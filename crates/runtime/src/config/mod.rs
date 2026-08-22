@@ -17,6 +17,7 @@
 //! preference follows the same precedence; absent fields resolve to
 //! `backend: auto`.
 
+pub mod crew;
 mod merge;
 
 pub use merge::{

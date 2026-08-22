@@ -1,0 +1,278 @@
+//! Integration tests for the crew JSON config module (spec §10).
+//!
+//! Layers: built-in defaults → arbitrary ordered file paths → per-run
+//! overrides. Deep merge, later layers win, `security.patterns` is
+//! additive, and an unknown key at any depth is a hard error naming the
+//! JSON path.
+
+use std::path::Path;
+
+use batman_runtime::config::crew::{
+    self, AdapterMode, ApprovalMode, ConfigError, CrewConfig, PermissionMode,
+};
+use serde_json::json;
+use tempfile::tempdir;
+
+fn write_layer(dir: &Path, name: &str, value: &serde_json::Value) -> std::path::PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, serde_json::to_string_pretty(value).unwrap()).unwrap();
+    path
+}
+
+/// Defaults match spec §10, with the controller override that every
+/// adapter's `mode` defaults to `headless` (no TUI adapter exists yet).
+#[test]
+fn defaults_match_spec_with_headless_mode_override() {
+    let cfg = crew::load_layers(&[], None).expect("defaults load with no layers");
+
+    assert_eq!(cfg.approval, ApprovalMode::Always);
+
+    assert_eq!(cfg.limits.max_concurrent_workers, 4);
+    assert_eq!(cfg.limits.inactivity_timeout_sec, 300);
+    assert_eq!(cfg.limits.total_timeout_sec, 1800);
+    assert_eq!(cfg.limits.turn_budget_per_subtask, 10);
+
+    assert_eq!(cfg.display.backend, crew::DisplayBackend::Auto);
+    assert_eq!(cfg.display.close_on_exit, crew::CloseOnExit::OnSuccess);
+
+    assert_eq!(cfg.adapters.len(), 4);
+    for name in ["claude", "codex", "copilot", "omp"] {
+        let adapter = cfg.adapters.get(name).unwrap_or_else(|| {
+            panic!("expected default adapter '{name}'");
+        });
+        assert!(adapter.enabled);
+        assert_eq!(adapter.mode, AdapterMode::Headless, "adapter '{name}' mode");
+        assert_eq!(adapter.permission_mode, PermissionMode::Max);
+    }
+    assert_eq!(cfg.adapters["claude"].bin, "claude");
+    assert_eq!(
+        cfg.adapters["claude"].profile,
+        "complex analysis, investigation, deep debugging"
+    );
+    assert_eq!(
+        cfg.adapters["codex"].profile,
+        "code review, finding defects"
+    );
+    assert_eq!(
+        cfg.adapters["copilot"].profile,
+        "documentation, explanations"
+    );
+    assert_eq!(cfg.adapters["omp"].profile, "implementation, coding tasks");
+    assert_eq!(cfg.adapters["omp"].model, Some("qwen".to_string()));
+    assert_eq!(cfg.adapters["claude"].model, None);
+
+    assert_eq!(cfg.workspace.default_mode, crew::WorkspaceMode::Shared);
+    assert_eq!(cfg.workspace.copy_max_bytes, None);
+    assert_eq!(cfg.workspace.copy_max_files, None);
+
+    assert!(!cfg.dashboard.enabled);
+    assert_eq!(cfg.dashboard.port, 4747);
+
+    assert_eq!(cfg.retention.max_runs, 20);
+    assert_eq!(cfg.retention.period, "30d");
+
+    assert!(cfg.security.patterns.is_empty());
+}
+
+/// A layer that overrides one field in `limits` must leave its siblings
+/// at the built-in defaults (deep merge, not layer-replaces-object).
+#[test]
+fn deep_merge_overriding_one_limit_leaves_siblings_at_defaults() {
+    let dir = tempdir().unwrap();
+    let user = write_layer(
+        dir.path(),
+        "user.json",
+        &json!({ "limits": { "maxConcurrentWorkers": 8 } }),
+    );
+
+    let cfg = crew::load_layers(&[user.as_path()], None).expect("layer merges");
+
+    assert_eq!(cfg.limits.max_concurrent_workers, 8);
+    // Siblings survive from defaults.
+    assert_eq!(cfg.limits.inactivity_timeout_sec, 300);
+    assert_eq!(cfg.limits.total_timeout_sec, 1800);
+    assert_eq!(cfg.limits.turn_budget_per_subtask, 10);
+}
+
+/// `security.patterns` concatenates across layers instead of the later
+/// layer replacing the earlier one's list.
+#[test]
+fn security_patterns_are_additive_across_layers() {
+    let dir = tempdir().unwrap();
+    let user = write_layer(
+        dir.path(),
+        "user.json",
+        &json!({ "security": { "patterns": ["user-pattern"] } }),
+    );
+    let project = write_layer(
+        dir.path(),
+        "project.json",
+        &json!({ "security": { "patterns": ["project-pattern"] } }),
+    );
+
+    let cfg = crew::load_layers(&[user.as_path(), project.as_path()], None)
+        .expect("layers merge additively");
+
+    assert_eq!(
+        cfg.security.patterns,
+        vec!["user-pattern", "project-pattern"]
+    );
+}
+
+/// An unknown key at any depth fails closed, naming the JSON path.
+#[test]
+fn unknown_key_at_depth_errors_with_json_path() {
+    let dir = tempdir().unwrap();
+    let user = write_layer(
+        dir.path(),
+        "user.json",
+        &json!({ "limits": { "maxConcurrentWorkers": 8, "bogusField": true } }),
+    );
+
+    let err = crew::load_layers(&[user.as_path()], None).expect_err("unknown key must fail");
+
+    match err {
+        ConfigError::UnknownKey { path } => assert_eq!(path, "limits.bogusField"),
+        other => panic!("expected UnknownKey, got: {other}"),
+    }
+}
+
+/// An unknown top-level key also fails, naming just that key as the path.
+#[test]
+fn unknown_top_level_key_errors_with_bare_path() {
+    let dir = tempdir().unwrap();
+    let user = write_layer(dir.path(), "user.json", &json!({ "totallyBogus": 1 }));
+
+    let err = crew::load_layers(&[user.as_path()], None).expect_err("unknown key must fail");
+
+    match err {
+        ConfigError::UnknownKey { path } => assert_eq!(path, "totallyBogus"),
+        other => panic!("expected UnknownKey, got: {other}"),
+    }
+}
+
+/// The per-run override layer applies on top of file layers.
+#[test]
+fn per_run_layer_applies_on_top_of_file_layers() {
+    let dir = tempdir().unwrap();
+    let user = write_layer(
+        dir.path(),
+        "user.json",
+        &json!({ "limits": { "maxConcurrentWorkers": 8 } }),
+    );
+    let per_run = json!({ "limits": { "maxConcurrentWorkers": 2 } });
+
+    let cfg = crew::load_layers(&[user.as_path()], Some(&per_run)).expect("per-run layer applies");
+
+    assert_eq!(cfg.limits.max_concurrent_workers, 2);
+    assert_eq!(cfg.limits.inactivity_timeout_sec, 300);
+}
+
+/// An arbitrary adapter name is accepted, but its inner shape is still
+/// strict — an unknown field inside it still errors with the full path.
+#[test]
+fn unknown_adapter_name_accepted_with_strict_inner_shape() {
+    let dir = tempdir().unwrap();
+    let user = write_layer(
+        dir.path(),
+        "user.json",
+        &json!({
+            "adapters": {
+                "gemini": {
+                    "enabled": true,
+                    "bin": "gemini",
+                    "mode": "headless",
+                    "permissionMode": "max",
+                    "profile": "custom vendor"
+                }
+            }
+        }),
+    );
+
+    let cfg = crew::load_layers(&[user.as_path()], None).expect("unknown adapter name accepted");
+    let gemini = cfg.adapters.get("gemini").expect("gemini adapter present");
+    assert_eq!(gemini.bin, "gemini");
+    assert_eq!(gemini.profile, "custom vendor");
+    // Built-in adapters are untouched siblings.
+    assert_eq!(cfg.adapters.len(), 5);
+
+    let bad = write_layer(
+        dir.path(),
+        "bad.json",
+        &json!({
+            "adapters": {
+                "gemini": {
+                    "enabled": true,
+                    "bin": "gemini",
+                    "mode": "headless",
+                    "permissionMode": "max",
+                    "profile": "custom vendor",
+                    "notAField": true
+                }
+            }
+        }),
+    );
+
+    let err = crew::load_layers(&[bad.as_path()], None).expect_err("unknown inner field fails");
+    match err {
+        ConfigError::UnknownKey { path } => assert_eq!(path, "adapters.gemini.notAField"),
+        other => panic!("expected UnknownKey, got: {other}"),
+    }
+}
+
+/// The fingerprint is stable across layer files whose JSON keys are
+/// written in different orders, since it hashes canonical bytes of the
+/// deserialized (already order-independent) config.
+#[test]
+fn fingerprint_is_stable_under_key_order() {
+    let dir = tempdir().unwrap();
+    let a = write_layer(
+        dir.path(),
+        "a.json",
+        &json!({ "limits": { "maxConcurrentWorkers": 6, "inactivityTimeoutSec": 120 } }),
+    );
+    // Same content, different key order within the object.
+    let b_path = dir.path().join("b.json");
+    std::fs::write(
+        &b_path,
+        r#"{ "limits": { "inactivityTimeoutSec": 120, "maxConcurrentWorkers": 6 } }"#,
+    )
+    .unwrap();
+
+    let cfg_a = crew::load_layers(&[a.as_path()], None).expect("layer a loads");
+    let cfg_b = crew::load_layers(&[b_path.as_path()], None).expect("layer b loads");
+
+    assert_eq!(crew::fingerprint(&cfg_a), crew::fingerprint(&cfg_b));
+}
+
+/// Two structurally-equal configs fingerprint identically, and a changed
+/// config fingerprints differently (sanity on the hash itself).
+#[test]
+fn fingerprint_differs_for_different_configs() {
+    let default_cfg = crew::load_layers(&[], None).expect("defaults load");
+
+    let dir = tempdir().unwrap();
+    let user = write_layer(
+        dir.path(),
+        "user.json",
+        &json!({ "limits": { "maxConcurrentWorkers": 99 } }),
+    );
+    let changed_cfg = crew::load_layers(&[user.as_path()], None).expect("layer loads");
+
+    assert_ne!(
+        crew::fingerprint(&default_cfg),
+        crew::fingerprint(&changed_cfg)
+    );
+}
+
+/// A missing layer file path is treated as an absent layer, not an error
+/// -- real deployments have optional user/project config files.
+#[test]
+fn missing_layer_file_is_treated_as_absent() {
+    let dir = tempdir().unwrap();
+    let missing = dir.path().join("does-not-exist.json");
+
+    let cfg = crew::load_layers(&[missing.as_path()], None).expect("missing layer is skipped");
+
+    assert_eq!(cfg, CrewConfig::default());
+}
