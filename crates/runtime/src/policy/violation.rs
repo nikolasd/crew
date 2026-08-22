@@ -22,10 +22,11 @@
 //! cancellation side effects of `Cancel`/`QuarantineAndCancel` do not
 //! share that guarantee.
 //!
-//! [`ViolationService::record_cost_ceiling`] journals the same event with
-//! code `cost_ceiling_exceeded` and shares the identical action semantics
-//! through [`ViolationService::apply_action`], so a spend violation
-//! quarantines and cancels exactly the way a nested-worker violation does.
+//! Crew-v2 gap-closure WP5: a sibling `record_cost_ceiling` used to journal
+//! a `cost_ceiling_exceeded` violation through the same `apply_action`
+//! path, for the org-governance cost ceiling retired in that WP (deleted
+//! outright -- config-sourced, and that config layer was never reachable
+//! in production). Nested-worker handling below is unaffected.
 //!
 //! [`ViolationService::decide`] resolves a violation via
 //! `policy/violation/decide`, restricted to the violation's task's
@@ -77,10 +78,6 @@ use crate::service::RunDriver;
 /// Journaled `code` for a mid-run child observed against
 /// `NestedCapability::None`.
 pub const VIOLATION_CODE_NESTED_WORKER_DENIED: &str = "nested_worker_denied";
-
-/// Journaled `code` for a run whose accumulated adapter spend crossed
-/// `RuntimePolicy::cost_ceiling_per_run_usd`.
-pub const VIOLATION_CODE_COST_CEILING_EXCEEDED: &str = "cost_ceiling_exceeded";
 
 /// Errors returned by [`ViolationService`] operations.
 #[derive(Debug, thiserror::Error)]
@@ -223,9 +220,6 @@ impl ViolationService {
     /// residue is pre-existing, outside this fix's mechanism, and tracked
     /// as its own `REVIEW.md` finding rather than fixed here.
     ///
-    /// Named rather than overloaded so the cost-ceiling sibling
-    /// [`ViolationService::record_cost_ceiling`] can never be mistaken for it.
-    ///
     /// # Errors
     /// Returns [`ViolationError::Domain`] if `run_id` does not exist.
     pub async fn record_nested_worker(
@@ -285,69 +279,7 @@ impl ViolationService {
         .await
     }
 
-    /// Journals a `cost_ceiling_exceeded` violation and applies the same
-    /// quarantine/cancellation semantics as a nested-worker violation.
-    ///
-    /// Called by [`crate::adapter::event_sink::DomainAdapterEventSink`] when
-    /// accumulated `AdapterUsageEvent.cost_usd` for this run crosses
-    /// `RuntimePolicy::cost_ceiling_per_run_usd`. `observed_event_sequence`
-    /// is the sequence of the usage event that crossed the ceiling.
-    ///
-    /// A cost ceiling has no vendor child, so `vendor_child_id` and
-    /// `vendor_parent_ref` are journaled as `None` rather than empty strings.
-    ///
-    /// # Errors
-    /// Returns [`ViolationError::Domain`] if `run_id` does not exist.
-    pub async fn record_cost_ceiling(
-        &self,
-        run_id: RunId,
-        task_id: TaskId,
-        worker_id: WorkerId,
-        observed_event_sequence: u64,
-    ) -> Result<(), ViolationError> {
-        let policy_fingerprint = self.load_policy_fingerprint(run_id).await?;
-
-        let violation_id = PolicyViolationId::new();
-        let project_id = self.project_id;
-        let action_str = self.action.to_string();
-        let mut result = self
-            .db
-            .run_domain_op(Box::new(move |conn| {
-                let mut repo = DomainRepository::new(conn, project_id);
-                repo.record_policy_violation(
-                    violation_id,
-                    run_id,
-                    task_id,
-                    worker_id,
-                    VIOLATION_CODE_COST_CEILING_EXCEEDED,
-                    observed_event_sequence,
-                    &policy_fingerprint,
-                    None,
-                    None,
-                    &action_str,
-                )
-                .map(|outcome| {
-                    embed_envelope(
-                        json!({
-                            "sequence": outcome.committed.sequence,
-                            "alreadyActioned": outcome.already_actioned,
-                        }),
-                        &outcome.committed.envelope,
-                    )
-                })
-            }))
-            .await
-            .map_err(ViolationError::Domain)?;
-        let already_actioned = result["alreadyActioned"].as_bool().unwrap_or(false);
-        self.broadcast(&mut result);
-
-        self.apply_action(run_id, worker_id, already_actioned, None, None)
-            .await
-    }
-
-    /// Applies `self.action` after a violation has been journaled. Shared by
-    /// both violation kinds so quarantine and cancellation semantics can
-    /// never drift between them.
+    /// Applies `self.action` after a violation has been journaled.
     ///
     /// A no-op when `already_actioned` -- the violation is still journaled by
     /// the caller, but the quarantine flag is not re-applied and no second

@@ -134,16 +134,6 @@ pub struct DomainAdapterEventSink {
     /// plan Task 1), not merely a journaled observation.
     nested_not_managed: bool,
     violation_service: Arc<crate::policy::ViolationService>,
-    /// This run's hard spend ceiling in USD, or `None` when unenforced.
-    cost_ceiling_per_run_usd: Option<f64>,
-    /// Running total of every `UsageReported.cost_usd` this sink has
-    /// journaled. One sink is constructed per run (`run_one`), so this
-    /// needs no keying by run id and carries no cross-run state.
-    accumulated_cost_usd: std::sync::Mutex<f64>,
-    /// Set once the ceiling has been crossed and a violation journaled, so
-    /// a long-running worker reports the breach once rather than on every
-    /// subsequent usage event.
-    cost_violation_recorded: std::sync::atomic::AtomicBool,
 }
 
 impl DomainAdapterEventSink {
@@ -165,7 +155,6 @@ impl DomainAdapterEventSink {
         org_security_patterns: Vec<String>,
         nested_not_managed: bool,
         violation_service: Arc<crate::policy::ViolationService>,
-        cost_ceiling_per_run_usd: Option<f64>,
     ) -> Result<Self, String> {
         let redactor = Arc::new(Redactor::with_org_rules(&org_security_patterns)?);
         Ok(Self {
@@ -175,34 +164,7 @@ impl DomainAdapterEventSink {
             redactor,
             nested_not_managed,
             violation_service,
-            cost_ceiling_per_run_usd,
-            accumulated_cost_usd: std::sync::Mutex::new(0.0),
-            cost_violation_recorded: std::sync::atomic::AtomicBool::new(false),
         })
-    }
-
-    /// Adds `cost_usd` to this run's running total and reports whether that
-    /// addition is the one that crossed the ceiling.
-    ///
-    /// Returns `true` at most once per sink: the caller journals a
-    /// `cost_ceiling_exceeded` violation only on the crossing event, not on
-    /// every usage event after it.
-    fn accumulate_cost(&self, cost_usd: Option<f64>) -> bool {
-        use std::sync::atomic::Ordering;
-
-        let (Some(ceiling), Some(cost)) = (self.cost_ceiling_per_run_usd, cost_usd) else {
-            return false;
-        };
-        let Ok(mut total) = self.accumulated_cost_usd.lock() else {
-            // A poisoned lock means a prior panic while holding it; the
-            // total is unusable, so decline to fabricate a breach.
-            return false;
-        };
-        *total += cost;
-        if *total < ceiling {
-            return false;
-        }
-        !self.cost_violation_recorded.swap(true, Ordering::SeqCst)
     }
 
     /// Sanitizes a single classified fragment: `Visible` text is
@@ -383,13 +345,6 @@ impl AdapterEventSink for DomainAdapterEventSink {
         } else {
             None
         };
-        // The ceiling is evaluated against the event just built, so the
-        // sequence reported on the violation is the usage event that
-        // crossed it -- which the journal write below produces.
-        let cost_ceiling_crossed = match &runtime_event {
-            RuntimeEvent::AdapterUsageEvent { cost_usd, .. } => self.accumulate_cost(*cost_usd),
-            _ => false,
-        };
         let violation_service = Arc::clone(&self.violation_service);
         Box::pin(async move {
             let mut result = db
@@ -419,18 +374,6 @@ impl AdapterEventSink for DomainAdapterEventSink {
                     error = %err,
                     run_id = %run_id,
                     "failed to record mid-run nested-worker policy violation"
-                );
-            }
-
-            if cost_ceiling_crossed
-                && let Err(err) = violation_service
-                    .record_cost_ceiling(run_id, task_id, worker_id, sequence)
-                    .await
-            {
-                tracing::warn!(
-                    error = %err,
-                    run_id = %run_id,
-                    "failed to record cost-ceiling policy violation"
                 );
             }
 

@@ -10,18 +10,27 @@
 //! org-lock mechanism. That system was never actually wired up end to end
 //! -- the extension passed no config-path flags -- so every deployment
 //! already ran with each of those fields at its default, empty/off value.
-//! crew.json's schema (spec §10, [`crew::CrewConfig`]) does not model any
-//! of that surface, so this module fixes the fields with no `CrewConfig`
-//! equivalent at that same default value permanently: this changes
-//! nothing about production behavior (already the default everywhere),
-//! but crew.json can no longer *become* a way to set them. See the WP5
-//! report for the decision record if any of that enforcement needs a real
-//! config surface later.
 //!
-//! [`NestedViolationAction`] is the one carry-over worth calling out
-//! explicitly: unlike the six pure rollout-readiness booleans (deleted
-//! outright -- nothing but the doctor's advisory report ever read them),
-//! it is a real, load-bearing default for [`crate::policy::violation`]'s
+//! crew.json's schema (spec §10, [`crew::CrewConfig`]) deliberately does
+//! not model that org-governance surface (the design spec's §2.2/§12
+//! retire the org config layer outright, moving it to
+//! `docs/future-features.md`). Per the WP5 ruling, the fields with no
+//! `CrewConfig` equivalent -- `allowed_models`, `allowed_adapters`,
+//! `required_capabilities`, both cost ceilings, and the
+//! `native_discovery_reviewed` rollout gate -- and the `policy::evaluate`
+//! checks that read them are deleted outright, not kept inert: that layer
+//! was never reachable in production, so nothing behavioral changes.
+//! `policy::evaluate::PolicyViolationKind`/`PolicyError`'s matching
+//! variants stay declared (deprecated, unconstructable) since a journaled
+//! event from before this retirement could still carry one. Nested-worker
+//! *safety* does not regress -- the per-child record-intent flow
+//! (`coordination` + `policy/violation/decide`) is untouched; only the
+//! config-sourced pre-authorization discovery gate is gone.
+//!
+//! [`NestedViolationAction`] is the one field of the old bag that survives
+//! on [`RuntimePolicy`] itself: unlike the six pure rollout-readiness
+//! booleans and the five org-governance fields above, it is a real,
+//! load-bearing default for [`crate::policy::violation`]'s
 //! nested-worker-violation handling, not a gate. It keeps its own type and
 //! default (`QuarantineAndCancel`), just with no config-file path to
 //! override it yet.
@@ -75,23 +84,6 @@ pub struct RuntimePolicy {
     pub display_backend: crew::DisplayBackend,
     pub retention: String,
     pub concurrency_ceiling: u32,
-    /// Always empty: `CrewConfig` has no model allowlist. An empty list
-    /// permits every model -- exactly what every current deployment
-    /// already does, since no config path could ever have set this.
-    pub allowed_models: Vec<String>,
-    /// Always empty: `CrewConfig` has no adapter allowlist. See `allowed_models`.
-    pub allowed_adapters: Vec<String>,
-    /// Always empty: `CrewConfig` has no required-capability list.
-    pub required_capabilities: Vec<String>,
-    /// Always `None`: `CrewConfig` has no per-run cost ceiling.
-    pub cost_ceiling_per_run_usd: Option<f64>,
-    /// Always `None`: `CrewConfig` has no daily cost ceiling.
-    pub cost_ceiling_daily_usd: Option<f64>,
-    /// Always `false`: `CrewConfig` has no native-discovery acknowledgement
-    /// field. Fail-closed, matching every current deployment's default --
-    /// and presently inert either way, since no shipped adapter declares a
-    /// nested capability above `none`.
-    pub native_discovery_reviewed: bool,
     pub org_security_patterns: Vec<String>,
     pub copy_max_bytes: u64,
     pub copy_max_files: u64,
@@ -107,12 +99,6 @@ impl RuntimePolicy {
             display_backend: cfg.display.backend,
             retention: cfg.retention.period.clone(),
             concurrency_ceiling: cfg.limits.max_concurrent_workers,
-            allowed_models: Vec::new(),
-            allowed_adapters: Vec::new(),
-            required_capabilities: Vec::new(),
-            cost_ceiling_per_run_usd: None,
-            cost_ceiling_daily_usd: None,
-            native_discovery_reviewed: false,
             org_security_patterns: cfg.security.patterns.clone(),
             copy_max_bytes: cfg
                 .workspace

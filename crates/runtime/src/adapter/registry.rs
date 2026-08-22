@@ -483,9 +483,6 @@ async fn run_one(
         org_security_patterns,
         effective_capabilities.nested != NestedCapability::Managed,
         Arc::clone(&ctx.violation_service),
-        ctx.policy
-            .as_deref()
-            .and_then(|p| p.cost_ceiling_per_run_usd),
     ) {
         Ok(sink) => Arc::new(sink) as Arc<dyn AdapterEventSink>,
         Err(err) => {
@@ -839,12 +836,6 @@ mod settlement_tests {
             display_backend: crate::config::crew::DisplayBackend::Auto,
             retention: "30d".to_string(),
             concurrency_ceiling: 1,
-            allowed_models: vec![],
-            allowed_adapters: vec![],
-            cost_ceiling_per_run_usd: None,
-            cost_ceiling_daily_usd: None,
-            required_capabilities: vec![],
-            native_discovery_reviewed: true,
             org_security_patterns: vec![],
             copy_max_bytes: crate::workspace::DEFAULT_COPY_MAX_BYTES,
             copy_max_files: crate::workspace::DEFAULT_COPY_MAX_FILES,

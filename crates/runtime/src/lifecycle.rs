@@ -254,11 +254,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     let nested_violation_action = policy.nested_violation_action;
     let policy = Arc::new(policy);
     let registry = Arc::new(AdapterRegistry::new(
-        Arc::new(
-            PolicyEvaluator::new((*policy).clone()).with_daily_spend(Arc::new(
-                crate::policy::JournalDailySpend::new(paths.database.clone(), paths.project_id),
-            )),
-        ),
+        Arc::new(PolicyEvaluator::new((*policy).clone())),
         repo_root.clone(),
         mcp,
         org_security_patterns,

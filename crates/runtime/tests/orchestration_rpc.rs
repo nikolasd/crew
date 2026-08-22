@@ -327,7 +327,6 @@ impl ViolationTriggeringRunDriver {
             vec![],
             true,
             Arc::clone(&ctx.violation_service),
-            None,
         )
         .expect("built-in patterns always compile");
         sink.emit(AdapterEvent {
@@ -359,7 +358,6 @@ impl RunDriver for ViolationTriggeringRunDriver {
                 vec![],
                 true,
                 Arc::clone(&ctx.violation_service),
-                None,
             )
             .expect("built-in patterns always compile");
             sink.emit(AdapterEvent {
@@ -422,7 +420,6 @@ impl RunDriver for ConfigurableCancelViolationDriver {
                 vec![],
                 true,
                 Arc::clone(&ctx.violation_service),
-                None,
             )
             .expect("built-in patterns always compile");
             sink.emit(AdapterEvent {
@@ -744,162 +741,6 @@ async fn policy_violation_decide_release_is_refused_on_an_already_terminal_run()
         "the refused release must never revive the run"
     );
 }
-// ------------------------------------------------------------------ cost ceiling
-
-/// Simulates a run whose adapter reports usage crossing the merged policy's
-/// per-run cost ceiling: emits one `UsageReported` through a real
-/// [`batman_runtime::adapter::DomainAdapterEventSink`] built with
-/// `nested_not_managed: false` (so only the ceiling can trigger a violation)
-/// and `cost_ceiling_per_run_usd: Some(1.0)`, exercising the whole
-/// `ViolationService::record_cost_ceiling` pipeline with no vendor process.
-#[derive(Default)]
-struct CostCeilingRunDriver {
-    cancel_calls: parking_lot::Mutex<Vec<(RunId, CancelScope)>>,
-    captured: parking_lot::Mutex<Option<RunDriverContext>>,
-}
-
-impl CostCeilingRunDriver {
-    fn cancel_calls(&self) -> Vec<(RunId, CancelScope)> {
-        self.cancel_calls.lock().clone()
-    }
-}
-
-impl RunDriver for CostCeilingRunDriver {
-    fn active_run_count(&self) -> usize {
-        0
-    }
-
-    fn start(&self, ctx: RunDriverContext) -> AdapterFuture<'static, Result<(), String>> {
-        *self.captured.lock() = Some(ctx.clone());
-        Box::pin(async move {
-            let sink = batman_runtime::adapter::DomainAdapterEventSink::new(
-                ctx.db.clone(),
-                ctx.project_id,
-                ctx.events_tx.clone(),
-                vec![],
-                false,
-                Arc::clone(&ctx.violation_service),
-                Some(1.0),
-            )
-            .expect("built-in patterns always compile");
-            sink.emit(AdapterEvent {
-                run_id: ctx.run_id,
-                task_id: ctx.task_id,
-                worker_id: ctx.worker_id,
-                payload: AdapterEventPayload::UsageReported {
-                    input_tokens: 1_000,
-                    output_tokens: 2_000,
-                    cost_usd: Some(2.5),
-                },
-            })
-            .await
-            .map_err(|e| e.to_string())?;
-            Ok(())
-        })
-    }
-
-    fn send_follow_up(
-        &self,
-        _run_id: RunId,
-        _task_id: TaskId,
-        _worker_id: WorkerId,
-        _prompt: String,
-    ) -> AdapterFuture<'static, Result<(), String>> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn running_adapter(&self, _run_id: RunId) -> Option<Arc<dyn Adapter>> {
-        None
-    }
-
-    fn cancel_run(
-        &self,
-        run_id: RunId,
-        scope: CancelScope,
-    ) -> AdapterFuture<'static, Result<batman_runtime::service::CancelOutcome, String>> {
-        self.cancel_calls.lock().push((run_id, scope));
-        Box::pin(async { Ok(batman_runtime::service::CancelOutcome::Cancelled) })
-    }
-}
-
-/// A run whose adapter reports $2.50 against a $1.00 per-run ceiling
-/// records a `cost_ceiling_exceeded` violation, quarantines the run,
-/// and allows the owning client to release the quarantine via
-/// `policy/violation/decide` — proving the full `record_cost_ceiling`
-/// pipeline (R48).
-#[tokio::test]
-async fn crossing_the_per_run_cost_ceiling_records_an_actionable_violation() {
-    let driver = Arc::new(CostCeilingRunDriver::default());
-    let harness = Harness::start(|c| {
-        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
-        c.nested_violation_action = batman_runtime::config::NestedViolationAction::Quarantine;
-    })
-    .await;
-    let mut client = omp_client(&harness, "omp-1").await;
-
-    let (_, _, run_id) = submit_run_with_driver(&mut client, "omp-1").await;
-
-    // The pure-Quarantine action never cancels: the run stays non-terminal.
-    let get = client.call(5, "run/get", json!({ "runId": run_id })).await;
-    assert_eq!(
-        get["result"]["flags"]["policyQuarantined"], true,
-        "run must be quarantined after cost ceiling breach: {get:?}"
-    );
-    assert_ne!(
-        get["result"]["state"], "cancelled",
-        "Quarantine-only action must never cancel the run"
-    );
-    assert!(
-        driver.cancel_calls().is_empty(),
-        "Quarantine-only action must never call cancel_run"
-    );
-
-    // Find the recorded cost-ceiling violation from the replayed events.
-    let replay = client
-        .call(6, "events/replay", json!({ "afterSequence": 0 }))
-        .await;
-    let events = replay["result"].as_array().unwrap();
-    let recorded = events
-        .iter()
-        .find(|e| e["event"]["type"] == "policyViolationRecorded")
-        .expect("a policyViolationRecorded event must be journaled");
-    let kind = &recorded["event"]["payload"]["kind"]["policyViolationRecorded"];
-    assert_eq!(
-        kind["code"], "cost_ceiling_exceeded",
-        "the recorded violation must carry the cost ceiling code: {kind:?}"
-    );
-    assert!(
-        kind["vendor_child_id"].is_null(),
-        "a cost-ceiling violation has no vendor child: {kind:?}"
-    );
-    assert!(
-        kind["vendor_parent_ref"].is_null(),
-        "a cost-ceiling violation has no vendor parent: {kind:?}"
-    );
-    let violation_id = kind["violation_id"]
-        .as_str()
-        .expect("violation_id must be present")
-        .to_string();
-
-    // The owning client releases the quarantine — this step reads the
-    // policy_violations projection row, so it proves the row was persisted.
-    let decide = client
-        .call(
-            7,
-            "policy/violation/decide",
-            json!({ "violationId": violation_id, "resolution": "release" }),
-        )
-        .await;
-    assert!(decide.get("error").is_none(), "decide failed: {decide:?}");
-    assert_eq!(decide["result"]["outcome"], "decided");
-
-    let get_after = client.call(8, "run/get", json!({ "runId": run_id })).await;
-    assert_eq!(
-        get_after["result"]["flags"]["policyQuarantined"], false,
-        "release must clear the quarantine flag: {get_after:?}"
-    );
-}
-
 /// A run's `policyFingerprint` is an immutable snapshot of the merge it
 /// was authorized under: a later run carrying `policyOverrides` gets its
 /// own fingerprint and never rewrites an existing run's.
@@ -1450,7 +1291,6 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
                 vec![],
                 true,
                 Arc::clone(&ctx.violation_service),
-                None,
             )
             .expect("built-in patterns always compile");
             sink.emit(AdapterEvent {

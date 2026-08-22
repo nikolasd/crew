@@ -149,10 +149,58 @@ version check as the token-usage entry above — revisit both together.
 
 ---
 
+## Org Governance Enforcement (Model/Adapter Allowlists, Cost Ceilings, Rollout Gates)
+
+**Specified by:** crew-v2 gap-closure WP5 ruling (2026-08-22); supersedes the entries below
+**References:** `crates/runtime/src/policy/evaluate.rs`, `crates/runtime/src/config/mod.rs`
+
+### What it is
+
+Before crew-v2, `RuntimePolicy` (fed by an org/repo/user YAML config layer) let an org
+centrally impose: a model allowlist, an adapter allowlist, a required-capability list, a
+per-run and a daily cost ceiling, and a `native_discovery_reviewed` rollout gate blocking
+authorization of vendor-discovered nested workers. `PolicyEvaluator::evaluate` enforced all
+five before every run's authorization.
+
+crew.json (spec §10, `crew::CrewConfig`) deliberately does not model this org-governance
+surface — the design spec retires the org config layer outright (§2.2/§12). WP5 deleted the
+enforcement and the corresponding `RuntimePolicy` fields rather than keeping them
+permanently inert, since that YAML layer was never actually wired up end to end (the
+extension passed no config-path flags) and so was unreachable in every real deployment.
+The wire-adjacent `PolicyViolationKind`/`PolicyError` enum variants
+(`ModelNotAllowed`, `AdapterNotAllowed`, `CapabilityMissing`, `NativeDiscoveryUnacknowledged`,
+`CostCeiling*`) stay declared, marked `Deprecated`, so a journaled event from before this
+retirement stays deserializable; nothing constructs them any more.
+
+Nested-worker *safety* is unaffected: the per-child record-intent-until-accepted/denied flow
+(`coordination`'s child request + `policy/violation/decide`, `policy::violation`) is a
+separate, untouched mechanism. What's gone is only the config-sourced pre-authorization gate
+and the mid-run cost-ceiling enforcement, both of which required a config surface that no
+longer exists.
+
+### Why deferred
+
+No operator has asked for centrally-managed policy since the rename; crew v2's scope is a
+single-repo, single-operator tool. Reintroducing this needs a real config surface (the org
+config layer this depended on is itself deferred below) before there's anything for it to
+read.
+
+### Decision trigger
+
+Implement when an operator needs centrally-managed policy across a fleet of repos/machines —
+the same trigger as the org config layer's own return, below, since this enforcement has no
+inputs without it.
+
+---
+
 ## Org Config: URL or File Path Support
 
 **Specified by:** TODO.md Feature Requests section (retired 2026-08-06)
-**References:** `crates/runtime/src/config/merge.rs` (`load_layer`)
+**Status:** the local org config layer this describes was itself retired by the crew-v2
+design (spec §2.2/§12; removed by crew-v2 gap-closure WP5) — the entry below is preserved as
+a record of the pre-crew-v2 idea, relevant again only if the org config layer itself returns.
+**References:** `crates/runtime/src/config/merge.rs` (`load_layer`, no longer part of the
+crate -- orphaned, pending deletion)
 
 ### What it is
 
@@ -184,7 +232,13 @@ filesystem, etc.) is a real deployment problem for them.
 ## Config: Templates, Schema Validation, Versioning, Encryption
 
 **Specified by:** TODO.md "Other Potential Features" backlog (retired 2026-08-06)
-**References:** `crates/runtime/src/config/merge.rs`, `crates/runtime/src/config/`
+**Status:** written against the pre-crew-v2 YAML org/repo/user config
+(`LayeredConfig`/`merge.rs`), removed by crew-v2 gap-closure WP5 in favor of `crew.json`
+(`crates/runtime/src/config/crew.rs`). The four ideas below are unaffected in spirit (crew.json
+could equally use templates/schema validation/versioning/encryption) but any implementation
+would target `crew.rs`'s `load_layers`, not the paths named below.
+**References:** `crates/runtime/src/config/crew.rs` (current), `crates/runtime/src/config/merge.rs`
+(orphaned, pending deletion)
 
 Four thin, undesigned ideas from the same backlog, grouped here since they
 all touch the config-loading path and none has been scoped past a one-line

@@ -2,14 +2,27 @@
 //! `AdapterAuthorization`.
 //!
 //! Enforces:
-//! - Model allowlist (deny by default when allowlist is non-empty)
-//! - Adapter allowlist (deny by default when allowlist is non-empty)
-//! - Required capabilities, against the conformance-proven effective set
-//! - The `native_discovery_reviewed` rollout gate, blocking rather than advisory
-//! - Per-run and daily cost ceilings, including refusing an adapter that
-//!   cannot report usage while a ceiling is configured
 //! - Concurrency ceiling (block runs exceeding the ceiling)
 //! - Nested worker policy (deny unexpected child workers)
+//!
+//! Crew-v2 gap-closure WP5 (ruling): the org-governance enforcement this
+//! evaluator used to also apply -- model/adapter allowlists, a
+//! required-capability list, per-run/daily cost ceilings, and the
+//! `native_discovery_reviewed` rollout gate -- is retired along with the
+//! YAML org config layer that was its only source (`crew.json`, spec §10,
+//! has no equivalent surface; see `docs/superpowers/specs/2026-08-22-crew-v2-design.md`
+//! §2.2/§12). That layer was never actually wired up end to end (the
+//! extension passed no config-path flags), so this changes nothing about
+//! production behavior. See `docs/future-features.md` for the decision
+//! trigger if org governance returns.
+//!
+//! Nested-worker *safety* does not regress: the per-child
+//! record-intent-until-accepted/denied flow (`coordination`'s child
+//! request + `policy/violation/decide`) is untouched and remains the real
+//! enforcement for vendor-discovered children. What's retired here is only
+//! the pre-authorization gate that blocked authorizing a profile whose
+//! *declared* nested capability was unacknowledged by org config -- a
+//! config-sourced check, not a capability-downgrade one.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -37,19 +50,26 @@ pub struct PolicyViolation {
 /// The kind of policy violation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyViolationKind {
-    /// The model is not in the allowlist.
+    /// Deprecated: no longer produced since crew v2 (org-governance
+    /// enforcement retired, crew-v2 gap-closure WP5). Kept declared,
+    /// unconstructable in production, because a journaled event from
+    /// before this retirement could carry it.
     ModelNotAllowed,
     /// The concurrency ceiling has been reached.
     ConcurrencyCeilingExceeded,
     /// A nested/child worker was denied by policy.
     NestedWorkerDenied,
-    /// The adapter kind is not authorized.
+    /// Deprecated: no longer produced since crew v2 (org-governance
+    /// enforcement retired, crew-v2 gap-closure WP5).
     AdapterNotAllowed,
-    /// A capability the org requires is absent from the adapter.
+    /// Deprecated: no longer produced since crew v2 (org-governance
+    /// enforcement retired, crew-v2 gap-closure WP5).
     CapabilityMissing,
-    /// Native vendor-worker discovery is unacknowledged by rollout gates.
+    /// Deprecated: no longer produced since crew v2 (org-governance
+    /// enforcement retired, crew-v2 gap-closure WP5).
     NativeDiscoveryUnacknowledged,
-    /// A configured spend ceiling is already reached or unmeasurable.
+    /// Deprecated: no longer produced since crew v2 (org-governance
+    /// enforcement retired, crew-v2 gap-closure WP5).
     CostCeiling,
 }
 
@@ -74,7 +94,10 @@ impl std::fmt::Display for PolicyViolationKind {
 /// Errors from policy evaluation.
 #[derive(Debug, thiserror::Error)]
 pub enum PolicyError {
-    /// The model is not in the allowlist.
+    /// Deprecated: no longer produced since crew v2 (org-governance
+    /// enforcement retired, crew-v2 gap-closure WP5). Kept declared,
+    /// unconstructable in production, because a journaled event from
+    /// before this retirement could carry it.
     #[error("model '{model}' is not in the allowlist; allowed: {allowed:?}")]
     ModelNotAllowed { model: String, allowed: Vec<String> },
 
@@ -86,24 +109,26 @@ pub enum PolicyError {
     #[error("nested worker denied: {reason}")]
     NestedWorkerDenied { reason: String },
 
-    /// The adapter kind is not authorized.
+    /// Deprecated: no longer produced since crew v2 (org-governance
+    /// enforcement retired, crew-v2 gap-closure WP5).
     #[error("adapter '{adapter}' is not authorized")]
     AdapterNotAllowed { adapter: String },
 
-    /// A capability the org requires is absent from the adapter's
-    /// effective (conformance-proven) capability set.
+    /// Deprecated: no longer produced since crew v2 (org-governance
+    /// enforcement retired, crew-v2 gap-closure WP5).
     #[error("adapter '{adapter}' does not provide required capability '{capability}'")]
     CapabilityMissing { adapter: String, capability: String },
 
-    /// The profile can act on vendor-discovered child workers, but the
-    /// org has not resolved the rollout gate that governs doing so.
+    /// Deprecated: no longer produced since crew v2 (org-governance
+    /// enforcement retired, crew-v2 gap-closure WP5).
     #[error(
         "adapter '{adapter}' declares native worker discovery, but rollout gate \
          'native_discovery_reviewed' is unresolved"
     )]
     NativeDiscoveryUnacknowledged { adapter: String },
 
-    /// A spend ceiling is already reached.
+    /// Deprecated: no longer produced since crew v2 (org-governance
+    /// enforcement retired, crew-v2 gap-closure WP5).
     #[error("{scope} cost ceiling ${ceiling:.2} reached; ${spent:.2} already spent")]
     CostCeilingExceeded {
         scope: &'static str,
@@ -111,8 +136,8 @@ pub enum PolicyError {
         spent: f64,
     },
 
-    /// A spend ceiling is configured but this adapter cannot report usage,
-    /// so the ceiling could never be observed, let alone enforced.
+    /// Deprecated: no longer produced since crew v2 (org-governance
+    /// enforcement retired, crew-v2 gap-closure WP5).
     #[error(
         "adapter '{adapter}' reports no usage, so the configured cost ceiling \
          cannot be enforced for it"
@@ -120,84 +145,8 @@ pub enum PolicyError {
     CostCeilingUnenforceable { adapter: String },
 }
 
-/// Reads how much the project has already spent today, in USD.
-///
-/// Separate from the evaluator because authorization is synchronous while
-/// the runtime's journal is behind an async actor: this reads the same
-/// SQLite file directly, on the authorizing thread, rather than making the
-/// whole authorization path async for a check most deployments never
-/// configure.
-pub trait DailySpend: Send + Sync {
-    /// Returns today's (UTC) total `costUsd` across the project's
-    /// `adapterUsageEvent` records.
-    ///
-    /// # Errors
-    /// Returns a message if the journal cannot be read. A ceiling that
-    /// cannot be measured must deny, so the caller treats this as a denial.
-    fn spent_today_usd(&self) -> Result<f64, String>;
-}
-
-/// The production [`DailySpend`]: sums `adapterUsageEvent.costUsd` from the
-/// runtime journal for the current UTC day.
-pub struct JournalDailySpend {
-    database: std::path::PathBuf,
-    project_id: batman_protocol::ProjectId,
-}
-
-impl JournalDailySpend {
-    #[must_use]
-    pub fn new(database: std::path::PathBuf, project_id: batman_protocol::ProjectId) -> Self {
-        Self {
-            database,
-            project_id,
-        }
-    }
-}
-
-impl DailySpend for JournalDailySpend {
-    fn spent_today_usd(&self) -> Result<f64, String> {
-        // Timestamps are stored as RFC3339 text, so the first ten
-        // characters are `YYYY-MM-DD` and a prefix match is a day filter --
-        // the same text-comparison approach `crate::audit::retention` uses.
-        let today = time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .map_err(|e| e.to_string())?;
-        let today = &today[..10];
-        let conn = rusqlite::Connection::open(&self.database).map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT event_json FROM events \
-                 WHERE project_id = ?1 AND timestamp LIKE ?2 \
-                 AND event_json LIKE '%adapterUsageEvent%'",
-            )
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(
-                rusqlite::params![self.project_id.to_string(), format!("{today}%")],
-                |row| row.get::<_, String>(0),
-            )
-            .map_err(|e| e.to_string())?;
-
-        let mut total = 0.0_f64;
-        for row in rows {
-            let json = row.map_err(|e| e.to_string())?;
-            let value: serde_json::Value =
-                serde_json::from_str(&json).map_err(|e| e.to_string())?;
-            if value.get("type").and_then(serde_json::Value::as_str) != Some("adapterUsageEvent") {
-                continue;
-            }
-            total += value
-                .get("payload")
-                .and_then(|p| p.get("costUsd"))
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or(0.0);
-        }
-        Ok(total)
-    }
-}
-
 /// The policy evaluator: implements [`AdapterAuthorization`] and enforces
-/// model allowlists, concurrency ceilings, and nested worker policies.
+/// concurrency ceilings and nested worker policies.
 ///
 /// Constructed once at daemon startup from a [`RuntimePolicy`]. The
 /// concurrency counter uses atomic check-and-increment (`fetch_update`)
@@ -209,10 +158,6 @@ pub struct PolicyEvaluator {
     active_runs: Arc<AtomicU32>,
     /// Whether nested workers are allowed (from policy).
     allow_nested: bool,
-    /// Where today's project spend is read from. `None` in embeddings that
-    /// have no journal to read; a daily ceiling configured without one is
-    /// unmeasurable and therefore denies.
-    daily_spend: Option<Arc<dyn DailySpend>>,
 }
 
 impl PolicyEvaluator {
@@ -223,15 +168,7 @@ impl PolicyEvaluator {
             policy,
             active_runs: Arc::new(AtomicU32::new(0)),
             allow_nested: false, // default: deny nested
-            daily_spend: None,
         }
-    }
-
-    /// Attaches the source the daily cost ceiling is measured against.
-    #[must_use]
-    pub fn with_daily_spend(mut self, source: Arc<dyn DailySpend>) -> Self {
-        self.daily_spend = Some(source);
-        self
     }
 
     /// Returns the effective runtime policy.
@@ -258,8 +195,7 @@ impl PolicyEvaluator {
     }
 
     /// Evaluates whether a worker profile is authorized for a run,
-    /// considering model allowlists, the adapter allowlist, concurrency
-    /// ceilings, and nested worker policies.
+    /// considering the concurrency ceiling and nested worker policy.
     ///
     /// `policy` is the run's *own* resolved policy -- the startup policy
     /// re-merged with that run's `policyOverrides`. `None` means "use the
@@ -278,94 +214,24 @@ impl PolicyEvaluator {
     /// Returns [`PolicyError`] if the profile is denied.
     pub fn evaluate(
         &self,
-        profile: &WorkerProfile,
-        effective_capabilities: &AdapterCapabilities,
+        // Retained for signature stability and for any future check that
+        // consumes the worker profile or the conformance-downgraded
+        // effective capability set -- unused today because the checks
+        // that read them (model allowlist, required capabilities) were
+        // config-sourced org governance, now retired (crew-v2
+        // gap-closure WP5 ruling; see the module doc).
+        _profile: &WorkerProfile,
+        _effective_capabilities: &AdapterCapabilities,
         is_nested: bool,
         policy: Option<&RuntimePolicy>,
     ) -> Result<(), PolicyError> {
         let policy = policy.unwrap_or(&self.policy);
-
-        // Check model allowlist.
-        if !policy.allowed_models.is_empty() && !policy.allowed_models.contains(&profile.model) {
-            return Err(PolicyError::ModelNotAllowed {
-                model: profile.model.clone(),
-                allowed: policy.allowed_models.clone(),
-            });
-        }
 
         // Check nested worker policy.
         if is_nested && !self.allow_nested {
             return Err(PolicyError::NestedWorkerDenied {
                 reason: "nested workers are not allowed by policy".to_string(),
             });
-        }
-
-        // Check the adapter allowlist. An empty list permits every adapter
-        // this runtime can build; a non-empty list is deny-by-default, and
-        // is the only supported way for an org to forbid a vendor.
-        if !policy.allowed_adapters.is_empty()
-            && !policy.allowed_adapters.contains(&profile.adapter)
-        {
-            return Err(PolicyError::AdapterNotAllowed {
-                adapter: profile.adapter.clone(),
-            });
-        }
-
-        // Required capabilities. The effective set is the conformance-proven
-        // one, so this denies an adapter that merely *claims* a capability
-        // its fixture never demonstrated.
-        for capability in &policy.required_capabilities {
-            if !effective_capabilities.has(capability) {
-                return Err(PolicyError::CapabilityMissing {
-                    adapter: profile.adapter.clone(),
-                    capability: capability.clone(),
-                });
-            }
-        }
-
-        // Native vendor-worker discovery is the one rollout gate that
-        // blocks rather than advises: it governs whether this runtime may
-        // act on workers it did not create.
-        if effective_capabilities.nested != crate::adapter::NestedCapability::None
-            && !policy.native_discovery_reviewed
-        {
-            return Err(PolicyError::NativeDiscoveryUnacknowledged {
-                adapter: profile.adapter.clone(),
-            });
-        }
-
-        // Cost ceilings. A ceiling that cannot be measured is worse than no
-        // ceiling, because it reads as enforced -- so an adapter that
-        // reports no usage is denied outright whenever one is configured.
-        let cost_configured =
-            policy.cost_ceiling_per_run_usd.is_some() || policy.cost_ceiling_daily_usd.is_some();
-        if cost_configured && effective_capabilities.usage == crate::adapter::UsageCapability::None
-        {
-            return Err(PolicyError::CostCeilingUnenforceable {
-                adapter: profile.adapter.clone(),
-            });
-        }
-        if let Some(ceiling) = policy.cost_ceiling_daily_usd {
-            // An unreadable journal makes the ceiling unmeasurable, which
-            // is exactly the `Unenforceable` case -- never a silent allow.
-            let Some(source) = self.daily_spend.as_ref() else {
-                return Err(PolicyError::CostCeilingUnenforceable {
-                    adapter: profile.adapter.clone(),
-                });
-            };
-            let spent =
-                source
-                    .spent_today_usd()
-                    .map_err(|_| PolicyError::CostCeilingUnenforceable {
-                        adapter: profile.adapter.clone(),
-                    })?;
-            if spent >= ceiling {
-                return Err(PolicyError::CostCeilingExceeded {
-                    scope: "daily",
-                    ceiling,
-                    spent,
-                });
-            }
         }
 
         // Atomic check-and-increment: CAS loop to avoid TOCTOU race
@@ -468,12 +334,6 @@ mod tests {
             display_backend: crate::config::crew::DisplayBackend::Auto,
             retention: "30d".to_string(),
             concurrency_ceiling: 2,
-            allowed_models: vec!["gpt-4".to_string()],
-            allowed_adapters: vec![],
-            cost_ceiling_per_run_usd: None,
-            cost_ceiling_daily_usd: None,
-            required_capabilities: vec![],
-            native_discovery_reviewed: true,
             org_security_patterns: vec![],
             copy_max_bytes: crate::workspace::DEFAULT_COPY_MAX_BYTES,
             copy_max_files: crate::workspace::DEFAULT_COPY_MAX_FILES,
@@ -509,41 +369,10 @@ mod tests {
     }
 
     #[test]
-    fn test_policy_evaluator_allows_allowed_model() {
+    fn test_policy_evaluator_allows_any_model_org_governance_retired() {
         let policy = test_policy();
         let evaluator = PolicyEvaluator::new(policy);
-        let profile = test_profile("gpt-4");
-        let caps = test_capabilities();
-
-        assert!(evaluator.evaluate(&profile, &caps, false, None).is_ok());
-        assert_eq!(evaluator.active_runs(), 1);
-
-        evaluator.release();
-        assert_eq!(evaluator.active_runs(), 0);
-    }
-
-    #[test]
-    fn test_policy_evaluator_denies_disallowed_model() {
-        let policy = test_policy();
-        let evaluator = PolicyEvaluator::new(policy);
-        let profile = test_profile("gpt-3.5");
-        let caps = test_capabilities();
-
-        let result = evaluator.evaluate(&profile, &caps, false, None);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            PolicyError::ModelNotAllowed { .. }
-        ));
-        assert_eq!(evaluator.active_runs(), 0);
-    }
-
-    #[test]
-    fn test_policy_evaluator_empty_allowlist_allows_all() {
-        let mut policy = test_policy();
-        policy.allowed_models = vec![];
-        let evaluator = PolicyEvaluator::new(policy);
-        let profile = test_profile("any-model");
+        let profile = test_profile("any-model-at-all");
         let caps = test_capabilities();
 
         assert!(evaluator.evaluate(&profile, &caps, false, None).is_ok());
@@ -609,127 +438,6 @@ mod tests {
 
         assert_eq!(violation.model, "gpt-3.5");
         assert!(!violation.is_nested);
-    }
-
-    #[test]
-    fn required_capability_absent_from_the_effective_set_denies() {
-        let mut policy = test_policy();
-        policy.required_capabilities = vec!["nativeView".to_string()];
-        let evaluator = PolicyEvaluator::new(policy);
-        let profile = test_profile("gpt-4");
-        // `test_capabilities` declares `nativeView: none`.
-        let caps = test_capabilities();
-
-        let err = evaluator
-            .evaluate(&profile, &caps, false, None)
-            .expect_err("a missing required capability must deny");
-        assert!(
-            matches!(err, PolicyError::CapabilityMissing { .. }),
-            "{err}"
-        );
-        assert_eq!(evaluator.active_runs(), 0, "a denial must book no slot");
-    }
-
-    #[test]
-    fn required_capability_present_allows() {
-        let mut policy = test_policy();
-        policy.required_capabilities = vec!["structuredResult".to_string(), "usage".to_string()];
-        let evaluator = PolicyEvaluator::new(policy);
-
-        assert!(
-            evaluator
-                .evaluate(&test_profile("gpt-4"), &test_capabilities(), false, None)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn nested_capable_adapter_denied_until_the_discovery_gate_is_resolved() {
-        let mut policy = test_policy();
-        policy.native_discovery_reviewed = false;
-        let evaluator = PolicyEvaluator::new(policy);
-        let mut caps = test_capabilities();
-        caps.nested = NestedCapability::Observable;
-
-        let err = evaluator
-            .evaluate(&test_profile("gpt-4"), &caps, false, None)
-            .expect_err("an unresolved discovery gate must block, not merely advise");
-        assert!(
-            matches!(err, PolicyError::NativeDiscoveryUnacknowledged { .. }),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn a_cost_ceiling_denies_an_adapter_that_cannot_report_usage() {
-        let mut policy = test_policy();
-        policy.cost_ceiling_per_run_usd = Some(5.0);
-        let evaluator = PolicyEvaluator::new(policy);
-        let mut caps = test_capabilities();
-        caps.usage = UsageCapability::None;
-
-        let err = evaluator
-            .evaluate(&test_profile("gpt-4"), &caps, false, None)
-            .expect_err("an unmeasurable ceiling must deny rather than read as enforced");
-        assert!(
-            matches!(err, PolicyError::CostCeilingUnenforceable { .. }),
-            "{err}"
-        );
-    }
-
-    struct FixedSpend(f64);
-    impl DailySpend for FixedSpend {
-        fn spent_today_usd(&self) -> Result<f64, String> {
-            Ok(self.0)
-        }
-    }
-
-    struct UnreadableSpend;
-    impl DailySpend for UnreadableSpend {
-        fn spent_today_usd(&self) -> Result<f64, String> {
-            Err("journal unreadable".to_string())
-        }
-    }
-
-    #[test]
-    fn daily_ceiling_denies_once_reached_and_allows_below_it() {
-        let mut policy = test_policy();
-        policy.cost_ceiling_daily_usd = Some(10.0);
-
-        let spent_over = PolicyEvaluator::new(policy.clone())
-            .with_daily_spend(Arc::new(FixedSpend(10.0)))
-            .evaluate(&test_profile("gpt-4"), &test_capabilities(), false, None)
-            .expect_err("spend at the ceiling must deny");
-        assert!(
-            matches!(
-                spent_over,
-                PolicyError::CostCeilingExceeded { scope: "daily", .. }
-            ),
-            "{spent_over}"
-        );
-
-        assert!(
-            PolicyEvaluator::new(policy)
-                .with_daily_spend(Arc::new(FixedSpend(9.99)))
-                .evaluate(&test_profile("gpt-4"), &test_capabilities(), false, None)
-                .is_ok(),
-            "spend below the ceiling must be allowed"
-        );
-    }
-
-    #[test]
-    fn an_unreadable_journal_denies_rather_than_silently_allowing() {
-        let mut policy = test_policy();
-        policy.cost_ceiling_daily_usd = Some(10.0);
-        let evaluator = PolicyEvaluator::new(policy).with_daily_spend(Arc::new(UnreadableSpend));
-
-        let err = evaluator
-            .evaluate(&test_profile("gpt-4"), &test_capabilities(), false, None)
-            .expect_err("an unreadable spend source must deny");
-        assert!(
-            matches!(err, PolicyError::CostCeilingUnenforceable { .. }),
-            "{err}"
-        );
     }
 
     #[test]

@@ -235,7 +235,6 @@ impl RunDriver for SeedingRunDriver {
                 security_patterns,
                 false, // nested_not_managed: don't trip a violation while seeding
                 Arc::clone(&ctx.violation_service),
-                None, // no cost ceiling: seeding usage must not quarantine the run
             )
             .expect("seed patterns always compile");
             for payload in events {

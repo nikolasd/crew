@@ -390,7 +390,6 @@ async fn nested_worker_observed_emits_without_upgrading_declared_capability() {
         vec![],
         false,
         violation_service,
-        None,
     )
     .expect("built-in patterns always compile");
 
@@ -744,7 +743,6 @@ async fn a_sink_with_invalid_org_patterns_fails_closed() {
         vec!["[invalid-regex".to_string()],
         false,
         violation_service,
-        None,
     );
     let err = result
         .err()
