@@ -47,6 +47,13 @@ export interface EnsureRuntimeOptions {
    * same principal. When omitted, falls back to a constant identity.
    */
   readonly sessionId?: string;
+  /**
+   * Crew config layer files to pass as `--config`, lowest precedence
+   * first. Resolved and JSON-validated by the caller (see
+   * {@link resolveCrewConfigPaths} in `crew-config.ts`) -- `buildServeArgs`
+   * only forwards whatever paths it is given. Defaults to no config layers.
+   */
+  readonly configPaths?: readonly string[];
 }
 
 /** The result of {@link ensureRuntime}. */
@@ -86,7 +93,11 @@ export interface SelectedBinary {
  * its inherited stdio is discarded.
  */
 export function buildServeArgs(options: EnsureRuntimeOptions): string[] {
-  return ["serve", "--state-dir", options.stateDir, "--repo", options.repository, "--idle-seconds", String(options.idleSeconds)];
+  const args = ["serve", "--state-dir", options.stateDir, "--repo", options.repository, "--idle-seconds", String(options.idleSeconds)];
+  for (const configPath of options.configPaths ?? []) {
+    args.push("--config", configPath);
+  }
+  return args;
 }
 
 /**

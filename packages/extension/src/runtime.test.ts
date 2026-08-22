@@ -126,6 +126,28 @@ test("buildServeArgs returns the exact detached serve argument vector", () => {
   expect(args).not.toContain("--foreground");
 });
 
+test("buildServeArgs omits --config entirely when no config layers are given", () => {
+  const args = buildServeArgs({
+    stateDir: "/s",
+    repository: "/r",
+    idleSeconds: 42,
+    env: {},
+    configPaths: [],
+  });
+  expect(args).not.toContain("--config");
+});
+
+test("buildServeArgs appends one --config per layer path, in the given order", () => {
+  const args = buildServeArgs({
+    stateDir: "/s",
+    repository: "/r",
+    idleSeconds: 42,
+    env: {},
+    configPaths: ["/home/alice/.omp/crew.json", "/r/.omp/crew.json"],
+  });
+  expect(args).toEqual(["serve", "--state-dir", "/s", "--repo", "/r", "--idle-seconds", "42", "--config", "/home/alice/.omp/crew.json", "--config", "/r/.omp/crew.json"]);
+});
+
 test("ensureRuntime spawns a detached daemon that logs runtime_started to runtime.log", async () => {
   const stateDir = newStateDir();
   const repository = newRepo();

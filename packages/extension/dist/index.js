@@ -6851,15 +6851,46 @@ import { TASK_SUBAGENT_EVENT_CHANNEL, TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBA
 // src/context.ts
 import { homedir } from "os";
 
+// src/crew-config.ts
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
+
+class CrewConfigError extends Error {
+  code;
+  path;
+  constructor(code, path, message) {
+    super(message);
+    this.name = "CrewConfigError";
+    this.code = code;
+    this.path = path;
+  }
+}
+function resolveCrewConfigPaths(home, repository) {
+  const candidates = [join(home, ".omp", "crew.json"), join(repository, ".omp", "crew.json")];
+  const resolved = [];
+  for (const path of candidates) {
+    if (!existsSync(path)) {
+      continue;
+    }
+    try {
+      JSON.parse(readFileSync(path, "utf8"));
+    } catch (err) {
+      throw new CrewConfigError("invalid-json", path, `crew config file ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    resolved.push(path);
+  }
+  return resolved;
+}
+
 // src/platform.ts
-import { existsSync as existsSync2, readFileSync as readFileSync2 } from "fs";
-import { join as join2 } from "path";
+import { existsSync as existsSync3, readFileSync as readFileSync3 } from "fs";
+import { join as join3 } from "path";
 
 // src/runtime.ts
 import { spawn } from "child_process";
 import { createHash } from "crypto";
-import { existsSync, lstatSync, realpathSync, statSync } from "fs";
-import { dirname, isAbsolute, join } from "path";
+import { existsSync as existsSync2, lstatSync, realpathSync, statSync } from "fs";
+import { dirname, isAbsolute, join as join2 } from "path";
 
 // src/client.ts
 import { createConnection } from "net";
@@ -10242,7 +10273,11 @@ class BinarySelectionError extends Error {
   }
 }
 function buildServeArgs(options) {
-  return ["serve", "--state-dir", options.stateDir, "--repo", options.repository, "--idle-seconds", String(options.idleSeconds)];
+  const args = ["serve", "--state-dir", options.stateDir, "--repo", options.repository, "--idle-seconds", String(options.idleSeconds)];
+  for (const configPath of options.configPaths ?? []) {
+    args.push("--config", configPath);
+  }
+  return args;
 }
 async function ensureRuntime(options) {
   const socketPath = socketPathFor(options.stateDir, options.repository);
@@ -10264,7 +10299,7 @@ async function ensureRuntime(options) {
   return { client, childStarted: true };
 }
 function socketPathFor(stateDir, repository) {
-  return join(stateDir, "repos", repositoryId(repository), "runtime.sock");
+  return join2(stateDir, "repos", repositoryId(repository), "runtime.sock");
 }
 function repositoryId(repository) {
   const canonical = realpathSync(repository);
@@ -10278,7 +10313,7 @@ function repositoryIdFromRoot(canonicalRoot) {
 function discoverVcsRoot(canonical) {
   let current = canonical;
   for (;; ) {
-    if (pathExists(join(current, ".git"))) {
+    if (pathExists(join2(current, ".git"))) {
       return current;
     }
     const parent = dirname(current);
@@ -10341,7 +10376,7 @@ function initParams(repository, sessionId) {
   };
 }
 async function tryConnect(socketPath, repository, sessionId) {
-  if (!existsSync(socketPath)) {
+  if (!existsSync2(socketPath)) {
     return;
   }
   const client = new CrewClient({ socketPath });
@@ -10375,9 +10410,9 @@ function sleep(ms) {
 
 // src/integrity.ts
 import { createHash as createHash2 } from "crypto";
-import { readFileSync } from "fs";
+import { readFileSync as readFileSync2 } from "fs";
 function sha256File(path) {
-  return createHash2("sha256").update(readFileSync(path)).digest("hex");
+  return createHash2("sha256").update(readFileSync2(path)).digest("hex");
 }
 
 // src/platform.ts
@@ -10414,7 +10449,7 @@ function resolveTarget(platform, arch, libc) {
   return target;
 }
 function runtimeCacheDir(stateRoot, version) {
-  return join2(stateRoot, "bin", version);
+  return join3(stateRoot, "bin", version);
 }
 function resolveCrewd(platform, arch, libc, env, stateRoot) {
   const override = resolveOverride(env);
@@ -10423,9 +10458,9 @@ function resolveCrewd(platform, arch, libc, env, stateRoot) {
   }
   const target = resolveTarget(platform, arch, libc);
   const dir = runtimeCacheDir(stateRoot, EXTENSION_VERSION);
-  const binPath = join2(dir, "crewd");
-  const manifestPath = join2(dir, "manifest.json");
-  if (!existsSync2(binPath) || !existsSync2(manifestPath)) {
+  const binPath = join3(dir, "crewd");
+  const manifestPath = join3(dir, "manifest.json");
+  if (!existsSync3(binPath) || !existsSync3(manifestPath)) {
     throw new BinarySelectionError("runtime-not-installed", `no crewd binary installed for version ${EXTENSION_VERSION}; run /crew-runtime-install to download it, or set OMP_CREW_BINARY to a local build`);
   }
   const manifest = readManifest(manifestPath);
@@ -10456,7 +10491,7 @@ function parseManifest(raw, sourceLabel) {
 function readManifest(manifestPath) {
   let raw;
   try {
-    raw = readFileSync2(manifestPath, "utf8");
+    raw = readFileSync3(manifestPath, "utf8");
   } catch (err) {
     throw new BinaryIntegrityError("manifest-invalid", `unable to read manifest at ${manifestPath}: ${err.message}`);
   }
@@ -10488,14 +10523,14 @@ function detectLibc(platform = process.platform) {
     }
   } catch {}
   const muslLoaders = ["/lib/ld-musl-x86_64.so.1", "/lib/ld-musl-aarch64.so.1"];
-  if (muslLoaders.some((loader) => existsSync2(loader))) {
+  if (muslLoaders.some((loader) => existsSync3(loader))) {
     return "musl";
   }
   return;
 }
 
 // src/state.ts
-import { isAbsolute as isAbsolute2, join as join3 } from "path";
+import { isAbsolute as isAbsolute2, join as join4 } from "path";
 class StateRootError extends Error {
   code;
   constructor(code, message) {
@@ -10517,10 +10552,10 @@ function resolveStateRoot(env, home) {
     if (!isAbsolute2(xdgStateHome)) {
       throw new StateRootError("relative-override", `XDG_STATE_HOME must be an absolute path, got ${JSON.stringify(xdgStateHome)}`);
     }
-    return join3(xdgStateHome, "omp", "batman");
+    return join4(xdgStateHome, "omp", "batman");
   }
   const piConfigDir = env.PI_CONFIG_DIR ?? ".omp";
-  return join3(home, piConfigDir, "batman");
+  return join4(home, piConfigDir, "batman");
 }
 
 // src/context.ts
@@ -10530,6 +10565,7 @@ function buildStatusContext(options = {}) {
   const home = options.home ?? homedir();
   const repository = options.cwd ?? process.cwd();
   const stateDir = resolveStateRoot(env, home);
+  const configPaths = resolveCrewConfigPaths(home, repository);
   return {
     ensureRuntimeOptions: {
       stateDir,
@@ -10537,7 +10573,8 @@ function buildStatusContext(options = {}) {
       idleSeconds: DEFAULT_IDLE_SECONDS,
       env,
       packagedBinaryResolver: options.packagedBinaryResolver ?? (() => resolveCrewd(process.platform, process.arch, detectLibc(), env, stateDir).path),
-      sessionId: options.sessionId
+      sessionId: options.sessionId,
+      configPaths
     }
   };
 }
@@ -10911,7 +10948,7 @@ import { homedir as homedir3 } from "os";
 
 // src/download.ts
 import { chmodSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "fs";
-import { join as join4 } from "path";
+import { join as join5 } from "path";
 var API_BASE_URL = "https://api.github.com/repos/nikolasd/batman";
 
 class RuntimeDownloadError extends Error {
@@ -10942,9 +10979,9 @@ async function downloadRuntime(options) {
   }
   const binaryBytes = await fetchAssetBytes(fetchImpl, binaryAsset.url, options.token);
   const dir = runtimeCacheDir(options.stateRoot, options.version);
-  const finalPath = join4(dir, "crewd");
-  const manifestPath = join4(dir, "manifest.json");
-  const tmpPath = join4(dir, `.crewd.${process.pid}.tmp`);
+  const finalPath = join5(dir, "crewd");
+  const manifestPath = join5(dir, "manifest.json");
+  const tmpPath = join5(dir, `.crewd.${process.pid}.tmp`);
   try {
     mkdirSync(dir, { recursive: true, mode: 448 });
     writeFileSync(tmpPath, binaryBytes);
