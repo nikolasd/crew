@@ -86,6 +86,7 @@ fn omp_rpc_test_profile() -> WorkerProfile {
         startup_options: StartupOptions::OmpRpc(OmpRpcStartupOptions {
             profile: None,
             host_tools: None,
+            ..Default::default()
         }),
         environment_allowlist: Vec::new(),
         source: "test".to_string(),

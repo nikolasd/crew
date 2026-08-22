@@ -571,7 +571,11 @@ async fn omp_extension_receives_all_mutation_methods() {
             "workspace/inspect",
             "workspace/apply",
             "artifact/list",
-            "artifact/fetch"
+            "artifact/fetch",
+            "plan/propose",
+            "plan/decide",
+            "plan/get",
+            "run/timeoutAck"
         ]
     );
 }

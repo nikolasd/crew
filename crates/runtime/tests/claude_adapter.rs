@@ -171,6 +171,7 @@ fn startup_options_pass_through_supported_cli_flags_and_omit_unsupported_max_tur
         // by this CLI-argv adapter -- deliberately not passed as a flag,
         // rather than inventing one.
         max_turns: Some(10),
+        ..Default::default()
     };
     let spec = StartSpec {
         run_id: batman_protocol::RunId::new(),

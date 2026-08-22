@@ -752,6 +752,7 @@ fn spawn_plan_is_unchanged_when_mcp_is_none() {
         allow_tool: Some(vec!["fs_read".to_string()]),
         deny_tool: Some(vec!["fs_write".to_string()]),
         log_level: Some("debug".to_string()),
+        ..Default::default()
     };
     let adapter = CopilotAdapter::new(
         PathBuf::from("copilot"),

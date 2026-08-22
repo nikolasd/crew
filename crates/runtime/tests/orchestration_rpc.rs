@@ -2570,6 +2570,47 @@ async fn display_principal_cannot_call_orchestration_mutation_methods() {
     );
 }
 
+#[tokio::test]
+async fn display_principal_cannot_call_plan_or_timeout_ack_methods() {
+    let harness = Harness::start(|_| {}).await;
+    let mut client = Client::connect(&harness.socket).await;
+    client.initialize("display", "display-1", None).await;
+
+    for method in ["plan/propose", "plan/decide", "plan/get", "run/timeoutAck"] {
+        let attempt = client.call(2, method, json!({})).await;
+        assert_eq!(
+            attempt["error"]["code"], -32601,
+            "display must get METHOD_NOT_FOUND for {method}: {attempt:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn omp_extension_can_reach_plan_and_timeout_ack_methods_but_they_are_stubbed() {
+    // Role table membership: an `ompExtension` client's call reaches the
+    // service layer (rather than being hidden as METHOD_NOT_FOUND for the
+    // role, the way `display_principal_cannot_call_plan_or_timeout_ack_methods`
+    // proves it is for `display`) and gets a distinct "not yet
+    // implemented" refusal -- the stub this work package wires ahead of
+    // WP17/WP21's real handlers.
+    let harness = Harness::start(|_| {}).await;
+    let mut client = omp_client(&harness, "omp-1").await;
+
+    for method in ["plan/propose", "plan/decide", "plan/get", "run/timeoutAck"] {
+        let attempt = client.call(2, method, json!({})).await;
+        assert_eq!(
+            attempt["error"]["code"], -32601,
+            "{method} should still surface a JSON-RPC error: {attempt:?}"
+        );
+        let message = attempt["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("not yet implemented"),
+            "{method} should be refused as not-yet-implemented, not as an unknown/out-of-role \
+             method: {attempt:?}"
+        );
+    }
+}
+
 // ------------------------------------------------------------- reconcile
 
 #[tokio::test]
@@ -3349,6 +3390,7 @@ impl RunDriver for RealAdapterRunDriver {
                 startup_options: StartupOptions::OmpRpc(OmpRpcStartupOptions {
                     profile: None,
                     host_tools: None,
+                    ..Default::default()
                 }),
                 environment_allowlist: Vec::new(),
                 source: "test".to_string(),
