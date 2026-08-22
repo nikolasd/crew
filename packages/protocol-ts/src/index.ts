@@ -6,6 +6,7 @@
 // generated file is re-exported, so a type that exists on the wire is
 // always importable from the barrel. Enforced by `bun run generate --check`
 // (xtask's check_barrel_completeness), which fails CI on any omission.
+export type * from "./generated/AnsweredBy";
 export type * from "./generated/ApplyRequest";
 export type * from "./generated/ApplyResult";
 export type * from "./generated/ApplyStrategy";
@@ -49,6 +50,10 @@ export type * from "./generated/LeaseRequest";
 export type * from "./generated/MessageId";
 export type * from "./generated/MessageKind";
 export type * from "./generated/OperationId";
+export type * from "./generated/PlanDecideResult";
+export type * from "./generated/PlanGetResult";
+export type * from "./generated/PlanProposeResult";
+export type * from "./generated/PlanSpec";
 export type * from "./generated/PolicyViolationId";
 export type * from "./generated/PolicyViolationListResult";
 export type * from "./generated/PolicyViolationSummary";
@@ -61,13 +66,16 @@ export type * from "./generated/RunFlags";
 export type * from "./generated/RunId";
 export type * from "./generated/RunResultResult";
 export type * from "./generated/RunState";
+export type * from "./generated/RunTimeoutAckResult";
 export type * from "./generated/RunUsage";
 export type * from "./generated/RuntimeCapabilities";
 export type * from "./generated/RuntimeEvent";
 export type * from "./generated/RuntimeEventKind";
 export type * from "./generated/RuntimeInfo";
 export type * from "./generated/RuntimeStatus";
+export type * from "./generated/SubtaskSpec";
 export type * from "./generated/TaskId";
+export type * from "./generated/TimeoutKind";
 export type * from "./generated/Timestamp";
 export type * from "./generated/VersionRange";
 export type * from "./generated/WorkerId";

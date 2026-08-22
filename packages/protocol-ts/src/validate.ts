@@ -72,6 +72,14 @@ export const validateJsonRpcErrorResponse = def("JsonRpcErrorResponse");
 export const validateJsonRpcNotification = def("JsonRpcNotification");
 /** Validates a `run/result` result payload. */
 export const validateRunResultResult = def("RunResultResult");
+/** Validates a `plan/propose` result payload. */
+export const validatePlanProposeResult = def("PlanProposeResult");
+/** Validates a `plan/decide` result payload. */
+export const validatePlanDecideResult = def("PlanDecideResult");
+/** Validates a `plan/get` result payload. */
+export const validatePlanGetResult = def("PlanGetResult");
+/** Validates a `run/timeoutAck` result payload. */
+export const validateRunTimeoutAckResult = def("RunTimeoutAckResult");
 
 /** Validates the array of event envelopes returned by `events/replay`. */
 export const validateEventEnvelopeArray = ajv.compile({

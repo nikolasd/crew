@@ -17,10 +17,11 @@ use batman_protocol::{
     ContentClass, DiagnosticLevel, DisplayBackend, DisplayConfig, DisplayStatus, EventEnvelope,
     EventSource, InitializeParams, InitializeResult, InspectRequest, InspectResult, JsonRpcError,
     JsonRpcErrorResponse, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, LeaseRequest,
-    MessageId, MessageKind, OperationId, PolicyViolationListResult, PolicyViolationSummary,
-    ProjectId, ProtocolVersion, ReleaseRequest, RepositoryIdentity, RequestId, RunId,
-    RunResultResult, RunUsage, RuntimeCapabilities, RuntimeEvent, RuntimeInfo, RuntimeStatus,
-    TaskId, Timestamp, VersionRange, WorkerId, WorkspaceInfo,
+    MessageId, MessageKind, OperationId, PlanDecideResult, PlanGetResult, PlanProposeResult,
+    PolicyViolationListResult, PolicyViolationSummary, ProjectId, ProtocolVersion, ReleaseRequest,
+    RepositoryIdentity, RequestId, RunId, RunResultResult, RunTimeoutAckResult, RunUsage,
+    RuntimeCapabilities, RuntimeEvent, RuntimeInfo, RuntimeStatus, TaskId, Timestamp, VersionRange,
+    WorkerId, WorkspaceInfo,
 };
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
@@ -267,6 +268,10 @@ fn export_bindings(dir: &Path) -> Result<()> {
         PolicyViolationSummary,
         PolicyViolationListResult,
         MessageKind,
+        PlanProposeResult,
+        PlanDecideResult,
+        PlanGetResult,
+        RunTimeoutAckResult,
     );
 
     Ok(())
