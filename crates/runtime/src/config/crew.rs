@@ -184,6 +184,10 @@ pub struct WorkspaceConfig {
     pub copy_max_bytes: Option<u64>,
     #[serde(default)]
     pub copy_max_files: Option<u64>,
+    /// Ceiling on the artifact store's total bytes; `None` uses
+    /// [`crate::workspace::DEFAULT_ARTIFACT_STORE_MAX_BYTES`].
+    #[serde(default)]
+    pub artifact_max_bytes: Option<u64>,
 }
 
 impl Default for WorkspaceConfig {
@@ -192,6 +196,7 @@ impl Default for WorkspaceConfig {
             default_mode: WorkspaceMode::Shared,
             copy_max_bytes: None,
             copy_max_files: None,
+            artifact_max_bytes: None,
         }
     }
 }
@@ -353,7 +358,12 @@ const ADAPTER_KEYS: &[&str] = &[
     "sessionDir",
     "extraArgs",
 ];
-const WORKSPACE_KEYS: &[&str] = &["defaultMode", "copyMaxBytes", "copyMaxFiles"];
+const WORKSPACE_KEYS: &[&str] = &[
+    "defaultMode",
+    "copyMaxBytes",
+    "copyMaxFiles",
+    "artifactMaxBytes",
+];
 const DASHBOARD_KEYS: &[&str] = &["enabled", "port"];
 const RETENTION_KEYS: &[&str] = &["maxRuns", "period"];
 const SECURITY_KEYS: &[&str] = &["patterns"];

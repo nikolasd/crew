@@ -263,9 +263,30 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         mcp,
         org_security_patterns,
     ));
+    // The artifact store persists under the state root so a journaled
+    // `patch_artifact_id` survives a daemon restart -- `workspace/apply`
+    // after a restart must still find its patch. Failing to open it is a
+    // real permission/disk problem and refuses startup: silently falling
+    // back to memory would journal artifact ids that quietly die with the
+    // process.
+    let artifact_store = Arc::new(
+        crate::workspace::ArtifactStore::with_storage(
+            paths.artifacts.clone(),
+            crew_config
+                .workspace
+                .artifact_max_bytes
+                .unwrap_or(crate::workspace::DEFAULT_ARTIFACT_STORE_MAX_BYTES),
+        )
+        .map_err(|e| ServeError::Io {
+            path: paths.artifacts.clone(),
+            source: std::io::Error::other(e.to_string()),
+        })?,
+    );
+
     let config = ServerConfig {
         binary_source: opts.binary_source,
         run_driver: Some(Arc::clone(&registry) as Arc<dyn crate::service::RunDriver>),
+        artifact_store: Some(artifact_store),
         repository: repo_root.clone(),
         worker_verifier: Arc::new(ScopeTokenVerifier::new(Arc::clone(&scope_tokens))),
         nested_violation_action,

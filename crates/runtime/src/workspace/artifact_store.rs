@@ -18,6 +18,12 @@ use tokio::sync::RwLock;
 /// single RPC response bounded no matter what a caller asks for.
 pub const ARTIFACT_FETCH_MAX_BYTES: u64 = 256 * 1024;
 
+/// Default ceiling on the total bytes a persistent store may hold, used
+/// when `workspace.artifactMaxBytes` is not configured. Patches and
+/// conflict reports are small; this bound exists so a runaway publisher
+/// cannot fill the state directory.
+pub const DEFAULT_ARTIFACT_STORE_MAX_BYTES: u64 = 256 * 1024 * 1024;
+
 #[derive(Debug, Error)]
 pub enum ArtifactStoreError {
     #[error("artifact not found: {0}")]
@@ -47,13 +53,20 @@ pub(crate) fn sha256_hex(content: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// In-memory artifact store with metadata tracking.
+/// Artifact store with metadata tracking; optionally persisted on disk so
+/// journaled artifact ids survive a daemon restart.
 #[derive(Debug, Clone)]
 pub struct ArtifactStore {
     /// Maps artifact ID to its metadata and content.
     artifacts: Arc<RwLock<HashMap<ArtifactId, StoredArtifact>>>,
-    /// Base directory for on-disk storage (optional).
+    /// Base directory for on-disk storage (optional). Content lives at
+    /// `objects/<sha256>` (content-addressed: identical bytes share one
+    /// file and a stale filename can never alias a different artifact);
+    /// metadata lives at `index/<artifact_id>.json`.
     storage_dir: Option<PathBuf>,
+    /// Ceiling on the total stored bytes; a publish that would exceed it
+    /// is refused with a typed error.
+    max_total_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -63,20 +76,36 @@ struct StoredArtifact {
 }
 
 impl ArtifactStore {
-    /// Creates a new in-memory artifact store.
+    /// Creates a new in-memory artifact store (no persistence, unbounded --
+    /// the pre-persistence behavior, kept for tests and embedded use).
     pub fn new() -> Self {
         ArtifactStore {
             artifacts: Arc::new(RwLock::new(HashMap::new())),
             storage_dir: None,
+            max_total_bytes: u64::MAX,
         }
     }
 
-    /// Creates a new artifact store with on-disk persistence.
-    pub fn with_storage(base_dir: PathBuf) -> Result<Self, ArtifactStoreError> {
-        std::fs::create_dir_all(&base_dir)?;
+    /// Opens an artifact store persisted under `base_dir`, loading the
+    /// on-disk index so artifacts published before a daemon restart stay
+    /// fetchable. An index entry whose content file is missing or no
+    /// longer hashes to its recorded digest is skipped (with a warning),
+    /// never served.
+    ///
+    /// # Errors
+    /// Returns [`ArtifactStoreError::Io`] if the storage directories
+    /// cannot be created or the index cannot be scanned.
+    pub fn with_storage(
+        base_dir: PathBuf,
+        max_total_bytes: u64,
+    ) -> Result<Self, ArtifactStoreError> {
+        std::fs::create_dir_all(base_dir.join("objects"))?;
+        std::fs::create_dir_all(base_dir.join("index"))?;
+        let loaded = load_index(&base_dir)?;
         Ok(ArtifactStore {
-            artifacts: Arc::new(RwLock::new(HashMap::new())),
+            artifacts: Arc::new(RwLock::new(loaded)),
             storage_dir: Some(base_dir),
+            max_total_bytes,
         })
     }
 
@@ -107,17 +136,35 @@ impl ArtifactStore {
             });
         }
 
-        // If on-disk storage is configured, write the content
-        if let Some(ref storage_dir) = self.storage_dir {
-            let storage_path = &artifact.storage_path;
-            let full_path = storage_dir.join(storage_path);
-            if let Some(parent) = full_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&full_path, &content)?;
+        // Ceiling check under the write lock, before anything durable
+        // happens, so a refused publish leaves no trace on disk.
+        let mut artifacts = self.artifacts.write().await;
+        let stored_total: u64 = artifacts
+            .values()
+            .map(|stored| stored.metadata.byte_length)
+            .sum();
+        if stored_total.saturating_add(content.len() as u64) > self.max_total_bytes {
+            return Err(ArtifactStoreError::Storage(format!(
+                "artifact store ceiling exceeded: {stored_total} stored + {} new > {} max bytes",
+                content.len(),
+                self.max_total_bytes
+            )));
         }
 
-        let mut artifacts = self.artifacts.write().await;
+        if let Some(ref storage_dir) = self.storage_dir {
+            // Content first (content-addressed; identical bytes dedupe),
+            // index entry second: an index entry always points at content
+            // that already exists.
+            let object_path = storage_dir.join("objects").join(&artifact.sha256);
+            if !object_path.exists() {
+                write_atomically(&object_path, &content)?;
+            }
+            let index_path = storage_dir.join("index").join(format!("{id}.json"));
+            let metadata_json = serde_json::to_vec(&artifact)
+                .map_err(|e| ArtifactStoreError::Storage(e.to_string()))?;
+            write_atomically(&index_path, &metadata_json)?;
+        }
+
         artifacts.insert(
             id,
             StoredArtifact {
@@ -231,6 +278,67 @@ impl Default for ArtifactStore {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Writes `bytes` to `path` via a same-directory temp file + rename, so a
+/// crash mid-write can never leave a half-written object or index entry
+/// under the final name.
+fn write_atomically(path: &std::path::Path, bytes: &[u8]) -> Result<(), ArtifactStoreError> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Loads every `index/<artifact_id>.json` whose content object still
+/// exists and still hashes to its recorded digest. Entries failing either
+/// check are skipped with a warning -- served-but-wrong is the one
+/// unacceptable outcome.
+fn load_index(
+    base_dir: &std::path::Path,
+) -> Result<HashMap<ArtifactId, StoredArtifact>, ArtifactStoreError> {
+    let mut loaded = HashMap::new();
+    for entry in std::fs::read_dir(base_dir.join("index"))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let metadata: Artifact = match std::fs::read(&path)
+            .map_err(ArtifactStoreError::from)
+            .and_then(|bytes| {
+                serde_json::from_slice(&bytes)
+                    .map_err(|e| ArtifactStoreError::Storage(e.to_string()))
+            }) {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                tracing::warn!(path = %path.display(), error = %err, "artifact_index_entry_unreadable");
+                continue;
+            }
+        };
+        let object_path = base_dir.join("objects").join(&metadata.sha256);
+        let content = match std::fs::read(&object_path) {
+            Ok(content) => content,
+            Err(err) => {
+                tracing::warn!(
+                    artifact_id = %metadata.artifact_id,
+                    path = %object_path.display(),
+                    error = %err,
+                    "artifact_content_missing_on_load"
+                );
+                continue;
+            }
+        };
+        if sha256_hex(&content) != metadata.sha256 {
+            tracing::warn!(
+                artifact_id = %metadata.artifact_id,
+                "artifact_content_digest_mismatch_on_load; refusing to serve it"
+            );
+            continue;
+        }
+        loaded.insert(metadata.artifact_id, StoredArtifact { metadata, content });
+    }
+    Ok(loaded)
 }
 
 /// Simple base64 encoding.

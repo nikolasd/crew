@@ -330,6 +330,7 @@ fn full_field_round_trip_through_json_survives_validate_shape() {
             default_mode: WorkspaceMode::Copy,
             copy_max_bytes: Some(123),
             copy_max_files: Some(45),
+            artifact_max_bytes: Some(6789),
         },
         dashboard: DashboardConfig {
             enabled: true,
