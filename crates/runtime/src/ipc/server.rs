@@ -250,6 +250,16 @@ impl Server {
         Arc::clone(&self.shared.coordination)
     }
 
+    /// The live event broadcast every committed mutation fans out to.
+    /// Exposed (like [`Server::coordination_broker`]) for projections
+    /// constructed after `bind` -- the dashboard's SSE route subscribes to
+    /// exactly this sender, so it sees the same envelopes as
+    /// `events/subscribe` clients.
+    #[must_use]
+    pub fn events_sender(&self) -> broadcast::Sender<batman_protocol::EventEnvelope> {
+        self.shared.events_tx.clone()
+    }
+
     /// Accepts and serves connections until `shutdown` resolves.
     ///
     /// Each accepted connection has its peer credentials read *before* any

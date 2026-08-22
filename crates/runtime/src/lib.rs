@@ -18,6 +18,7 @@ pub mod canonical_json;
 pub mod config;
 pub mod conformance;
 pub mod coordination;
+pub mod dashboard;
 pub mod db;
 pub mod display;
 pub mod doctor;

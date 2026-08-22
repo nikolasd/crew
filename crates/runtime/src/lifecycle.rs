@@ -183,8 +183,12 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     // can re-merge a run's own `policyOverrides` onto them.
     let config_paths = opts.config_paths.clone();
     let path_refs: Vec<&Path> = config_paths.iter().map(PathBuf::as_path).collect();
-    let policy = crate::config::resolve_policy(&path_refs, None)
+    // Load the merged CrewConfig once: the policy adapter below is what
+    // `run/submit` re-merges against, while sections the policy does not
+    // carry (the dashboard listener) are read off the config directly.
+    let crew_config = crate::config::crew::load_layers(&path_refs, None)
         .map_err(|e| ServeError::ConfigError(e.to_string()))?;
+    let policy = crate::config::RuntimePolicy::from_crew_config(&crew_config);
 
     // Org security patterns fail *closed*. An org configures these to keep
     // specific secrets out of a durable journal it cannot retroactively
@@ -321,7 +325,41 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         }
     });
 
+    // The dashboard is an opt-in, read-only, localhost-only projection; a
+    // bind failure (port taken) degrades to "no dashboard" rather than
+    // failing a daemon that orchestrates fine without it.
+    let dashboard = if crew_config.dashboard.enabled {
+        match crate::dashboard::DashboardServer::bind(
+            crew_config.dashboard.port,
+            crate::dashboard::DashboardDeps {
+                db: Arc::clone(&db),
+                project_id: paths.project_id,
+                events_tx: server.events_sender(),
+            },
+        )
+        .await
+        {
+            Ok(dashboard) => {
+                tracing::info!(addr = %dashboard.local_addr(), "dashboard_started");
+                Some(dashboard)
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, port = crew_config.dashboard.port, "dashboard_bind_failed");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     server.serve(shutdown_signal()).await?;
+
+    // Stop the dashboard before the journal drains below: its readers go
+    // through the same DatabaseHandle, so nothing may still be answering
+    // HTTP once the actor begins shutting down.
+    if let Some(dashboard) = dashboard {
+        dashboard.stop();
+    }
 
     // Graceful shutdown: journal the stop record durably FIRST, then close the
     // database, and only then remove the socket and release the lock. The
