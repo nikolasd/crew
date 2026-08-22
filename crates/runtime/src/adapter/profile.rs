@@ -180,12 +180,26 @@ impl StartupOptions {
     }
 }
 
+/// Whether a supervised adapter process runs attached to a terminal UI or
+/// fully headless. Defaults to `Headless` so a profile serialized before
+/// this field existed still deserializes -- the same wire-compat pattern
+/// `ApprovalEvent.reason` uses in `batman_protocol::event`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AdapterMode {
+    Tui,
+    #[default]
+    Headless,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClaudeStartupOptions {
     pub allowed_tools: Option<Vec<String>>,
     pub permission_mode: Option<String>,
     pub max_turns: Option<u32>,
+    #[serde(default)]
+    pub mode: AdapterMode,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -194,6 +208,8 @@ pub struct CodexStartupOptions {
     pub sandbox_mode: Option<String>,
     pub approval_policy: Option<String>,
     pub config_overrides: Option<Vec<String>>,
+    #[serde(default)]
+    pub mode: AdapterMode,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -202,6 +218,8 @@ pub struct CopilotStartupOptions {
     pub allow_tool: Option<Vec<String>>,
     pub deny_tool: Option<Vec<String>>,
     pub log_level: Option<String>,
+    #[serde(default)]
+    pub mode: AdapterMode,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -209,6 +227,8 @@ pub struct CopilotStartupOptions {
 pub struct OmpRpcStartupOptions {
     pub profile: Option<String>,
     pub host_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub mode: AdapterMode,
 }
 
 /// Startup options for the terminal-controlled degraded fallback mode.
@@ -422,5 +442,76 @@ impl EffectivePolicy {
 impl Default for EffectivePolicy {
     fn default() -> Self {
         Self::baseline()
+    }
+}
+
+#[cfg(test)]
+mod adapter_mode_tests {
+    use super::*;
+
+    #[test]
+    fn adapter_mode_defaults_to_headless() {
+        assert_eq!(AdapterMode::default(), AdapterMode::Headless);
+    }
+
+    /// A profile serialized before `mode` existed on these structs must
+    /// still deserialize, defaulting to `Headless` -- the same wire-compat
+    /// requirement the runtime already applies to `ApprovalEvent.reason`.
+    #[test]
+    fn every_vendor_startup_options_defaults_mode_when_field_is_missing() {
+        let claude: ClaudeStartupOptions = serde_json::from_value(serde_json::json!({
+            "allowedTools": null,
+            "permissionMode": null,
+            "maxTurns": null,
+        }))
+        .unwrap();
+        assert_eq!(claude.mode, AdapterMode::Headless);
+
+        let codex: CodexStartupOptions = serde_json::from_value(serde_json::json!({
+            "sandboxMode": null,
+            "approvalPolicy": null,
+            "configOverrides": null,
+        }))
+        .unwrap();
+        assert_eq!(codex.mode, AdapterMode::Headless);
+
+        let copilot: CopilotStartupOptions = serde_json::from_value(serde_json::json!({
+            "allowTool": null,
+            "denyTool": null,
+            "logLevel": null,
+        }))
+        .unwrap();
+        assert_eq!(copilot.mode, AdapterMode::Headless);
+
+        let omp_rpc: OmpRpcStartupOptions = serde_json::from_value(serde_json::json!({
+            "profile": null,
+            "hostTools": null,
+        }))
+        .unwrap();
+        assert_eq!(omp_rpc.mode, AdapterMode::Headless);
+    }
+
+    #[test]
+    fn mode_round_trips_tui() {
+        let options = ClaudeStartupOptions {
+            mode: AdapterMode::Tui,
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&options).unwrap();
+        assert_eq!(value["mode"], "tui");
+        let round_tripped: ClaudeStartupOptions = serde_json::from_value(value).unwrap();
+        assert_eq!(round_tripped.mode, AdapterMode::Tui);
+    }
+
+    #[test]
+    fn startup_options_still_rejects_unknown_fields() {
+        let value = serde_json::json!({
+            "allowedTools": null,
+            "permissionMode": null,
+            "maxTurns": null,
+            "mode": "headless",
+            "unexpected": true,
+        });
+        assert!(serde_json::from_value::<ClaudeStartupOptions>(value).is_err());
     }
 }

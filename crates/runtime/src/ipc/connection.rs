@@ -517,6 +517,25 @@ async fn dispatch(
                 Err(err) => error(&id, err.code, &err.message),
             }
         }
+        // Plan lifecycle and run-timeout-ack methods: routed through
+        // OrchestrationService, which currently refuses every one of these
+        // with a "not yet implemented" error (crew v2 gap-closure WP6);
+        // WP17/WP21 replace the stub with real handlers.
+        BatmanMethod::PlanPropose
+        | BatmanMethod::PlanDecide
+        | BatmanMethod::PlanGet
+        | BatmanMethod::RunTimeoutAck => {
+            let resolved = method.expect("allowed implies a known method");
+            let params = message.get("params").cloned().unwrap_or(Value::Null);
+            match shared
+                .orchestration
+                .dispatch(resolved, principal, &params)
+                .await
+            {
+                Ok(value) => success(&id, value),
+                Err(err) => error(&id, err.code, &err.message),
+            }
+        }
     }
 }
 

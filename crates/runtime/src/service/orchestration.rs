@@ -49,6 +49,20 @@ impl ServiceError {
             message: msg.into(),
         }
     }
+
+    /// A refusal for a known, role-permitted method whose real handler
+    /// lands in a later work package. Reuses `METHOD_NOT_FOUND` (-32601),
+    /// the same code the ACP-facing Copilot client already returns for a
+    /// recognized-but-unimplemented method
+    /// (`crate::adapter::copilot::client`), rather than inventing a new
+    /// refusal shape; the message text (not the code) is what
+    /// distinguishes "not yet implemented" from "unknown or out of role".
+    fn not_yet_implemented(method_name: &str) -> Self {
+        Self {
+            code: error_code::METHOD_NOT_FOUND,
+            message: format!("{method_name} is not yet implemented"),
+        }
+    }
 }
 
 impl From<DomainError> for ServiceError {
@@ -333,6 +347,15 @@ impl OrchestrationService {
             BatmanMethod::WorkspaceApply => self.workspace_apply(principal, params).await,
             BatmanMethod::ArtifactList => self.artifact_list(principal, params).await,
             BatmanMethod::ArtifactFetch => self.artifact_fetch(principal, params).await,
+            // Stubs: the daemon accepts these `ompExtension`-only methods
+            // (they are in the role table -- see
+            // `crate::ipc::ClientPrincipal::allowed_methods`) but refuses
+            // every one of them until a later work package (crew v2
+            // gap-closure WP17/WP21) lands its real handler.
+            BatmanMethod::PlanPropose => Err(ServiceError::not_yet_implemented("plan/propose")),
+            BatmanMethod::PlanDecide => Err(ServiceError::not_yet_implemented("plan/decide")),
+            BatmanMethod::PlanGet => Err(ServiceError::not_yet_implemented("plan/get")),
+            BatmanMethod::RunTimeoutAck => Err(ServiceError::not_yet_implemented("run/timeoutAck")),
             _ => Err(ServiceError::internal(
                 "method is not routed through OrchestrationService",
             )),

@@ -46,6 +46,7 @@ pub fn conformance_profile(model: impl Into<String>) -> WorkerProfile {
         startup_options: StartupOptions::OmpRpc(OmpRpcStartupOptions {
             profile: None,
             host_tools: None,
+            ..Default::default()
         }),
         environment_allowlist: Vec::new(),
         source: "conformance".to_string(),
