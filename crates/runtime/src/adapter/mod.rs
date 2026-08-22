@@ -19,6 +19,7 @@ mod run_lifecycle;
 pub mod terminal;
 #[path = "trait.rs"]
 mod r#trait;
+pub mod tui;
 
 use std::future::Future;
 use std::pin::Pin;
