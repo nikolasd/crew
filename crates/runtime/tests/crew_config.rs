@@ -5,10 +5,13 @@
 //! additive, and an unknown key at any depth is a hard error naming the
 //! JSON path.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use batman_runtime::config::crew::{
-    self, AdapterMode, ApprovalMode, ConfigError, CrewConfig, PermissionMode,
+    self, AdapterConfig, AdapterMode, ApprovalMode, CloseOnExit, ConfigError, CrewConfig,
+    DashboardConfig, DisplayBackend, DisplayConfig, Limits, PermissionMode, RetentionConfig,
+    SecurityConfig, WorkspaceConfig, WorkspaceMode,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -263,6 +266,95 @@ fn fingerprint_differs_for_different_configs() {
         crew::fingerprint(&default_cfg),
         crew::fingerprint(&changed_cfg)
     );
+}
+
+/// A full-field round trip: every field of `CrewConfig` set to a distinct
+/// non-default value, serialized to a single layer file, then re-loaded
+/// through `load_layers` (which walks `validate_shape`'s hand-maintained
+/// `*_KEYS` tables before deserializing). Guards the tables staying in
+/// sync with the struct field lists -- a field present in the struct but
+/// missing from its `*_KEYS` entry would make this test fail with an
+/// `UnknownKey` naming exactly that field, since every field here is
+/// deliberately populated and none left at its default.
+#[test]
+fn full_field_round_trip_through_json_survives_validate_shape() {
+    // `load_layers` deep-merges this layer onto `CrewConfig::default()`,
+    // which already carries the four built-in adapter names -- so every
+    // one of them must be listed here too (each overridden to a distinct
+    // non-default value), or the round trip would spuriously "pass" with
+    // leftover defaults for whichever built-in name was omitted.
+    let mut adapters = BTreeMap::new();
+    for name in ["claude", "codex", "copilot", "omp"] {
+        adapters.insert(
+            name.to_string(),
+            AdapterConfig {
+                enabled: false,
+                bin: format!("{name}-custom-bin"),
+                mode: AdapterMode::Tui,
+                permission_mode: PermissionMode::Readonly,
+                model: Some(format!("{name}-custom-model")),
+                profile: format!("{name} custom profile"),
+                session_dir: Some(format!("/tmp/{name}-sessions")),
+                extra_args: vec![format!("--{name}-flag")],
+            },
+        );
+    }
+    adapters.insert(
+        "vertex".to_string(),
+        AdapterConfig {
+            enabled: false,
+            bin: "vertex-cli".to_string(),
+            mode: AdapterMode::Tui,
+            permission_mode: PermissionMode::Readonly,
+            model: Some("gemini-custom".to_string()),
+            profile: "a distinct custom profile".to_string(),
+            session_dir: Some("/tmp/vertex-sessions".to_string()),
+            extra_args: vec!["--flag-a".to_string(), "--flag-b".to_string()],
+        },
+    );
+
+    let original = CrewConfig {
+        approval: ApprovalMode::Never,
+        limits: Limits {
+            max_concurrent_workers: 7,
+            inactivity_timeout_sec: 111,
+            total_timeout_sec: 222,
+            turn_budget_per_subtask: 3,
+        },
+        display: DisplayConfig {
+            backend: DisplayBackend::Hidden,
+            close_on_exit: CloseOnExit::Always,
+        },
+        adapters,
+        workspace: WorkspaceConfig {
+            default_mode: WorkspaceMode::Copy,
+            copy_max_bytes: Some(123),
+            copy_max_files: Some(45),
+        },
+        dashboard: DashboardConfig {
+            enabled: true,
+            port: 9999,
+        },
+        retention: RetentionConfig {
+            max_runs: 99,
+            period: "7d".to_string(),
+        },
+        security: SecurityConfig {
+            patterns: vec!["a-pattern".to_string(), "b-pattern".to_string()],
+        },
+    };
+
+    let dir = tempdir().unwrap();
+    let layer = write_layer(
+        dir.path(),
+        "full.json",
+        &serde_json::to_value(&original).expect("CrewConfig serializes"),
+    );
+
+    let round_tripped =
+        crew::load_layers(&[layer.as_path()], None).expect("every field is a known key");
+
+    assert_eq!(round_tripped, original);
 }
 
 /// A missing layer file path is treated as an absent layer, not an error
