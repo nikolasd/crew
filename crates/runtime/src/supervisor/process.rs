@@ -30,6 +30,8 @@ pub enum SupervisorError {
     },
     #[error("spawned process has no observable pid")]
     MissingPid,
+    #[error("pty error: {message}")]
+    Pty { message: String },
 }
 
 /// A fully specified request to spawn one supervised process.

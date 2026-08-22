@@ -17,6 +17,7 @@ futures-util.workspace = true
 hex.workspace = true
 nix.workspace = true
 parking_lot.workspace = true
+portable-pty.workspace = true
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
 regex.workspace = true
