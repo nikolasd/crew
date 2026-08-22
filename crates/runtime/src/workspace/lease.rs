@@ -56,7 +56,37 @@ pub struct CreatedLease {
 }
 
 pub struct LeaseService {
-    db_path: std::path::PathBuf,
+    /// The one held connection (same discipline as the journal's actor:
+    /// never open-per-call). The mutex serializes callers; WAL +
+    /// busy_timeout keep out-of-process readers (`crewd lease release`,
+    /// the doctor) safe alongside it.
+    conn: std::sync::Mutex<rusqlite::Connection>,
+}
+
+/// Pragma/version snapshot of the lease database, mirroring the main
+/// journal's diagnostics shape so the same invariants can be asserted.
+#[derive(Debug, Clone)]
+pub struct LeaseDbDiagnostics {
+    pub journal_mode: String,
+    pub foreign_keys: bool,
+    pub busy_timeout: i64,
+    pub synchronous: i64,
+    pub user_version: i64,
+}
+
+/// Versioned schema. v1 adopts the pre-versioned shape: `IF NOT EXISTS`
+/// is deliberate so a database created by the old unversioned code (same
+/// table, `user_version` 0) is adopted in place without data loss.
+fn migrations() -> rusqlite_migration::Migrations<'static> {
+    rusqlite_migration::Migrations::new(vec![rusqlite_migration::M::up(
+        "CREATE TABLE IF NOT EXISTS workspace_leases (
+            lease_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, mode TEXT NOT NULL,
+            isolation_kind TEXT NOT NULL DEFAULT 'shared', path TEXT NOT NULL,
+            base_revision TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'active',
+            acquired_at TEXT NOT NULL, acquisition_sequence INTEGER NOT NULL DEFAULT 0,
+            released_at TEXT
+        )",
+    )])
 }
 
 impl LeaseService {
@@ -70,24 +100,53 @@ impl LeaseService {
             std::fs::create_dir_all(parent).map_err(|e| LeaseError::Db(e.to_string()))?;
         }
 
-        let conn =
+        let mut conn =
             rusqlite::Connection::open(db_path).map_err(|e| LeaseError::Db(e.to_string()))?;
 
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS workspace_leases (
-            lease_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, mode TEXT NOT NULL,
-            isolation_kind TEXT NOT NULL DEFAULT 'shared', path TEXT NOT NULL,
-            base_revision TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'active',
-            acquired_at TEXT NOT NULL, acquisition_sequence INTEGER NOT NULL DEFAULT 0,
-            released_at TEXT
-        )",
-        )
-        .map_err(|e| LeaseError::Db(e.to_string()))?;
+        // The same pragmas the journal runs under (db/migrations.rs):
+        // durable, concurrent-reader-safe, and bounded on contention.
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .and_then(|()| conn.pragma_update(None, "foreign_keys", true))
+            .and_then(|()| conn.pragma_update(None, "busy_timeout", 5000_i64))
+            .and_then(|()| conn.pragma_update(None, "synchronous", "FULL"))
+            .map_err(|e| LeaseError::Db(e.to_string()))?;
 
-        let _ = conn.close();
+        migrations()
+            .to_latest(&mut conn)
+            .map_err(|e| LeaseError::Db(e.to_string()))?;
 
         Ok(LeaseService {
-            db_path: db_path.to_path_buf(),
+            conn: std::sync::Mutex::new(conn),
+        })
+    }
+
+    fn conn(&self) -> std::sync::MutexGuard<'_, rusqlite::Connection> {
+        self.conn
+            .lock()
+            .expect("lease connection mutex is never poisoned")
+    }
+
+    /// The live connection's pragma/version state, for the doctor and the
+    /// invariant tests. (`foreign_keys`/`busy_timeout`/`synchronous` are
+    /// per-connection, so only the held connection can answer.)
+    ///
+    /// # Errors
+    /// Returns [`LeaseError::Db`] if a pragma cannot be read.
+    pub fn diagnostics(&self) -> Result<LeaseDbDiagnostics, LeaseError> {
+        let conn = self.conn();
+        let query = |name: &str| -> Result<i64, LeaseError> {
+            conn.pragma_query_value(None, name, |row| row.get(0))
+                .map_err(|e| LeaseError::Db(e.to_string()))
+        };
+        let journal_mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .map_err(|e| LeaseError::Db(e.to_string()))?;
+        Ok(LeaseDbDiagnostics {
+            journal_mode,
+            foreign_keys: query("foreign_keys")? == 1,
+            busy_timeout: query("busy_timeout")?,
+            synchronous: query("synchronous")?,
+            user_version: query("user_version")?,
         })
     }
 
@@ -97,8 +156,7 @@ impl LeaseService {
         mode: LeaseMode,
         requested_isolation: Option<IsolationKind>,
     ) -> Result<CreatedLease, LeaseError> {
-        let conn =
-            rusqlite::Connection::open(&self.db_path).map_err(|e| LeaseError::Db(e.to_string()))?;
+        let conn = self.conn();
 
         conn.execute("BEGIN IMMEDIATE", params![])
             .map_err(|e| LeaseError::Db(e.to_string()))?;
@@ -201,8 +259,7 @@ impl LeaseService {
     /// Transitions a lease from `allocating` to `active` with the real
     /// workspace path, after the caller has materialized the workspace.
     pub fn activate(&self, lease_id: String, path: String) -> Result<(), LeaseError> {
-        let conn =
-            rusqlite::Connection::open(&self.db_path).map_err(|e| LeaseError::Db(e.to_string()))?;
+        let conn = self.conn();
 
         let rows_affected = conn
             .execute(
@@ -211,8 +268,6 @@ impl LeaseService {
                 params![path, lease_id],
             )
             .map_err(|e| LeaseError::Db(e.to_string()))?;
-
-        let _ = conn.close();
 
         if rows_affected == 0 {
             return Err(LeaseError::NotFound { lease_id });
@@ -223,8 +278,7 @@ impl LeaseService {
     /// Returns workspace info for an active lease bound to `run_id`.
     /// Used by OMP to discover a peer agent's workspace path.
     pub fn active_for_run(&self, run_id: RunId) -> Result<Option<WorkspaceInfo>, LeaseError> {
-        let conn =
-            rusqlite::Connection::open(&self.db_path).map_err(|e| LeaseError::Db(e.to_string()))?;
+        let conn = self.conn();
 
         // "No rows" is a real, expected outcome (`None`); every other
         // rusqlite error (locked/corrupted DB, schema mismatch) must
@@ -248,8 +302,6 @@ impl LeaseService {
             )
             .optional()
             .map_err(|e| LeaseError::Db(e.to_string()))?;
-
-        let _ = conn.close();
 
         Ok(result.map(
             |(run_id_str, mode_str, isol_kind, path, _state, base_rev)| {
@@ -293,8 +345,7 @@ impl LeaseService {
     /// Returns [`LeaseError::Db`] if the lease database cannot be read or
     /// the grace-period cutoff cannot be computed.
     pub fn stale(&self) -> Result<Vec<(String, String)>, LeaseError> {
-        let conn =
-            rusqlite::Connection::open(&self.db_path).map_err(|e| LeaseError::Db(e.to_string()))?;
+        let conn = self.conn();
 
         let cutoff = OffsetDateTime::now_utc()
             .checked_sub(ALLOCATING_LEASE_GRACE)
@@ -336,8 +387,7 @@ impl LeaseService {
     }
 
     pub fn get(&self, lease_id: String) -> Result<WorkspaceInfo, LeaseError> {
-        let conn =
-            rusqlite::Connection::open(&self.db_path).map_err(|e| LeaseError::Db(e.to_string()))?;
+        let conn = self.conn();
 
         let (run_id_str, mode_str, isol_kind, path, state, base_rev): (String, String, String, String, String, String) = conn.query_row(
             "SELECT run_id, mode, isolation_kind, path, state, base_revision FROM workspace_leases WHERE lease_id = ?1",
@@ -375,8 +425,6 @@ impl LeaseService {
             }
         };
 
-        let _ = conn.close();
-
         Ok(WorkspaceInfo {
             lease_id,
             run_id: run_id_from_str(&run_id_str)?,
@@ -394,8 +442,7 @@ impl LeaseService {
     }
 
     pub fn release(&self, lease_id: String) -> Result<(), LeaseError> {
-        let conn =
-            rusqlite::Connection::open(&self.db_path).map_err(|e| LeaseError::Db(e.to_string()))?;
+        let conn = self.conn();
 
         let state: String = conn
             .query_row(
@@ -425,8 +472,6 @@ impl LeaseService {
         )
         .map_err(|e| LeaseError::Db(e.to_string()))?;
 
-        let _ = conn.close();
-
         Ok(())
     }
 
@@ -440,16 +485,13 @@ impl LeaseService {
     /// # Errors
     /// Returns [`LeaseError::Db`] if the update fails.
     pub fn mark_cleanup_failed(&self, lease_id: String) -> Result<(), LeaseError> {
-        let conn =
-            rusqlite::Connection::open(&self.db_path).map_err(|e| LeaseError::Db(e.to_string()))?;
+        let conn = self.conn();
 
         conn.execute(
             "UPDATE workspace_leases SET state = 'cleanupFailed' WHERE lease_id = ?1",
             params![lease_id],
         )
         .map_err(|e| LeaseError::Db(e.to_string()))?;
-
-        let _ = conn.close();
 
         Ok(())
     }
@@ -459,8 +501,7 @@ impl LeaseService {
     /// itself never succeeded (`released_at IS NULL`) -- see the comment in
     /// [`Self::acquire`] for why that case must still count as held.
     pub fn active_for_repository(&self) -> Result<u64, LeaseError> {
-        let conn =
-            rusqlite::Connection::open(&self.db_path).map_err(|e| LeaseError::Db(e.to_string()))?;
+        let conn = self.conn();
 
         let count: i64 = conn
             .query_row(
@@ -471,8 +512,6 @@ impl LeaseService {
                 |row| row.get(0),
             )
             .map_err(|e| LeaseError::Db(e.to_string()))?;
-
-        let _ = conn.close();
 
         Ok(count as u64)
     }
