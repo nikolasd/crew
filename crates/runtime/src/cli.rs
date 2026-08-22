@@ -46,15 +46,12 @@ enum Command {
         /// than to `runtime.log`.
         #[arg(long)]
         foreground: bool,
-        /// Path to the org-level configuration file.
-        #[arg(long = "org-config")]
-        org_config: Option<PathBuf>,
-        /// Path to the repo-level configuration file.
-        #[arg(long = "repo-config")]
-        repo_config: Option<PathBuf>,
-        /// Path to the user-level configuration file.
-        #[arg(long = "user-config")]
-        user_config: Option<PathBuf>,
+        /// A crew config layer file, lowest precedence first. Repeatable;
+        /// a later occurrence's values win a field-by-field deep merge
+        /// (`security.patterns` is additive instead). A path that does not
+        /// exist is treated as an absent layer, not an error.
+        #[arg(long = "config")]
+        config: Vec<PathBuf>,
     },
     /// Print the runtime's `runtime/status` snapshot as JSON.
     Status {
@@ -109,15 +106,10 @@ enum Command {
         /// Output as JSON (machine-readable).
         #[arg(long)]
         json: bool,
-        /// Organization policy layer, as an explicit file path.
-        #[arg(long)]
-        org_config: Option<PathBuf>,
-        /// Repository policy layer, as an explicit file path.
-        #[arg(long)]
-        repo_config: Option<PathBuf>,
-        /// User policy layer, as an explicit file path.
-        #[arg(long)]
-        user_config: Option<PathBuf>,
+        /// A crew config layer file, lowest precedence first. Repeatable;
+        /// same semantics as `serve --config`.
+        #[arg(long = "config")]
+        config: Vec<PathBuf>,
     },
     /// Serve the worker-coordination MCP proxy for one run over stdio.
     CoordinationMcp {
@@ -248,21 +240,8 @@ pub async fn run() -> ExitCode {
             repo,
             idle_seconds,
             foreground,
-            org_config,
-            repo_config,
-            user_config,
-        } => {
-            run_serve(
-                state_dir,
-                repo,
-                idle_seconds,
-                foreground,
-                org_config,
-                repo_config,
-                user_config,
-            )
-            .await
-        }
+            config,
+        } => run_serve(state_dir, repo, idle_seconds, foreground, config).await,
         Command::Status {
             wait_seconds,
             state_dir,
@@ -302,10 +281,8 @@ pub async fn run() -> ExitCode {
             state_dir,
             repo,
             json,
-            org_config,
-            repo_config,
-            user_config,
-        } => run_doctor(state_dir, repo, json, org_config, repo_config, user_config).await,
+            config,
+        } => run_doctor(state_dir, repo, json, config).await,
         Command::CoordinationMcp {
             state_dir,
             repo,
@@ -349,9 +326,7 @@ async fn run_serve(
     repo: PathBuf,
     idle_seconds: Option<u64>,
     foreground: bool,
-    org_config: Option<PathBuf>,
-    repo_config: Option<PathBuf>,
-    user_config: Option<PathBuf>,
+    config: Vec<PathBuf>,
 ) -> ExitCode {
     use batman_runtime::lifecycle::{self, ServeOptions};
 
@@ -366,9 +341,7 @@ async fn run_serve(
         idle_seconds,
         foreground,
         binary_source: binary_source_from_env(),
-        org_config,
-        repo_config,
-        user_config,
+        config_paths: config,
     };
 
     match lifecycle::serve(&options).await {
@@ -766,9 +739,7 @@ async fn run_doctor(
     state_dir: Option<PathBuf>,
     repo: PathBuf,
     json: bool,
-    org_config: Option<PathBuf>,
-    repo_config: Option<PathBuf>,
-    user_config: Option<PathBuf>,
+    config: Vec<PathBuf>,
 ) -> ExitCode {
     use batman_runtime::doctor::Doctor;
     use batman_runtime::paths::RuntimePaths;
@@ -805,15 +776,9 @@ async fn run_doctor(
 
     // `--repo` names the repository being diagnosed, never a config file.
     // Config layers are explicit flags, exactly as they are for `serve`.
-    let policy = match batman_runtime::config::LayeredConfig::load(
-        org_config.as_deref(),
-        repo_config.as_deref(),
-        user_config.as_deref(),
-    ) {
-        Ok(config) => match config.merge(None) {
-            Ok(policy) => Some(policy),
-            Err(err) => return abort(json, &format!("failed to merge config: {err}")),
-        },
+    let path_refs: Vec<&std::path::Path> = config.iter().map(PathBuf::as_path).collect();
+    let policy = match batman_runtime::config::resolve_policy(&path_refs, None) {
+        Ok(policy) => Some(policy),
         Err(err) => return abort(json, &format!("failed to load config: {err}")),
     };
 

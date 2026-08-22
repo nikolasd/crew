@@ -46,9 +46,9 @@ async fn an_uncompilable_org_pattern_refuses_to_serve() {
             .success()
     );
 
-    let org_config = temp.path().join("org.yaml");
+    let org_config = temp.path().join("org.json");
     // `[` opens a character class that is never closed.
-    std::fs::write(&org_config, "security:\n  patterns:\n    - \"secret-[\"\n").unwrap();
+    std::fs::write(&org_config, r#"{"security":{"patterns":["secret-["]}}"#).unwrap();
 
     let state_dir = temp.path().join("state");
     let opts = batman_runtime::lifecycle::ServeOptions {
@@ -57,9 +57,7 @@ async fn an_uncompilable_org_pattern_refuses_to_serve() {
         idle_seconds: Some(1),
         foreground: true,
         binary_source: batman_protocol::BinarySource::Unknown,
-        org_config: Some(org_config),
-        repo_config: None,
-        user_config: None,
+        config_paths: vec![org_config],
     };
 
     let err = batman_runtime::lifecycle::serve(&opts)

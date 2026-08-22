@@ -18,7 +18,7 @@ use batman_runtime::adapter::{
     OmpRpcStartupOptions, ProtocolKind, ResumeCapability, StartupOptions, SteeringCapability,
     UsageCapability, WorkerProfile, WorkspaceControlCapability,
 };
-use batman_runtime::config::{NestedViolationAction, RolloutGates, RuntimePolicy};
+use batman_runtime::config::{NestedViolationAction, RuntimePolicy, crew::DisplayBackend};
 use batman_runtime::db::DatabaseHandle;
 use batman_runtime::policy::{PolicyEvaluator, ViolationService};
 use batman_runtime::service::{RunDriver, RunDriverContext};
@@ -362,30 +362,20 @@ fn test_capabilities() -> AdapterCapabilities {
 
 fn ceiling_one_policy() -> RuntimePolicy {
     RuntimePolicy {
-        merged: serde_json::json!({}),
         fingerprint: "test".to_string(),
-        display_backend: "auto".to_string(),
+        display_backend: DisplayBackend::Auto,
         retention: "30d".to_string(),
-        max_workers: 4,
         concurrency_ceiling: 1,
         allowed_models: vec!["gpt-4".to_string()],
         allowed_adapters: vec![],
         cost_ceiling_per_run_usd: None,
+        cost_ceiling_daily_usd: None,
+        required_capabilities: vec![],
+        native_discovery_reviewed: true,
         org_security_patterns: vec![],
-        rollout_gates: RolloutGates {
-            vendor_terms_accepted: true,
-            retention_configured: true,
-            model_allowlist_set: true,
-            concurrency_explicit: true,
-            native_discovery_reviewed: true,
-            ornith_identity_set: true,
-            nested_violation_action: NestedViolationAction::QuarantineAndCancel,
-            allow_development_binary_override: false,
-        },
         copy_max_bytes: batman_runtime::workspace::DEFAULT_COPY_MAX_BYTES,
         copy_max_files: batman_runtime::workspace::DEFAULT_COPY_MAX_FILES,
-        required_capabilities: vec![],
-        cost_ceiling_daily_usd: None,
+        nested_violation_action: NestedViolationAction::QuarantineAndCancel,
     }
 }
 

@@ -180,10 +180,10 @@ pub struct OrchestrationService {
     /// that starts the service without a merged config, in which case the
     /// authorizer falls back to its own startup policy.
     policy: Option<Arc<crate::config::RuntimePolicy>>,
-    /// The startup config layers, retained so a run carrying
+    /// The startup config layer paths, retained so a run carrying
     /// `policyOverrides` can be re-merged against them at submit time
     /// rather than being authorized under a policy it did not request.
-    layered_config: Option<Arc<crate::config::LayeredConfig>>,
+    config_paths: Option<Vec<std::path::PathBuf>>,
     /// The display backends this machine can attach a run's pane to.
     /// Resolved once per `run/submit` against the caller's
     /// `displayPreference`, so an adapter never re-probes.
@@ -236,37 +236,35 @@ impl OrchestrationService {
             artifact_store,
             repository,
             policy: None,
-            layered_config: None,
+            config_paths: None,
             display: Arc::new(crate::display::DisplayRegistry::with_default_backends(
                 batman_protocol::DisplayConfig::default(),
             )),
         }
     }
 
-    /// Attaches the merged startup policy and the layers it came from. The
-    /// daemon calls this once, before serving; every other embedding leaves
-    /// it unset, gets `None` for a run's policy, and so falls back to the
-    /// authorizer's own startup policy.
+    /// Attaches the merged startup policy and the config layer paths it
+    /// came from. The daemon calls this once, before serving; every other
+    /// embedding leaves it unset, gets `None` for a run's policy, and so
+    /// falls back to the authorizer's own startup policy.
     ///
-    /// The layers are what make `policyOverrides` meaningful: without them
+    /// The paths are what make `policyOverrides` meaningful: without them
     /// a per-run override has nothing to merge onto and is ignored.
     #[must_use]
     pub fn with_policy(
         mut self,
-        layered_config: Arc<crate::config::LayeredConfig>,
+        config_paths: Vec<std::path::PathBuf>,
         policy: Arc<crate::config::RuntimePolicy>,
     ) -> Self {
         self.display = Arc::new(crate::display::DisplayRegistry::with_default_backends(
             batman_protocol::DisplayConfig {
-                backend: policy
-                    .display_backend
-                    .parse()
+                backend: crate::config::protocol_display_backend(policy.display_backend)
                     .unwrap_or(batman_protocol::DisplayBackend::Terminal),
                 width: None,
                 height: None,
             },
         ));
-        self.layered_config = Some(layered_config);
+        self.config_paths = Some(config_paths);
         self.policy = Some(policy);
         self
     }
@@ -806,12 +804,15 @@ impl OrchestrationService {
         // policy unchanged, and `None` lets the authorizer fall back to its
         // own. A malformed or lock-violating override is the caller's
         // fault, so it is `invalid_params`, never an internal error.
-        let policy = match (params.get("policyOverrides"), self.layered_config.as_ref()) {
-            (Some(overrides), Some(layers)) => Some(Arc::new(
-                layers
-                    .merge(Some(overrides))
-                    .map_err(|e| ServiceError::invalid_params(e.to_string()))?,
-            )),
+        let policy = match (params.get("policyOverrides"), self.config_paths.as_ref()) {
+            (Some(overrides), Some(paths)) => {
+                let path_refs: Vec<&std::path::Path> =
+                    paths.iter().map(std::path::PathBuf::as_path).collect();
+                Some(Arc::new(
+                    crate::config::resolve_policy(&path_refs, Some(overrides))
+                        .map_err(|e| ServiceError::invalid_params(e.to_string()))?,
+                ))
+            }
             _ => self.policy.clone(),
         };
 

@@ -906,19 +906,17 @@ async fn crossing_the_per_run_cost_ceiling_records_an_actionable_violation() {
 #[tokio::test]
 async fn per_run_policy_overrides_snapshot_only_their_own_run() {
     let org = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(org.path(), "max_workers: 8\n").unwrap();
-    let layers = Arc::new(
-        batman_runtime::config::LayeredConfig::load(Some(org.path()), None, None).unwrap(),
-    );
-    let startup = Arc::new(layers.merge(None).unwrap());
+    std::fs::write(org.path(), r#"{"limits":{"maxConcurrentWorkers":8}}"#).unwrap();
+    let config_paths = vec![org.path().to_path_buf()];
+    let startup = Arc::new(batman_runtime::config::resolve_policy(&[org.path()], None).unwrap());
     let startup_fingerprint = startup.fingerprint.clone();
 
     let harness = Harness::start({
-        let layers = Arc::clone(&layers);
+        let config_paths = config_paths.clone();
         let startup = Arc::clone(&startup);
         move |c| {
             c.run_driver = Some(Arc::new(FakeRunDriver) as Arc<dyn RunDriver>);
-            c.policy = Some((layers, startup));
+            c.policy = Some((config_paths, startup));
         }
     })
     .await;
@@ -957,13 +955,13 @@ async fn per_run_policy_overrides_snapshot_only_their_own_run() {
             json!({
                 "taskId": task_id,
                 "workerId": worker_id,
-                "policyOverrides": { "max_workers": 2 },
+                "policyOverrides": { "limits": { "maxConcurrentWorkers": 2 } },
             }),
         )
         .await;
     assert!(
         overridden.get("error").is_none(),
-        "an override that violates no lock must be accepted: {overridden:?}"
+        "a well-formed override must be accepted: {overridden:?}"
     );
     let overridden_run = overridden["result"]["runId"].as_str().unwrap().to_string();
 

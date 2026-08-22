@@ -25,7 +25,7 @@ use batman_runtime::adapter::{
     AdapterAuthorization, AdapterKind, CodexStartupOptions, ProfileId, StartupOptions,
     WorkerProfile,
 };
-use batman_runtime::config::{NestedViolationAction, RolloutGates, RuntimePolicy};
+use batman_runtime::config::{NestedViolationAction, RuntimePolicy, crew::DisplayBackend};
 use batman_runtime::conformance::{DISABLE_VENDOR_CLI_ENV, run_fixture_conformance, scenario};
 use batman_runtime::policy::PolicyEvaluator;
 use batman_runtime::workspace::{DEFAULT_COPY_MAX_BYTES, DEFAULT_COPY_MAX_FILES};
@@ -54,30 +54,20 @@ fn codex_profile() -> WorkerProfile {
 /// required-capability check against the conformance-proven effective set.
 fn steering_and_resume_policy() -> RuntimePolicy {
     RuntimePolicy {
-        merged: serde_json::json!({}),
         fingerprint: "test".to_string(),
-        display_backend: "auto".to_string(),
+        display_backend: DisplayBackend::Auto,
         retention: "30d".to_string(),
-        max_workers: 4,
         concurrency_ceiling: u32::MAX,
         allowed_models: vec![],
         allowed_adapters: vec![],
         cost_ceiling_per_run_usd: None,
+        cost_ceiling_daily_usd: None,
+        required_capabilities: vec!["steering".to_string(), "resume".to_string()],
+        native_discovery_reviewed: true,
         org_security_patterns: vec![],
-        rollout_gates: RolloutGates {
-            vendor_terms_accepted: true,
-            retention_configured: true,
-            model_allowlist_set: true,
-            concurrency_explicit: true,
-            native_discovery_reviewed: true,
-            ornith_identity_set: true,
-            nested_violation_action: NestedViolationAction::QuarantineAndCancel,
-            allow_development_binary_override: false,
-        },
         copy_max_bytes: DEFAULT_COPY_MAX_BYTES,
         copy_max_files: DEFAULT_COPY_MAX_FILES,
-        required_capabilities: vec!["steering".to_string(), "resume".to_string()],
-        cost_ceiling_daily_usd: None,
+        nested_violation_action: NestedViolationAction::QuarantineAndCancel,
     }
 }
 

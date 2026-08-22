@@ -327,7 +327,7 @@ impl PolicyEvaluator {
         // blocks rather than advises: it governs whether this runtime may
         // act on workers it did not create.
         if effective_capabilities.nested != crate::adapter::NestedCapability::None
-            && !policy.rollout_gates.native_discovery_reviewed
+            && !policy.native_discovery_reviewed
         {
             return Err(PolicyError::NativeDiscoveryUnacknowledged {
                 adapter: profile.adapter.clone(),
@@ -462,34 +462,22 @@ mod tests {
         NativeViewCapability, NestedCapability, ProfileId, ProtocolKind, ResumeCapability,
         StartupOptions, SteeringCapability, UsageCapability, WorkspaceControlCapability,
     };
-    use crate::config::RolloutGates;
-
     fn test_policy() -> RuntimePolicy {
         RuntimePolicy {
-            merged: serde_json::json!({}),
             fingerprint: "test".to_string(),
-            display_backend: "auto".to_string(),
+            display_backend: crate::config::crew::DisplayBackend::Auto,
             retention: "30d".to_string(),
-            max_workers: 4,
             concurrency_ceiling: 2,
             allowed_models: vec!["gpt-4".to_string()],
             allowed_adapters: vec![],
             cost_ceiling_per_run_usd: None,
+            cost_ceiling_daily_usd: None,
+            required_capabilities: vec![],
+            native_discovery_reviewed: true,
             org_security_patterns: vec![],
-            rollout_gates: RolloutGates {
-                vendor_terms_accepted: true,
-                retention_configured: true,
-                model_allowlist_set: true,
-                concurrency_explicit: true,
-                native_discovery_reviewed: true,
-                ornith_identity_set: true,
-                nested_violation_action: crate::config::NestedViolationAction::QuarantineAndCancel,
-                allow_development_binary_override: false,
-            },
             copy_max_bytes: crate::workspace::DEFAULT_COPY_MAX_BYTES,
             copy_max_files: crate::workspace::DEFAULT_COPY_MAX_FILES,
-            required_capabilities: vec![],
-            cost_ceiling_daily_usd: None,
+            nested_violation_action: crate::config::NestedViolationAction::QuarantineAndCancel,
         }
     }
 
@@ -658,7 +646,7 @@ mod tests {
     #[test]
     fn nested_capable_adapter_denied_until_the_discovery_gate_is_resolved() {
         let mut policy = test_policy();
-        policy.rollout_gates.native_discovery_reviewed = false;
+        policy.native_discovery_reviewed = false;
         let evaluator = PolicyEvaluator::new(policy);
         let mut caps = test_capabilities();
         caps.nested = NestedCapability::Observable;

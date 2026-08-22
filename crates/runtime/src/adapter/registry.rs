@@ -835,30 +835,20 @@ mod settlement_tests {
         }
 
         let policy = crate::config::RuntimePolicy {
-            merged: serde_json::json!({}),
             fingerprint: "test".to_string(),
-            display_backend: "auto".to_string(),
+            display_backend: crate::config::crew::DisplayBackend::Auto,
             retention: "30d".to_string(),
-            max_workers: 4,
             concurrency_ceiling: 1,
             allowed_models: vec![],
             allowed_adapters: vec![],
             cost_ceiling_per_run_usd: None,
+            cost_ceiling_daily_usd: None,
+            required_capabilities: vec![],
+            native_discovery_reviewed: true,
             org_security_patterns: vec![],
-            rollout_gates: crate::config::RolloutGates {
-                vendor_terms_accepted: true,
-                retention_configured: true,
-                model_allowlist_set: true,
-                concurrency_explicit: true,
-                native_discovery_reviewed: true,
-                ornith_identity_set: true,
-                nested_violation_action: crate::config::NestedViolationAction::QuarantineAndCancel,
-                allow_development_binary_override: false,
-            },
             copy_max_bytes: crate::workspace::DEFAULT_COPY_MAX_BYTES,
             copy_max_files: crate::workspace::DEFAULT_COPY_MAX_FILES,
-            required_capabilities: vec![],
-            cost_ceiling_daily_usd: None,
+            nested_violation_action: crate::config::NestedViolationAction::QuarantineAndCancel,
         };
         let evaluator = Arc::new(crate::policy::PolicyEvaluator::new(policy));
         let authorization: Arc<dyn AdapterAuthorization> = Arc::clone(&evaluator) as _;

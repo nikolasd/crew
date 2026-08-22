@@ -159,19 +159,16 @@ fn doctor_with_nonexistent_repo() {
 // the aggregate.
 
 use batman_protocol::ProjectId;
-use batman_runtime::config::{LayeredConfig, RuntimePolicy};
+use batman_runtime::config::RuntimePolicy;
 use batman_runtime::db::DatabaseHandle;
 use batman_runtime::doctor::{Doctor, DoctorResult};
 use std::sync::Arc;
 
-/// The default merged policy: no layers, so `merge` yields the built-in
-/// defaults. This is the common case the doctor must never treat as an
-/// error.
+/// The default merged policy: no config layers, so this is the built-in
+/// `CrewConfig` defaults adapted to a `RuntimePolicy`. This is the common
+/// case the doctor must never treat as an error.
 fn default_policy() -> RuntimePolicy {
-    LayeredConfig::load(None, None, None)
-        .expect("no layers always loads")
-        .merge(None)
-        .expect("the default policy always merges")
+    batman_runtime::config::resolve_policy(&[], None).expect("no layers always resolves")
 }
 
 fn repo_root() -> std::path::PathBuf {
@@ -230,17 +227,18 @@ async fn a_check_that_cannot_run_is_never_reported_as_passed() {
 }
 
 #[tokio::test]
-async fn configuration_valid_fails_on_a_zero_worker_ceiling() {
+async fn configuration_valid_fails_on_a_zero_concurrency_ceiling() {
     let state = tempfile::tempdir().unwrap();
     let mut policy = default_policy();
-    policy.max_workers = 0;
+    policy.concurrency_ceiling = 0;
     let (doctor, _db) = doctor_over(state.path(), policy).await;
 
     let result = doctor.check().await.expect("catalog runs");
 
     assert!(
-        error_for(&result, "configuration_valid").is_some_and(|e| e.contains("max_workers")),
-        "expected max_workers to be named: {:?}",
+        error_for(&result, "configuration_valid")
+            .is_some_and(|e| e.contains("concurrency_ceiling")),
+        "expected concurrency_ceiling to be named: {:?}",
         result.failed_checks
     );
 }
@@ -492,7 +490,7 @@ async fn schema_compatibility_passes_against_the_committed_schema() {
 async fn display_available_fails_when_the_forced_backend_is_unavailable() {
     let state = tempfile::tempdir().unwrap();
     let mut policy = default_policy();
-    policy.display_backend = "tmux".to_string();
+    policy.display_backend = batman_runtime::config::crew::DisplayBackend::Tmux;
     let (doctor, _db) = doctor_over(state.path(), policy).await;
 
     let result = doctor.check().await.expect("catalog runs");
