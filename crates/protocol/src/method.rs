@@ -133,4 +133,47 @@ pub enum BatmanMethod {
     /// quarantine without diffing the raw event stream (R80).
     #[serde(rename = "policy/violation/list")]
     PolicyViolationList,
+
+    // Orchestration: leader/subtask plan lifecycle (crew v2). Role-gated
+    // to `ompExtension` only (`crate::ipc::ClientPrincipal::allowed_methods`
+    // in the runtime crate). The daemon accepts these methods and refuses
+    // them with a "not yet implemented" JSON-RPC error until a later work
+    // package (WP17/WP21) lands their real handlers.
+    /// Proposes a decomposition of a run into subtasks, persisting a
+    /// `PlanProposed` event pending `plan/decide`.
+    #[serde(rename = "plan/propose")]
+    PlanPropose,
+    /// Approves or rejects a previously proposed plan, persisting a
+    /// `PlanDecided` event.
+    #[serde(rename = "plan/decide")]
+    PlanDecide,
+    /// Fetches the most recently proposed plan for a run and its decision,
+    /// if any.
+    #[serde(rename = "plan/get")]
+    PlanGet,
+    /// The leader acknowledges a `WorkerTimeout` event, resolving how the
+    /// run proceeds.
+    #[serde(rename = "run/timeoutAck")]
+    RunTimeoutAck,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plan_and_timeout_ack_methods_serialize_as_literal_method_names() {
+        let cases = [
+            (BatmanMethod::PlanPropose, "plan/propose"),
+            (BatmanMethod::PlanDecide, "plan/decide"),
+            (BatmanMethod::PlanGet, "plan/get"),
+            (BatmanMethod::RunTimeoutAck, "run/timeoutAck"),
+        ];
+        for (method, wire_name) in cases {
+            assert_eq!(serde_json::to_value(method).unwrap(), wire_name);
+            let parsed: BatmanMethod =
+                serde_json::from_value(serde_json::json!(wire_name)).unwrap();
+            assert_eq!(parsed, method);
+        }
+    }
 }

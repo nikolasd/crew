@@ -14,6 +14,7 @@ mod event;
 mod ids;
 mod message;
 mod method;
+mod plan;
 mod rpc;
 mod run;
 mod schema;
@@ -36,8 +37,8 @@ pub use display::{
 };
 pub use event::RunFlags;
 pub use event::{
-    Classified, ContentClass, DiagnosticLevel, EventEnvelope, EventSource, RuntimeEvent,
-    RuntimeEventKind, Timestamp, TimestampParseError,
+    AnsweredBy, Classified, ContentClass, DiagnosticLevel, EventEnvelope, EventSource, PlanSpec,
+    RuntimeEvent, RuntimeEventKind, SubtaskSpec, TimeoutKind, Timestamp, TimestampParseError,
 };
 pub use ids::{
     ApprovalId, ArtifactId, MessageId, OperationId, PolicyViolationId, ProjectId, RunId, TaskId,
@@ -45,6 +46,7 @@ pub use ids::{
 };
 pub use message::{DeliveryState, MessageKind, RunMessage};
 pub use method::BatmanMethod;
+pub use plan::{PlanDecideResult, PlanGetResult, PlanProposeResult, RunTimeoutAckResult};
 pub use rpc::{
     BinarySource, ClientAuth, ClientCapabilities, ClientInfo, ClientPrincipalSummary, ClientRole,
     EVENTS_EVENT_METHOD, InitializeParams, InitializeResult, JSONRPC_VERSION, JsonRpcError,

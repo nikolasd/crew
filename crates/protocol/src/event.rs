@@ -174,6 +174,54 @@ pub enum DiagnosticLevel {
     Error,
 }
 
+/// Who answered a [`RuntimeEvent::EscalationRaised`] escalation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum AnsweredBy {
+    Leader,
+    User,
+}
+
+/// Which liveness deadline a [`RuntimeEvent::WorkerTimeout`] event reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum TimeoutKind {
+    Inactivity,
+    Total,
+}
+
+/// One subtask within a [`PlanSpec`], as proposed by `plan/propose`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct SubtaskSpec {
+    /// The caller-assigned identifier for this subtask within its plan;
+    /// distinct from a [`TaskId`], since a proposed subtask is not yet a
+    /// registered task until (and unless) the plan is approved.
+    pub id: String,
+    pub description: String,
+    /// The adapter wire name (e.g. `claude`, `codex`) this subtask is
+    /// intended to run under.
+    pub adapter: String,
+    /// Whether this subtask is expected to write to the workspace.
+    pub writes: bool,
+    /// The maximum number of turns this subtask may take; `None` means no
+    /// explicit budget was proposed.
+    pub turn_budget: Option<u32>,
+}
+
+/// A proposed decomposition of a run into subtasks, carried by
+/// [`RuntimeEvent::PlanProposed`] and returned by `plan/get`, awaiting
+/// `plan/decide`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct PlanSpec {
+    pub subtasks: Vec<SubtaskSpec>,
+}
+
 /// Independent boolean flags on a run.
 ///
 /// `degradedControl`, `needsReconciliation`, `protocolUnhealthy`,
@@ -553,6 +601,73 @@ pub enum RuntimeEvent {
         backend: DisplayBackend,
         pane_ref: String,
     },
+    /// A leader proposed a decomposition of a run into subtasks via
+    /// `plan/propose`, pending `plan/decide`.
+    PlanProposed {
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        plan: PlanSpec,
+    },
+    /// A previously proposed plan was approved or rejected via
+    /// `plan/decide`.
+    PlanDecided {
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        approved: bool,
+        /// `None` when no rationale was given for the decision.
+        reason: Option<String>,
+    },
+    /// A worker asked a question that blocks its own progress, without
+    /// escalating control (compare [`Self::EscalationRaised`]). `question`
+    /// has already crossed the redaction boundary; `None` means the
+    /// entire fragment was `Thinking`/`Secret`-classified and was
+    /// dropped, not that the question was empty.
+    WorkerQuestion {
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        question: Option<String>,
+    },
+    /// A worker escalated a blocking condition to its leader or a human
+    /// operator. `reason` is a plain, machine-assigned code (never raw
+    /// worker content); `question` has already crossed the redaction
+    /// boundary the same way [`Self::WorkerQuestion`]'s field has.
+    EscalationRaised {
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        reason: String,
+        question: Option<String>,
+    },
+    /// An escalation was answered by the leader or a human user.
+    /// `answer` has already crossed the redaction boundary the same way
+    /// [`Self::WorkerQuestion`]'s field has.
+    EscalationAnswered {
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        answered_by: AnsweredBy,
+        answer: Option<String>,
+    },
+    /// A worker exceeded its configured turn budget.
+    BudgetExceeded {
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        turns_used: u32,
+        turn_limit: u32,
+    },
+    /// A worker's supervised process missed a liveness deadline.
+    WorkerTimeout {
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        kind: TimeoutKind,
+        #[ts(type = "number")]
+        since_ms: u64,
+    },
 }
 
 /// The envelope wrapping every durable runtime event, carrying its sequence
@@ -662,6 +777,186 @@ mod tests {
                 let _: String = message;
             }
             _ => panic!("expected diagnostic"),
+        }
+    }
+
+    fn fixture_ids() -> (RunId, TaskId, WorkerId) {
+        (RunId::new(), TaskId::new(), WorkerId::new())
+    }
+
+    #[test]
+    fn plan_proposed_round_trips_and_matches_shape() {
+        let (run_id, task_id, worker_id) = fixture_ids();
+        let event = RuntimeEvent::PlanProposed {
+            run_id,
+            task_id,
+            worker_id,
+            plan: PlanSpec {
+                subtasks: vec![SubtaskSpec {
+                    id: "sub-1".into(),
+                    description: "write the tests".into(),
+                    adapter: "claude".into(),
+                    writes: true,
+                    turn_budget: Some(10),
+                }],
+            },
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["type"], "planProposed");
+        assert_eq!(value["payload"]["plan"]["subtasks"][0]["id"], "sub-1");
+        assert_eq!(value["payload"]["plan"]["subtasks"][0]["writes"], true);
+        assert_eq!(value["payload"]["plan"]["subtasks"][0]["turnBudget"], 10);
+
+        let round_tripped: RuntimeEvent = serde_json::from_value(value).unwrap();
+        match round_tripped {
+            RuntimeEvent::PlanProposed { plan, .. } => assert_eq!(plan.subtasks.len(), 1),
+            other => panic!("expected PlanProposed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_proposed_rejects_unknown_field_in_subtask() {
+        let (run_id, task_id, worker_id) = fixture_ids();
+        let value = serde_json::json!({
+            "type": "planProposed",
+            "payload": {
+                "runId": run_id.to_string(),
+                "taskId": task_id.to_string(),
+                "workerId": worker_id.to_string(),
+                "plan": {
+                    "subtasks": [{
+                        "id": "sub-1",
+                        "description": "write the tests",
+                        "adapter": "claude",
+                        "writes": true,
+                        "turnBudget": null,
+                        "unexpected": "nope",
+                    }]
+                }
+            }
+        });
+        assert!(serde_json::from_value::<RuntimeEvent>(value).is_err());
+    }
+
+    #[test]
+    fn plan_decided_matches_exact_json_shape() {
+        let (run_id, task_id, worker_id) = fixture_ids();
+        let event = RuntimeEvent::PlanDecided {
+            run_id,
+            task_id,
+            worker_id,
+            approved: false,
+            reason: Some("scope too broad".into()),
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["type"], "planDecided");
+        assert_eq!(value["payload"]["approved"], false);
+        assert_eq!(value["payload"]["reason"], "scope too broad");
+    }
+
+    #[test]
+    fn worker_question_none_means_fully_redacted_not_empty() {
+        let (run_id, task_id, worker_id) = fixture_ids();
+        let event = RuntimeEvent::WorkerQuestion {
+            run_id,
+            task_id,
+            worker_id,
+            question: None,
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["type"], "workerQuestion");
+        assert!(value["payload"]["question"].is_null());
+    }
+
+    #[test]
+    fn escalation_raised_and_answered_round_trip() {
+        let (run_id, task_id, worker_id) = fixture_ids();
+        let raised = RuntimeEvent::EscalationRaised {
+            run_id,
+            task_id,
+            worker_id,
+            reason: "ambiguous_requirement".into(),
+            question: Some("should this endpoint be idempotent?".into()),
+        };
+        let value = serde_json::to_value(&raised).unwrap();
+        assert_eq!(value["type"], "escalationRaised");
+        assert_eq!(value["payload"]["reason"], "ambiguous_requirement");
+        assert!(serde_json::from_value::<RuntimeEvent>(value).is_ok());
+
+        let answered = RuntimeEvent::EscalationAnswered {
+            run_id,
+            task_id,
+            worker_id,
+            answered_by: AnsweredBy::User,
+            answer: Some("yes, make it idempotent".into()),
+        };
+        let value = serde_json::to_value(&answered).unwrap();
+        assert_eq!(value["type"], "escalationAnswered");
+        assert_eq!(value["payload"]["answeredBy"], "user");
+        assert!(serde_json::from_value::<RuntimeEvent>(value).is_ok());
+    }
+
+    #[test]
+    fn budget_exceeded_matches_exact_json_shape() {
+        let (run_id, task_id, worker_id) = fixture_ids();
+        let event = RuntimeEvent::BudgetExceeded {
+            run_id,
+            task_id,
+            worker_id,
+            turns_used: 12,
+            turn_limit: 10,
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["type"], "budgetExceeded");
+        assert_eq!(value["payload"]["turnsUsed"], 12);
+        assert_eq!(value["payload"]["turnLimit"], 10);
+    }
+
+    #[test]
+    fn worker_timeout_round_trips_both_kinds() {
+        let (run_id, task_id, worker_id) = fixture_ids();
+        for kind in [TimeoutKind::Inactivity, TimeoutKind::Total] {
+            let event = RuntimeEvent::WorkerTimeout {
+                run_id,
+                task_id,
+                worker_id,
+                kind,
+                since_ms: 90_000,
+            };
+            let value = serde_json::to_value(&event).unwrap();
+            assert_eq!(value["type"], "workerTimeout");
+            let round_tripped: RuntimeEvent = serde_json::from_value(value).unwrap();
+            match round_tripped {
+                RuntimeEvent::WorkerTimeout {
+                    kind: k, since_ms, ..
+                } => {
+                    assert_eq!(k, kind);
+                    assert_eq!(since_ms, 90_000);
+                }
+                other => panic!("expected WorkerTimeout, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn classified_is_not_reachable_from_new_crew_v2_events() {
+        // Compile-time proof mirroring `classified_is_not_reachable_from_runtime_event`:
+        // every new free-text field on these variants is a plain
+        // `Option<String>`/`String`, never `Classified<String>`, so raw
+        // thinking/secret content can only reach these variants already
+        // sanitized.
+        let (run_id, task_id, worker_id) = fixture_ids();
+        let event = RuntimeEvent::WorkerQuestion {
+            run_id,
+            task_id,
+            worker_id,
+            question: Some("sanitized".into()),
+        };
+        match event {
+            RuntimeEvent::WorkerQuestion { question, .. } => {
+                let _: Option<String> = question;
+            }
+            _ => panic!("expected WorkerQuestion"),
         }
     }
 }
