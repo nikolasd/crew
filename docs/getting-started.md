@@ -48,84 +48,64 @@ rebuilt `dist/index.js`.
 
 ### Configuration Layers
 
-Crew uses a layered configuration system with strict precedence (highest wins):
+Crew uses a strict JSON configuration file, `crew.json`, layered with later layers winning a
+field-by-field deep merge (`security.patterns` is the one exception — additive, concatenated
+across layers rather than replaced):
 
-1. **Org config** (lowest precedence)
-2. **Repo config**
-3. **User config** (highest static precedence)
-4. **Per-run params** (overrides everything)
+1. Built-in defaults (lowest precedence)
+2. User file (`~/.omp/crew.json`)
+3. Project file (`<repo>/.omp/crew.json`)
+4. Per-run `policyOverrides` (overrides everything)
 
-Configuration files are YAML with strict unknown-key rejection (fails closed with line/column diagnostics).
+Every level rejects unknown keys, failing closed with the exact JSON path that named the unknown
+key (`"adapters.claude.notAField"`, `"limits.bogusField"`, ...) — see
+`crates/runtime/src/config/crew.rs`.
 
 ### Configuration File Locations
 
-There is no auto-discovery: each layer is loaded only from the path you pass explicitly via
-`--org-config`, `--repo-config`, or `--user-config` (to `serve` or `doctor`) — a layer you don't
-pass is simply absent from the merge, and there's no `CREW_ORG_CONFIG`-style environment variable
-either. `<repo>/.crew/config.yaml` and `~/.crew/config.yaml` below are conventional locations to
-point those flags at, not defaults Crew looks for on its own.
+The extension resolves the user and project files itself and passes each one that exists to
+`crewd serve --config <path>` (repeatable, lowest precedence first); a path that doesn't exist is
+simply an absent layer, not an error. Calling `crewd serve`/`crewd doctor` directly, you pass
+`--config` yourself — there's no auto-discovery or `CREW_CONFIG`-style environment variable at the
+CLI layer, only what the extension does for you.
 
 ### Configuration File Example
 
-```yaml
-# ~/.crew/config.yaml
-max_workers: 4
-concurrency:
-  ceiling: 8
-retention: "30d"
-display:
-  backend: auto
-models:
-  allowlist:
-    - "gpt-4"
-    - "claude-3-opus"
-security:
-  patterns:
-    - "AKIA[0-9A-Za-z]{16}"  # AWS access key pattern
-    - "sk-[a-zA-Z0-9]{32}"  # API key pattern
-rollout_gates:
-  vendor_terms_accepted: true
-  retention_configured: true
-  model_allowlist_set: true
-  concurrency_explicit: true
-  native_discovery_reviewed: true
-  ornith_identity_set: true
-```
-
-### RuntimePolicy
-
-The merged configuration produces an immutable [`RuntimePolicy`] with a SHA-256 fingerprint:
-
-```rust
-pub struct RuntimePolicy {
-    pub merged: serde_json::Value,
-    pub fingerprint: String,
-    pub display_backend: String,
-    pub retention: String,
-    pub max_workers: u32,
-    pub concurrency_ceiling: u32,
-    pub allowed_models: Vec<String>,
-    pub org_security_patterns: Vec<String>,
-    pub rollout_gates: RolloutGates,
+```json
+// ~/.omp/crew.json
+{
+  "limits": { "maxConcurrentWorkers": 4 },
+  "retention": { "period": "30d", "maxRuns": 20 },
+  "display": { "backend": "auto" },
+  "security": {
+    "patterns": [
+      "AKIA[0-9A-Za-z]{16}",
+      "sk-[a-zA-Z0-9]{32}"
+    ]
+  }
 }
 ```
 
-### RolloutGates
+### CrewConfig
 
-Production-blocking gates that must be resolved:
+The merged configuration deserializes into an immutable `CrewConfig` (spec §10); a thin
+`RuntimePolicy` adapter (`crates/runtime/src/config/mod.rs`) exposes the fields the runtime's
+redaction, workspace, concurrency, retention, and doctor checks read, plus a SHA-256 fingerprint
+(`crew::fingerprint`) so two runtimes that resolved the same layers can prove they landed on the
+identical effective policy without comparing documents byte-for-byte:
 
 ```rust
-pub struct RolloutGates {
-    pub vendor_terms_accepted: bool,
-    pub retention_configured: bool,
-    pub model_allowlist_set: bool,
-    pub concurrency_explicit: bool,
-    pub native_discovery_reviewed: bool,
-    pub ornith_identity_set: bool,
+pub struct CrewConfig {
+    pub approval: ApprovalMode,           // always | never | auto
+    pub limits: Limits,                   // maxConcurrentWorkers, timeouts, turn budget
+    pub display: DisplayConfig,           // backend, closeOnExit
+    pub adapters: BTreeMap<String, AdapterConfig>,
+    pub workspace: WorkspaceConfig,       // default_mode, copy_max_bytes, copy_max_files
+    pub dashboard: DashboardConfig,       // enabled, port
+    pub retention: RetentionConfig,       // max_runs, period
+    pub security: SecurityConfig,         // patterns (additive across layers)
 }
 ```
-
-All gates must be `true` before production use.
 
 ## Usage
 
@@ -145,13 +125,12 @@ omitting it falls back to a bare `.crew` in the current directory, which is *not
 crewd serve --repo "$PWD" --state-dir "$HOME/.omp/batman"
 ```
 
-With explicit configuration files:
+With explicit configuration layers, lowest precedence first:
 
 ```bash
 crewd serve --repo "$PWD" --state-dir "$HOME/.omp/batman" \
-  --org-config /etc/crew/org.yaml \
-  --repo-config .crew/config.yaml \
-  --user-config ~/.crew/config.yaml
+  --config ~/.omp/crew.json \
+  --config .omp/crew.json
 ```
 
 ### How the extension finds and starts `crewd`

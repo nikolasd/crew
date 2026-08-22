@@ -61,7 +61,7 @@ Starts the runtime for one repository and serves until stopped.
 
 ```bash
 crewd serve --repo <path> [--state-dir <path>] [--idle-seconds <n>] [--foreground]
-              [--org-config <path>] [--repo-config <path>] [--user-config <path>]
+              [--config <path>]...
 ```
 
 | Flag | Required | Default | Meaning |
@@ -70,7 +70,7 @@ crewd serve --repo <path> [--state-dir <path>] [--idle-seconds <n>] [--foregroun
 | `--state-dir` | no | `.crew` (relative to cwd) | State root; see above |
 | `--idle-seconds` | no | none — runs until signalled | Exit after this many seconds with zero connections and zero active runs |
 | `--foreground` | no | `false` | Log structured records to stderr instead of `runtime.log` |
-| `--org-config` / `--repo-config` / `--user-config` | no | none | Explicit paths for the three config layers (see `docs/architecture.md`'s config-merge notes) |
+| `--config` | no (repeatable) | none | A crew.json config layer file, lowest precedence first (e.g. the user file before the project file); later occurrences deep-merge over earlier ones, `security.patterns` additive. A path that doesn't exist is an absent layer, not an error. |
 
 **Single-instance enforcement:** `serve` takes an exclusive, non-blocking advisory `flock(2)` on
 `<runtime-dir>/runtime.lock` (not an `O_EXCL` create — the lock file itself is never deleted, only
@@ -165,7 +165,7 @@ daemon actually writes, not a directory only `doctor` believes in.
 
 ```bash
 crewd doctor --repo <path> [--state-dir <path>] [--json]
-              [--org-config <path>] [--repo-config <path>] [--user-config <path>]
+              [--config <path>]...
 ```
 
 Exits **0** if every check passes, **1** if any check fails (the process still ran to completion —
