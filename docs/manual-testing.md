@@ -482,16 +482,21 @@ wired into the running daemon: `lifecycle::serve()`'s `ServerConfig` sets `run_d
 `AdapterRegistry` instance (`cargo test -p batman-runtime --test adapter_registry` exercises it
 directly).
 
-However, whether the registry starts an adapter is decided by the merged org policy, evaluated by
-`PolicyEvaluator`: the `models` and `adapters` allowlists (empty means "all allowed"), any
-`capabilities.required` entries checked against the adapter's conformance-proven capability set,
-the `concurrency` ceiling, the `cost` ceilings, and the `native_discovery_reviewed` rollout gate
-for adapters that can observe vendor-created child workers.
+However, whether the registry starts an adapter is still gated by `PolicyEvaluator`: the
+`limits.maxConcurrentWorkers` concurrency ceiling (from `crew.json`), and a nested-worker check
+that denies unexpected child workers pre-authorization. The wider org-governance surface this
+evaluator used to also enforce -- model/adapter allowlists, a required-capability list, cost
+ceilings, and the `native_discovery_reviewed` rollout gate -- is retired (crew-v2 gap-closure WP5;
+see
+[`future-features.md`](future-features.md#org-governance-enforcement-modeladapter-allowlists-cost-ceilings-rollout-gates)):
+that surface was config-sourced from the YAML org layer removed in that WP, which was never
+actually reachable in production.
 
 Practically: submitting a run through a live `omp` session with a real adapter's vendor CLI
-installed **will** attempt to start the adapter as long as the merged policy permits it. A denial
-names the dimension that refused (for example `adapter 'codex' is not authorized`), and an absent
-vendor CLI still reports `adapter_unavailable` — a separate, availability-level answer.
+installed **will** attempt to start the adapter as long as the concurrency ceiling isn't reached
+and the worker isn't an unexpected nested one. A denial names the dimension that refused (for
+example `concurrency ceiling 8 reached; 8 active runs`), and an absent vendor CLI still reports
+`adapter_unavailable` — a separate, availability-level answer.
 
 To exercise the registry's own start/reject/authorize/construct logic directly:
 

@@ -741,6 +741,69 @@ async fn policy_violation_decide_release_is_refused_on_an_already_terminal_run()
         "the refused release must never revive the run"
     );
 }
+/// A crew.json layer's `workspace.copyMaxFiles` reaches the live
+/// `WorkspaceMaterializer` a `run/submit` actually uses -- not just a unit
+/// test against `RuntimePolicy::from_crew_config` in isolation. The path
+/// this proves: `--config` file -> `resolve_policy` -> `RuntimePolicy`
+/// (`orchestration.rs`'s `self.policy`) -> `materializer()`
+/// (`orchestration.rs:1159`) -> `WorkspaceMaterializer::with_copy_limits`
+/// -> `CopyIsolation`'s per-file budget check. A ceiling of `0` files
+/// means even a one-file repository (this harness's real git repo, whose
+/// only tracked file is `README.md`) must fail to materialize.
+#[tokio::test]
+async fn workspace_copy_max_files_from_config_reaches_the_live_materializer() {
+    let config = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(config.path(), r#"{"workspace":{"copyMaxFiles":0}}"#).unwrap();
+    let config_paths = vec![config.path().to_path_buf()];
+    let policy = Arc::new(batman_runtime::config::resolve_policy(&[config.path()], None).unwrap());
+    assert_eq!(
+        policy.copy_max_files, 0,
+        "sanity: the layer must actually override the default ceiling"
+    );
+
+    let harness = Harness::start(move |c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver) as Arc<dyn RunDriver>);
+        c.policy = Some((config_paths, policy));
+    })
+    .await;
+    init_real_git_repo(&harness.owned_dir);
+    let mut client = omp_client(&harness, "omp-1").await;
+
+    let task = client
+        .call(
+            2,
+            "task/upsert",
+            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
+        )
+        .await;
+    let task_id = task["result"]["taskId"].as_str().unwrap().to_string();
+    let worker = client
+        .call(
+            3,
+            "worker/create",
+            json!({ "fingerprint": "sha256:f", "adapter": "fake", "model": "m" }),
+        )
+        .await;
+    let worker_id = worker["result"]["workerId"].as_str().unwrap().to_string();
+
+    let submit = client
+        .call(
+            4,
+            "run/submit",
+            json!({ "taskId": task_id, "workerId": worker_id, "workspaceMode": "copy" }),
+        )
+        .await;
+
+    let error = submit
+        .get("error")
+        .expect("a zero-file copy ceiling from config must refuse materialization, proving the config value reached the live materializer");
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("ceiling") && message.contains("file"),
+        "expected the copy ceiling's own error naming the file-count breach: {submit:?}"
+    );
+}
+
 /// A run's `policyFingerprint` is an immutable snapshot of the merge it
 /// was authorized under: a later run carrying `policyOverrides` gets its
 /// own fingerprint and never rewrites an existing run's.

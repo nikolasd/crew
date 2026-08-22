@@ -46,7 +46,7 @@ Small, dependency-light, and the vocabulary for everything else.
 | `src/main.rs` | Thin entry point; calls `cli::run()` |
 | `src/cli.rs` | clap definitions for `serve`/`status`/`stop`/`version`/`schema`/`monitor`/`audit`; maps outcomes to exit codes (73 = lost the singleton race) |
 | `src/lifecycle.rs` | `serve()`/`status()`/`stop()`: flock singleton, lock metadata, idle shutdown, graceful-stop ordering, log routing, doctor integration |
-| `src/doctor.rs` | `Doctor` — health checking with rollout gates, adapter availability, configuration validity |
+| `src/doctor.rs` | `Doctor` — health checking: adapter availability, configuration validity, and more |
 | `src/recovery.rs` | `RecoveryCoordinator` — recovers every non-terminal run at startup (ownership, not age); `recover_paused`/`recover_waiting` gates; `DEFAULT_STALE_RUN_THRESHOLD` for the doctor's read-only `stale_runs` report |
 | `src/paths.rs` | `RuntimePaths::resolve`, VCS-root discovery, `repository_id_from_canonical_root` |
 | `src/security/mod.rs` | `StateRoot::resolve` precedence, `ensure_private_dir`/`ensure_private_file` (0700/0600, atomic) |
@@ -180,8 +180,7 @@ Follow this once with the files open and you will have seen every layer.
    spawns `crewd serve --state-dir … --repo … --idle-seconds …` detached, and retries with
    backoff (≤5 s).
 4. **Daemon startup** — `cli.rs` parses args → `lifecycle.rs:serve` resolves `RuntimePaths`, takes
-   the flock (loser exits 73), opens `DatabaseHandle` (migrations + PRAGMAs)
-   runs `Doctor::check()` (rollout gates, adapter availability),
+   the flock (loser exits 73), opens `DatabaseHandle` (migrations + PRAGMAs),
    appends a redacted `runtimeStarted` event through the `Redactor`, binds the owner-only socket
    (`ipc/server.rs:bind`), starts logging (`runtime.log` when detached).
 5. **Handshake** — the client sends `initialize` (first frame, 4 MiB bootstrap cap). The server
@@ -349,7 +348,7 @@ provider).
 | Supervisor (process management) | `crates/runtime/tests/supervisor.rs` |
 | Workspace operations (lease, apply, materialize) | `crates/runtime/tests/{workspace_lease,workspace_apply,workspace_materialize}.rs` |
 | Display backends (terminal, herdr, tmux) | `crates/runtime/tests/{terminal,herdr,tmux}_adapter.rs`, `display_registry.rs`, `display_selector.rs` |
-| Configuration merging, rollout gates | `crates/runtime/tests/config.rs` |
+| Configuration loading and merging (crew.json) | `crates/runtime/tests/crew_config.rs` |
 | Conformance test scenarios | `crates/runtime/tests/conformance.rs` |
 | Coordination MCP proxy | `crates/runtime/tests/coordination_mcp.rs` |
 | Redaction rules | `crates/runtime/tests/redaction.rs` |
@@ -410,11 +409,15 @@ bun test packages/extension/src/client.test.ts -t "frame"              # TS test
   `cancelled`, `crates/runtime/tests/recovery.rs` is the matrix; `recover_paused`/`recover_waiting`
   are the only knobs. There's no flag to trigger recovery on demand — use `doctor`'s `stale_runs`
   check (five-minute silence threshold, read-only) to see a wedged run without forcing a restart.
-- **Rollout gates must all be `true` before production use.** The `Doctor::check()` runs on
-  every `serve` and `status` command. If any gate is unresolved, the doctor reports it and
-  the runtime refuses to serve in production mode. Check your config files (`~/.crew/config.yaml`,
-  `<repo>/.crew/config.yaml`) for `rollout_gates` fields.
-- **Adapter authorization is deny-by-default in production.** The `DenyByDefaultAuthorization`
-  rejects every worker unless `dev_override` is explicitly set. Tests inject `FixtureAuthorization`
-  to allow/deny as needed. Production callers must supply a real `PolicyEvaluator` (see the
-  Hardening plan's `PolicyEvaluator`, which owns model/adapter allowlists and ceilings).
+- **Rollout gates are retired (crew-v2 gap-closure WP5).** The old YAML config's six
+  advisory "rollout gate" booleans (and the `native_discovery_reviewed` gate that actually blocked
+  authorization) had no equivalent in `crew.json`'s schema and were config-sourced from a layer
+  that was never actually wired up end to end — see
+  [`future-features.md`](future-features.md#org-governance-enforcement-modeladapter-allowlists-cost-ceilings-rollout-gates)
+  for the decision trigger if that surface returns. `Doctor::check()` no longer has a
+  `rollout_gates_resolved` check.
+- **Adapter authorization goes through `PolicyEvaluator` in production.** Tests inject
+  `FixtureAuthorization` to allow/deny as needed. `PolicyEvaluator` itself now only enforces the
+  concurrency ceiling (`limits.maxConcurrentWorkers`) and a nested-worker pre-authorization
+  check — the model/adapter allowlists and cost ceilings it used to also own are retired along
+  with the rollout gates above.

@@ -162,8 +162,8 @@ crewd status --repo "$PWD" --state-dir "$HOME/.omp/batman"
 
 For diagnostics that don't require a live runtime, use `doctor` instead — it runs the full check
 catalog (database connectivity, state directory permissions, platform support, schema
-compatibility, adapter availability, disk space, stale runs/workspaces, rollout gates, and more —
-see [`cli-reference.md`](cli-reference.md#crewd-doctor) for the complete list):
+compatibility, adapter availability, disk space, stale runs/workspaces, and more — see
+[`cli-reference.md`](cli-reference.md#crewd-doctor) for the complete list):
 
 ```bash
 crewd doctor --repo "$PWD" --state-dir "$HOME/.omp/batman" --json
@@ -313,10 +313,10 @@ if result.healthy {
 
 ### Health Checks
 
-The catalog runs 13 checks in total — database connectivity, configuration validity, state
+The catalog runs 12 checks in total — database connectivity, configuration validity, state
 directory permissions, platform support, binary integrity, socket permissions, schema
 compatibility, per-adapter availability (Claude/Codex/Copilot/OMP-RPC), display backend
-availability, disk space, stale workspaces, stale runs, and rollout gate resolution. See
+availability, disk space, stale workspaces, and stale runs. See
 [`cli-reference.md`](cli-reference.md#crewd-doctor) for what each one actually verifies — it's
 the single source of truth for the catalog, kept alongside the CLI flags it's exposed through.
 
@@ -425,18 +425,6 @@ doesn't exist or isn't writable.
    [`cli-reference.md`](cli-reference.md#before-you-start-state-directories)).
 2. Ensure it exists and is writable — `crewd doctor --json` reports this directly as the
    `state_dir_writable` and `database_connectivity` checks.
-
-### Rollout Gates Unresolved
-
-If `doctor` reports unresolved rollout gates, `native_discovery_reviewed` specifically blocks
-authorization outright; the rest are advisory.
-
-**Solution**:
-1. Review your configuration files.
-2. Ensure the relevant `rollout_gates` fields are set to `true` in whichever config layer you
-   control.
-3. Check current status: `crewd doctor --repo <path> --state-dir <state-dir> --json` — the
-   `unresolved_gates` array and the per-gate `rollout_gate_<gate>` checks name exactly what's left.
 
 ### Permission Errors
 
