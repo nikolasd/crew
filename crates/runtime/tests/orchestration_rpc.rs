@@ -927,7 +927,7 @@ async fn run_submit_journals_the_display_pane_it_attached() {
         .await;
     let worker_id = worker["result"]["workerId"].as_str().unwrap().to_string();
 
-    // `terminal` is the one backend that is always available, so this
+    // `hidden` is the one backend that is always available, so this
     // resolves identically on a developer machine and in headless CI.
     let submit = client
         .call(
@@ -936,13 +936,13 @@ async fn run_submit_journals_the_display_pane_it_attached() {
             json!({
                 "taskId": task_id,
                 "workerId": worker_id,
-                "displayPreference": { "ordered": ["terminal"], "placement": "embedded" },
+                "displayPreference": { "ordered": ["hidden"], "placement": "embedded" },
             }),
         )
         .await;
     let run_id = submit["result"]["runId"].as_str().unwrap().to_string();
-    assert_eq!(submit["result"]["display"]["selected"], "terminal");
-    assert_eq!(submit["result"]["display"]["attempts"], json!(["terminal"]));
+    assert_eq!(submit["result"]["display"]["selected"], "hidden");
+    assert_eq!(submit["result"]["display"]["attempts"], json!(["hidden"]));
 
     let replay = client
         .call(5, "events/replay", json!({ "afterSequence": 0 }))
@@ -950,7 +950,7 @@ async fn run_submit_journals_the_display_pane_it_attached() {
     let attached = pane_events(&replay, "displayPaneAttached");
     assert_eq!(attached.len(), 1, "exactly one attach: {attached:?}");
     assert_eq!(attached[0]["runId"], run_id);
-    assert_eq!(attached[0]["backend"], "terminal");
+    assert_eq!(attached[0]["backend"], "hidden");
     assert_eq!(
         attached[0]["paneRef"], "",
         "resolution never activates a backend, so there is no vendor pane id yet"

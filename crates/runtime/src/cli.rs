@@ -239,7 +239,7 @@ enum AuditCommand {
 enum DisplayCommand {
     /// Probe the display backend status.
     Probe {
-        /// Backend to probe: herdr, tmux, or terminal.
+        /// Backend to probe: herdr, tmux, osWindow, or hidden.
         backend: String,
         /// Output as JSON.
         #[arg(long, default_value_t = false)]
@@ -897,7 +897,9 @@ async fn run_coordination_mcp(
 /// this only reads availability/version, exactly like `DisplayBackendTrait::status`.
 async fn run_display_probe(backend: String, json: bool) -> ExitCode {
     use crew_protocol::{DisplayBackend as ProtoBackend, DisplayConfig};
-    use crew_runtime::display::{DisplayBackendTrait, HerdrDisplay, TerminalDisplay, TmuxDisplay};
+    use crew_runtime::display::{
+        DisplayBackendTrait, HerdrDisplay, HiddenDisplay, OsWindowDisplay, TmuxDisplay,
+    };
 
     let display: Box<dyn DisplayBackendTrait> = match backend.as_str() {
         "herdr" => Box::new(HerdrDisplay::new(DisplayConfig {
@@ -910,14 +912,19 @@ async fn run_display_probe(backend: String, json: bool) -> ExitCode {
             width: None,
             height: None,
         })),
-        "terminal" => Box::new(TerminalDisplay::new(DisplayConfig {
-            backend: ProtoBackend::Terminal,
+        "osWindow" => Box::new(OsWindowDisplay::new(DisplayConfig {
+            backend: ProtoBackend::OsWindow,
+            width: None,
+            height: None,
+        })),
+        "hidden" => Box::new(HiddenDisplay::new(DisplayConfig {
+            backend: ProtoBackend::Hidden,
             width: None,
             height: None,
         })),
         other => {
             return fail(&format!(
-                "unknown display backend `{other}`; expected one of herdr, tmux, or terminal"
+                "unknown display backend `{other}`; expected one of herdr, tmux, osWindow, or hidden"
             ));
         }
     };

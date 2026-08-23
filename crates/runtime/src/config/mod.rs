@@ -129,20 +129,51 @@ pub fn resolve_policy(
     Ok(RuntimePolicy::from_crew_config(&cfg))
 }
 
-/// Maps `CrewConfig`'s display backend to the protocol's narrower enum
-/// (`Herdr`/`Tmux`/`Terminal` only -- no `Auto`, `OsWindow`, or `Hidden`).
-/// `Auto` means "no forced backend" everywhere it's read, so it maps to
-/// `None`; `OsWindow`/`Hidden` have no protocol-side backend to force yet,
-/// so they also map to `None` rather than a wrong guess.
+/// Maps `CrewConfig`'s display backend to the protocol's enum. WP9
+/// reconciled the two: `crew_protocol::DisplayBackend` now has an exact
+/// counterpart for every concrete choice here (`Herdr`, `Tmux`,
+/// `OsWindow`, `Hidden`) -- only `Auto` has no protocol-side backend of
+/// its own, because it means "no forced backend, resolve one" wherever
+/// it's read, so it maps to `None`.
 #[must_use]
 pub fn protocol_display_backend(
     backend: crew::DisplayBackend,
 ) -> Option<crew_protocol::DisplayBackend> {
     match backend {
-        crew::DisplayBackend::Auto
-        | crew::DisplayBackend::OsWindow
-        | crew::DisplayBackend::Hidden => None,
+        crew::DisplayBackend::Auto => None,
         crew::DisplayBackend::Herdr => Some(crew_protocol::DisplayBackend::Herdr),
         crew::DisplayBackend::Tmux => Some(crew_protocol::DisplayBackend::Tmux),
+        crew::DisplayBackend::OsWindow => Some(crew_protocol::DisplayBackend::OsWindow),
+        crew::DisplayBackend::Hidden => Some(crew_protocol::DisplayBackend::Hidden),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_maps_to_no_forced_backend() {
+        assert_eq!(protocol_display_backend(crew::DisplayBackend::Auto), None);
+    }
+
+    #[test]
+    fn every_concrete_config_backend_maps_to_its_protocol_counterpart() {
+        assert_eq!(
+            protocol_display_backend(crew::DisplayBackend::Herdr),
+            Some(crew_protocol::DisplayBackend::Herdr)
+        );
+        assert_eq!(
+            protocol_display_backend(crew::DisplayBackend::Tmux),
+            Some(crew_protocol::DisplayBackend::Tmux)
+        );
+        assert_eq!(
+            protocol_display_backend(crew::DisplayBackend::OsWindow),
+            Some(crew_protocol::DisplayBackend::OsWindow)
+        );
+        assert_eq!(
+            protocol_display_backend(crew::DisplayBackend::Hidden),
+            Some(crew_protocol::DisplayBackend::Hidden)
+        );
     }
 }

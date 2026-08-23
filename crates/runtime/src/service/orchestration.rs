@@ -273,7 +273,7 @@ impl OrchestrationService {
         self.display = Arc::new(crate::display::DisplayRegistry::with_default_backends(
             crew_protocol::DisplayConfig {
                 backend: crate::config::protocol_display_backend(policy.display_backend)
-                    .unwrap_or(crew_protocol::DisplayBackend::Terminal),
+                    .unwrap_or(crew_protocol::DisplayBackend::Hidden),
                 width: None,
                 height: None,
             },

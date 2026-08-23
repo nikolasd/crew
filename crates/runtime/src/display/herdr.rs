@@ -9,7 +9,10 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::{CommandExecutor, CommandResult, DisplayBackendTrait, RealCommandExecutor};
+use super::{
+    CommandExecutor, CommandResult, DisplayBackendTrait, DisplayFuture, PaneHandle, PaneRequest,
+    RealCommandExecutor,
+};
 
 /// Herdr's own `herdr status --json` result, parsed into the fields this
 /// adapter needs for compatibility gating. Field names/nesting verified
@@ -93,17 +96,6 @@ impl HerdrStatus {
     }
 }
 
-/// One pane this backend created and is tracked as owning. Never
-/// modifies or closes a pane lacking this tag.
-#[derive(Debug, Clone)]
-struct OwnedPane {
-    pane_id: String,
-    #[allow(dead_code)] // retained for diagnostics/future coordination-metadata reporting
-    run_id: String,
-    #[allow(dead_code)]
-    display_id: String,
-}
-
 /// Herdr display backend.
 ///
 /// Compatibility gate: probes `herdr status --json` and requires EXACT
@@ -113,12 +105,12 @@ struct OwnedPane {
 /// time.
 pub struct HerdrDisplay {
     #[allow(dead_code)]
-    // carried for parity with TmuxDisplay/TerminalDisplay; no field of it is read yet
+    // carried for parity with TmuxDisplay/HiddenDisplay; no field of it is read yet
     config: DisplayConfig,
     session_active: bool,
     executor: Arc<dyn CommandExecutor>,
     status_cache: Mutex<Option<(Instant, Result<HerdrStatus, String>)>>,
-    owned_panes: Mutex<Vec<OwnedPane>>,
+    owned_panes: Mutex<Vec<String>>,
 }
 
 const STATUS_CACHE_TTL: Duration = Duration::from_secs(5);
@@ -180,35 +172,29 @@ impl HerdrDisplay {
         }
     }
 
-    /// Creates a new Crew-owned pane running `command`, tagged with
-    /// `run_id`/`display_id` ownership, at `placement`. Probes `herdr
-    /// status` first (via the 5-second cache) and issues no pane command
-    /// at all when incompatible.
+    /// Creates a new Crew-owned pane running `req.command`, reporting
+    /// `req.title` as the agent name via `pane report-agent`, at
+    /// `req.placement`. Probes `herdr status` first (via the 5-second
+    /// cache) and issues no pane command at all when incompatible.
     ///
     /// # Errors
     /// Returns a message (naming a coordinated Herdr restart when the
     /// cause is a protocol mismatch) without ever creating a pane, if
     /// Herdr is unavailable/incompatible, the split fails, or the
     /// command fails to launch.
-    pub fn create_pane(
-        &self,
-        command: &[String],
-        placement: DisplayPlacement,
-        run_id: &str,
-        display_id: &str,
-    ) -> Result<String, String> {
+    fn create_pane_sync(&self, req: &PaneRequest) -> Result<String, String> {
         let status = self.probe()?;
         if !status.compatible {
             return Err(status.remediation());
         }
-        if placement == DisplayPlacement::Embedded {
+        if req.placement == DisplayPlacement::Embedded {
             return Err(
                 "DisplayPlacement::Embedded creates no separate pane; Herdr has nothing to split"
                     .to_string(),
             );
         }
 
-        let direction = match placement {
+        let direction = match req.placement {
             DisplayPlacement::SplitRight => "right",
             // Tab/Workspace placement first creates a tagged pane via an
             // ordinary down-split, then moves it -- Herdr's own `pane
@@ -227,7 +213,7 @@ impl HerdrDisplay {
         // A partial move failure must clean up only the pane just
         // created, never a pre-existing one.
         let outcome: Result<(), String> = (|| {
-            match placement {
+            match req.placement {
                 DisplayPlacement::Tab => {
                     self.execute_or_err(
                         &["pane", "move", &pane_id, "--new-tab"],
@@ -245,7 +231,7 @@ impl HerdrDisplay {
             }
 
             let mut run_args: Vec<&str> = vec!["pane", "run", &pane_id];
-            run_args.extend(command.iter().map(String::as_str));
+            run_args.extend(req.command.iter().map(String::as_str));
             self.execute_or_err(&run_args, "run")?;
 
             self.execute_or_err(
@@ -255,7 +241,7 @@ impl HerdrDisplay {
                     "--source",
                     "crew",
                     "--agent",
-                    display_id,
+                    &req.title,
                     "--state",
                     "working",
                     &pane_id,
@@ -267,11 +253,7 @@ impl HerdrDisplay {
 
         match outcome {
             Ok(()) => {
-                self.owned_panes.lock().push(OwnedPane {
-                    pane_id: pane_id.clone(),
-                    run_id: run_id.to_string(),
-                    display_id: display_id.to_string(),
-                });
+                self.owned_panes.lock().push(pane_id.clone());
                 Ok(pane_id)
             }
             Err(err) => {
@@ -290,17 +272,17 @@ impl HerdrDisplay {
     /// # Errors
     /// Returns a message if `pane_id` is not tracked as Crew-owned, or
     /// the close command itself fails.
-    pub fn close_owned_pane(&self, pane_id: &str) -> Result<(), String> {
-        let owned = {
+    fn close_owned_pane(&self, pane_id: &str) -> Result<(), String> {
+        {
             let mut panes = self.owned_panes.lock();
-            let Some(index) = panes.iter().position(|p| p.pane_id == pane_id) else {
+            let Some(index) = panes.iter().position(|p| p == pane_id) else {
                 return Err(format!(
                     "refusing to close pane {pane_id}: not tracked as owned by this backend"
                 ));
             };
-            panes.remove(index)
-        };
-        self.execute_or_err(&["pane", "close", &owned.pane_id], "close")?;
+            panes.remove(index);
+        }
+        self.execute_or_err(&["pane", "close", pane_id], "close")?;
         Ok(())
     }
 
@@ -308,11 +290,7 @@ impl HerdrDisplay {
     /// diagnostics.
     #[must_use]
     pub fn owned_pane_ids(&self) -> Vec<String> {
-        self.owned_panes
-            .lock()
-            .iter()
-            .map(|p| p.pane_id.clone())
-            .collect()
+        self.owned_panes.lock().clone()
     }
 
     /// Runs the full `herdr` argv in `args` (including the leading
@@ -398,6 +376,21 @@ impl DisplayBackendTrait for HerdrDisplay {
     fn version(&self) -> Option<String> {
         self.probe().ok().map(|s| s.client_version)
     }
+
+    fn create_pane(&self, req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
+        Box::pin(async move {
+            let pane_ref = self.create_pane_sync(&req)?;
+            Ok(PaneHandle {
+                backend: DisplayBackend::Herdr,
+                pane_ref,
+            })
+        })
+    }
+
+    fn close_pane(&self, handle: &PaneHandle) -> DisplayFuture<'_, ()> {
+        let pane_ref = handle.pane_ref.clone();
+        Box::pin(async move { self.close_owned_pane(&pane_ref) })
+    }
 }
 
 #[cfg(test)]
@@ -468,26 +461,35 @@ mod tests {
         assert!(status.remediation().contains("restart"));
     }
 
-    #[test]
-    fn incompatible_status_makes_the_backend_unavailable_and_issues_no_pane_command() {
+    fn pane_request(command: &[&str], placement: DisplayPlacement, title: &str) -> PaneRequest {
+        PaneRequest {
+            title: title.to_string(),
+            command: command.iter().map(|s| s.to_string()).collect(),
+            placement,
+        }
+    }
+
+    #[tokio::test]
+    async fn incompatible_status_makes_the_backend_unavailable_and_issues_no_pane_command() {
         let executor =
             Arc::new(FixtureExecutor::new().with("herdr status --json", ok(MISMATCH_STATUS)));
         let display = HerdrDisplay::with_executor(DisplayConfig::default(), executor);
         assert!(!display.is_available());
 
-        let result = display.create_pane(
-            &["crewd".to_string(), "monitor".to_string()],
-            DisplayPlacement::SplitRight,
-            "run-1",
-            "display-1",
-        );
+        let result = display
+            .create_pane(pane_request(
+                &["crewd", "monitor"],
+                DisplayPlacement::SplitRight,
+                "display-1",
+            ))
+            .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("restart"));
         assert!(display.owned_pane_ids().is_empty());
     }
 
-    #[test]
-    fn compatible_status_creates_one_tagged_pane_and_tracks_it_as_owned() {
+    #[tokio::test]
+    async fn compatible_status_creates_one_tagged_pane_and_tracks_it_as_owned() {
         let split_response = ok(r#"{"id":"cli:pane:split","result":{"pane":{"pane_id":"w1:p2"}}}"#);
         let executor = Arc::new(
             FixtureExecutor::new()
@@ -504,15 +506,16 @@ mod tests {
         );
         let display = HerdrDisplay::with_executor(DisplayConfig::default(), executor);
 
-        let pane_id = display
-            .create_pane(
-                &["crewd".to_string(), "monitor".to_string()],
+        let handle = display
+            .create_pane(pane_request(
+                &["crewd", "monitor"],
                 DisplayPlacement::SplitRight,
-                "run-1",
                 "display-1",
-            )
+            ))
+            .await
             .expect("compatible protocol must allow pane creation");
-        assert_eq!(pane_id, "w1:p2");
+        assert_eq!(handle.pane_ref, "w1:p2");
+        assert_eq!(handle.backend, DisplayBackend::Herdr);
         assert_eq!(display.owned_pane_ids(), vec!["w1:p2".to_string()]);
     }
 

@@ -2656,7 +2656,7 @@
       ]
     },
     "DisplayBackend": {
-      "description": "Supported display backends.",
+      "description": "Supported display backends.\n\nReconciled with `crates/runtime`'s config-facing\n`crew::config::crew::DisplayBackend` (WP9): that enum additionally has\n`Auto`, which means \"no forced backend\" and has no concrete backend of\nits own here -- every other variant of the config enum maps to exactly\none of these (`crate::config::protocol_display_backend` in the runtime\ncrate does that mapping). `Terminal` (an always-available, capability-\nfree stub) is retired in the same change: [`Self::Hidden`] is now the\none always-available fallback, and it is a real, deliberate \"no pane\"\nchoice rather than a degraded terminal rendering.",
       "oneOf": [
         {
           "description": "Herdr terminal multiplexer backend.",
@@ -2669,9 +2669,14 @@
           "const": "tmux"
         },
         {
-          "description": "Raw terminal backend (degraded capabilities).",
+          "description": "A new OS-native terminal window (`osascript`/Terminal on macOS,\n`x-terminal-emulator` on Linux).",
           "type": "string",
-          "const": "terminal"
+          "const": "osWindow"
+        },
+        {
+          "description": "No pane at all -- the always-available fallback. Not degraded\ncapability like the retired `Terminal`; a deliberate, always-safe\nchoice for headless or opted-out runs.",
+          "type": "string",
+          "const": "hidden"
         }
       ]
     },
