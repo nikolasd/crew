@@ -46,6 +46,7 @@ pub use run_lifecycle::RunLifecycleSink;
 pub use r#trait::{
     Adapter, AdapterMessage, AdapterSnapshot, CancelScope, ProbeResult, StartSpec, VendorSessionRef,
 };
+pub use tui::{LaunchSpec, TuiAdapter, TuiTimings, TuiVendor, VersionVerdict};
 
 /// A boxed future returned by every [`Adapter`]/[`AdapterEventSink`]
 /// operation, resolving to `Result<T, AdapterError>`.

@@ -10,12 +10,14 @@
 //! ([`parse_jsonl_chunk`]), the polling [`TranscriptTailer`], and
 //! nonce-based transcript discovery ([`find_transcript_by_nonce`]).
 
+mod adapter;
 mod discovery;
 mod tailer;
 
 use crew_protocol::Classified;
 use serde::{Deserialize, Serialize};
 
+pub use adapter::{LaunchSpec, TuiAdapter, TuiTimings, TuiVendor, VersionVerdict};
 pub use discovery::{DiscoveryError, find_transcript_by_nonce};
 pub use tailer::{TailerHandle, TranscriptTailer};
 
