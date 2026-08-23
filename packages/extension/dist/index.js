@@ -6897,8 +6897,8 @@ import { createConnection } from "net";
 
 // ../protocol-ts/src/validate.ts
 var import__2020 = __toESM(require__2020(), 1);
-// ../protocol-ts/schema/batman.schema.json
-var batman_schema_default = {
+// ../protocol-ts/schema/crew.schema.json
+var crew_schema_default = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   title: "ProtocolDocument",
   description: "Root schema document referencing every exported request/result/event\ntype, so that a single `schemars` invocation produces one JSON Schema\nwith everything reachable from the wire protocol in `$defs`.",
@@ -7078,7 +7078,7 @@ diagnostics only.`,
       ]
     },
     ProtocolVersion: {
-      description: "A BATMAN protocol version, expressed as `major.minor` with no patch\ncomponent (patch-level changes must be backward compatible).",
+      description: "A Crew protocol version, expressed as `major.minor` with no patch\ncomponent (patch-level changes must be backward compatible).",
       type: "object",
       properties: {
         major: {
@@ -7220,7 +7220,7 @@ instance.`,
         allowedMethods: {
           type: "array",
           items: {
-            $ref: "#/$defs/BatmanMethod"
+            $ref: "#/$defs/CrewMethod"
           }
         },
         capabilities: {
@@ -7262,7 +7262,7 @@ only.`,
       ]
     },
     ProjectId: {
-      description: "Identifies a repository/project managed by the BATMAN runtime.",
+      description: "Identifies a repository/project managed by the Crew runtime.",
       type: "string"
     },
     ClientPrincipalSummary: {
@@ -7337,8 +7337,8 @@ confirm how the runtime identified it.`,
       description: "Identifies a worker process spawned by the runtime.",
       type: "string"
     },
-    BatmanMethod: {
-      description: `All JSON-RPC methods implemented by the BATMAN runtime, including
+    CrewMethod: {
+      description: `All JSON-RPC methods implemented by the Crew runtime, including
 orchestration extension methods.
 
 Serialized as the literal method name string used on the wire.`,
@@ -7527,7 +7527,7 @@ number and routing metadata.`,
       description: `Canonical UTC RFC 3339 timestamp text, as carried on the wire.
 
 Rather than expose [\`time::OffsetDateTime\`] across generated bindings,
-BATMAN normalizes every timestamp to a UTC RFC 3339 string at
+Crew normalizes every timestamp to a UTC RFC 3339 string at
 construction time; downstream consumers (including schemars/ts-rs) only
 ever see a plain string.`,
       type: "string"
@@ -8471,7 +8471,7 @@ what an unexpected observation means.`,
           additionalProperties: false
         },
         {
-          description: "A display backend attached or detached a Batman-owned pane.",
+          description: "A display backend attached or detached a Crew-owned pane.",
           type: "object",
           properties: {
             type: {
@@ -8976,12 +8976,12 @@ session/thread identifier.`,
           const: "adapterNestedWorkerObserved"
         },
         {
-          description: "A display backend attached a Batman-owned pane to a run.",
+          description: "A display backend attached a Crew-owned pane to a run.",
           type: "string",
           const: "displayPaneAttached"
         },
         {
-          description: "A display backend detached (closed) a Batman-owned pane.",
+          description: "A display backend detached (closed) a Crew-owned pane.",
           type: "string",
           const: "displayPaneDetached"
         },
@@ -9889,7 +9889,7 @@ terminal. Changes presentation only; never run ownership.`,
       ]
     },
     JsonRpcNotification: {
-      description: "A JSON-RPC 2.0 notification envelope: a method call with no `id`, for\nwhich no response is expected. BATMAN uses these to push runtime events to\nsubscribed clients via the `events/event` method.",
+      description: "A JSON-RPC 2.0 notification envelope: a method call with no `id`, for\nwhich no response is expected. Crew uses these to push runtime events to\nsubscribed clients via the `events/event` method.",
       type: "object",
       properties: {
         jsonrpc: {
@@ -10455,7 +10455,7 @@ child at all (a cost ceiling does not).`,
 };
 
 // ../protocol-ts/src/validate.ts
-var SCHEMA_ID = "https://schema.batman.satorianalytics.com/batman.schema.json";
+var SCHEMA_ID = "https://schema.crew.satorianalytics.com/crew.schema.json";
 var ajv = new import__2020.default({
   strict: true,
   allErrors: true,
@@ -10466,7 +10466,7 @@ var ajv = new import__2020.default({
 for (const format of ["int16", "uint16", "int32", "uint32", "int64", "uint64", "float", "double"]) {
   ajv.addFormat(format, true);
 }
-ajv.addSchema({ ...batman_schema_default, $id: SCHEMA_ID });
+ajv.addSchema({ ...crew_schema_default, $id: SCHEMA_ID });
 function def(name) {
   const validate = ajv.getSchema(`${SCHEMA_ID}#/$defs/${name}`);
   if (validate === undefined) {
@@ -10492,7 +10492,7 @@ var validatePlanDecideResult = def("PlanDecideResult");
 var validatePlanGetResult = def("PlanGetResult");
 var validateRunTimeoutAckResult = def("RunTimeoutAckResult");
 var validateEventEnvelopeArray = ajv.compile({
-  $id: "https://schema.batman.satorianalytics.com/event-envelope-array.json",
+  $id: "https://schema.crew.satorianalytics.com/event-envelope-array.json",
   type: "array",
   items: { $ref: `${SCHEMA_ID}#/$defs/EventEnvelope` }
 });
@@ -10761,7 +10761,7 @@ var package_default = {
   peerDependencies: { "@oh-my-pi/pi-coding-agent": ">=17.0.7 <18" },
   devDependencies: {
     "@oh-my-pi/pi-coding-agent": ">=17.0.7 <18",
-    "@nikolasd/batman-protocol": "workspace:*",
+    "@nikolasd/crew-protocol": "workspace:*",
     "@types/bun": "1.3.14",
     ajv: "8.17.1",
     zod: "^4"
@@ -11038,6 +11038,7 @@ function detectLibc(platform = process.platform) {
 }
 
 // src/state.ts
+import { existsSync as existsSync4 } from "fs";
 import { isAbsolute as isAbsolute2, join as join4 } from "path";
 class StateRootError extends Error {
   code;
@@ -11047,7 +11048,7 @@ class StateRootError extends Error {
     this.code = code;
   }
 }
-function resolveStateRoot(env, home) {
+function resolveStateRoot(env, home, exists = existsSync4) {
   const crewStateDir = envFlag(env, "CREW_STATE_DIR", "BATMAN_STATE_DIR");
   if (crewStateDir !== undefined) {
     if (!isAbsolute2(crewStateDir)) {
@@ -11060,10 +11061,18 @@ function resolveStateRoot(env, home) {
     if (!isAbsolute2(xdgStateHome)) {
       throw new StateRootError("relative-override", `XDG_STATE_HOME must be an absolute path, got ${JSON.stringify(xdgStateHome)}`);
     }
-    return join4(xdgStateHome, "omp", "batman");
+    return preferringLegacyIfOnlyItExists(join4(xdgStateHome, "omp"), exists);
   }
   const piConfigDir = env.PI_CONFIG_DIR ?? ".omp";
-  return join4(home, piConfigDir, "batman");
+  return preferringLegacyIfOnlyItExists(join4(home, piConfigDir), exists);
+}
+function preferringLegacyIfOnlyItExists(parent, exists) {
+  const crewDir = join4(parent, "crew");
+  const legacyDir = join4(parent, "batman");
+  if (!exists(crewDir) && exists(legacyDir)) {
+    return legacyDir;
+  }
+  return crewDir;
 }
 
 // src/context.ts
@@ -11457,7 +11466,7 @@ import { homedir as homedir3 } from "os";
 // src/download.ts
 import { chmodSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "fs";
 import { join as join5 } from "path";
-var API_BASE_URL = "https://api.github.com/repos/nikolasd/batman";
+var API_BASE_URL = "https://api.github.com/repos/nikolasd/crew";
 
 class RuntimeDownloadError extends Error {
   code;
@@ -12664,7 +12673,7 @@ function crewExtension(pi) {
   pi.registerTool({
     name: RUNTIME_INSTALL_TOOL_NAME,
     label: "Crew Runtime Install",
-    description: "Use to download and verify the crewd runtime binary for this platform. Call this when crew_health or any orchestration tool fails with code 'runtime-not-installed'. Downloads the GitHub release asset matching this extension's version, verifies its SHA-256 against the published manifest, and caches it under the Crew state root. nikolasd/batman is a private repository, so this needs read access to it: set GITHUB_TOKEN or GH_TOKEN, or run `gh auth login` locally.",
+    description: "Use to download and verify the crewd runtime binary for this platform. Call this when crew_health or any orchestration tool fails with code 'runtime-not-installed'. Downloads the GitHub release asset matching this extension's version, verifies its SHA-256 against the published manifest, and caches it under the Crew state root. nikolasd/crew is a private repository, so this needs read access to it: set GITHUB_TOKEN or GH_TOKEN, or run `gh auth login` locally.",
     parameters: pi.zod.object({}),
     approval: "exec",
     async execute(_toolCallId, _params, _signal, _onUpdate) {
