@@ -2,18 +2,18 @@
 
 ## Project Overview
 
-BATMAN (B**orderline** **A**wesome **T**ool for **M**ultiagent **A**utomation by **N**ikolas) is an [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi) extension backed by a durable, repository-scoped local daemon. It supervises worker processes (Claude, Codex, Copilot, OMP-RPC), persists a durable event journal, recovers after crashes, and feeds display backends.
+Crew (B**orderline** **A**wesome **T**ool for **M**ultiagent **A**utomation by **N**ikolas) is an [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi) extension backed by a durable, repository-scoped local daemon. It supervises worker processes (Claude, Codex, Copilot, OMP-RPC), persists a durable event journal, recovers after crashes, and feeds display backends.
 
-**Architecture split:** OMP decides what to do (task graph, scheduling, approvals, merge decisions). BATMAN ensures it happens and can be replayed.
+**Architecture split:** OMP decides what to do (task graph, scheduling, approvals, merge decisions). Crew ensures it happens and can be replayed.
 
-Delivered via the OMP marketplace (git clone of this repo, extension + skills) plus a `batcave` (Rust) binary downloaded on demand as a GitHub Release asset. No OMP fork, no private APIs, no npm publication.
+Delivered via the OMP marketplace (git clone of this repo, extension + skills) plus a `crewd` (Rust) binary downloaded on demand as a GitHub Release asset. No OMP fork, no private APIs, no npm publication.
 
 ---
 
 ## Architecture & Data Flow
 
 ```
-OMP Extension (TypeScript)  ──JSON-RPC 2.0 over NDJSON──>  batcave daemon (Rust)
+OMP Extension (TypeScript)  ──JSON-RPC 2.0 over NDJSON──>  crewd daemon (Rust)
                                                                       │
                                                                       ├── Adapter Registry ──> Worker Processes
                                                                       ├── SQLite Journal (WAL, append-only)
@@ -24,8 +24,8 @@ OMP Extension (TypeScript)  ──JSON-RPC 2.0 over NDJSON──>  batcave daemo
 ```
 
 **Data flow for a task:**
-1. OMP extension calls `batman_task` → registers task with runtime
-2. OMP schedules worker → calls `batman_run` → runtime authorizes, acquires workspace lease, spawns adapter
+1. OMP extension calls `crew_task` → registers task with runtime
+2. OMP schedules worker → calls `crew_run` → runtime authorizes, acquires workspace lease, spawns adapter
 3. Adapter (Claude/Codex/Copilot/OMP-RPC) runs the worker process, streams events
 4. Events flow through `Redactor` (sanitizes secrets) → `DatabaseActor` (persists to SQLite) → broadcast to live subscribers
 5. Completion triggers slot release, workspace apply, and approval callbacks
@@ -39,11 +39,11 @@ OMP Extension (TypeScript)  ──JSON-RPC 2.0 over NDJSON──>  batcave daemo
 | Path | Purpose |
 |------|---------|
 | `crates/protocol/` | Canonical Rust wire types — source of truth for all protocol types |
-| `crates/runtime/` | `batcave` daemon: CLI, lifecycle, IPC server, SQLite, adapters, services |
+| `crates/runtime/` | `crewd` daemon: CLI, lifecycle, IPC server, SQLite, adapters, services |
 | `crates/xtask/` | Codegen (schema + TS bindings) and platform package assembly |
 | `packages/extension/` | OMP extension: client, tools, monitor, reconciliation |
 | `packages/protocol-ts/` | Generated TS bindings + JSON Schema + Ajv validators |
-| `packages/batman-*/` | Per-target release build staging (created on demand by `batman-xtask package`; gitignored, not committed) |
+| `packages/crew-*/` | Per-target release build staging (created on demand by `batman-xtask package`; gitignored, not committed) |
 | `fixtures/` | Cross-language golden fixtures (protocol frames, state roots, configs) |
 | `tests/` | Conformance test runner |
 | `release/` | Release build inputs and evidence: `targets.json` (platform build matrix, read by xtask and CI) plus per-version release checklists and live adapter conformance results |
@@ -84,14 +84,14 @@ bun test packages/extension/src/...     # specific file
 bun run typecheck                       # TypeScript compiler gate (own CI job)
 
 # Manual testing with local changes
-OMP_BATMAN_BINARY="$PWD/target/debug/batcave" \
+OMP_CREW_BINARY="$PWD/target/debug/crewd" \
   omp --extension ./packages/extension/src/index.ts
 
-# Run batcave directly
-batcave serve --repo /path/to/repo [--org-config ... --repo-config ... --user-config ...]
-batcave status --repo /path/to/repo
-batcave stop --repo /path/to/repo
-batcave audit export --repo "$PWD" --state-dir "$HOME/.omp/batman/repos/<repository-id>" --output /tmp/audit.jsonl
+# Run crewd directly
+crewd serve --repo /path/to/repo [--org-config ... --repo-config ... --user-config ...]
+crewd status --repo /path/to/repo
+crewd stop --repo /path/to/repo
+crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/batman" --output /tmp/audit.jsonl
 ```
 
 ---
@@ -130,8 +130,8 @@ batcave audit export --repo "$PWD" --state-dir "$HOME/.omp/batman/repos/<reposit
 
 - Rust: `snake_case` for modules/functions, `PascalCase` for types, `SCREAMING_SNAKE_CASE` for constants
 - TypeScript: `camelCase` for functions/variables, `PascalCase` for types/classes
-- Tool names: `batman_<verb>` (e.g., `batman_task`, `batman_worker`, `batman_run`)
-- Commands: `/batman-status`, `/batman-doctor`
+- Tool names: `crew_<verb>` (e.g., `crew_task`, `crew_worker`, `crew_run`)
+- Commands: `/crew-status`, `/crew-doctor`
 
 ---
 
@@ -140,7 +140,7 @@ batcave audit export --repo "$PWD" --state-dir "$HOME/.omp/batman/repos/<reposit
 | File | Role |
 |------|------|
 | `crates/protocol/src/lib.rs` | Protocol type definitions — the canonical source of truth |
-| `crates/runtime/src/main.rs` | `batcave` entry point — thin CLI dispatcher |
+| `crates/runtime/src/main.rs` | `crewd` entry point — thin CLI dispatcher |
 | `crates/runtime/src/lib.rs` | Runtime library — all modules, `extern crate self` trick |
 | `crates/runtime/src/lifecycle.rs` | Daemon lifecycle: serve, shutdown, idle timeout |
 | `crates/runtime/src/ipc/server.rs` | JSON-RPC server over Unix domain socket |
@@ -154,7 +154,7 @@ batcave audit export --repo "$PWD" --state-dir "$HOME/.omp/batman/repos/<reposit
 | `packages/extension/src/runtime.ts` | Runtime launcher with binary selection and retry |
 | `packages/extension/src/tools/` | Orchestration tool implementations |
 | `packages/extension/src/omp-native/` | OMP-native reconciliation and fact persistence |
-| `packages/extension/src/monitor/` | Embedded /batman monitor (model, render, controller) |
+| `packages/extension/src/monitor/` | Embedded /crew monitor (model, render, controller) |
 | `packages/protocol-ts/src/index.ts` | Re-exports all generated TS types |
 | `packages/protocol-ts/src/validate.ts` | Ajv validators for runtime messages |
 | `biome.json` | Formatter config (TS/JS only; Rust uses cargo fmt) |
@@ -162,7 +162,7 @@ batcave audit export --repo "$PWD" --state-dir "$HOME/.omp/batman/repos/<reposit
 | `tsconfig.json` | Root TS config (strict, ESNext, Bun types) |
 | `rust-toolchain.toml` | Rust 1.97.1 with clippy + rustfmt |
 | `Cargo.toml` | Workspace definition and shared dependencies |
-| `.claude-plugin/marketplace.json` | OMP marketplace catalog for the `batman` plugin |
+| `.claude-plugin/marketplace.json` | OMP marketplace catalog for the `crew` plugin |
 | `git-town.toml` | Git Town config (main branch, GitHub forge) |
 
 ---
@@ -174,8 +174,8 @@ batcave audit export --repo "$PWD" --state-dir "$HOME/.omp/batman/repos/<reposit
 - **Exact install mode:** `bunfig.toml` sets `exact = true` — lockfile is strict.
 - **Rust toolchain:** 1.97.1 via `rust-toolchain.toml`. Use `rustup` for automatic version pinning.
 - **Formatter:** Biome for TS/JS (`bun run format`), `cargo fmt` for Rust. Linting disabled in Biome; use `cargo clippy` for Rust.
-- **Distribution:** Extension + skills install via the OMP marketplace (`.claude-plugin/marketplace.json`, git clone of this repo — private, so needs GitHub read access via SSH key or `gh auth login`). The `batcave` binary downloads on demand as a GitHub Release asset via `/batman-runtime-install`, verified by SHA-256; that download needs `GITHUB_TOKEN`/`GH_TOKEN` set, or a local `gh auth login` session.
-- **Test environment:** Set `BATMAN_DISABLE_VENDOR_CLI=1` to skip live vendor CLI calls (required in CI to avoid billed model calls).
+- **Distribution:** Extension + skills install via the OMP marketplace (`.claude-plugin/marketplace.json`, git clone of this repo — private, so needs GitHub read access via SSH key or `gh auth login`). The `crewd` binary downloads on demand as a GitHub Release asset via `/crew-runtime-install`, verified by SHA-256; that download needs `GITHUB_TOKEN`/`GH_TOKEN` set, or a local `gh auth login` session.
+- **Test environment:** Set `CREW_DISABLE_VENDOR_CLI=1` to skip live vendor CLI calls (required in CI to avoid billed model calls).
 - **Cross-platform:** macOS (arm64/x64) and glibc Linux (arm64/x64). Everything else rejected with typed error.
 
 ---
@@ -208,10 +208,10 @@ cargo test --test adapter_contract
 bun test packages/extension/src/runtime.test.ts
 
 # Conformance (fixture mode, no live calls)
-BATMAN_DISABLE_VENDOR_CLI=1 cargo test --test conformance
+CREW_DISABLE_VENDOR_CLI=1 cargo test --test conformance
 
 # Live conformance for specific adapter (requires credentials)
-BATMAN_LIVE_CLAUDE=1 cargo test --test conformance
+CREW_LIVE_CLAUDE=1 cargo test --test conformance
 ```
 
 ### CI Pipeline (`.github/workflows/ci.yml`)
@@ -219,13 +219,13 @@ BATMAN_LIVE_CLAUDE=1 cargo test --test conformance
 Five jobs run on every push/PR:
 1. **format** — `cargo fmt --check` + Biome format check
 2. **clippy** — `cargo clippy` with `-D warnings`
-3. **test** — `cargo test` + `bun test` on ubuntu-latest and macos-latest (with `BATMAN_DISABLE_VENDOR_CLI=1`)
+3. **test** — `cargo test` + `bun test` on ubuntu-latest and macos-latest (with `CREW_DISABLE_VENDOR_CLI=1`)
 4. **generate-check** — verifies generated code is up to date (`bun run generate --check`)
 5. **security** — `cargo audit` + gitleaks scan
 
 ### Release (`.github/workflows/release.yml`)
 
-Triggered by pushing a `v*` tag. Builds `batcave` for all 4 platforms, assembles per-target release manifests, builds the extension bundle, and uploads binaries + manifests as GitHub Release assets. Requires only the default `GITHUB_TOKEN` — no npm publish, no `NPM_TOKEN`.
+Triggered by pushing a `v*` tag. Builds `crewd` for all 4 platforms, assembles per-target release manifests, builds the extension bundle, and uploads binaries + manifests as GitHub Release assets. Requires only the default `GITHUB_TOKEN` — no npm publish, no `NPM_TOKEN`.
 
 ---
 

@@ -1,4 +1,4 @@
-// `batman_message`: sends and lists correlated run messages. `send` is
+// `crew_message`: sends and lists correlated run messages. `send` is
 // tier `write` -- it records intent for the runtime to deliver, but does
 // not itself execute code or spawn a process.
 //
@@ -24,7 +24,7 @@ type _MessageKindExhaustive = Exclude<MessageKind, (typeof MESSAGE_KINDS)[number
 const _messageKindExhaustive: _MessageKindExhaustive = true;
 void _messageKindExhaustive;
 
-export const BATMAN_MESSAGE_TOOL_NAME = "batman_message";
+export const CREW_MESSAGE_TOOL_NAME = "crew_message";
 
 export function registerMessageTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
@@ -39,8 +39,8 @@ export function registerMessageTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
   });
 
   pi.registerTool({
-    name: BATMAN_MESSAGE_TOOL_NAME,
-    label: "BATMAN Message",
+    name: CREW_MESSAGE_TOOL_NAME,
+    label: "Crew Message",
     description:
       "Use to communicate between workers during an active multi-worker run, or to review message history. Use op: 'send' to send a message to another worker (requires runId, senderWorkerId, kind, payload), or op: 'list' to list messages for a run. Message kinds: assign, steer, followUp, question, answer, peerMessage, approvalDecision, cancel, shutdown. Use when workers need to coordinate or escalate decisions.",
     parameters: params,

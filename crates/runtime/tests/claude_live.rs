@@ -17,7 +17,7 @@
 //! ```
 //! An explicit `--ignored` run is itself the signal that a human wants
 //! the live call; the only thing that still skips it is
-//! `BATMAN_DISABLE_VENDOR_CLI=1`, which forbids observation-only vendor
+//! `CREW_DISABLE_VENDOR_CLI=1`, which forbids observation-only vendor
 //! invocation for CI or a machine without the CLI installed. No CI job
 //! and no agent working on this task ever passes `--ignored` here.
 
@@ -54,7 +54,7 @@ async fn start_a_real_claude_session_and_observe_its_result() {
     // live call -- the only remaining reason to refuse is the kill
     // switch, which forbids observation-only vendor invocation.
     if batman_runtime::conformance::vendor_cli_invocation_disabled() {
-        eprintln!("skipping: BATMAN_DISABLE_VENDOR_CLI=1 forbids live vendor-CLI invocation");
+        eprintln!("skipping: CREW_DISABLE_VENDOR_CLI=1 forbids live vendor-CLI invocation");
         return;
     }
 

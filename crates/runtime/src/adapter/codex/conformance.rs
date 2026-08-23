@@ -450,8 +450,8 @@ fn unexpected_child_observation_scenario() -> ScenarioResult {
 }
 
 /// `VENDOR_RECONNECT`: not applicable to this adapter -- its worker-MCP
-/// tools are injected via `-c mcp_servers.batman.*` overrides into a real
-/// `batcave coordination-mcp` subprocess that Codex itself spawns and
+/// tools are injected via `-c mcp_servers.crew.*` overrides into a real
+/// `crewd coordination-mcp` subprocess that Codex itself spawns and
 /// reconnects to on its own terms; this adapter owns no reconnect logic
 /// of its own to test here (that subprocess's own reconnect behavior is
 /// proven by `crates/runtime/tests/coordination_mcp.rs`, a different
@@ -460,7 +460,7 @@ fn vendor_reconnect_scenario() -> ScenarioResult {
     ScenarioResult::pass(
         scenario::VENDOR_RECONNECT,
         "not applicable to codex: worker MCP reconnection is handled by Codex's own \
-         mcp_servers.batman.* -configured coordination-mcp subprocess, which Codex spawns and \
+         mcp_servers.crew.* -configured coordination-mcp subprocess, which Codex spawns and \
          reconnects to on its own terms -- this adapter has no adapter-owned reconnect logic of \
          its own to test here (see crates/runtime/tests/coordination_mcp.rs for that \
          subprocess's own reconnect proof)"
@@ -479,7 +479,7 @@ fn vendor_reconnect_scenario() -> ScenarioResult {
 /// not `Fail`: a scenario fixture mode cannot attempt is not one it
 /// disproved, so it must not strip Codex's declared `steering` / `resume`
 /// from `effective_capabilities` (R68). See `live_report`, which runs by
-/// default unless `BATMAN_DISABLE_VENDOR_CLI=1` is set, for the real proof.
+/// default unless `CREW_DISABLE_VENDOR_CLI=1` is set, for the real proof.
 fn requires_live_turn_scenario(name: &'static str, mechanism: &str) -> ScenarioResult {
     ScenarioResult::skip(
         name,
@@ -487,7 +487,7 @@ fn requires_live_turn_scenario(name: &'static str, mechanism: &str) -> ScenarioR
             "skipped: {mechanism} -- codex only persists a thread's resumable rollout once a \
              turn actually runs, and turn/start is what invokes the model, so this is not \
              attempted in fixture_report; see live_report (runs by default unless \
-             BATMAN_DISABLE_VENDOR_CLI=1 is set)"
+             CREW_DISABLE_VENDOR_CLI=1 is set)"
         ),
     )
 }
@@ -512,7 +512,7 @@ async fn spawn_raw_client(cwd: &std::path::Path) -> Result<Arc<CodexRpcClient>, 
         .call(
             "initialize",
             serde_json::json!({
-                "clientInfo": {"name": "@nikolasd/batman", "version": env!("CARGO_PKG_VERSION")},
+                "clientInfo": {"name": "@nikolasd/crew", "version": env!("CARGO_PKG_VERSION")},
                 "capabilities": {"experimentalApi": true}
             }),
         )
@@ -873,11 +873,11 @@ async fn live_lifecycle_scenarios() -> Vec<ScenarioResult> {
 /// Runs the live conformance suite against the installed `codex` CLI.
 ///
 /// Real invocation is the default; this suite runs a real `turn/start`,
-/// which is a billed model call. Set `BATMAN_DISABLE_VENDOR_CLI=1` to
+/// which is a billed model call. Set `CREW_DISABLE_VENDOR_CLI=1` to
 /// forbid it in CI or on a machine without the CLI installed.
 ///
 /// # Errors
-/// Returns a message if `BATMAN_DISABLE_VENDOR_CLI=1` is set.
+/// Returns a message if `CREW_DISABLE_VENDOR_CLI=1` is set.
 pub async fn live_report() -> Result<ConformanceReport, String> {
     if batman_runtime::conformance::vendor_cli_invocation_disabled() {
         return Err(format!(

@@ -1,5 +1,5 @@
-//! Security-critical filesystem primitives: resolving the BATMAN state root
-//! and ensuring every directory or file BATMAN creates on disk is private
+//! Security-critical filesystem primitives: resolving the Crew state root
+//! and ensuring every directory or file Crew creates on disk is private
 //! (mode `0700`/`0600`, owned by the current user) before anything else is
 //! written into it.
 
@@ -10,15 +10,18 @@ use std::path::{Path, PathBuf};
 
 use nix::unistd::Uid;
 
+use crate::env_flag::env_flag_from;
+
 pub mod redaction;
 pub mod rules;
 
-/// Errors resolving or securing BATMAN's on-disk state.
+/// Errors resolving or securing Crew's on-disk state.
 #[derive(Debug, thiserror::Error)]
 pub enum SecurityError {
-    /// `BATMAN_STATE_DIR` or `XDG_STATE_HOME` was set to a relative path.
-    /// Both must be absolute, since they anchor where secrets and sockets
-    /// live regardless of the current working directory.
+    /// `CREW_STATE_DIR` (or its pre-rename name, `BATMAN_STATE_DIR`) or
+    /// `XDG_STATE_HOME` was set to a relative path. Both must be absolute,
+    /// since they anchor where secrets and sockets live regardless of the
+    /// current working directory.
     #[error("{var} must be an absolute path, got {value:?}")]
     RelativeOverride { var: &'static str, value: String },
 
@@ -32,9 +35,9 @@ pub enum SecurityError {
 
     /// A pre-existing directory is owned by someone other than the current
     /// user. Reusing it would let that other user read or tamper with
-    /// BATMAN's state, so it is rejected rather than merely warned about.
+    /// Crew's state, so it is rejected rather than merely warned about.
     #[error(
-        "{path:?} is owned by uid {owner}, expected the current uid {expected}; refusing to reuse a directory BATMAN does not own"
+        "{path:?} is owned by uid {owner}, expected the current uid {expected}; refusing to reuse a directory Crew does not own"
     )]
     UntrustedOwner {
         path: PathBuf,
@@ -52,7 +55,7 @@ pub enum SecurityError {
     },
 }
 
-/// The root directory BATMAN stores all per-repository state under.
+/// The root directory Crew stores all per-repository state under.
 ///
 /// [`StateRoot::resolve`] is a pure function of `env` and `home` --
 /// deliberately no process-global reads -- so callers (and tests) can drive
@@ -64,20 +67,24 @@ pub enum SecurityError {
 pub struct StateRoot(PathBuf);
 
 impl StateRoot {
-    /// Resolves the BATMAN state root from `env`/`home` using the
-    /// precedence: `BATMAN_STATE_DIR` -> `$XDG_STATE_HOME/omp/batman` ->
-    /// `$HOME/${PI_CONFIG_DIR:-.omp}/batman`.
+    /// Resolves the Crew state root from `env`/`home` using the precedence:
+    /// `CREW_STATE_DIR` (or its pre-rename name, `BATMAN_STATE_DIR`) ->
+    /// `$XDG_STATE_HOME/omp/batman` -> `$HOME/${PI_CONFIG_DIR:-.omp}/batman`.
+    /// The on-disk directory name stays `batman` in both fallback tiers:
+    /// moving already-provisioned user state is a separate, careful
+    /// migration this rename does not attempt.
     ///
     /// # Errors
-    /// Returns [`SecurityError::RelativeOverride`] if `BATMAN_STATE_DIR` or
-    /// `XDG_STATE_HOME` is set but not an absolute path.
+    /// Returns [`SecurityError::RelativeOverride`] if `CREW_STATE_DIR`
+    /// (or legacy `BATMAN_STATE_DIR`) or `XDG_STATE_HOME` is set but not an
+    /// absolute path.
     pub fn resolve(env: &HashMap<String, String>, home: &Path) -> Result<Self, SecurityError> {
-        if let Some(value) = env.get("BATMAN_STATE_DIR") {
-            let path = PathBuf::from(value);
+        if let Some(value) = env_flag_from(env, "CREW_STATE_DIR", "BATMAN_STATE_DIR") {
+            let path = PathBuf::from(&value);
             if !path.is_absolute() {
                 return Err(SecurityError::RelativeOverride {
-                    var: "BATMAN_STATE_DIR",
-                    value: value.clone(),
+                    var: "CREW_STATE_DIR",
+                    value,
                 });
             }
             return Ok(Self(path));
@@ -126,7 +133,7 @@ impl AsRef<Path> for StateRoot {
 /// Creates `path` (and any missing parents) if needed, then ensures it is
 /// mode `0700` and owned by the current user, rejecting it otherwise.
 ///
-/// This is the single place BATMAN's Rust runtime creates security-sensitive
+/// This is the single place Crew's Rust runtime creates security-sensitive
 /// directories; both [`StateRoot::ensure_private`] and
 /// [`crate::paths::RuntimePaths::resolve`] go through it.
 ///
@@ -193,7 +200,7 @@ fn ensure_private_dir_as(path: &Path, expected_uid: u32) -> Result<(), SecurityE
 /// Creates an empty file at `path` if missing, then ensures it is mode
 /// `0600` and owned by the current user, rejecting it otherwise.
 ///
-/// Used by components that materialize BATMAN's per-repository state files
+/// Used by components that materialize Crew's per-repository state files
 /// (lock, database, log) so every file under [`crate::paths::RuntimePaths`]
 /// is created private by construction.
 ///
@@ -263,16 +270,39 @@ mod tests {
     }
 
     #[test]
-    fn batman_state_dir_takes_precedence() {
+    fn crew_state_dir_takes_precedence() {
         let root = StateRoot::resolve(
             &env(&[
-                ("BATMAN_STATE_DIR", "/var/lib/batman"),
+                ("CREW_STATE_DIR", "/var/lib/crew"),
                 ("XDG_STATE_HOME", "/home/alice/.local/state"),
             ]),
             Path::new("/home/alice"),
         )
         .unwrap();
+        assert_eq!(root.path(), Path::new("/var/lib/crew"));
+    }
+
+    #[test]
+    fn legacy_batman_state_dir_still_works_when_crew_state_dir_is_unset() {
+        let root = StateRoot::resolve(
+            &env(&[("BATMAN_STATE_DIR", "/var/lib/batman")]),
+            Path::new("/home/alice"),
+        )
+        .unwrap();
         assert_eq!(root.path(), Path::new("/var/lib/batman"));
+    }
+
+    #[test]
+    fn crew_state_dir_wins_over_legacy_batman_state_dir() {
+        let root = StateRoot::resolve(
+            &env(&[
+                ("CREW_STATE_DIR", "/var/lib/crew"),
+                ("BATMAN_STATE_DIR", "/var/lib/batman"),
+            ]),
+            Path::new("/home/alice"),
+        )
+        .unwrap();
+        assert_eq!(root.path(), Path::new("/var/lib/crew"));
     }
 
     #[test]
@@ -305,7 +335,23 @@ mod tests {
     }
 
     #[test]
-    fn rejects_relative_batman_state_dir() {
+    fn rejects_relative_crew_state_dir() {
+        let err = StateRoot::resolve(
+            &env(&[("CREW_STATE_DIR", "relative/state")]),
+            Path::new("/home/alice"),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            SecurityError::RelativeOverride {
+                var: "CREW_STATE_DIR",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_relative_legacy_batman_state_dir() {
         let err = StateRoot::resolve(
             &env(&[("BATMAN_STATE_DIR", "relative/state")]),
             Path::new("/home/alice"),
@@ -314,7 +360,7 @@ mod tests {
         assert!(matches!(
             err,
             SecurityError::RelativeOverride {
-                var: "BATMAN_STATE_DIR",
+                var: "CREW_STATE_DIR",
                 ..
             }
         ));
@@ -382,7 +428,7 @@ mod tests {
         let target = dir.path().join("state");
 
         // The directory is created owned by the current uid; injecting a
-        // *different* expected uid via the seam simulates BATMAN encountering a
+        // *different* expected uid via the seam simulates Crew encountering a
         // pre-existing directory owned by someone else, which must be rejected
         // rather than reused.
         let real_uid = Uid::current().as_raw();

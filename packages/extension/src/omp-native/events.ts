@@ -1,5 +1,5 @@
 // Pure normalizers from the installed OMP `task:subagent:lifecycle`,
-// `task:subagent:progress`, and `task:subagent:event` payloads to Batman
+// `task:subagent:progress`, and `task:subagent:event` payloads to Crew
 // `OmpNativeAgentFact` values. Never reads or mutates OMP's own state --
 // each function is a total map from one payload to one fact (or, for the
 // raw event channel, no fact at all).

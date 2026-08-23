@@ -1,14 +1,14 @@
 //! Per-adapter coordination MCP launch helpers: the argv/env/config each
 //! adapter's command builder injects to give its supervised vendor
-//! process access to the worker coordination tools (`batman_task`,
-//! `batman_send`, etc.) via a `batcave coordination-mcp` subprocess the
+//! process access to the worker coordination tools (`crew_task`,
+//! `crew_send`, etc.) via a `crewd coordination-mcp` subprocess the
 //! vendor CLI itself spawns as its own MCP server -- see
 //! `crate::coordination::mcp` for that subprocess, and
 //! `crate::coordination::mcp_protocol` for the tool schemas it serves.
 //!
 //! Every adapter's own native MCP/plugin/skill/hook discovery stays on:
 //! nothing here ever adds a flag that suppresses or replaces it, only
-//! one additional named server (`"batman"`) alongside whatever the
+//! one additional named server (`"crew"`) alongside whatever the
 //! vendor CLI already loads from the user/project's own config.
 //!
 //! OMP-RPC has no separate MCP subprocess of its own to inject this
@@ -34,12 +34,12 @@ use serde_json::{Value, json};
 use crate::coordination::{BindError, ScopeBinding, ScopeTokenStore, VendorProcessIdentity};
 
 /// Everything a supervised vendor process's command builder needs to
-/// wire up the coordination MCP server: where the verified `batcave`
+/// wire up the coordination MCP server: where the verified `crewd`
 /// binary lives, this run's state/repository paths, and the run it's
 /// scoped to.
 #[derive(Debug, Clone)]
 pub struct McpLaunchContext {
-    pub batcave_path: PathBuf,
+    pub crewd_path: PathBuf,
     pub state_dir: PathBuf,
     pub repository: PathBuf,
     pub run_id: RunId,
@@ -56,7 +56,7 @@ pub struct McpLaunchContext {
 pub struct AdapterMcpConfig {
     pub scope_tokens: Arc<ScopeTokenStore>,
     pub project_id: ProjectId,
-    pub batcave_path: PathBuf,
+    pub crewd_path: PathBuf,
     pub state_dir: PathBuf,
     pub repository: PathBuf,
 }
@@ -68,7 +68,7 @@ impl AdapterMcpConfig {
     #[must_use]
     pub fn launch_context(&self, run_id: RunId) -> McpLaunchContext {
         McpLaunchContext {
-            batcave_path: self.batcave_path.clone(),
+            crewd_path: self.crewd_path.clone(),
             state_dir: self.state_dir.clone(),
             repository: self.repository.clone(),
             run_id,
@@ -154,7 +154,7 @@ pub fn coordination_mcp_argv(context: &McpLaunchContext) -> Vec<String> {
 }
 
 /// The environment addition for the supervised vendor process (never
-/// this runtime's own): only `BATMAN_WORKER_SCOPE_TOKEN`. The vendor
+/// this runtime's own): only `CREW_WORKER_SCOPE_TOKEN`. The vendor
 /// process inherits it into whatever MCP-server child it spawns for
 /// `coordination-mcp`; that subprocess reads and removes the variable
 /// from its own environment immediately (see
@@ -164,48 +164,48 @@ pub fn coordination_mcp_argv(context: &McpLaunchContext) -> Vec<String> {
 pub fn coordination_mcp_env(scope_token: &str) -> HashMap<String, String> {
     let mut env = HashMap::new();
     env.insert(
-        "BATMAN_WORKER_SCOPE_TOKEN".to_string(),
+        "CREW_WORKER_SCOPE_TOKEN".to_string(),
         scope_token.to_string(),
     );
     env
 }
 
 /// The MCP server config block (`{"command":...,"args":[...]}`) every
-/// stdio-MCP-consuming adapter embeds under a `"batman"` server name --
+/// stdio-MCP-consuming adapter embeds under a `"crew"` server name --
 /// shaped identically for both Claude and Copilot; only how each
 /// adapter *delivers* the surrounding document (a file path vs. an
 /// inline JSON argument) differs.
 #[must_use]
 fn coordination_mcp_server_config(context: &McpLaunchContext) -> Value {
     json!({
-        "command": context.batcave_path.display().to_string(),
+        "command": context.crewd_path.display().to_string(),
         "args": coordination_mcp_argv(context),
     })
 }
 
-/// The full MCP config document `{"mcpServers":{"batman":{...}}}` both
+/// The full MCP config document `{"mcpServers":{"crew":{...}}}` both
 /// Claude's `--mcp-config` file and Copilot's `--additional-mcp-config`
 /// inline argument carry -- identical shape, different delivery.
 #[must_use]
 pub fn coordination_mcp_config_document(context: &McpLaunchContext) -> Value {
-    json!({ "mcpServers": { "batman": coordination_mcp_server_config(context) } })
+    json!({ "mcpServers": { "crew": coordination_mcp_server_config(context) } })
 }
 
 /// The two `-c` override arguments Codex's `codex app-server` command
-/// line receives to register the same server as `mcp_servers.batman`
+/// line receives to register the same server as `mcp_servers.crew`
 /// without a config file, preserving every other loaded Codex config.
 /// Codex's `-c key=value` overrides parse `value` as a TOML value, not
 /// JSON -- a TOML basic string for the command, a TOML array of basic
 /// strings for args.
 #[must_use]
 pub fn codex_mcp_overrides(context: &McpLaunchContext) -> Vec<String> {
-    let command_value = toml_basic_string(&context.batcave_path.display().to_string());
+    let command_value = toml_basic_string(&context.crewd_path.display().to_string());
     let args_value = toml_basic_string_array(&coordination_mcp_argv(context));
     vec![
         "-c".to_string(),
-        format!("mcp_servers.batman.command={command_value}"),
+        format!("mcp_servers.crew.command={command_value}"),
         "-c".to_string(),
-        format!("mcp_servers.batman.args={args_value}"),
+        format!("mcp_servers.crew.args={args_value}"),
     ]
 }
 
@@ -250,8 +250,8 @@ mod tests {
 
     fn context() -> McpLaunchContext {
         McpLaunchContext {
-            batcave_path: PathBuf::from("/opt/batman/bin/batcave"),
-            state_dir: PathBuf::from("/tmp/batman-state"),
+            crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
+            state_dir: PathBuf::from("/tmp/crew-state"),
             repository: PathBuf::from("/tmp/my-repo"),
             run_id: RunId::new(),
         }
@@ -261,8 +261,8 @@ mod tests {
         AdapterMcpConfig {
             scope_tokens: Arc::new(ScopeTokenStore::new()),
             project_id: ProjectId::new(),
-            batcave_path: PathBuf::from("/opt/batman/bin/batcave"),
-            state_dir: PathBuf::from("/tmp/batman-state"),
+            crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
+            state_dir: PathBuf::from("/tmp/crew-state"),
             repository: PathBuf::from("/tmp/my-repo"),
         }
     }
@@ -276,7 +276,7 @@ mod tests {
             vec![
                 "coordination-mcp",
                 "--state-dir",
-                "/tmp/batman-state",
+                "/tmp/crew-state",
                 "--repo",
                 "/tmp/my-repo",
                 "--run-id",
@@ -290,7 +290,7 @@ mod tests {
         let env = coordination_mcp_env("a-token");
         assert_eq!(env.len(), 1);
         assert_eq!(
-            env.get("BATMAN_WORKER_SCOPE_TOKEN"),
+            env.get("CREW_WORKER_SCOPE_TOKEN"),
             Some(&"a-token".to_string())
         );
     }
@@ -300,10 +300,10 @@ mod tests {
         let context = context();
         let document = coordination_mcp_config_document(&context);
         assert_eq!(
-            document["mcpServers"]["batman"]["command"],
-            "/opt/batman/bin/batcave"
+            document["mcpServers"]["crew"]["command"],
+            "/opt/crew/bin/crewd"
         );
-        let args = document["mcpServers"]["batman"]["args"].as_array().unwrap();
+        let args = document["mcpServers"]["crew"]["args"].as_array().unwrap();
         assert_eq!(args[0], "coordination-mcp");
         assert_eq!(args.len(), 7);
         // Exactly one server entry -- an adapter merges this under its
@@ -319,18 +319,18 @@ mod tests {
         assert_eq!(overrides[0], "-c");
         assert_eq!(
             overrides[1],
-            "mcp_servers.batman.command=\"/opt/batman/bin/batcave\""
+            "mcp_servers.crew.command=\"/opt/crew/bin/crewd\""
         );
         assert_eq!(overrides[2], "-c");
-        assert!(overrides[3].starts_with("mcp_servers.batman.args=[\"coordination-mcp\", "));
+        assert!(overrides[3].starts_with("mcp_servers.crew.args=[\"coordination-mcp\", "));
         assert!(overrides[3].ends_with(']'));
     }
 
     #[test]
     fn codex_overrides_escape_toml_special_characters_in_paths() {
         let context = McpLaunchContext {
-            batcave_path: PathBuf::from("/opt/batman \"quoted\"/bin/batcave"),
-            state_dir: PathBuf::from("/tmp/batman-state"),
+            crewd_path: PathBuf::from("/opt/crew \"quoted\"/bin/crewd"),
+            state_dir: PathBuf::from("/tmp/crew-state"),
             repository: PathBuf::from("/tmp/my-repo"),
             run_id: RunId::new(),
         };
@@ -340,22 +340,22 @@ mod tests {
         // closing quote around the whole path.
         assert_eq!(
             overrides[1],
-            "mcp_servers.batman.command=\"/opt/batman \\\"quoted\\\"/bin/batcave\""
+            "mcp_servers.crew.command=\"/opt/crew \\\"quoted\\\"/bin/crewd\""
         );
     }
 
     #[test]
     fn codex_overrides_escape_control_characters_not_just_backslash_and_quote() {
         let context = McpLaunchContext {
-            batcave_path: PathBuf::from("/opt/batman\n\t/bin/batcave"),
-            state_dir: PathBuf::from("/tmp/batman-state"),
+            crewd_path: PathBuf::from("/opt/crew\n\t/bin/crewd"),
+            state_dir: PathBuf::from("/tmp/crew-state"),
             repository: PathBuf::from("/tmp/my-repo"),
             run_id: RunId::new(),
         };
         let overrides = codex_mcp_overrides(&context);
         assert_eq!(
             overrides[1],
-            "mcp_servers.batman.command=\"/opt/batman\\n\\t/bin/batcave\""
+            "mcp_servers.crew.command=\"/opt/crew\\n\\t/bin/crewd\""
         );
         // The escaped value never contains a raw control character --
         // every byte from here on is a printable TOML basic-string body.
@@ -435,7 +435,7 @@ mod tests {
         let config = adapter_mcp_config();
         let run_id = RunId::new();
         let context = config.launch_context(run_id);
-        assert_eq!(context.batcave_path, config.batcave_path);
+        assert_eq!(context.crewd_path, config.crewd_path);
         assert_eq!(context.state_dir, config.state_dir);
         assert_eq!(context.repository, config.repository);
         assert_eq!(context.run_id, run_id);

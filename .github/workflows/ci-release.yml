@@ -49,11 +49,11 @@ jobs:
           echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
           echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc-ar" >> "$GITHUB_ENV"
 
-      - name: Build batcave
-        run: cargo build --release --target ${{ matrix.rust_target }} --bin batcave
+      - name: Build crewd
+        run: cargo build --release --target ${{ matrix.rust_target }} --bin crewd
 
       - name: Assemble leaf package
         run: |
           cargo run -p batman-xtask -- package \
             --target ${{ matrix.leaf_target }} \
-            --binary target/${{ matrix.rust_target }}/release/batcave
+            --binary target/${{ matrix.rust_target }}/release/crewd

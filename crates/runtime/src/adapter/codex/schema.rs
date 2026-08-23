@@ -116,7 +116,7 @@ pub fn verify_against_installed_binary(
     manifest: &SchemaManifest,
     codex_bin: &str,
 ) -> Result<(), SchemaCompatibilityError> {
-    let dir = std::env::temp_dir().join(format!("batman-codex-schema-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("crew-codex-schema-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)
         .map_err(|e| SchemaCompatibilityError::Generate(codex_bin.to_string(), e))?;

@@ -267,7 +267,7 @@ fn omp_init(agent_dir: &str, client_max: u32, min: (u16, u16), max: (u16, u16)) 
         "id": 1,
         "method": "initialize",
         "params": {
-            "client": { "name": "@nikolasd/batman", "version": "0.1.0" },
+            "client": { "name": "@nikolasd/crew", "version": "0.1.0" },
             "supported": {
                 "min": { "major": min.0, "minor": min.1 },
                 "max": { "major": max.0, "minor": max.1 }

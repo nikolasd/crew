@@ -15,7 +15,7 @@ import { BinaryIntegrityError } from "./platform";
 import statusResultFixture from "../../../fixtures/omp/status-result.json" with { type: "json" };
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
-const BATCAVE = join(REPO_ROOT, "target", "debug", "batcave");
+const CREWD = join(REPO_ROOT, "target", "debug", "crewd");
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -84,14 +84,14 @@ function fakeCommandContext(cwd: string, hasUI: boolean): { ctx: ExtensionComman
   };
 }
 
-test("registers batman_status plus every orchestration tool, and every slash command", () => {
+test("registers crew_health plus every orchestration tool, and every slash command", () => {
   const { api, tools, commands } = createFakeApi();
   extension(api);
-  expect([...tools.keys()]).toEqual(["batman_status", "batman_task", "batman_worker", "batman_profile", "batman_run", "batman_workspace", "batman_artifact", "batman_child", "batman_violation", "batman_message", "batman_approval", "batman_reconcile", "batman_doctor", "batman_runtime_install"]);
-  expect([...commands.keys()]).toEqual(["batman-status", "batman", "batman-doctor", "batman-runtime-install"]);
+  expect([...tools.keys()]).toEqual(["crew_health", "crew_task", "crew_worker", "crew_profile", "crew_run", "crew_workspace", "crew_artifact", "crew_child", "crew_violation", "crew_message", "crew_approval", "crew_reconcile", "crew_doctor", "crew_runtime_install"]);
+  expect([...commands.keys()]).toEqual(["crew-status", "crew", "crew-doctor", "crew-runtime-install"]);
 });
 
-// ---- Live-daemon path: a real foreground `batcave` the tool must reach. ----
+// ---- Live-daemon path: a real foreground `crewd` the tool must reach. ----
 
 let daemon: ReturnType<typeof Bun.spawn> | undefined;
 let stateDir: string;
@@ -152,7 +152,7 @@ beforeAll(async () => {
   repoDir = mkdtempSync("/tmp/bat-omp-r-");
   mkdirSync(join(repoDir, ".git"));
 
-  daemon = Bun.spawn([BATCAVE, "serve", "--foreground", "--state-dir", stateDir, "--repo", repoDir], { stdout: "ignore", stderr: "pipe" });
+  daemon = Bun.spawn([CREWD, "serve", "--foreground", "--state-dir", stateDir, "--repo", repoDir], { stdout: "ignore", stderr: "pipe" });
 
   await waitForSocket(stateDir);
 }, 180_000);
@@ -166,12 +166,12 @@ afterEach(() => {
   restoreEnv();
 });
 
-test("batman_status tool reports a healthy runtime for a real foreground daemon", async () => {
-  setEnv("BATMAN_STATE_DIR", stateDir);
+test("crew_health tool reports a healthy runtime for a real foreground daemon", async () => {
+  setEnv("CREW_STATE_DIR", stateDir);
 
   const { api, tools } = createFakeApi();
   extension(api);
-  const tool = tools.get("batman_status")!;
+  const tool = tools.get("crew_health")!;
 
   const ctx = fakeExtensionContext(repoDir);
   const result = await tool.execute("call-1", {}, undefined, undefined, ctx);
@@ -184,12 +184,12 @@ test("batman_status tool reports a healthy runtime for a real foreground daemon"
     protocolHealthy: true,
   });
 });
-test("batman_status tool reuses the cached client across a second call", async () => {
-  setEnv("BATMAN_STATE_DIR", stateDir);
+test("crew_health tool reuses the cached client across a second call", async () => {
+  setEnv("CREW_STATE_DIR", stateDir);
 
   const { api, tools } = createFakeApi();
   extension(api);
-  const tool = tools.get("batman_status")!;
+  const tool = tools.get("crew_health")!;
   const ctx = fakeExtensionContext(repoDir);
 
   const first = await tool.execute("call-1", {}, undefined, undefined, ctx);
@@ -200,18 +200,18 @@ test("batman_status tool reuses the cached client across a second call", async (
   expect((second.details as { projectId: string }).projectId).toBe((first.details as { projectId: string }).projectId);
 });
 
-test("batman_status tool returns a sanitized error when the runtime cannot be reached", async () => {
+test("crew_health tool returns a sanitized error when the runtime cannot be reached", async () => {
   const emptyState = mkdtempSync("/tmp/bat-omp-empty-");
   const brokenRepo = mkdtempSync("/tmp/bat-omp-broken-");
   mkdirSync(join(brokenRepo, ".git"));
 
-  const invalidBinary = "/nonexistent/batcave-does-not-exist";
-  setEnv("BATMAN_STATE_DIR", emptyState);
-  setEnv("OMP_BATMAN_BINARY", invalidBinary);
+  const invalidBinary = "/nonexistent/crewd-does-not-exist";
+  setEnv("CREW_STATE_DIR", emptyState);
+  setEnv("OMP_CREW_BINARY", invalidBinary);
 
   const { api, tools } = createFakeApi();
   extension(api);
-  const tool = tools.get("batman_status")!;
+  const tool = tools.get("crew_health")!;
   const ctx = fakeExtensionContext(brokenRepo);
 
   const result = await tool.execute("call-1", {}, undefined, undefined, ctx);
@@ -220,7 +220,7 @@ test("batman_status tool returns a sanitized error when the runtime cannot be re
   const details = result.details as { code: string; message: string; doctorCommand: string };
   expect(typeof details.code).toBe("string");
   expect(details.code.length).toBeGreaterThan(0);
-  expect(details.doctorCommand).toContain("batcave status --repo");
+  expect(details.doctorCommand).toContain("crewd status --repo");
   expect(details.doctorCommand).toContain(brokenRepo);
 
   // Sanitized: no stack frames, no leaked environment values (e.g. the
@@ -231,12 +231,12 @@ test("batman_status tool returns a sanitized error when the runtime cannot be re
   expect(details.message).not.toContain(invalidBinary);
 });
 
-test("batman_status surfaces a typed BinaryIntegrityError code without leaking its path", async () => {
+test("crew_health surfaces a typed BinaryIntegrityError code without leaking its path", async () => {
   const emptyState = mkdtempSync("/tmp/bat-omp-empty-");
   const brokenRepo = mkdtempSync("/tmp/bat-omp-broken-");
   mkdirSync(join(brokenRepo, ".git"));
 
-  const sensitivePath = "/leaf/package/dir/bin/batcave";
+  const sensitivePath = "/leaf/package/dir/bin/crewd";
 
   const result = await getRuntimeStatus({
     ensureRuntimeOptions: {
@@ -263,12 +263,12 @@ test("batman_status surfaces a typed BinaryIntegrityError code without leaking i
   expect(serialized).not.toContain(sensitivePath);
 });
 
-test("batman-status command notifies (not console.logs) in interactive mode", async () => {
-  setEnv("BATMAN_STATE_DIR", stateDir);
+test("crew-status command notifies (not console.logs) in interactive mode", async () => {
+  setEnv("CREW_STATE_DIR", stateDir);
 
   const { api, commands } = createFakeApi();
   extension(api);
-  const command = commands.get("batman-status")!;
+  const command = commands.get("crew-status")!;
 
   const { ctx, notifications } = fakeCommandContext(repoDir, true);
   const logSpy = spyOn(console, "log");
@@ -285,12 +285,12 @@ test("batman-status command notifies (not console.logs) in interactive mode", as
   expect(logSpy).not.toHaveBeenCalled();
 });
 
-test("batman-status command console.logs (not notify) outside interactive mode", async () => {
-  setEnv("BATMAN_STATE_DIR", stateDir);
+test("crew-status command console.logs (not notify) outside interactive mode", async () => {
+  setEnv("CREW_STATE_DIR", stateDir);
 
   const { api, commands } = createFakeApi();
   extension(api);
-  const command = commands.get("batman-status")!;
+  const command = commands.get("crew-status")!;
 
   const { ctx, notifications } = fakeCommandContext(repoDir, false);
   const logged: string[] = [];

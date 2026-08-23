@@ -1,4 +1,4 @@
-//! Integration tests for `batcave doctor` CLI command.
+//! Integration tests for `crewd doctor` CLI command.
 //!
 //! These tests verify the doctor command's behavior with various inputs:
 //! - Valid repository with proper state directory
@@ -13,7 +13,7 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 use tempfile::TempDir;
 
-const BATCAVE: &str = env!("CARGO_BIN_EXE_batcave");
+const CREWD: &str = env!("CARGO_BIN_EXE_crewd");
 
 struct Fixture {
     state: TempDir,
@@ -43,7 +43,7 @@ impl Fixture {
     }
 
     fn doctor(&self, json: bool) -> Command {
-        let mut cmd = Command::new(BATCAVE);
+        let mut cmd = Command::new(CREWD);
         cmd.arg("doctor")
             .arg("--state-dir")
             .arg(self.state_dir())
@@ -101,7 +101,7 @@ fn doctor_with_nonexistent_state_dir() {
         "fixture precondition: must start absent"
     );
 
-    let mut cmd = Command::new(BATCAVE);
+    let mut cmd = Command::new(CREWD);
     cmd.arg("doctor")
         .arg("--json")
         .arg("--state-dir")
@@ -137,7 +137,7 @@ fn doctor_with_nonexistent_state_dir() {
 #[test]
 fn doctor_with_nonexistent_repo() {
     let fixture = Fixture::new();
-    let mut cmd = Command::new(BATCAVE);
+    let mut cmd = Command::new(CREWD);
     cmd.arg("doctor")
         .arg("--state-dir")
         .arg(fixture.state_dir())
@@ -402,7 +402,7 @@ async fn schema_compatibility_fails_when_the_committed_schema_drifts() {
     let fake_repo = tempfile::tempdir().unwrap();
     let schema_dir = fake_repo.path().join("packages/protocol-ts/schema");
     std::fs::create_dir_all(&schema_dir).unwrap();
-    std::fs::write(schema_dir.join("batman.schema.json"), b"{}\n").unwrap();
+    std::fs::write(schema_dir.join("crew.schema.json"), b"{}\n").unwrap();
 
     let db = Arc::new(
         DatabaseHandle::start(state.path().join("runtime.db"))
@@ -433,8 +433,8 @@ async fn schema_compatibility_fails_when_the_committed_schema_drifts() {
 async fn schema_compatibility_passes_when_repo_has_no_schema_file() {
     let state = tempfile::tempdir().unwrap();
     // `--repo` is an ordinary project with no `packages/protocol-ts/schema/`
-    // at all -- the common case, since `--repo` is the project BATMAN runs
-    // against, not a checkout of BATMAN's own source.
+    // at all -- the common case, since `--repo` is the project Crew runs
+    // against, not a checkout of Crew's own source.
     let ordinary_repo = tempfile::tempdir().unwrap();
 
     let db = Arc::new(
@@ -478,6 +478,28 @@ async fn schema_compatibility_passes_against_the_committed_schema() {
             .iter()
             .any(|name| name == "schema_compatibility"),
         "the committed schema must match this binary: {:?}",
+        result.failed_checks
+    );
+}
+
+/// The catalog's `display_available` check used to construct
+/// `TerminalDisplay`, which hardcodes `is_available() -> true`, into the
+/// same "any backend available" `.any()` -- so the check could never fail.
+/// Forcing a specific backend that isn't actually usable (no tmux, no
+/// session) must surface as a failure naming that backend, not be masked
+/// by the terminal fallback.
+#[tokio::test]
+async fn display_available_fails_when_the_forced_backend_is_unavailable() {
+    let state = tempfile::tempdir().unwrap();
+    let mut policy = default_policy();
+    policy.display_backend = "tmux".to_string();
+    let (doctor, _db) = doctor_over(state.path(), policy).await;
+
+    let result = doctor.check().await.expect("catalog runs");
+
+    assert!(
+        error_for(&result, "display_available").is_some_and(|e| e.contains("tmux")),
+        "expected the forced-but-unavailable backend to be named: {:?}",
         result.failed_checks
     );
 }

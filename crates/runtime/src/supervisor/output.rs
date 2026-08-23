@@ -23,7 +23,7 @@ pub const MAX_STDERR_CAPTURE_BYTES: usize = 25 * 1024 * 1024;
 
 /// Receives a clone of every raw stdout frame decoded by any
 /// `spawn_stdout_reader` task in this process. Installed once, by
-/// `batcave conformance capture` only -- production never installs one,
+/// `crewd conformance capture` only -- production never installs one,
 /// and the cost when absent is a single `OnceLock::get` returning `None`.
 static FRAME_TAP: std::sync::OnceLock<mpsc::UnboundedSender<Vec<u8>>> = std::sync::OnceLock::new();
 

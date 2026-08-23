@@ -93,7 +93,23 @@ fn state_root_precedence_matches_shared_fixture() {
 }
 
 #[test]
-fn rejects_relative_batman_state_dir_override() {
+fn rejects_relative_crew_state_dir_override() {
+    let mut env = HashMap::new();
+    env.insert("CREW_STATE_DIR".to_string(), "relative/state".to_string());
+    let home = PathBuf::from("/home/alice");
+
+    let err = StateRoot::resolve(&env, &home).expect_err("relative override must be rejected");
+    assert!(matches!(
+        err,
+        SecurityError::RelativeOverride {
+            var: "CREW_STATE_DIR",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn rejects_relative_legacy_batman_state_dir_override() {
     let mut env = HashMap::new();
     env.insert("BATMAN_STATE_DIR".to_string(), "relative/state".to_string());
     let home = PathBuf::from("/home/alice");
@@ -102,7 +118,7 @@ fn rejects_relative_batman_state_dir_override() {
     assert!(matches!(
         err,
         SecurityError::RelativeOverride {
-            var: "BATMAN_STATE_DIR",
+            var: "CREW_STATE_DIR",
             ..
         }
     ));

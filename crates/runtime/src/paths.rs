@@ -1,4 +1,4 @@
-//! Derives the on-disk paths BATMAN's runtime uses for a given repository,
+//! Derives the on-disk paths Crew's runtime uses for a given repository,
 //! namespaced under a [`crate::security::StateRoot`].
 //!
 //! Given a repository directory, [`RuntimePaths::resolve`] canonicalizes it,
@@ -29,7 +29,7 @@ pub enum PathError {
         source: std::io::Error,
     },
 
-    /// The canonical path is not valid UTF-8. BATMAN hashes and stores
+    /// The canonical path is not valid UTF-8. Crew hashes and stores
     /// paths as UTF-8 text, so a non-UTF-8 repository path cannot be
     /// represented. On macOS this is effectively unreachable (APFS/HFS+
     /// require valid UTF-8 file names); it is reachable on Linux, where
@@ -50,7 +50,7 @@ pub enum PathError {
     Security(#[from] SecurityError),
 }
 
-/// The filesystem paths BATMAN's runtime uses for a single repository,
+/// The filesystem paths Crew's runtime uses for a single repository,
 /// rooted at `<state_root>/repos/<repository-id>/`.
 #[derive(Debug, Clone)]
 pub struct RuntimePaths {

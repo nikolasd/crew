@@ -1,6 +1,6 @@
-// Downloads and verifies the `batcave` binary GitHub Release asset for a
-// given version/target, caching it under the BATMAN state root at the exact
-// path `resolveBatcave` (`platform.ts`) later reads from.
+// Downloads and verifies the `crewd` binary GitHub Release asset for a
+// given version/target, caching it under the Crew state root at the exact
+// path `resolveCrewd` (`platform.ts`) later reads from.
 //
 // Modelled on `doctor.ts`'s split: this module is the pure worker; `install.ts`
 // builds its context and shapes the tool/command result.
@@ -48,7 +48,7 @@ export interface DownloadRuntimeOptions {
   readonly version: string;
   /** The target triple (e.g. `darwin-arm64`) whose asset to fetch. */
   readonly target: string;
-  /** Absolute BATMAN state root the binary is cached under. */
+  /** Absolute Crew state root the binary is cached under. */
   readonly stateRoot: string;
   /** Forwarded as `Authorization: Bearer <token>` on every request; required while the repository stays private. */
   readonly token?: string;
@@ -60,7 +60,7 @@ export interface DownloadRuntimeOptions {
 
 /** The result of a successful {@link downloadRuntime} call. */
 export interface DownloadRuntimeResult {
-  /** Absolute path to the verified, cached `batcave` binary. */
+  /** Absolute path to the verified, cached `crewd` binary. */
   readonly path: string;
   readonly version: string;
   readonly target: string;
@@ -74,21 +74,26 @@ interface ReleaseAsset {
 }
 
 /**
- * Downloads `batcave` for `options.target`/`options.version` from the
+ * Downloads `crewd` for `options.target`/`options.version` from the
  * matching GitHub Release, verifies its SHA-256 against the published
  * manifest, and caches both under `runtimeCacheDir(stateRoot, version)`.
  *
  * Ordering invariant: the manifest is validated before any binary bytes are
  * fetched, the binary is verified before it is renamed into place, and the
  * manifest is written to the cache only after the binary has landed --
- * `resolveBatcave` relies on a present manifest always implying an
+ * `resolveCrewd` relies on a present manifest always implying an
  * already-verified sibling binary.
+ *
+ * Compatibility note: this looks for `crewd-<target>` assets, which exist
+ * starting with the first release tag published after the batman -> crew
+ * rename; any release before that tag shipped `batcave-<target>` assets
+ * instead and cannot be installed by this function.
  */
 export async function downloadRuntime(options: DownloadRuntimeOptions): Promise<DownloadRuntimeResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const apiBaseUrl = options.apiBaseUrl ?? API_BASE_URL;
   const tag = `v${options.version}`;
-  const binaryName = `batcave-${options.target}`;
+  const binaryName = `crewd-${options.target}`;
   const manifestName = `${binaryName}.manifest.json`;
 
   const releaseUrl = `${apiBaseUrl}/releases/tags/${tag}`;
@@ -109,9 +114,9 @@ export async function downloadRuntime(options: DownloadRuntimeOptions): Promise<
   const binaryBytes = await fetchAssetBytes(fetchImpl, binaryAsset.url, options.token);
 
   const dir = runtimeCacheDir(options.stateRoot, options.version);
-  const finalPath = join(dir, "batcave");
+  const finalPath = join(dir, "crewd");
   const manifestPath = join(dir, "manifest.json");
-  const tmpPath = join(dir, `.batcave.${process.pid}.tmp`);
+  const tmpPath = join(dir, `.crewd.${process.pid}.tmp`);
 
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });

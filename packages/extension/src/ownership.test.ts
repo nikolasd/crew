@@ -22,7 +22,7 @@ import extension from "./index";
 import { repositoryId } from "./runtime";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
-const BATCAVE = join(REPO_ROOT, "target", "debug", "batcave");
+const CREWD = join(REPO_ROOT, "target", "debug", "crewd");
 
 // ---- Daemon lifecycle (self-contained) ----
 
@@ -43,7 +43,7 @@ beforeAll(async () => {
 
   // Real spawn wait required: the daemon must bind its socket before tests can connect.
   // eslint-disable-next-line no-setTimeout
-  daemonProcess = Bun.spawn([BATCAVE, "serve", "--foreground", "--state-dir", stateDir, "--repo", repoDir], {
+  daemonProcess = Bun.spawn([CREWD, "serve", "--foreground", "--state-dir", stateDir, "--repo", repoDir], {
     stdout: "ignore",
     stderr: "pipe",
   });
@@ -243,7 +243,7 @@ function makeContext(sessionId: string): ExtensionContext {
 // ---- Tests ----
 
 test("matching sessionId allows task owner to decide approval and violation", async () => {
-  setEnvVar("BATMAN_STATE_DIR", stateDir);
+  setEnvVar("CREW_STATE_DIR", stateDir);
 
   const sessionId = "own-test-session-1";
   const { approvalId, violationId } = seedTestData(sessionId);
@@ -252,8 +252,8 @@ test("matching sessionId allows task owner to decide approval and violation", as
   extension(api);
 
   const ctx = makeContext(sessionId);
-  const approvalTool = tools.get("batman_approval")!;
-  const violationTool = tools.get("batman_violation")!;
+  const approvalTool = tools.get("crew_approval")!;
+  const violationTool = tools.get("crew_violation")!;
 
   // Decide the approval — should succeed because instanceId (from sessionId)
   // matches the task's ownerClientInstanceId.
@@ -301,7 +301,7 @@ test("matching sessionId allows task owner to decide approval and violation", as
 });
 
 test("mismatched sessionId forbids approval and violation decisions", async () => {
-  setEnvVar("BATMAN_STATE_DIR", stateDir);
+  setEnvVar("CREW_STATE_DIR", stateDir);
 
   // Seed data owned by one session.
   const ownerSession = "own-test-session-owner";
@@ -312,8 +312,8 @@ test("mismatched sessionId forbids approval and violation decisions", async () =
   extension(api);
 
   const ctx = makeContext("own-test-session-imposter");
-  const approvalTool = tools.get("batman_approval")!;
-  const violationTool = tools.get("batman_violation")!;
+  const approvalTool = tools.get("crew_approval")!;
+  const violationTool = tools.get("crew_violation")!;
 
   // Approval decide should fail with Forbidden.
   const approvalResult = await approvalTool.execute(

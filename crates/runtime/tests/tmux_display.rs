@@ -76,7 +76,7 @@ impl MockCommandExecutor {
     }
 
     fn assert_session_creation_invoked(&self) {
-        self.assert_command_invoked("tmux", &["new-session", "-d", "-s", "batman-session"]);
+        self.assert_command_invoked("tmux", &["new-session", "-d", "-s", "crew-session"]);
     }
 }
 
@@ -337,11 +337,7 @@ fn create_pane_for_workspace_placement_is_capability_unsupported_and_issues_no_c
     let mock = Arc::new(mock);
     let tmux = TmuxDisplay::with_executor(config, mock.clone());
 
-    let result = tmux.create_pane(
-        &["batcave".to_string()],
-        DisplayPlacement::Workspace,
-        "run-1",
-    );
+    let result = tmux.create_pane(&["crewd".to_string()], DisplayPlacement::Workspace, "run-1");
     let err = result.expect_err("tmux has no workspace concept");
     assert!(err.contains("capability_unsupported"));
     assert!(
@@ -360,7 +356,7 @@ fn create_pane_without_an_active_session_refuses_rather_than_starting_one() {
     let tmux = TmuxDisplay::with_executor(config, mock.clone());
 
     let result = tmux.create_pane(
-        &["batcave".to_string(), "monitor".to_string()],
+        &["crewd".to_string(), "monitor".to_string()],
         DisplayPlacement::SplitRight,
         "run-1",
     );
@@ -392,10 +388,7 @@ fn split_right_creates_one_tagged_pane_and_records_ownership_with_argv_safe_comm
     // `Command::args` (never a shell) guarantees.
     let pane_id = tmux
         .create_pane(
-            &[
-                "/opt/my batcave/bin/batcave".to_string(),
-                "monitor".to_string(),
-            ],
+            &["/opt/my crewd/bin/crewd".to_string(), "monitor".to_string()],
             DisplayPlacement::SplitRight,
             "run-1",
         )
@@ -410,7 +403,7 @@ fn split_right_creates_one_tagged_pane_and_records_ownership_with_argv_safe_comm
     assert!(
         split_call
             .1
-            .contains(&"/opt/my batcave/bin/batcave".to_string())
+            .contains(&"/opt/my crewd/bin/crewd".to_string())
     );
 }
 
@@ -428,7 +421,7 @@ fn closing_an_untracked_pane_is_refused_and_closing_an_owned_one_removes_it() {
 
     let pane_id = tmux
         .create_pane(
-            &["batcave".to_string(), "monitor".to_string()],
+            &["crewd".to_string(), "monitor".to_string()],
             DisplayPlacement::SplitDown,
             "run-1",
         )

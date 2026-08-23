@@ -2,8 +2,8 @@
 //! `batman_runtime::conformance` for the shared report/scenario contract
 //! this module fills in.
 //!
-//! `fixture_report()` is reachable from a real, deployed `batcave` binary
-//! (`batcave adapters --json` / `batcave conformance --fixture`, see
+//! `fixture_report()` is reachable from a real, deployed `crewd` binary
+//! (`crewd adapters --json` / `crewd conformance --fixture`, see
 //! `crate::cli`), never only from `cargo test` -- so every scenario here
 //! must be safe to run with no test-only tooling available (no
 //! `fake-worker`, no `cargo`): each is either (a) pure, zero-process
@@ -463,7 +463,7 @@ fn approval_scenario() -> ScenarioResult {
 /// empty until their next `omp models refresh`. Measured A/A vs A/B/A:
 /// three consecutive full-environment reads give `10, 10, 10`; interposing
 /// one stripped-environment call gives `10, 0, 0`. Passing the server's
-/// address keeps a conformance run from quietly degrading state BATMAN does
+/// address keeps a conformance run from quietly degrading state Crew does
 /// not own -- verified: 10 local providers before a full live run, 10
 /// after.
 ///
@@ -663,7 +663,7 @@ async fn vendor_reconnect_scenario() -> ScenarioResult {
         "type": "host_tool_call",
         "id": "htc-conformance-1",
         "toolCallId": "tc-1",
-        "toolName": "batman_task",
+        "toolName": "crew_task",
         "arguments": {},
     });
     let scope = BoundScope {
@@ -722,7 +722,7 @@ async fn resume_flag_probe() -> Result<(), VendorUnavailable> {
         ));
     }
     let bogus_id = format!(
-        "batman-conformance-nonexistent-{}-{}",
+        "crew-conformance-nonexistent-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1115,11 +1115,11 @@ pub async fn fixture_report() -> ConformanceReport {
 /// Real invocation is the default. Every scenario here remains
 /// zero-model-call (identical to [`fixture_report`]) -- this adapter's own
 /// conformance is already bottlenecked on a real local selector being
-/// reachable (see [`probe_scenario`]). Set `BATMAN_DISABLE_VENDOR_CLI=1`
+/// reachable (see [`probe_scenario`]). Set `CREW_DISABLE_VENDOR_CLI=1`
 /// to keep these real-process probes out of a CI run.
 ///
 /// # Errors
-/// Returns a message if `BATMAN_DISABLE_VENDOR_CLI=1` is set.
+/// Returns a message if `CREW_DISABLE_VENDOR_CLI=1` is set.
 pub async fn live_report() -> Result<ConformanceReport, String> {
     if batman_runtime::conformance::vendor_cli_invocation_disabled() {
         return Err(format!(

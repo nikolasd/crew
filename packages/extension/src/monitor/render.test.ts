@@ -113,8 +113,8 @@ test("stateColor falls back to the theme's default text color for an unrecognize
   expect(stateColor("totally-unknown")).toBe("text");
 });
 
-test("renderWidgetHeader returns the bat icon and the BATMAN label", () => {
-  expect(renderWidgetHeader()).toBe("\u{F0B5F} BATMAN");
+test("renderWidgetHeader returns the bat icon and the Crew label", () => {
+  expect(renderWidgetHeader()).toBe("\u{F0B5F} Crew");
 });
 
 test("a row line includes the state icon alongside the state word", () => {
@@ -122,7 +122,7 @@ test("a row line includes the state icon alongside the state word", () => {
   expect(line).toContain(`${stateIcon("succeeded")} succeeded`);
 });
 
-test("renderRowDetails includes worker, action-relevant fields, and timestamps for /batman status", () => {
+test("renderRowDetails includes worker, action-relevant fields, and timestamps for /crew status", () => {
   const details = renderRowDetails(row({ workspaceMode: "isolated", latestActivity: "question sent", adapter: "codex", model: "gpt-5" }));
   expect(details).toContain("Run: run-1");
   expect(details).toContain("Task: task-1");
@@ -149,10 +149,10 @@ test("renderRowDetails names the decision surface for a run with children active
   // The raw flag name still appears in the flag list; the added line is
   // what tells an operator how to resolve it.
   expect(details).toContain("childrenActive");
-  expect(details).toContain("batman_child");
+  expect(details).toContain("crew_child");
 
   // A run with no children must not carry the pointer at all.
-  expect(renderRowDetails(row({}))).not.toContain("batman_child");
+  expect(renderRowDetails(row({}))).not.toContain("crew_child");
 });
 
 test("renderWidgetBox embeds the accent-colored header in the top border", () => {
@@ -164,7 +164,7 @@ test("renderWidgetBox embeds the accent-colored header in the top border", () =>
 test("renderWidgetBox wraps the empty-state line in the border, uncolored", () => {
   const lines = renderWidgetBox({ rows: {}, lastSequence: 0 }, fakeTheme());
   expect(lines).toHaveLength(3); // top border, empty-state line, bottom border
-  expect(lines[1]).toContain("[text]No BATMAN runs yet.[/text]");
+  expect(lines[1]).toContain("[text]No Crew runs yet.[/text]");
   expect(lines[1].startsWith("[border]│[/border]")).toBe(true);
   expect(lines[1].endsWith("[border]│[/border]")).toBe(true);
 });
@@ -189,7 +189,7 @@ test("renderWidgetBox appends a muted overflow line beyond MAX_WIDGET_ROWS", () 
   expect(lines).toHaveLength(MAX_WIDGET_ROWS + 3);
   const overflowLine = lines[lines.length - 2];
   expect(overflowLine).toContain("[muted]");
-  expect(overflowLine).toContain("more; use /batman status <runId> for full details.");
+  expect(overflowLine).toContain("more; use /crew status <runId> for full details.");
 });
 
 test("renderWidgetBox produces a top border, every content line, and the bottom border at equal total width", () => {
@@ -238,7 +238,7 @@ test("renderWidgetBox produces a top border, every content line, and the bottom 
 
 test("renderWidgetBox stays equal-width by code points for the empty state, where the header carries an icon but the content line does not", () => {
   // The header (`BAT_ICON`) always carries a surrogate-pair icon; the
-  // empty-state line ("No BATMAN runs yet.") never does. Pre-fix, that
+  // empty-state line ("No Crew runs yet.") never does. Pre-fix, that
   // asymmetry meant the top border's fill-character count (derived from
   // `header.length`) came out 1 short relative to the body/bottom border
   // (derived from a line with no surrogate pair to overcount) — the exact
@@ -296,12 +296,12 @@ test("a no-model fixture extension compiles and runs pi.appendEntry + ctx.ui.set
 
   // The exact calls the plan pins to OMP 17.0.7's public surface.
   function fixtureExtension(pi: ExtensionAPI, ctx: ExtensionContext): void {
-    pi.appendEntry("batman-monitor", { sequence: 1 });
-    ctx.ui.setWidget("batman-monitor", ["fixture"], { placement: "aboveEditor" });
+    pi.appendEntry("crew-monitor", { sequence: 1 });
+    ctx.ui.setWidget("crew-monitor", ["fixture"], { placement: "aboveEditor" });
   }
 
   fixtureExtension(fakePi, fakeCtx);
 
-  expect(appendedEntries).toEqual([{ customType: "batman-monitor", data: { sequence: 1 } }]);
-  expect(widgets).toEqual([{ key: "batman-monitor", content: ["fixture"], options: { placement: "aboveEditor" } }]);
+  expect(appendedEntries).toEqual([{ customType: "crew-monitor", data: { sequence: 1 } }]);
+  expect(widgets).toEqual([{ key: "crew-monitor", content: ["fixture"], options: { placement: "aboveEditor" } }]);
 });

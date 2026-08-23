@@ -43,14 +43,14 @@ fn new_adapter() -> ClaudeAdapter {
     )
 }
 
-/// A worker-MCP config pointing at a fake `batcave_path` -- fine for
+/// A worker-MCP config pointing at a fake `crewd_path` -- fine for
 /// every test that only inspects the argv/env/file this module builds
 /// and never actually spawns the resulting `coordination-mcp` command.
 fn mcp_config() -> AdapterMcpConfig {
     AdapterMcpConfig {
         scope_tokens: Arc::new(ScopeTokenStore::new()),
         project_id: ProjectId::new(),
-        batcave_path: PathBuf::from("/opt/batman/bin/batcave"),
+        crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
         state_dir: std::env::temp_dir(),
         repository: std::env::temp_dir(),
     }
@@ -60,7 +60,7 @@ fn mcp_config() -> AdapterMcpConfig {
 /// duplicated here only so live-process tests can assert on the file's
 /// existence/absence without a way to read the adapter's private state.
 fn expected_mcp_config_path(run_id: RunId) -> PathBuf {
-    std::env::temp_dir().join(format!("batman-mcp-{run_id}.json"))
+    std::env::temp_dir().join(format!("crew-mcp-{run_id}.json"))
 }
 
 fn real_claude_binary() -> Option<PathBuf> {
@@ -271,7 +271,7 @@ fn mcp_injection_env_carries_only_the_scope_token() {
 
     assert_eq!(injection.extra_env.len(), 1);
     assert_eq!(
-        injection.extra_env.get("BATMAN_WORKER_SCOPE_TOKEN"),
+        injection.extra_env.get("CREW_WORKER_SCOPE_TOKEN"),
         Some(&injection.token)
     );
 
@@ -294,7 +294,7 @@ fn mcp_injection_config_file_has_owner_only_permissions_and_never_contains_the_t
 
     let document: serde_json::Value = serde_json::from_str(&contents).unwrap();
     assert_eq!(
-        document["mcpServers"]["batman"]["args"][0],
+        document["mcpServers"]["crew"]["args"][0],
         "coordination-mcp"
     );
     assert_eq!(document["mcpServers"].as_object().unwrap().len(), 1);

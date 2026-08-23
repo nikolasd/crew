@@ -1,6 +1,6 @@
 // Aggregate conformance runner.
 //
-// Spawns the real `batcave conformance` CLI once for every adapter and
+// Spawns the real `crewd conformance` CLI once for every adapter and
 // writes a combined report. This is the release gate's data source, so it
 // never fabricates a report: a non-zero exit throws and no file is written.
 
@@ -11,9 +11,10 @@ import { join } from "node:path";
 
 import type { AdapterConformanceReport, CombinedReport } from "./assert-report";
 
-/** Resolves the `batcave` binary the same way the extension's tests do. */
-function batcavePath(): string {
-  return process.env.OMP_BATMAN_BINARY ?? "target/debug/batcave";
+/** Resolves the `crewd` binary the same way the extension's tests do,
+ * accepting the pre-rename `OMP_BATMAN_BINARY` name as a fallback. */
+function crewdPath(): string {
+  return process.env.OMP_CREW_BINARY ?? process.env.OMP_BATMAN_BINARY ?? "target/debug/crewd";
 }
 
 /**
@@ -31,24 +32,24 @@ function batcavePath(): string {
  *   of reports. Either way `outputPath` is left untouched.
  */
 export async function runAllFixtures(outputPath: string): Promise<void> {
-  const scratch = mkdtempSync(join(tmpdir(), "batman-conformance-"));
+  const scratch = mkdtempSync(join(tmpdir(), "crew-conformance-"));
   const reportPath = join(scratch, "conformance.json");
 
-  const proc = Bun.spawn([batcavePath(), "conformance", "--adapter", "all", "--fixture", "--output", reportPath], { stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn([crewdPath(), "conformance", "--adapter", "all", "--fixture", "--output", reportPath], { stdout: "pipe", stderr: "pipe" });
   const [exitCode, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
 
   if (exitCode !== 0) {
-    throw new Error(`batcave conformance exited ${exitCode}: ${stderr.trim() || "(no stderr)"}`);
+    throw new Error(`crewd conformance exited ${exitCode}: ${stderr.trim() || "(no stderr)"}`);
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(reportPath, "utf-8"));
   } catch (err) {
-    throw new Error(`batcave conformance wrote an unreadable report: ${err}`);
+    throw new Error(`crewd conformance wrote an unreadable report: ${err}`);
   }
   if (!Array.isArray(parsed)) {
-    throw new Error("batcave conformance must write a JSON array of reports");
+    throw new Error("crewd conformance must write a JSON array of reports");
   }
 
   const adapters: Record<string, AdapterConformanceReport> = {};

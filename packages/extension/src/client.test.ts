@@ -4,10 +4,10 @@ import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 
 import type { InitializeParams, InitializeResult, RuntimeStatus } from "@nikolasd/batman-protocol";
-import { BatmanClient, JsonRpcRemoteError, ValidationError } from "./client";
+import { CrewClient, JsonRpcRemoteError, ValidationError } from "./client";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
-const BATCAVE = join(REPO_ROOT, "target", "debug", "batcave");
+const CREWD = join(REPO_ROOT, "target", "debug", "crewd");
 
 let serverProc: Bun.Subprocess | undefined;
 let stateDir: string;
@@ -44,7 +44,7 @@ async function waitForSocket(state: string): Promise<string> {
 
 function ompInitParams(agentDir: string, maxFrameBytes: number): InitializeParams {
   return {
-    client: { name: "@nikolasd/batman", version: "0.1.0" },
+    client: { name: "@nikolasd/crew", version: "0.1.0" },
     supported: { min: { major: 1, minor: 0 }, max: { major: 1, minor: 0 } },
     repository: { canonicalPath: agentDir, vcsRoot: agentDir },
     auth: { role: "ompExtension", instanceId: "omp-1", agentDirectory: agentDir },
@@ -65,7 +65,7 @@ beforeAll(async () => {
   repoDir = mkdtempSync("/tmp/bat-ts-r-");
   mkdirSync(join(repoDir, ".git"));
 
-  serverProc = Bun.spawn([BATCAVE, "serve", "--foreground", "--state-dir", stateDir, "--repo", repoDir], { stdout: "pipe", stderr: "pipe" });
+  serverProc = Bun.spawn([CREWD, "serve", "--foreground", "--state-dir", stateDir, "--repo", repoDir], { stdout: "pipe", stderr: "pipe" });
 
   socketPath = await waitForSocket(stateDir);
 }, 180_000);
@@ -75,7 +75,7 @@ afterAll(() => {
 });
 
 test("initialize negotiates protocol 1.0, project id, and the minimum frame size", async () => {
-  const client = new BatmanClient({ socketPath });
+  const client = new CrewClient({ socketPath });
   try {
     const result: InitializeResult = await client.initialize(ompInitParams(repoDir, 1024 * 1024));
     expect(result.negotiated).toEqual({ major: 1, minor: 0 });
@@ -90,7 +90,7 @@ test("initialize negotiates protocol 1.0, project id, and the minimum frame size
 });
 
 test("runtime/status reports a healthy, running runtime", async () => {
-  const client = new BatmanClient({ socketPath });
+  const client = new CrewClient({ socketPath });
   try {
     await client.initialize(ompInitParams(repoDir, 1024 * 1024));
     const status = (await client.request("runtime/status")) as RuntimeStatus;
@@ -104,7 +104,7 @@ test("runtime/status reports a healthy, running runtime", async () => {
 });
 
 test("subscribe replays the durable RuntimeStarted event", async () => {
-  const client = new BatmanClient({ socketPath });
+  const client = new CrewClient({ socketPath });
   try {
     await client.initialize(ompInitParams(repoDir, 1024 * 1024));
     const firstEvent = await new Promise<{ sequence: number; event: { type: string } }>((resolve) => {
@@ -118,7 +118,7 @@ test("subscribe replays the durable RuntimeStarted event", async () => {
 });
 
 test("a frame offer below the protocol minimum is rejected with INVALID_PARAMS", async () => {
-  const client = new BatmanClient({ socketPath });
+  const client = new CrewClient({ socketPath });
   try {
     await expect(client.initialize(ompInitParams(repoDir, 1024))).rejects.toMatchObject({
       code: -32602,
@@ -159,7 +159,7 @@ test("an inbound message with an unknown field is rejected before reaching calle
 
   await new Promise<void>((resolve) => fakeServer.listen(fakeSocketPath, resolve));
 
-  const client = new BatmanClient({ socketPath: fakeSocketPath });
+  const client = new CrewClient({ socketPath: fakeSocketPath });
   try {
     await expect(client.initialize(ompInitParams(repoDir, 1024 * 1024))).rejects.toBeInstanceOf(ValidationError);
   } finally {
@@ -221,7 +221,7 @@ test("an inbound frame exceeding the negotiated cap is rejected before dispatch 
 
   await new Promise<void>((resolve) => fakeServer.listen(fakeSocketPath, resolve));
 
-  const client = new BatmanClient({ socketPath: fakeSocketPath });
+  const client = new CrewClient({ socketPath: fakeSocketPath });
   try {
     await client.initialize(ompInitParams(repoDir, 1024 * 1024));
 
@@ -291,7 +291,7 @@ test("a malformed artifact/fetch result (missing contentBase64) is rejected by s
 
   await new Promise<void>((resolve) => fakeServer.listen(fakeSocketPath, resolve));
 
-  const client = new BatmanClient({ socketPath: fakeSocketPath });
+  const client = new CrewClient({ socketPath: fakeSocketPath });
   try {
     await client.initialize(ompInitParams(repoDir, 1024 * 1024));
     await expect(client.request("artifact/fetch", { artifactId: "018f1435-2e2b-7c1a-9d4b-6a1e2f3c4d5c" })).rejects.toBeInstanceOf(ValidationError);
@@ -340,7 +340,7 @@ test("a malformed run/result result (runId not a string) is rejected by schema v
 
   await new Promise<void>((resolve) => fakeServer.listen(fakeSocketPath, resolve));
 
-  const client = new BatmanClient({ socketPath: fakeSocketPath });
+  const client = new CrewClient({ socketPath: fakeSocketPath });
   try {
     await client.initialize(ompInitParams(repoDir, 1024 * 1024));
     await expect(client.request("run/result", { runId: "r-1" })).rejects.toBeInstanceOf(ValidationError);
@@ -387,7 +387,7 @@ test("a null result for a validator-less method is rejected by the structural ob
 
   await new Promise<void>((resolve) => fakeServer.listen(fakeSocketPath, resolve));
 
-  const client = new BatmanClient({ socketPath: fakeSocketPath });
+  const client = new CrewClient({ socketPath: fakeSocketPath });
   try {
     await client.initialize(ompInitParams(repoDir, 1024 * 1024));
     await expect(client.request("task/upsert", { taskId: "t" })).rejects.toBeInstanceOf(ValidationError);

@@ -1,6 +1,6 @@
 //! Configuration precedence and immutable effective policy.
 //!
-//! BATMAN resolves its runtime configuration from multiple YAML layers
+//! Crew resolves its runtime configuration from multiple YAML layers
 //! (org → repo → user → per-run params) with strict precedence: higher
 //! layers win, but org-level field locks prevent lower layers from
 //! overriding specific values. The result is an immutable, SHA-256-

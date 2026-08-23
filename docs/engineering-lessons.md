@@ -18,7 +18,7 @@ should be discovered by reading documentation, not by trial and error.
 
 A cached client shared across callers with different role needs must authenticate with the *union* of every role its callers need, not whatever the first caller happened to need.
 
-**The bug:** `ensureRuntime` originally hardcoded `ClientAuth::Display` (read-only) for what its own doc comment called "a launcher connection" — correct for `batman_status`, the only caller when it was written. `index.ts::getClient()` later cached and reused that exact client for every orchestration tool too, so every mutation (`task/upsert`, `run/submit`, ...) failed `-32601 method ... is not available to this client` — silently, since `display`'s method table is a strict *subset* of `ompExtension`'s and nothing checks that relationship at compile time.
+**The bug:** `ensureRuntime` originally hardcoded `ClientAuth::Display` (read-only) for what its own doc comment called "a launcher connection" — correct for `crew_health`, the only caller when it was written. `index.ts::getClient()` later cached and reused that exact client for every orchestration tool too, so every mutation (`task/upsert`, `run/submit`, ...) failed `-32601 method ... is not available to this client` — silently, since `display`'s method table is a strict *subset* of `ompExtension`'s and nothing checks that relationship at compile time.
 
 **The fix:** `ensureRuntime` now authenticates as `ompExtension` unconditionally, safe for every existing caller because `ompExtension`'s allowed methods are always a superset.
 
@@ -74,7 +74,7 @@ ADR-0012 defined the run-lifecycle relation and ADR-0013 shipped `FakeRunDriver`
 implementer. The real `AdapterRegistry` — the production `RunDriver` — never called
 `transition_run` anywhere in `run_one` or `watch_settlement`; grepping `crates/runtime/src/adapter/`
 for `transition_run` returned zero hits. Every real run's row stayed `queued` however successfully
-its vendor process ran and exited; `run/get`, `run/list`, the `/batman` monitor, and the approval
+its vendor process ran and exited; `run/get`, `run/list`, the `/crew` monitor, and the approval
 flow all read a value that was wrong for every real run, and only a daemon restart
 (`RecoveryCoordinator`) ever terminalized anything.
 
@@ -365,17 +365,17 @@ calling the result deterministic.
 
 ## Health Checks (`doctor`)
 
-### A check scoped to the BATMAN source tree must not run against `--repo`
+### A check scoped to the Crew source tree must not run against `--repo`
 
 **Location:** `crates/runtime/src/doctor.rs::check_schema_compatibility`
 
 `schema_compatibility` compared the binary's own rendered protocol schema against
-`<repo_root>/packages/protocol-ts/schema/batman.schema.json` — but `repo_root` is `--repo`, the
-arbitrary project BATMAN is running against, not necessarily a checkout of BATMAN's own source.
-That schema document is only ever committed inside the BATMAN monorepo itself.
+`<repo_root>/packages/protocol-ts/schema/crew.schema.json` — but `repo_root` is `--repo`, the
+arbitrary project Crew is running against, not necessarily a checkout of Crew's own source.
+That schema document is only ever committed inside the Crew monorepo itself.
 
 **The bug:** For every ordinary `--repo` (which is the entire point of the flag — ADR-none, this
-was just never exercised against a non-BATMAN repo), the file is absent, and the check failed
+was just never exercised against a non-Crew repo), the file is absent, and the check failed
 unconditionally with a "no such file" `ConfigError` — a permanently-red check on every real-world
 install. It masked a second, unrelated latent bug: `crates/runtime/tests/doctor.rs`'s
 `doctor_with_nonexistent_state_dir` asserted stderr contained "No such file", which this
@@ -384,7 +384,7 @@ the state-dir path it claimed to at all.
 
 **The fix:** A missing schema document at `--repo` now means "not applicable" (`Ok`), not
 "broken" — this check only fires when the document exists and disagrees with the binary,
-i.e., only inside a BATMAN dev checkout where drift is real. Fixed the masked test to assert
+i.e., only inside a Crew dev checkout where drift is real. Fixed the masked test to assert
 what nonexistent-but-creatable state dirs actually do (get provisioned, same as `serve`) instead
 of a coincidental error string.
 

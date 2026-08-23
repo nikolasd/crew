@@ -1,4 +1,4 @@
-// `batman_workspace`: acquires, inspects, and releases isolated (or shared)
+// `crew_workspace`: acquires, inspects, and releases isolated (or shared)
 // working directories for a run. `acquire` is tier `exec` -- it materializes
 // a git worktree or copy on disk (or grants shared access to the repository
 // root) and activates the lease. `release` is tier `exec` -- it tears down
@@ -31,7 +31,7 @@ void _leaseModeExhaustive;
 void _isolationKindExhaustive;
 void _applyStrategyExhaustive;
 
-export const BATMAN_WORKSPACE_TOOL_NAME = "batman_workspace";
+export const CREW_WORKSPACE_TOOL_NAME = "crew_workspace";
 
 export function registerWorkspaceTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
@@ -41,14 +41,14 @@ export function registerWorkspaceTool(pi: ExtensionAPI, ctx: OrchestrationToolCo
     requestedIsolation: pi.zod.enum(ISOLATION_KINDS).optional().describe("Optional for acquire: the isolation strategy to materialize. Defaults to shared. Use gitWorktree or copy when a peer agent will work on the same task concurrently."),
     leaseId: pi.zod.string().optional().describe("Required for get, release, inspect, and apply: the lease id."),
     strategy: pi.zod.enum(APPLY_STRATEGIES).optional().describe("Required for apply: applyPatch applies a patch artifact, cherryPick replays commits."),
-    artifactId: pi.zod.string().optional().describe("Required for apply: the artifact to apply (from batman_artifact { op: 'list' })."),
+    artifactId: pi.zod.string().optional().describe("Required for apply: the artifact to apply (from crew_artifact { op: 'list' })."),
     expectedTargetRevision: pi.zod.string().optional().describe("Required for apply: the revision the workspace must currently be at. A mismatch is refused as STALE_REVISION rather than applied to the wrong base."),
     approvalCorrelationId: pi.zod.string().optional().describe("Optional for apply: correlates this application with an approval decision."),
   });
 
   pi.registerTool({
-    name: BATMAN_WORKSPACE_TOOL_NAME,
-    label: "BATMAN Workspace",
+    name: CREW_WORKSPACE_TOOL_NAME,
+    label: "Crew Workspace",
     description:
       "Use to acquire, inspect, apply changes to, or release an isolated (or shared) working directory for a run. Use op: 'acquire' before submitting a run that needs its own git worktree or copy (requires runId and mode; pass requestedIsolation: 'gitWorktree' for concurrent agents working on the same task in isolation), op: 'get' to fetch a lease's current path and state, op: 'inspect' to read the workspace's dirty/untracked file counts and diverged commits, op: 'apply' to land a patch or cherry-pick an artifact into the workspace (requires strategy, artifactId, and expectedTargetRevision), or op: 'release' to tear down the lease once the run is done with it. A shared-mode write lease is exclusive across the whole project; isolated (gitWorktree or copy) leases never conflict with each other or with shared leases.",
     parameters: params,

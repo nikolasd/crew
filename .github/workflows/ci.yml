@@ -65,7 +65,7 @@ jobs:
     # job here that runs `cargo test`/`bun test` sets the opt-out kill
     # switch (see `crates/runtime/src/conformance/mod.rs`).
     env:
-      BATMAN_DISABLE_VENDOR_CLI: "1"
+      CREW_DISABLE_VENDOR_CLI: "1"
     steps:
       - uses: actions/checkout@v4
 

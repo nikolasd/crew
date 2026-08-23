@@ -141,7 +141,7 @@ impl DatabaseHandle {
         let (ready_tx, ready_rx) = oneshot::channel::<Result<(), DbError>>();
 
         let worker = thread::Builder::new()
-            .name("batman-db-actor".to_string())
+            .name("crew-db-actor".to_string())
             .spawn(move || run_actor(path, receiver, ready_tx))
             .map_err(DbError::ThreadSpawn)?;
 

@@ -1,4 +1,4 @@
-//! `batcave`: the BATMAN runtime daemon and its lifecycle CLI.
+//! `crewd`: the Crew runtime daemon and its lifecycle CLI.
 //!
 //! The entry point is deliberately thin: it parses arguments and dispatches
 //! into [`cli::run`], which drives the `batman_runtime::lifecycle` library.

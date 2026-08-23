@@ -1,7 +1,7 @@
 //! Daemon lifecycle: single-instance locking, detached/foreground serving,
 //! idle shutdown, graceful stop, and the client side of `status`.
 //!
-//! `batcave serve` takes an advisory `flock(2)` on a persistent lock file
+//! `crewd serve` takes an advisory `flock(2)` on a persistent lock file
 //! recording the runtime's identity, then serves the socket protocol until it
 //! is signalled, an accepted in-band `runtime/shutdown` arrives (refused
 //! with `-32602` while any run is live or another connection is open,
@@ -55,7 +55,7 @@ use crate::policy::PolicyEvaluator;
 /// Options for [`serve`].
 #[derive(Debug, Clone)]
 pub struct ServeOptions {
-    /// The BATMAN state root directory. Already resolved by the CLI layer.
+    /// The Crew state root directory. Already resolved by the CLI layer.
     pub state_dir: PathBuf,
     /// The repository this runtime serves.
     pub repo: PathBuf,
@@ -224,16 +224,16 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     let scope_tokens = Arc::new(ScopeTokenStore::new());
 
     // `AdapterMcpConfig` needs this runtime's own verified binary path to
-    // tell a supervised vendor process which `batcave coordination-mcp`
+    // tell a supervised vendor process which `crewd coordination-mcp`
     // to spawn. `current_exe()` can fail (e.g. the executable was removed
     // after this process started); when it does, workers still start --
     // just without worker-coordination MCP tools -- rather than failing
     // the whole daemon. Never guessed: only a real resolved path is used.
     let mcp = match std::env::current_exe() {
-        Ok(batcave_path) => Some(AdapterMcpConfig {
+        Ok(crewd_path) => Some(AdapterMcpConfig {
             scope_tokens: Arc::clone(&scope_tokens),
             project_id: paths.project_id,
-            batcave_path,
+            crewd_path,
             state_dir: paths.root.clone(),
             repository: repo_root.clone(),
         }),
@@ -248,7 +248,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
                     fragments: vec![Classified {
                         class: ContentClass::Visible,
                         value: format!(
-                            "could not resolve the running batcave binary's own path ({err}); \
+                            "could not resolve the running crewd binary's own path ({err}); \
                              workers will start without worker-coordination MCP tools"
                         ),
                     }],
@@ -584,10 +584,10 @@ async fn query_status(socket: &Path, repo_str: &str) -> Result<Value, anyhow::Er
         "id": "1",
         "method": "initialize",
         "params": {
-            "client": { "name": "batcave", "version": VERSION },
+            "client": { "name": "crewd", "version": VERSION },
             "supported": { "min": { "major": 1, "minor": 0 }, "max": { "major": 1, "minor": 0 } },
             "repository": { "canonicalPath": repo_str, "vcsRoot": repo_str },
-            "auth": { "role": "display", "instanceId": "batcave-status" },
+            "auth": { "role": "display", "instanceId": "crewd-status" },
             "capabilities": { "eventReplay": false, "maxFrameBytes": 65536 },
             "lastSequence": null
         }
@@ -881,10 +881,10 @@ async fn connect_and_catch_up(
         "id": "1",
         "method": "initialize",
         "params": {
-            "client": { "name": "batcave", "version": VERSION },
+            "client": { "name": "crewd", "version": VERSION },
             "supported": { "min": { "major": 1, "minor": 0 }, "max": { "major": 1, "minor": 0 } },
             "repository": { "canonicalPath": repo_str, "vcsRoot": repo_str },
-            "auth": { "role": "display", "instanceId": "batcave-monitor" },
+            "auth": { "role": "display", "instanceId": "crewd-monitor" },
             "capabilities": { "eventReplay": true, "maxFrameBytes": 1048576 },
             "lastSequence": null
         }
@@ -1026,7 +1026,7 @@ pub async fn stop(opts: &StopOptions) -> Result<StopOutcome, StopError> {
 /// The advisory flock is the liveness proof, exactly as [`stop`] uses it:
 /// the socket file alone is not one -- an unclean crash (SIGKILL, machine
 /// crash) leaves `runtime.sock` on disk, and only the graceful shutdown
-/// path removes it. Used by `batcave lease release` to refuse out-of-band
+/// path removes it. Used by `crewd lease release` to refuse out-of-band
 /// writes only when a daemon is genuinely serving (R86 review W1).
 #[must_use]
 pub fn runtime_is_live(lock_path: &Path) -> bool {

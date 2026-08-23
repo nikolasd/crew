@@ -135,7 +135,7 @@ function assertAdapterReportValid(value: unknown, adapterName: string): void {
   }
   // A zero-scenario report is the stub signature this gate exists to catch.
   if (report.scenarios.length === 0) {
-    throw new Error(`Adapter ${adapterName} has zero scenarios — the conformance report appears to be a stub. ` + `A real run spawns 'batcave conformance' and records every canonical scenario.`);
+    throw new Error(`Adapter ${adapterName} has zero scenarios — the conformance report appears to be a stub. ` + `A real run spawns 'crewd conformance' and records every canonical scenario.`);
   }
   const passing = report.scenarios.filter((s) => s.outcome === "pass");
   if (passing.length === 0) {

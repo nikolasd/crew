@@ -39,7 +39,7 @@ Small, dependency-light, and the vocabulary for everything else.
 | `tests/coordination_contract.rs` | Message kinds, delivery states, coordination request/result wire shapes |
 | `tests/fixtures.rs` | Deserializes the golden fixtures through the real types |
 
-### `crates/runtime` — the `batcave` daemon
+### `crates/runtime` — the `crewd` daemon
 
 | File | What lives there |
 |---|---|
@@ -116,7 +116,7 @@ subsystem (`paths`, `database`, `redaction_boundary`, `ipc`, `lifecycle`, `domai
 `workspace_apply`, `workspace_lease`, `workspace_materialize`, `display_registry`, `display_selector`,
 `herdr_display`, `tmux_display`, `terminal_adapter`, `monitor_cli`, `audit`, `config`, `conformance`,
 `coordination_mcp`, `redaction`). The lifecycle tests run the real compiled binary
-(`env!("CARGO_BIN_EXE_batcave")`) as real processes.
+(`env!("CARGO_BIN_EXE_crewd")`) as real processes.
 
 ### `crates/xtask` — build tooling
 
@@ -124,34 +124,34 @@ One file (`src/main.rs`): `generate [--check]` (schema + ts-rs bindings, determi
 temp-dir byte-compare in check mode) and `package --target <triple> --binary <path>` (installs a
 binary into a leaf package with a deterministic manifest).
 
-### `packages/extension` — the OMP extension (`@nikolasd/batman`)
+### `packages/extension` — the OMP extension (`@nikolasd/crew`)
 
 | File | What lives there |
 |---|---|
-| `src/index.ts` | Default-export extension factory; registers `batman_status`, `batman_doctor`, `/batman-status`, `/batman-doctor`, the 11 orchestration tools (via `tools/index.ts`), OMP-native lifecycle listeners (`omp-native/`), and the embedded monitor (`monitor/controller.ts`) |
+| `src/index.ts` | Default-export extension factory; registers `crew_health`, `crew_doctor`, `/crew-status`, `/crew-doctor`, the 11 orchestration tools (via `tools/index.ts`), OMP-native lifecycle listeners (`omp-native/`), and the embedded monitor (`monitor/controller.ts`) |
 | `src/status.ts` | `getRuntimeStatus(ctx)` and `resolveClient(ctx)` — the shared status path and liveness-aware client resolver; reuses the cached connection while open, reconnects on demand
-| `src/doctor.ts` | `batman_doctor` tool / `/batman-doctor` command — shells out to `batcave doctor --json`, no live connection required
-| `src/client.ts` | `BatmanClient` — NDJSON framing, byte-exact caps, request correlation, Ajv validation, and `isClosed` liveness flag for cache invalidation
-| `src/runtime.ts` | `ensureRuntime` (connect-or-spawn, authenticates as `ompExtension`), `buildServeArgs`, `resolveOverride` (`OMP_BATMAN_BINARY` validation), `repositoryIdFromRoot` |
+| `src/doctor.ts` | `crew_doctor` tool / `/crew-doctor` command — shells out to `crewd doctor --json`, no live connection required
+| `src/client.ts` | `CrewClient` — NDJSON framing, byte-exact caps, request correlation, Ajv validation, and `isClosed` liveness flag for cache invalidation
+| `src/runtime.ts` | `ensureRuntime` (connect-or-spawn, authenticates as `ompExtension`), `buildServeArgs`, `resolveOverride` (`OMP_CREW_BINARY` validation), `repositoryIdFromRoot` |
 | `src/state.ts` | `resolveStateRoot(env, home)` — must stay semantically identical to Rust's `StateRoot::resolve` |
-| `src/platform.ts` | `resolveBatcave` tuple mapping, integrity/version checks, typed errors, `detectLibc` |
+| `src/platform.ts` | `resolveCrewd` tuple mapping, integrity/version checks, typed errors, `detectLibc` |
 | `src/integrity.ts` | `sha256File` |
 | `src/approval-ui.ts` | Approval UI components |
 | `src/tools/index.ts` | Registers all 11 tools with OMP |
 | `src/tools/shared.ts` | `callOrchestration` — the one execute body every orchestration tool uses; maps `JsonRpcRemoteError` to a stable tool error |
-| `src/tools/{profiles,workers,tasks,runs,workspaces,artifacts,children,violations,messages,approvals,reconcile}.ts` | `batman_profile`, `batman_worker`, `batman_task`, `batman_run`, `batman_workspace`, `batman_artifact`, `batman_child`, `batman_violation`, `batman_message`, `batman_approval`, `batman_reconcile` — see [plugin-usage.md](plugin-usage.md) for what each does |
+| `src/tools/{profiles,workers,tasks,runs,workspaces,artifacts,children,violations,messages,approvals,reconcile}.ts` | `crew_profile`, `crew_worker`, `crew_task`, `crew_run`, `crew_workspace`, `crew_artifact`, `crew_child`, `crew_violation`, `crew_message`, `crew_approval`, `crew_reconcile` — see [plugin-usage.md](plugin-usage.md) for what each does |
 | `src/omp-native/events.ts` | Normalizes `task:subagent:lifecycle\|progress\|event` bus payloads into `OmpNativeAgentFact` |
 | `src/omp-native/reconcile.ts` | `OmpNativeReconciler` (150 ms progress coalescing, terminal-immediate), `reconcileAcrossRestart` (undetected parent-scoped runs become `lost`), `createOmpProcessEpoch`, `reconcileWithRuntime` |
 | `src/monitor/model.ts` | `reduceEvent` — the pure event-reducer building `MonitorState` |
 | `src/monitor/render.ts` | Turns `MonitorState` into the widget's concise lines + per-run status detail |
-| `src/monitor/controller.ts` | `registerMonitor` — replay-first `session_start` wiring, `/batman [status <runId>]`, retry-on-reconnect |
+| `src/monitor/controller.ts` | `registerMonitor` — replay-first `session_start` wiring, `/crew [status <runId>]`, retry-on-reconnect |
 | `src/monitor/compat.ts` | Test-only `assertCompatiblePiCodingAgentVersion` (never called at runtime — see [`engineering-lessons.md`](engineering-lessons.md#never-use-with--type-json--imports-at-extension-load-time)) |
 
 Each module has a sibling `*.test.ts`. `client.test.ts` and `index.test.ts` spawn the real daemon.
 
 ### `packages/protocol-ts` — generated contract (`@nikolasd/batman-protocol`)
 
-`src/generated/*.ts` and `schema/batman.schema.json` are build outputs — regenerate, never edit.
+`src/generated/*.ts` and `schema/crew.schema.json` are build outputs — regenerate, never edit.
 `src/validate.ts` is hand-written: it compiles Ajv validators once (`validateInitializeResult`,
 `validateRuntimeStatus`, `validateEventEnvelope`, the JSON-RPC envelope validators) and exports
 `assertValid` + `ValidationError`.
@@ -163,21 +163,21 @@ If Rust and TypeScript must agree on something, a fixture pins it: protocol fram
 (`fixtures/repo-id/`), and the status result shape (`fixtures/omp/`). Both language test suites
 consume them, so unilateral drift fails tests.
 
-## 2. Trace: what happens when OMP runs `/batman-status`
+## 2. Trace: what happens when OMP runs `/crew-status`
 
 Follow this once with the files open and you will have seen every layer.
 
 1. **Registration** — OMP loads the extension and calls the default export
-   (`index.ts:batmanExtension`), which registers the tool and command; both handlers call
+   (`index.ts:crewExtension`), which registers the tool and command; both handlers call
    `getRuntimeStatus(ctx)` with the context from `context.ts:buildStatusContext`.
-2. **Client acquisition** — `status.ts:resolveClient` checks the cached `BatmanClient`'s `isClosed` flag.
+2. **Client acquisition** — `status.ts:resolveClient` checks the cached `CrewClient`'s `isClosed` flag.
    If the socket is still open, it returns the cached instance immediately. If the client is closed
    (daemon idle-exited or socket errored), it tears down the stale reference and calls
    `runtime.ts:ensureRuntime` to reconnect.
 3. **Connect-or-spawn** — `ensureRuntime` computes the socket path
    (`resolveStateRoot` + `repositoryId`) and tries to connect. If nothing answers: `selectBinary`
-   validates `OMP_BATMAN_BINARY` (or asks `platform.ts:resolveBatcave` for a packaged binary),
-   spawns `batcave serve --state-dir … --repo … --idle-seconds …` detached, and retries with
+   validates `OMP_CREW_BINARY` (or asks `platform.ts:resolveCrewd` for a packaged binary),
+   spawns `crewd serve --state-dir … --repo … --idle-seconds …` detached, and retries with
    backoff (≤5 s).
 4. **Daemon startup** — `cli.rs` parses args → `lifecycle.rs:serve` resolves `RuntimePaths`, takes
    the flock (loser exits 73), opens `DatabaseHandle` (migrations + PRAGMAs)
@@ -199,14 +199,14 @@ The event path is the same shape on the write side:
 (commit, then reply) → `events/event` notification to subscribers / `events/replay` for
 reconnecting clients.
 
-## 3. Trace: submitting a run through `batman_run`, and the monitor observing it live
+## 3. Trace: submitting a run through `crew_run`, and the monitor observing it live
 
 Same idea as §2, but through the orchestration surface — follow it once and you've seen how a
 mutation, the durable journal, and the embedded monitor connect. This trace is the symbol-level
 companion to the design-level sequence in
 [`architecture.md` § Data Flow: Event Lifecycle](architecture.md#data-flow-event-lifecycle).
 
-1. **The tool call** — the model calls `batman_run` with `{ op: "submit", taskId, workerId }`
+1. **The tool call** — the model calls `crew_run` with `{ op: "submit", taskId, workerId }`
    (`tools/runs.ts`); `execute` calls `ctx.getClient(cwd)` (the *same* cached `ompExtension`
    client every orchestration tool and the monitor share — see [`engineering-lessons.md`](engineering-lessons.md#cached-client-must-authenticate-with-the-union-of-all-roles) for why
    its role matters) and `callOrchestration(client, "run/submit", params)`
@@ -236,7 +236,7 @@ companion to the design-level sequence in
 6. **The monitor observes it** — `monitor/controller.ts`'s `client.subscribe` callback (already
    running from `session_start`) receives the notification from step 4, `model.ts::reduceEvent`
    builds/updates the run's row from the `RunEvent` payload, and `refresh()` calls
-   `ctx.ui.setWidget` — the row appears in `/batman` without the extension ever polling or
+   `ctx.ui.setWidget` — the row appears in `/crew` without the extension ever polling or
    reconnecting.
 
 ## 4. Debugging playbook
@@ -244,7 +244,7 @@ companion to the design-level sequence in
 **See what the daemon thinks is happening.**
 
 ```bash
-batcave status --wait-seconds 5 --state-dir <root> --repo <repo>   # JSON snapshot
+crewd status --wait-seconds 5 --state-dir <root> --repo <repo>   # JSON snapshot
 tail -f <root>/repos/<repo-id>/runtime.log | jq .                  # structured log (detached mode)
 ```
 
@@ -255,7 +255,7 @@ first 32 hex chars of `sha256` of the canonical VCS root path.
 records on stderr and keeps the process attached to your terminal:
 
 ```bash
-RUST_LOG=debug ./target/debug/batcave serve --foreground --state-dir /tmp/bs --repo "$PWD"
+RUST_LOG=debug ./target/debug/crewd serve --foreground --state-dir /tmp/bs --repo "$PWD"
 ```
 
 (`tracing-subscriber`'s env-filter is compiled in; `RUST_LOG` controls verbosity.)
@@ -299,7 +299,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":"1","method":"initialize","params":{...}}' 
 | `ValidationError` in the TS client | The daemon sent a frame the schema rejects — regenerate bindings or find the drift |
 
 **Orphan hunting.** Tests and smoke runs are disciplined about cleanup, but if something leaks:
-`pgrep -fl batcave`, then `batcave stop` (preferred) or `kill <pid>`. The kernel releases the flock
+`pgrep -fl crewd`, then `crewd stop` (preferred) or `kill <pid>`. The kernel releases the flock
 on death, so the next start recovers automatically.
 
 **Run conformance tests.** To verify adapter implementations match their protocol specs:
@@ -318,7 +318,7 @@ cargo test --test omp_rpc_adapter
 **Export audit events.** For offline analysis:
 
 ```bash
-batcave audit export --state-dir <root> --repo <repo> --output /tmp/audit.jsonl
+crewd audit export --state-dir <root> --repo <repo> --output /tmp/audit.jsonl
 ```
 
 ## 5. Testing guide
@@ -381,7 +381,7 @@ bun test packages/extension/src/client.test.ts -t "frame"              # TS test
   on solely for three unfixable third-party `.d.ts` errors (pi-catalog's `models.json` import,
   pi-coding-agent's `wrapper.d.ts` variance, pi-mnemopi's optional `fastembed` peer); first-party
   errors are never silenced.
-- `batcave schema` prints the schema **embedded at compile time** (`include_str!`). After changing
+- `crewd schema` prints the schema **embedded at compile time** (`include_str!`). After changing
   protocol types, `bun run generate` *and* rebuild the binary, or the printed schema lags the
   types. `generate --check` in CI catches the committed-file half of this.
 - Unix socket paths are capped (~104 bytes on macOS). Deep `--state-dir` paths fail fast with an
@@ -412,8 +412,8 @@ bun test packages/extension/src/client.test.ts -t "frame"              # TS test
   check (five-minute silence threshold, read-only) to see a wedged run without forcing a restart.
 - **Rollout gates must all be `true` before production use.** The `Doctor::check()` runs on
   every `serve` and `status` command. If any gate is unresolved, the doctor reports it and
-  the runtime refuses to serve in production mode. Check your config files (`~/.batman/config.yaml`,
-  `<repo>/.batman/config.yaml`) for `rollout_gates` fields.
+  the runtime refuses to serve in production mode. Check your config files (`~/.crew/config.yaml`,
+  `<repo>/.crew/config.yaml`) for `rollout_gates` fields.
 - **Adapter authorization is deny-by-default in production.** The `DenyByDefaultAuthorization`
   rejects every worker unless `dev_override` is explicitly set. Tests inject `FixtureAuthorization`
   to allow/deny as needed. Production callers must supply a real `PolicyEvaluator` (see the

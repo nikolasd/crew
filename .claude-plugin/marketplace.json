@@ -1,5 +1,5 @@
 {
-  "name": "batman",
+  "name": "crew",
   "owner": { "name": "Nikolas Demiridis" },
   "metadata": {
     "description": "Durable multiagent orchestration for OMP",
@@ -7,7 +7,7 @@
   },
   "plugins": [
     {
-      "name": "batman",
+      "name": "crew",
       "description": "Supervise Claude, Codex, Copilot, and OMP-RPC workers with an append-only event journal, crash recovery, and live run monitoring.",
       "source": "./packages/extension",
       "version": "0.4.1",

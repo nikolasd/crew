@@ -84,7 +84,7 @@ pub struct CaptureOutcome {
 ///
 /// # Errors
 /// Returns `Err` when the manifest is unreadable, `kind` has no manifest
-/// entries, the vendor CLI cannot be started, or `BATMAN_DISABLE_VENDOR_CLI=1`
+/// entries, the vendor CLI cannot be started, or `CREW_DISABLE_VENDOR_CLI=1`
 /// is set.
 pub async fn capture_adapter(
     kind: AdapterKind,
@@ -93,7 +93,7 @@ pub async fn capture_adapter(
 ) -> Result<CaptureOutcome, String> {
     if vendor_cli_invocation_disabled() {
         return Err(
-            "BATMAN_DISABLE_VENDOR_CLI=1 forbids capture; it spawns real vendor CLIs".to_string(),
+            "CREW_DISABLE_VENDOR_CLI=1 forbids capture; it spawns real vendor CLIs".to_string(),
         );
     }
 
@@ -524,7 +524,7 @@ mod tests {
                 );
                 let existing = std::fs::read_to_string(&fixture_path)
                     .expect("manifest target must be readable");
-                let mut scrubber = Scrubber::new("/workspace/batman".into());
+                let mut scrubber = Scrubber::new("/workspace/crew".into());
                 let frames: Vec<String> = if entry.fixture.ends_with(".jsonl") {
                     existing
                         .lines()

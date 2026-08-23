@@ -1,6 +1,6 @@
 //! Runtime health checking and rollout gate management.
 //!
-//! The [`Doctor`] provides a comprehensive health check of the BATMAN runtime,
+//! The [`Doctor`] provides a comprehensive health check of the Crew runtime,
 //! including:
 //! - Database connectivity
 //! - State directory accessibility
@@ -71,7 +71,7 @@ pub struct FailedCheck {
     pub error: String,
 }
 
-/// Performs health checks on the BATMAN runtime.
+/// Performs health checks on the Crew runtime.
 ///
 /// Every check reports either a pass or a [`FailedCheck`]. A check that
 /// cannot run reports a [`FailedCheck`] whose error starts with `skipped:`
@@ -88,7 +88,7 @@ pub struct Doctor {
     project_id: Option<ProjectId>,
 }
 
-/// The target triples the foundation ships prebuilt `batcave` leaves for.
+/// The target triples the foundation ships prebuilt `crewd` leaves for.
 /// Mirrors `crates/xtask/src/main.rs`'s `SUPPORTED_TARGETS`; the two must
 /// be changed together.
 const SUPPORTED_TARGETS: &[(&str, &str)] = &[
@@ -187,7 +187,7 @@ impl Doctor {
             let name = format!("adapter_{}_available", kind.wire_name());
             report.record(&name, Self::check_adapter(kind).await);
         }
-        report.record("display_available", Self::check_display());
+        report.record("display_available", self.check_display());
         report.record("disk_space", self.check_disk_space());
         report.record("stale_workspaces", self.check_stale_workspaces());
         report.record("stale_runs", self.check_stale_runs().await);
@@ -392,9 +392,9 @@ impl Doctor {
     /// Asserts the committed schema document matches what this binary's
     /// linked `batman-protocol` generates -- the same comparison
     /// `xtask generate --check` performs. This only applies when `--repo`
-    /// happens to be a checkout of the BATMAN source tree itself (the only
+    /// happens to be a checkout of the Crew source tree itself (the only
     /// place this file is ever committed); `--repo` is ordinarily an
-    /// unrelated project BATMAN is running against, so a missing schema
+    /// unrelated project Crew is running against, so a missing schema
     /// document there means "not applicable", not "broken" -- unlike a
     /// present-but-mismatched document, which is always a real drift.
     fn check_schema_compatibility(&self) -> Result<(), DoctorError> {
@@ -403,7 +403,7 @@ impl Doctor {
                 "skipped: no repository root was supplied".to_string(),
             ));
         };
-        let schema_path = repo_root.join("packages/protocol-ts/schema/batman.schema.json");
+        let schema_path = repo_root.join("packages/protocol-ts/schema/crew.schema.json");
         let committed = match std::fs::read(&schema_path) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -442,24 +442,68 @@ impl Doctor {
         }
     }
 
-    /// Reports which display backends are usable. `TerminalDisplay` is
-    /// unconditionally available, so this fails only on a genuinely broken
-    /// terminal.
-    fn check_display() -> Result<(), DoctorError> {
+    /// Reports per-backend display availability. When the merged policy
+    /// forces a specific backend (`display.backend`, anything other than
+    /// `"auto"`), that backend must itself be available -- an operator who
+    /// pinned `tmux` gets told `tmux` is unusable, not a vacuous pass. With
+    /// no forced backend, a *real* backend (Herdr or tmux) must be
+    /// available: `TerminalDisplay` is unconditionally available (it is
+    /// deleted outright in a later milestone) and must never satisfy this
+    /// check on its own, or the check could never fail.
+    fn check_display(&self) -> Result<(), DoctorError> {
         use crate::display::{DisplayBackendTrait, HerdrDisplay, TerminalDisplay, TmuxDisplay};
-        use batman_protocol::DisplayConfig;
+        use batman_protocol::{DisplayBackend, DisplayConfig};
 
-        let backends: [Box<dyn DisplayBackendTrait>; 3] = [
-            Box::new(HerdrDisplay::new(DisplayConfig::default())),
-            Box::new(TmuxDisplay::new(DisplayConfig::default())),
-            Box::new(TerminalDisplay::new(DisplayConfig::default())),
+        let availability: [(DisplayBackend, bool); 3] = [
+            (
+                DisplayBackend::Herdr,
+                HerdrDisplay::new(DisplayConfig::default()).is_available(),
+            ),
+            (
+                DisplayBackend::Tmux,
+                TmuxDisplay::new(DisplayConfig::default()).is_available(),
+            ),
+            (
+                DisplayBackend::Terminal,
+                TerminalDisplay::new(DisplayConfig::default()).is_available(),
+            ),
         ];
-        if backends.iter().any(|b| b.is_available()) {
+
+        let forced = self
+            .policy
+            .as_ref()
+            .and_then(|policy| policy.display_backend.parse::<DisplayBackend>().ok());
+
+        if let Some(forced) = forced {
+            let available = availability
+                .iter()
+                .find(|(backend, _)| *backend == forced)
+                .map(|(_, available)| *available)
+                .unwrap_or(false);
+            return if available {
+                Ok(())
+            } else {
+                Err(DoctorError::ConfigError(format!(
+                    "configured display backend '{forced}' is not available"
+                )))
+            };
+        }
+
+        let real_backend_available = availability
+            .iter()
+            .any(|(backend, available)| *backend != DisplayBackend::Terminal && *available);
+        if real_backend_available {
             Ok(())
         } else {
-            Err(DoctorError::ConfigError(
-                "no display backend is available, not even the terminal".to_string(),
-            ))
+            let detail = availability
+                .iter()
+                .map(|(backend, available)| format!("{backend}: {available}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(DoctorError::ConfigError(format!(
+                "no real display backend is available ({detail}); the always-available terminal \
+                 fallback does not satisfy this check"
+            )))
         }
     }
 
@@ -516,7 +560,7 @@ impl Doctor {
             .join(", ");
         Err(DoctorError::StateDirError(format!(
             "{} stale workspace lease(s): {detail} -- release one with \
-             `batcave lease release --repo <repo> --lease-id <id>`",
+             `crewd lease release --repo <repo> --lease-id <id>`",
             stale.len()
         )))
     }

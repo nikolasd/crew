@@ -1,6 +1,6 @@
-# BATMAN Compatibility Guide
+# Crew Compatibility Guide
 
-**Audience & purpose:** anyone deciding whether BATMAN supports their platform, or checking which
+**Audience & purpose:** anyone deciding whether Crew supports their platform, or checking which
 adapter-conformance scenarios currently pass against which vendor CLI version. This is a
 compatibility *matrix*, not a general reference — for configuration, protocol methods, or the
 CLI, see [getting-started.md](getting-started.md) (the developer manual),
@@ -9,9 +9,9 @@ document exists only for the two tables below.
 
 ## Supported Platforms
 
-BATMAN supports the following platform/architecture combinations — the full list, not a
+Crew supports the following platform/architecture combinations — the full list, not a
 milestone-in-progress. This is [`release/targets.json`](../release/targets.json)'s build matrix,
-which is also the exhaustive set `batcave` accepts at runtime
+which is also the exhaustive set `crewd` accepts at runtime
 (`crates/runtime/src/doctor.rs`'s `platform_supported` check):
 
 | Platform | Architecture | libc |
@@ -34,7 +34,7 @@ Windows equivalent is implemented), and the packaged binaries are built against 
 - **Linux**: glibc only; musl (e.g. Alpine) is rejected by `platform_supported`, not silently
   degraded.
 - **Display backends**: Herdr and tmux both require the matching binary to be installed and,
-  for tmux, an already-running session — see [`cli-reference.md`](cli-reference.md#batcave-display-probe)
+  for tmux, an already-running session — see [`cli-reference.md`](cli-reference.md#crewd-display-probe)
   for the read-only probe. The terminal backend is always available as a fallback.
 
 ## Adapter Compatibility
@@ -43,10 +43,10 @@ The table below is **generated from real `--live` conformance runs**, not from p
 records the version the adapter's own probe observed and how many canonical scenarios that run
 proved.
 
-Reproduce with (`BATMAN_DISABLE_VENDOR_CLI` must be **unset** — it suppresses vendor invocation):
+Reproduce with (`CREW_DISABLE_VENDOR_CLI` must be **unset** — it suppresses vendor invocation):
 
 ```bash
-./target/debug/batcave conformance --adapter <claude|codex|copilot|ompRpc> --live \
+./target/debug/crewd conformance --adapter <claude|codex|copilot|ompRpc> --live \
   --output /tmp/live-<adapter>.json
 ```
 
@@ -113,7 +113,7 @@ with `AdapterError::incompatible_version`, since this adapter's normalizer only 
 v1 field names.
 
 ### OMP-RPC Adapter
-- **Protocol**: BATMAN-driven `omp --mode rpc` NDJSON frames over stdio
+- **Protocol**: Crew-driven `omp --mode rpc` NDJSON frames over stdio
 - **Status**: Stable — **14 / 14, fully green**
 - **Live result**: 14 / 14 against `omp/17.2.7`, `passed: true`, reproduced on three consecutive
   runs with zero local providers in `omp`'s catalog.
@@ -128,6 +128,6 @@ because it's newer. If you hit a version gap:
 3. If it doesn't, see [`docs/manual-testing.md`](manual-testing.md#4-worker-adapters) for how to
    isolate which scenario regressed.
 
-For anything else — upgrading BATMAN itself, configuration, or the CLI — see
+For anything else — upgrading Crew itself, configuration, or the CLI — see
 [`operations.md`](operations.md#upgrading), [`getting-started.md`](getting-started.md), and
 [`cli-reference.md`](cli-reference.md).

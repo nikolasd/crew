@@ -1,4 +1,4 @@
-// `batman_worker`: creates, lists, and fetches logical worker identities.
+// `crew_worker`: creates, lists, and fetches logical worker identities.
 // `create` is tier `exec` -- it provisions a harness/profile identity that
 // later runs execute against.
 
@@ -7,7 +7,7 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import type { OrchestrationToolContext } from "./shared";
 import { callOrchestration } from "./shared";
 
-export const BATMAN_WORKER_TOOL_NAME = "batman_worker";
+export const CREW_WORKER_TOOL_NAME = "crew_worker";
 
 export function registerWorkerTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
@@ -22,10 +22,10 @@ export function registerWorkerTool(pi: ExtensionAPI, ctx: OrchestrationToolConte
   });
 
   pi.registerTool({
-    name: BATMAN_WORKER_TOOL_NAME,
-    label: "BATMAN Worker",
+    name: CREW_WORKER_TOOL_NAME,
+    label: "Crew Worker",
     description:
-      "Use to find or provision external AI harness workers (Claude, Codex, Copilot, OMP-RPC) that execute tasks. Use op: 'list' to see available workers for a repository (call before submitting a run), op: 'get' to fetch details of a specific worker, or op: 'create' to provision a new worker identity for a specific harness/model combination (requires fingerprint, adapter, model). You need a workerId from batman_worker { op: 'list' } to submit a run with batman_run { op: 'submit' }.",
+      "Use to find or provision external AI harness workers (Claude, Codex, Copilot, OMP-RPC) that execute tasks. Use op: 'list' to see available workers for a repository (call before submitting a run), op: 'get' to fetch details of a specific worker, or op: 'create' to provision a new worker identity for a specific harness/model combination (requires fingerprint, adapter, model). You need a workerId from crew_worker { op: 'list' } to submit a run with crew_run { op: 'submit' }.",
     parameters: params,
     approval: (args) => (typeof args === "object" && args !== null && "op" in args && args.op === "create" ? "exec" : "read"),
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {

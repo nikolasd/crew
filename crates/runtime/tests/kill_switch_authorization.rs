@@ -1,4 +1,4 @@
-//! The R68 regression proof: with `BATMAN_DISABLE_VENDOR_CLI=1` set, a
+//! The R68 regression proof: with `CREW_DISABLE_VENDOR_CLI=1` set, a
 //! development-only kill switch must never shrink the *effective*
 //! capabilities the production authorizer reads from a conformance report.
 //! An unattempted scenario is reported
@@ -11,7 +11,7 @@
 //! itself never appearing in the error.
 //!
 //! This file deliberately contains exactly **one** test. It mutates the
-//! process-global `BATMAN_DISABLE_VENDOR_CLI` variable, which
+//! process-global `CREW_DISABLE_VENDOR_CLI` variable, which
 //! `std::env::set_var` may only change soundly while no other thread is
 //! running (edition 2024 makes it `unsafe` for precisely this reason);
 //! `cargo test` runs `#[test]` functions in a binary concurrently, so a

@@ -1,4 +1,4 @@
-//! Integration tests for `batcave lease release` (R86): the operator
+//! Integration tests for `crewd lease release` (R86): the operator
 //! remedy for a lease whose owning session correlation was never
 //! persisted. Such a lease is unreleasable over RPC -- `workspace/release`
 //! is owner-gated and a new session is a different principal -- so the
@@ -51,7 +51,7 @@ fn seed_orphan_lease() -> (tempfile::TempDir, PathBuf, String, RunId) {
 }
 
 fn release_cmd(state_dir: &std::path::Path, repo: &std::path::Path, lease_id: &str) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_batcave"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_crewd"));
     cmd.args([
         "lease",
         "release",
@@ -73,7 +73,7 @@ fn lease_release_frees_an_orphaned_lease_and_journals_it() {
     // run's workspace claim (review E2).
     let refused = release_cmd(state_dir.path(), &repo, &lease_id)
         .output()
-        .expect("run batcave lease release");
+        .expect("run crewd lease release");
     assert!(
         !refused.status.success(),
         "an active lease must be refused without --yes"
@@ -86,7 +86,7 @@ fn lease_release_frees_an_orphaned_lease_and_journals_it() {
     let output = release_cmd(state_dir.path(), &repo, &lease_id)
         .arg("--yes")
         .output()
-        .expect("run batcave lease release --yes");
+        .expect("run crewd lease release --yes");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
@@ -143,7 +143,7 @@ fn lease_release_frees_an_orphaned_lease_and_journals_it() {
     let again = release_cmd(state_dir.path(), &repo, &lease_id)
         .arg("--yes")
         .output()
-        .expect("run batcave lease release again");
+        .expect("run crewd lease release again");
     assert_eq!(
         again.status.code(),
         Some(2),
@@ -161,7 +161,7 @@ fn lease_release_refuses_an_unknown_lease_id() {
 
     let output = release_cmd(state_dir.path(), &repo, "no-such-lease")
         .output()
-        .expect("run batcave lease release");
+        .expect("run crewd lease release");
     assert_eq!(
         output.status.code(),
         Some(1),
@@ -181,7 +181,7 @@ fn lease_release_refuses_while_a_runtime_is_serving() {
     let paths = RuntimePaths::resolve(state_dir.path(), &repo).expect("resolve runtime paths");
 
     // Liveness is the held advisory flock -- exactly what a serving
-    // daemon owns and what `batcave stop` probes -- NOT the socket file.
+    // daemon owns and what `crewd stop` probes -- NOT the socket file.
     std::fs::write(
         &paths.lock,
         serde_json::json!({
@@ -206,13 +206,13 @@ fn lease_release_refuses_while_a_runtime_is_serving() {
     let output = release_cmd(state_dir.path(), &repo, &lease_id)
         .arg("--yes")
         .output()
-        .expect("run batcave lease release");
+        .expect("run crewd lease release");
     assert!(
         !output.status.success(),
         "a live runtime must refuse the out-of-band release"
     );
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("batcave stop"),
+        String::from_utf8_lossy(&output.stderr).contains("crewd stop"),
         "the refusal must name the remedy"
     );
 
@@ -231,7 +231,7 @@ fn lease_release_refuses_while_a_runtime_is_serving() {
 /// `runtime.sock` on disk with no live flock holder -- the exact case
 /// this command exists for. A stale socket alone must NOT refuse, or the
 /// no-remedy condition is reinstated for crashes and the operator is
-/// sent to a `batcave stop` that reports NotRunning and removes nothing.
+/// sent to a `crewd stop` that reports NotRunning and removes nothing.
 #[test]
 fn lease_release_proceeds_past_a_stale_socket_left_by_a_crash() {
     let (state_dir, repo, lease_id, _run_id) = seed_orphan_lease();
@@ -241,7 +241,7 @@ fn lease_release_proceeds_past_a_stale_socket_left_by_a_crash() {
     let output = release_cmd(state_dir.path(), &repo, &lease_id)
         .arg("--yes")
         .output()
-        .expect("run batcave lease release");
+        .expect("run crewd lease release");
     assert!(
         output.status.success(),
         "a stale socket with no flock holder must not block the remedy: {}",

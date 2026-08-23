@@ -8,14 +8,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-BATMAN is an [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi) extension backed by a durable,
-repository-scoped local daemon (`batcave`, Rust). **OMP decides what to do** (task graph, scheduling,
-worker selection, approvals, merge/synthesis decisions). **BATMAN ensures it happens and can be
+Crew is an [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi) extension backed by a durable,
+repository-scoped local daemon (`crewd`, Rust). **OMP decides what to do** (task graph, scheduling,
+worker selection, approvals, merge/synthesis decisions). **Crew ensures it happens and can be
 replayed** — it supervises worker processes (Claude, Codex, Copilot, OMP-RPC), persists a durable
 SQLite event journal, recovers after crashes, and feeds display backends (herdr, tmux, terminal).
 
-Two deliverables, one repo: the OMP extension + skills (`@nikolasd/batman`, installed via the OMP
-marketplace — git-cloned, not npm-published) and `batcave` (Rust daemon binary, downloaded on demand
+Two deliverables, one repo: the OMP extension + skills (`@nikolasd/crew`, installed via the OMP
+marketplace — git-cloned, not npm-published) and `crewd` (Rust daemon binary, downloaded on demand
 as a GitHub Release asset), communicating over JSON-RPC 2.0 on bounded NDJSON over a per-repository
 Unix domain socket.
 
@@ -51,21 +51,21 @@ bun test packages/extension/src/runtime.test.ts   # one TS file
 bun run typecheck                            # TypeScript compiler gate (own CI job)
 
 # Conformance tests (golden-frame protocol checks, crates/runtime/src/conformance/ + tests/conformance/)
-BATMAN_DISABLE_VENDOR_CLI=1 cargo test --test conformance   # fixture mode (what CI runs)
-BATMAN_LIVE_CLAUDE=1 cargo test --test conformance          # live, needs vendor credentials
+CREW_DISABLE_VENDOR_CLI=1 cargo test --test conformance   # fixture mode (what CI runs)
+CREW_LIVE_CLAUDE=1 cargo test --test conformance          # live, needs vendor credentials
 
 # Manual exercise against local changes (no publish needed)
-OMP_BATMAN_BINARY="$PWD/target/debug/batcave" \
+OMP_CREW_BINARY="$PWD/target/debug/crewd" \
   omp --extension ./packages/extension/src/index.ts
 
-# batcave CLI directly
-batcave serve --repo /path/to/repo [--org-config ... --repo-config ... --user-config ...]
-batcave status --repo /path/to/repo
-batcave stop --repo /path/to/repo
-batcave audit export --repo "$PWD" --state-dir "$HOME/.omp/batman/repos/<repository-id>" --output /tmp/audit.jsonl
+# crewd CLI directly
+crewd serve --repo /path/to/repo [--org-config ... --repo-config ... --user-config ...]
+crewd status --repo /path/to/repo
+crewd stop --repo /path/to/repo
+crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/batman" --output /tmp/audit.jsonl
 ```
 
-`BATMAN_DISABLE_VENDOR_CLI=1` skips live vendor CLI calls — set it for any local test run to avoid
+`CREW_DISABLE_VENDOR_CLI=1` skips live vendor CLI calls — set it for any local test run to avoid
 billed model calls; CI always sets it. Rust test suite names live under `crates/runtime/tests/`
 (`adapter_contract`, `adapter_registry`, `approval`, `audit`, `coordination`, `redaction_boundary`,
 `workspace_lease`, etc.) — grep that directory when you need the exact name for `cargo test --test`.
@@ -73,7 +73,7 @@ billed model calls; CI always sets it. Rust test suite names live under `crates/
 ## Architecture
 
 ```
-OMP Extension (TypeScript)  ──JSON-RPC 2.0 over NDJSON──>  batcave daemon (Rust)
+OMP Extension (TypeScript)  ──JSON-RPC 2.0 over NDJSON──>  crewd daemon (Rust)
                                                                       │
                                                                       ├── Adapter Registry ──> Worker Processes
                                                                       ├── SQLite Journal (WAL, append-only)
@@ -83,10 +83,10 @@ OMP Extension (TypeScript)  ──JSON-RPC 2.0 over NDJSON──>  batcave daemo
                                                                       └── Workspace Operations (lease, materialize, apply)
 ```
 
-**Task lifecycle:** `batman_task` registers a task → `batman_run` authorizes it, acquires a
+**Task lifecycle:** `crew_task` registers a task → `crew_run` authorizes it, acquires a
 workspace lease, and spawns an adapter → the adapter (Claude/Codex/Copilot/OMP-RPC) runs the vendor
 CLI and streams normalized events → events pass through `Redactor` (strips secrets) →
-`DatabaseActor` (commits to SQLite) → broadcast to live subscribers (the embedded `/batman`
+`DatabaseActor` (commits to SQLite) → broadcast to live subscribers (the embedded `/crew`
 monitor, display backends) → completion releases the slot, applies the workspace, fires approval
 callbacks.
 
@@ -95,7 +95,7 @@ content is redacted before it becomes durable.
 
 Full C4-style diagrams (system context → container → component, plus the event-lifecycle sequence
 diagram and a role/permission table) are in `docs/architecture.md`. Design rationale for anything
-below is captured as an ADR in `docs/adr/0001...` through `0021...` — check there before assuming a
+below is captured as an ADR in `docs/adr/0001...` through `0024...` — check there before assuming a
 structural choice is accidental.
 
 ### Where things live
@@ -103,11 +103,11 @@ structural choice is accidental.
 | Path | What |
 |---|---|
 | `crates/protocol/` | Canonical Rust wire types (`serde` + `schemars` + `ts-rs` derives) — the source of truth for the whole protocol |
-| `crates/runtime/` | The `batcave` daemon: CLI, lifecycle, IPC server, SQLite actor, adapters, orchestration/coordination/approval services, workspace ops, security |
+| `crates/runtime/` | The `crewd` daemon: CLI, lifecycle, IPC server, SQLite actor, adapters, orchestration/coordination/approval services, workspace ops, security |
 | `crates/xtask/` | Codegen (TS bindings + JSON Schema) and platform package assembly |
-| `packages/extension/` | The OMP extension: JSON-RPC client, runtime launcher, tool implementations (`batman_task`, `batman_worker`, `batman_run`, ...), OMP-native reconciler, embedded `/batman` monitor |
+| `packages/extension/` | The OMP extension: JSON-RPC client, runtime launcher, tool implementations (`crew_task`, `crew_worker`, `crew_run`, ...), OMP-native reconciler, embedded `/crew` monitor |
 | `packages/protocol-ts/` | Generated TS bindings + JSON Schema + Ajv validators — **never hand-edit `src/generated/`**, run `bun run generate` |
-| `packages/batman-*/` | Per-platform `batcave` binary leaf directories — release build staging, created on demand by `batman-xtask package`, uploaded as GitHub Release assets, never committed |
+| `packages/crew-*/` | Per-platform `crewd` binary leaf directories — release build staging, created on demand by `batman-xtask package`, uploaded as GitHub Release assets, never committed |
 | `fixtures/` | Cross-language golden fixtures (protocol frames, state roots, repo ids, configs) that Rust and TS tests both read |
 | `tests/conformance/` | Golden-frame adapter conformance runner |
 | `release/` | Release build inputs and evidence — `targets.json` (platform build matrix, read by xtask and CI) plus per-version release checklists and live adapter conformance results |
@@ -158,8 +158,8 @@ These are enforced in review, not just style preference:
 - **Config**: layered YAML (org → repo → user → per-run params), strict unknown-key rejection.
   `crates/runtime/src/config/merge.rs` produces an immutable, SHA-256-fingerprinted `RuntimePolicy`.
 - **Naming**: Rust `snake_case`/`PascalCase`/`SCREAMING_SNAKE_CASE` as usual; TS `camelCase`/`PascalCase`.
-  Tool names follow `batman_<verb>` (`batman_task`, `batman_worker`, `batman_run`, ...); commands are
-  `/batman-status`, `/batman-doctor`.
+  Tool names follow `crew_<verb>` (`crew_task`, `crew_worker`, `crew_run`, ...); commands are
+  `/crew-status`, `/crew-doctor`.
 
 ## Source-of-truth docs (read before assuming a gap is unintentional)
 

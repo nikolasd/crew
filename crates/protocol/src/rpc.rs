@@ -133,7 +133,7 @@ pub struct ClientPrincipalSummary {
 
 // BatmanMethod is re-exported from method.rs.
 
-/// Where the running `batcave` binary was loaded from. `override` means a
+/// Where the running `crewd` binary was loaded from. `override` means a
 /// developer override path, `package` a bundled/installed binary, and
 /// `unknown` that the source could not be determined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

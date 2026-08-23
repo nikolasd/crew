@@ -7,7 +7,7 @@
 //!
 //! [`render_schema`] is the sole renderer. `batman-xtask generate` writes
 //! its output to `packages/protocol-ts/schema/batman.schema.json`, and
-//! `batcave doctor`'s `schema_compatibility` check compares the committed
+//! `crewd doctor`'s `schema_compatibility` check compares the committed
 //! file against it -- both must derive the schema the same way or the check
 //! would report drift that does not exist.
 

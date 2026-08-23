@@ -3,7 +3,7 @@
 // possible overflow line. `ctx.ui.setWidget` truncates array-content
 // widgets at 10 total LINES, not 10 rows — `MAX_WIDGET_ROWS` is capped at
 // 7 so the worst case (2 border lines + 7 rows + 1 overflow line = 10)
-// fits exactly. A fuller view is a `/batman status <runId>` command
+// fits exactly. A fuller view is a `/crew status <runId>` command
 // lookup, never silent truncation of state (the model itself is
 // unbounded, only the *rendered* widget is capped).
 
@@ -34,7 +34,7 @@ function codePointLength(text: string): number {
 }
 
 const BAT_ICON = "\u{F0B5F}";
-const WIDGET_HEADER_TEXT = "BATMAN";
+const WIDGET_HEADER_TEXT = "Crew";
 
 const STATE_ICONS: Record<string, string> = {
   queued: "\u{F0150}",
@@ -80,7 +80,7 @@ export function stateColor(state: string): ThemeColor {
   return STATE_COLORS[state] ?? FALLBACK_STATE_COLOR;
 }
 
-/** The widget's brand header: bat icon + "BATMAN", uncolored — the caller
+/** The widget's brand header: bat icon + "Crew", uncolored — the caller
  *  (`renderWidgetBox`) applies theme color, so this stays a plain data
  *  producer with no `Theme` dependency of its own. */
 export function renderWidgetHeader(): string {
@@ -161,13 +161,13 @@ export function renderWidgetBox(state: MonitorState, theme: Theme): string[] {
   let lines: string[];
   let colors: ThemeColor[];
   if (totalCount === 0) {
-    lines = ["No BATMAN runs yet."];
+    lines = ["No Crew runs yet."];
     colors = ["text"];
   } else {
     lines = rows.map(renderRowLine);
     colors = rows.map((row) => stateColor(row.state));
     if (totalCount > MAX_WIDGET_ROWS) {
-      lines.push(`… ${totalCount - MAX_WIDGET_ROWS} more; use /batman status <runId> for full details.`);
+      lines.push(`… ${totalCount - MAX_WIDGET_ROWS} more; use /crew status <runId> for full details.`);
       colors.push("muted");
     }
   }
@@ -175,7 +175,7 @@ export function renderWidgetBox(state: MonitorState, theme: Theme): string[] {
   return assembleBox(renderWidgetHeader(), lines, colors, theme);
 }
 
-/** Renders the full detail block for `/batman status <runId>`. */
+/** Renders the full detail block for `/crew status <runId>`. */
 export function renderRowDetails(row: MonitorRow): string {
   const lines = [`Run: ${row.runId}`, `Task: ${row.taskId}`, `Worker: ${row.workerId}`, `State: ${row.state}`];
   const harness = harnessLabel(row);
@@ -188,14 +188,14 @@ export function renderRowDetails(row: MonitorRow): string {
   // but not what to do about it. `coordination/child/decide` is the only
   // way a pending request ever resolves, so name its tool here.
   if (row.flags.childrenActive) {
-    lines.push("Children: active -- list and decide with batman_child");
+    lines.push("Children: active -- list and decide with crew_child");
   }
   // An open (undecided) violation on a quarantined run is the one
   // holding the quarantine (R80): name each so the operator can decide
-  // it with batman_violation instead of diffing the event stream.
+  // it with crew_violation instead of diffing the event stream.
   const openViolations = Object.entries(row.openViolations);
   if (openViolations.length > 0) {
-    lines.push(`Open violations: ${openViolations.map(([id, code]) => `${code} (${id})`).join(", ")} -- decide with batman_violation`);
+    lines.push(`Open violations: ${openViolations.map(([id, code]) => `${code} (${id})`).join(", ")} -- decide with crew_violation`);
   }
   lines.push(`Pending approvals: ${row.pendingApprovalCount}`);
   if (row.workspaceMode !== undefined) {

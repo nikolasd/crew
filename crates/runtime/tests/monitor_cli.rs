@@ -1,11 +1,11 @@
-//! Integration test for `batcave monitor`: binds a real, in-process
+//! Integration test for `crewd monitor`: binds a real, in-process
 //! [`Server`] on an on-disk socket (exactly like `orchestration_rpc.rs`'s
 //! own `Harness`), commits a task/worker/run through it over a raw
-//! socket client, then spawns the actual compiled `batcave monitor`
+//! socket client, then spawns the actual compiled `crewd monitor`
 //! subcommand as a subprocess pointed at the same repository/state
 //! directory -- proving the real CLI binary, not just the library
 //! function, connects, replays, and renders a committed run. A second
-//! test proves a `display` principal (exactly what `batcave monitor`
+//! test proves a `display` principal (exactly what `crewd monitor`
 //! authenticates as) cannot call an orchestration mutation method.
 
 use std::path::{Path, PathBuf};
@@ -38,7 +38,7 @@ impl PeerCredentialReader for FakeReader {
 
 /// Binds a real daemon on an on-disk socket and serves it on a spawned
 /// task until the returned sender is dropped or sent to. Returns the
-/// state/repo directories `batcave monitor`'s own independent
+/// state/repo directories `crewd monitor`'s own independent
 /// `RuntimePaths::resolve` call will use to find the same socket.
 async fn start_daemon() -> (
     PathBuf,
@@ -136,7 +136,7 @@ impl Client {
             "id": 1,
             "method": "initialize",
             "params": {
-                "client": { "name": "@nikolasd/batman", "version": "0.1.0" },
+                "client": { "name": "@nikolasd/crew", "version": "0.1.0" },
                 "supported": { "min": { "major": 1, "minor": 0 }, "max": { "major": 1, "minor": 0 } },
                 "repository": { "canonicalPath": agent_dir, "vcsRoot": agent_dir },
                 "auth": auth,
@@ -183,7 +183,7 @@ async fn monitor_renders_a_committed_run_and_exits_cleanly_on_sigint() {
     // `orchestration_rpc.rs`'s own
     // `run_submit_without_driver_reports_adapter_unavailable_but_preserves_queued_run`),
     // which is exactly the real, replayable `RunEvent` this test needs
-    // `batcave monitor` to render.
+    // `crewd monitor` to render.
     let _submit = client
         .call(
             4,
@@ -200,11 +200,11 @@ async fn monitor_renders_a_committed_run_and_exits_cleanly_on_sigint() {
         .unwrap()
         .to_string();
 
-    // Spawn the real compiled `batcave monitor` subcommand, pointed at
+    // Spawn the real compiled `crewd monitor` subcommand, pointed at
     // the same on-disk socket via its own independent
     // `RuntimePaths::resolve(state_dir, repo)` computation -- proving the
     // actual CLI binary, not just the library function underneath it.
-    let mut child = Command::new(env!("CARGO_BIN_EXE_batcave"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_crewd"))
         .args([
             "monitor",
             "--state-dir",
@@ -215,13 +215,13 @@ async fn monitor_renders_a_committed_run_and_exits_cleanly_on_sigint() {
         .stdout(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .expect("spawning batcave monitor must succeed");
+        .expect("spawning crewd monitor must succeed");
     let stdout = child.stdout.take().expect("piped stdout");
     let mut lines = BufReader::new(stdout).lines();
 
     let rendered = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
         .await
-        .expect("batcave monitor must render a line within 10 seconds")
+        .expect("crewd monitor must render a line within 10 seconds")
         .expect("reading monitor stdout must not error")
         .expect("monitor stdout must not close before rendering anything");
 
@@ -239,11 +239,11 @@ async fn monitor_renders_a_committed_run_and_exits_cleanly_on_sigint() {
         .expect("sending SIGINT must succeed");
     let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
         .await
-        .expect("batcave monitor must exit within 5 seconds of SIGINT")
+        .expect("crewd monitor must exit within 5 seconds of SIGINT")
         .expect("waiting on the child must not error");
     assert!(
         status.success(),
-        "batcave monitor must exit cleanly (status 0) on SIGINT, got: {status:?}"
+        "crewd monitor must exit cleanly (status 0) on SIGINT, got: {status:?}"
     );
 }
 
@@ -254,7 +254,7 @@ async fn a_display_role_monitor_cannot_call_orchestration_mutation_methods() {
 
     let mut client = Client::connect(&paths.socket).await;
     let init = client
-        .initialize("display", "batcave-monitor", repo_dir.to_str().unwrap())
+        .initialize("display", "crewd-monitor", repo_dir.to_str().unwrap())
         .await;
     assert!(init.get("error").is_none(), "initialize failed: {init:?}");
 
@@ -267,7 +267,7 @@ async fn a_display_role_monitor_cannot_call_orchestration_mutation_methods() {
         .await;
     assert_eq!(
         attempt["error"]["code"], -32601,
-        "a display principal (exactly what batcave monitor authenticates as) must get \
+        "a display principal (exactly what crewd monitor authenticates as) must get \
          METHOD_NOT_FOUND for task/upsert, proving the monitor cannot mutate: {attempt:?}"
     );
 }

@@ -16,7 +16,7 @@
 //! constructed here now receive worker-coordination MCP config too
 //! (closed alongside the prompt gap): `AdapterRegistry::new` accepts an
 //! `Option<AdapterMcpConfig>`, built by `lifecycle::serve()` from a
-//! resolved `batcave` binary path, state dir, and repository root, and
+//! resolved `crewd` binary path, state dir, and repository root, and
 //! threaded into every Claude/Codex/Copilot adapter this registry
 //! constructs. OMP-RPC's in-process host-tool bridge instead needs a
 //! `CoordinationBroker`, supplied after construction via
@@ -132,11 +132,11 @@ pub struct AdapterRegistry {
     authorization: Arc<dyn AdapterAuthorization>,
     /// The working directory every supervised vendor process is launched
     /// in. One registry instance serves one repository, exactly like one
-    /// `batcave` daemon does.
+    /// `crewd` daemon does.
     repo_root: PathBuf,
     /// Worker-coordination MCP launch config, given to every Claude/Codex/
     /// Copilot adapter this registry constructs so their supervised vendor
-    /// processes can reach the `batman` coordination MCP server. `None`
+    /// processes can reach the `crew` coordination MCP server. `None`
     /// for callers (chiefly tests) that never asked for worker MCP tools.
     mcp: Option<AdapterMcpConfig>,
     /// The [`CoordinationBroker`] OMP-RPC adapters answer their in-process
@@ -617,7 +617,7 @@ mod build_adapter_tests {
         AdapterMcpConfig {
             scope_tokens: Arc::new(ScopeTokenStore::new()),
             project_id: batman_protocol::ProjectId::new(),
-            batcave_path: PathBuf::from("/opt/batman/bin/batcave"),
+            crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
             state_dir: std::env::temp_dir(),
             repository: std::env::temp_dir(),
         }

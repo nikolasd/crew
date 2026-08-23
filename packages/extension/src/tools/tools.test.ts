@@ -5,11 +5,11 @@ import { join } from "node:path";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { z as zod } from "zod/v4";
 
-import { BatmanClient } from "../client";
+import { CrewClient } from "../client";
 import { registerOrchestrationTools } from "./index";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..", "..");
-const BATCAVE = join(REPO_ROOT, "target", "debug", "batcave");
+const CREWD = join(REPO_ROOT, "target", "debug", "crewd");
 
 // ---------------------------------------------------------------- fake API
 
@@ -59,7 +59,7 @@ test("registers exactly the eleven orchestration tools, in the order the model s
       throw new Error("not exercised in this test");
     },
   });
-  expect([...tools.keys()]).toEqual(["batman_task", "batman_worker", "batman_profile", "batman_run", "batman_workspace", "batman_artifact", "batman_child", "batman_violation", "batman_message", "batman_approval", "batman_reconcile"]);
+  expect([...tools.keys()]).toEqual(["crew_task", "crew_worker", "crew_profile", "crew_run", "crew_workspace", "crew_artifact", "crew_child", "crew_violation", "crew_message", "crew_approval", "crew_reconcile"]);
 });
 
 test("read-only ops resolve to tier read, mutating worker/run ops resolve to tier exec", () => {
@@ -70,14 +70,14 @@ test("read-only ops resolve to tier read, mutating worker/run ops resolve to tie
     },
   });
 
-  const worker = tools.get("batman_worker");
+  const worker = tools.get("crew_worker");
   expect(worker).toBeDefined();
   const workerApproval = worker?.approval as (args: unknown) => string;
   expect(workerApproval({ op: "create" })).toBe("exec");
   expect(workerApproval({ op: "list" })).toBe("read");
   expect(workerApproval({ op: "get" })).toBe("read");
 
-  const run = tools.get("batman_run");
+  const run = tools.get("crew_run");
   expect(run).toBeDefined();
   const runApproval = run?.approval as (args: unknown) => string;
   expect(runApproval({ op: "submit" })).toBe("exec");
@@ -103,31 +103,31 @@ test("every op's approval tier matches whether it mutates", () => {
   };
 
   // Reading a task must not cost a write approval.
-  expect(tierOf("batman_task", { op: "upsert" })).toBe("write");
-  expect(tierOf("batman_task", { op: "get" })).toBe("read");
+  expect(tierOf("crew_task", { op: "upsert" })).toBe("write");
+  expect(tierOf("crew_task", { op: "get" })).toBe("read");
 
   // Artifacts are pure evidence: no op mutates.
-  expect(tierOf("batman_artifact", { op: "list" })).toBe("read");
-  expect(tierOf("batman_artifact", { op: "fetch" })).toBe("read");
+  expect(tierOf("crew_artifact", { op: "list" })).toBe("read");
+  expect(tierOf("crew_artifact", { op: "fetch" })).toBe("read");
 
   // Accepting a child provisions a real run; listing requests does not.
-  expect(tierOf("batman_child", { op: "list" })).toBe("read");
-  expect(tierOf("batman_child", { op: "decide" })).toBe("exec");
+  expect(tierOf("crew_child", { op: "list" })).toBe("read");
+  expect(tierOf("crew_child", { op: "decide" })).toBe("exec");
 
   // Deciding a violation releases or cancels a quarantined run.
-  expect(tierOf("batman_violation", { op: "decide" })).toBe("exec");
+  expect(tierOf("crew_violation", { op: "decide" })).toBe("exec");
   // The list branch is a pure read; a constant "exec" regression fails here.
-  expect(tierOf("batman_violation", { op: "list" })).toBe("read");
+  expect(tierOf("crew_violation", { op: "list" })).toBe("read");
 
   // `apply` rewrites a real working tree, so it joins acquire/release.
-  expect(tierOf("batman_workspace", { op: "apply" })).toBe("exec");
-  expect(tierOf("batman_workspace", { op: "acquire" })).toBe("exec");
-  expect(tierOf("batman_workspace", { op: "release" })).toBe("exec");
-  expect(tierOf("batman_workspace", { op: "get" })).toBe("read");
-  expect(tierOf("batman_workspace", { op: "inspect" })).toBe("read");
+  expect(tierOf("crew_workspace", { op: "apply" })).toBe("exec");
+  expect(tierOf("crew_workspace", { op: "acquire" })).toBe("exec");
+  expect(tierOf("crew_workspace", { op: "release" })).toBe("exec");
+  expect(tierOf("crew_workspace", { op: "get" })).toBe("read");
+  expect(tierOf("crew_workspace", { op: "inspect" })).toBe("read");
 });
 
-test("batman_approval never auto-approves: fixed exec tier with override and reason", () => {
+test("crew_approval never auto-approves: fixed exec tier with override and reason", () => {
   const { api, tools } = createFakeApi();
   registerOrchestrationTools(api, {
     getClient: () => {
@@ -135,7 +135,7 @@ test("batman_approval never auto-approves: fixed exec tier with override and rea
     },
   });
 
-  const approval = tools.get("batman_approval");
+  const approval = tools.get("crew_approval");
   expect(approval).toBeDefined();
   expect(approval?.approval).toEqual({
     tier: "exec",
@@ -144,28 +144,28 @@ test("batman_approval never auto-approves: fixed exec tier with override and rea
   });
 });
 
-test("batman_approval requires approvalId, decision, and reason for decide", () => {
+test("crew_approval requires approvalId, decision, and reason for decide", () => {
   const { api, tools } = createFakeApi();
   registerOrchestrationTools(api, {
     getClient: () => {
       throw new Error("not exercised in this test");
     },
   });
-  const approval = tools.get("batman_approval");
+  const approval = tools.get("crew_approval");
   const schema = approval?.parameters as zod.ZodObject;
   expect(() => schema.parse({ op: "decide" })).not.toThrow(); // shape allows optional fields; runtime enforces requiredness
   const shape = schema.shape as Record<string, unknown>;
   expect(Object.keys(shape)).toEqual(["op", "runId", "approvalId", "decision", "reason"]);
 });
 
-test("batman_violation rejects a prose resolution the runtime would refuse (R16)", () => {
+test("crew_violation rejects a prose resolution the runtime would refuse (R16)", () => {
   const { api, tools } = createFakeApi();
   registerOrchestrationTools(api, {
     getClient: () => {
       throw new Error("not exercised in this test");
     },
   });
-  const violation = tools.get("batman_violation");
+  const violation = tools.get("crew_violation");
   const schema = violation?.parameters as zod.ZodObject;
   expect(schema.safeParse({ op: "decide", violationId: "v-1", resolution: "release" }).success).toBe(true);
   expect(schema.safeParse({ op: "decide", violationId: "v-1", resolution: "cancel" }).success).toBe(true);
@@ -174,14 +174,14 @@ test("batman_violation rejects a prose resolution the runtime would refuse (R16)
   expect(schema.safeParse({ op: "decide", violationId: "v-1", resolution: "please release the quarantined run" }).success).toBe(false);
 });
 
-test("batman_message rejects a kind outside the nine coordination kinds (R88)", () => {
+test("crew_message rejects a kind outside the nine coordination kinds (R88)", () => {
   const { api, tools } = createFakeApi();
   registerOrchestrationTools(api, {
     getClient: () => {
       throw new Error("not exercised in this test");
     },
   });
-  const message = tools.get("batman_message");
+  const message = tools.get("crew_message");
   const schema = message?.parameters as zod.ZodObject;
   expect(schema.safeParse({ op: "send", runId: "r-1", kind: "steer" }).success).toBe(true);
   expect(schema.safeParse({ op: "send", runId: "r-1", kind: "approvalDecision" }).success).toBe(true);
@@ -191,14 +191,14 @@ test("batman_message rejects a kind outside the nine coordination kinds (R88)", 
   expect(schema.safeParse({ op: "send", runId: "r-1", kind: "please steer the worker" }).success).toBe(false);
 });
 
-test("batman_run rejects a workspaceMode outside shared/isolated/copy (R29)", () => {
+test("crew_run rejects a workspaceMode outside shared/isolated/copy (R29)", () => {
   const { api, tools } = createFakeApi();
   registerOrchestrationTools(api, {
     getClient: () => {
       throw new Error("not exercised in this test");
     },
   });
-  const run = tools.get("batman_run");
+  const run = tools.get("crew_run");
   const schema = run?.parameters as zod.ZodObject;
   for (const mode of ["shared", "isolated", "copy"]) {
     expect(schema.safeParse({ op: "submit", taskId: "t", workerId: "w", prompt: "p", workspaceMode: mode }).success).toBe(true);
@@ -206,7 +206,7 @@ test("batman_run rejects a workspaceMode outside shared/isolated/copy (R29)", ()
   expect(schema.safeParse({ op: "submit", taskId: "t", workerId: "w", prompt: "p", workspaceMode: "worktree" }).success).toBe(false);
 });
 
-test("batman_run accepts the result op and calls run/result with the runId", async () => {
+test("crew_run accepts the result op and calls run/result with the runId", async () => {
   const { api, tools } = createFakeApi();
   const calls: Array<{ method: string; params: unknown }> = [];
   const stubClient = {
@@ -224,8 +224,8 @@ test("batman_run accepts the result op and calls run/result with the runId", asy
       throw new Error(`unexpected method: ${method}`);
     },
   };
-  registerOrchestrationTools(api, { getClient: async () => stubClient as unknown as BatmanClient });
-  const run = tools.get("batman_run");
+  registerOrchestrationTools(api, { getClient: async () => stubClient as unknown as CrewClient });
+  const run = tools.get("crew_run");
   expect(run).toBeDefined();
   const schema = run?.parameters as zod.ZodObject;
   expect(schema.safeParse({ op: "result", runId: "r-1" }).success).toBe(true);
@@ -280,7 +280,7 @@ beforeAll(async () => {
   repoDir = mkdtempSync("/tmp/bat-tools-r-");
   mkdirSync(join(repoDir, ".git"));
 
-  daemon = Bun.spawn([BATCAVE, "serve", "--foreground", "--state-dir", stateDir, "--repo", repoDir], { stdout: "ignore", stderr: "pipe" });
+  daemon = Bun.spawn([CREWD, "serve", "--foreground", "--state-dir", stateDir, "--repo", repoDir], { stdout: "ignore", stderr: "pipe" });
 
   await waitForSocket(stateDir);
 }, 180_000);
@@ -290,15 +290,15 @@ afterAll(async () => {
   await daemon?.exited;
 });
 
-async function connectedClient(): Promise<BatmanClient> {
+async function connectedClient(): Promise<CrewClient> {
   const socketPath = findSocket(stateDir);
   if (socketPath === undefined) {
     throw new Error("runtime socket not found");
   }
-  const client = new BatmanClient({ socketPath });
+  const client = new CrewClient({ socketPath });
   await client.whenConnected();
   await client.initialize({
-    client: { name: "@nikolasd/batman", version: "0.1.0" },
+    client: { name: "@nikolasd/crew", version: "0.1.0" },
     supported: { min: { major: 1, minor: 0 }, max: { major: 1, minor: 0 } },
     repository: { canonicalPath: repoDir, vcsRoot: repoDir },
     auth: { role: "ompExtension", instanceId: FAKE_SESSION_ID, agentDirectory: repoDir },
@@ -308,9 +308,9 @@ async function connectedClient(): Promise<BatmanClient> {
   return client;
 }
 
-test("batman_task upsert creates a task with auto-generated ID and session owner, and get reads it back", async () => {
+test("crew_task upsert creates a task with auto-generated ID and session owner, and get reads it back", async () => {
   const { api, tools } = createFakeApi();
-  let cached: BatmanClient | undefined;
+  let cached: CrewClient | undefined;
   registerOrchestrationTools(api, {
     getClient: async () => {
       cached ??= await connectedClient();
@@ -318,7 +318,7 @@ test("batman_task upsert creates a task with auto-generated ID and session owner
     },
   });
 
-  const taskTool = tools.get("batman_task");
+  const taskTool = tools.get("crew_task");
   expect(taskTool).toBeDefined();
   if (taskTool === undefined) throw new Error("unreachable");
 
@@ -341,9 +341,9 @@ test("batman_task upsert creates a task with auto-generated ID and session owner
   cached?.close();
 });
 
-test("batman_worker tool maps a JSON-RPC error to a stable, non-throwing tool error", async () => {
+test("crew_worker tool maps a JSON-RPC error to a stable, non-throwing tool error", async () => {
   const { api, tools } = createFakeApi();
-  let cached: BatmanClient | undefined;
+  let cached: CrewClient | undefined;
   registerOrchestrationTools(api, {
     getClient: async () => {
       cached ??= await connectedClient();
@@ -351,7 +351,7 @@ test("batman_worker tool maps a JSON-RPC error to a stable, non-throwing tool er
     },
   });
 
-  const workerTool = tools.get("batman_worker");
+  const workerTool = tools.get("crew_worker");
   expect(workerTool).toBeDefined();
   if (workerTool === undefined) throw new Error("unreachable");
 
@@ -367,7 +367,7 @@ test("batman_worker tool maps a JSON-RPC error to a stable, non-throwing tool er
   cached?.close();
 });
 
-test("batman_approval fails closed when humanRequired and no UI is available", async () => {
+test("crew_approval fails closed when humanRequired and no UI is available", async () => {
   // Create a stub client that returns a human_required approval.
   const stubClient = {
     request: async (method: string) => {
@@ -401,10 +401,10 @@ test("batman_approval fails closed when humanRequired and no UI is available", a
 
   const { api, tools } = createFakeApi();
   registerOrchestrationTools(api, {
-    getClient: async () => trackingClient as unknown as BatmanClient,
+    getClient: async () => trackingClient as unknown as CrewClient,
   });
 
-  const approvalTool = tools.get("batman_approval");
+  const approvalTool = tools.get("crew_approval");
   if (!approvalTool) throw new Error("approval tool not found");
 
   // Context with no UI (hasUI: false).

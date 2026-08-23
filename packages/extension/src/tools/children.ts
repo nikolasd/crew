@@ -1,4 +1,4 @@
-// `batman_child`: the accept/deny half of nested-worker spawning. A worker
+// `crew_child`: the accept/deny half of nested-worker spawning. A worker
 // that wants a child records the intent via its own coordination tool; OMP
 // decides here. `list` is tier `read`; `decide` is tier `exec` -- accepting
 // provisions a real child run that executes on its own.
@@ -8,7 +8,7 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import type { OrchestrationToolContext } from "./shared";
 import { callOrchestration } from "./shared";
 
-export const BATMAN_CHILD_TOOL_NAME = "batman_child";
+export const CREW_CHILD_TOOL_NAME = "crew_child";
 
 export function registerChildTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
@@ -23,8 +23,8 @@ export function registerChildTool(pi: ExtensionAPI, ctx: OrchestrationToolContex
   });
 
   pi.registerTool({
-    name: BATMAN_CHILD_TOOL_NAME,
-    label: "BATMAN Child",
+    name: CREW_CHILD_TOOL_NAME,
+    label: "Crew Child",
     description:
       "Use to see and decide nested-worker requests: a worker that wants to spawn a child records the intent, and nothing happens until you decide. Use op: 'list' to see pending requests (optionally filtered by runId), then op: 'decide' with parentRunId and decision. Accepting requires childTaskId, childWorkerId, and childRunId; denying requires reason. A request is only an intent -- accepting is what creates the child run.",
     parameters: params,

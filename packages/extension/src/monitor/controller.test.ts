@@ -9,7 +9,7 @@ import { expect, test } from "bun:test";
 
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
-import type { BatmanClient } from "../client";
+import type { CrewClient } from "../client";
 import type { EventEnvelope } from "@nikolasd/batman-protocol";
 import { registerMonitor } from "./controller";
 
@@ -41,7 +41,7 @@ interface FakeClient {
   subscribeCalls: number;
   closed: boolean;
   onEvent: ((event: EventEnvelope) => void) | undefined;
-  client: BatmanClient;
+  client: CrewClient;
 }
 
 function createFakeClient(): FakeClient {
@@ -49,7 +49,7 @@ function createFakeClient(): FakeClient {
     subscribeCalls: 0,
     closed: false,
     onEvent: undefined,
-    client: undefined as unknown as BatmanClient,
+    client: undefined as unknown as CrewClient,
   };
   fake.client = {
     get isClosed() {
@@ -66,7 +66,7 @@ function createFakeClient(): FakeClient {
         fake.onEvent = undefined;
       };
     },
-  } as unknown as BatmanClient;
+  } as unknown as CrewClient;
   return fake;
 }
 
@@ -116,7 +116,7 @@ test("session_start keeps the widget hidden when the journal has no runs (R56, r
   // shown with an empty box.
   expect(fake.subscribeCalls).toBe(1);
   expect(widgetCalls.length).toBe(1);
-  expect(widgetCalls[0]?.[0]).toBe("batman-monitor");
+  expect(widgetCalls[0]?.[0]).toBe("crew-monitor");
   expect(widgetCalls[0]?.[1]).toBeUndefined();
   expect(widgetCalls[0]?.[2]).toEqual({ placement: "aboveEditor" });
 });
@@ -139,7 +139,7 @@ test("the widget appears the moment a run row is created, and stays hidden befor
   expect(Array.isArray(widgetCalls[1]?.[1])).toBe(true);
 });
 
-test("/batman renders the box even when empty (explicit command overrides the auto-hide)", async () => {
+test("/crew renders the box even when empty (explicit command overrides the auto-hide)", async () => {
   const { api, commands } = createFakeApi();
   const fake = createFakeClient();
   registerMonitor(api, { getClient: async () => fake.client });
@@ -147,7 +147,7 @@ test("/batman renders the box even when empty (explicit command overrides the au
   const widgetCalls: unknown[][] = [];
   const cmdCtx = fakeExtensionContext(widgetCalls);
 
-  await commands.get("batman")?.handler("", cmdCtx);
+  await commands.get("crew")?.handler("", cmdCtx);
 
   // The user explicitly asked for the monitor, so the (empty) box renders
   // even with no runs — the asymmetry with session_start.

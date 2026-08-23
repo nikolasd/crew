@@ -19,12 +19,14 @@ var __toESM = (mod, isNodeMode, target) => {
   }
   target = mod != null ? __create(__getProtoOf(mod)) : {};
   const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
-  for (let key of __getOwnPropNames(mod))
-    if (!__hasOwnProp.call(to, key))
-      __defProp(to, key, {
-        get: __accessProp.bind(mod, key),
-        enumerable: true
-      });
+  if (mod && typeof mod === "object" || typeof mod === "function") {
+    for (let key of __getOwnPropNames(mod))
+      if (!__hasOwnProp.call(to, key))
+        __defProp(to, key, {
+          get: __accessProp.bind(mod, key),
+          enumerable: true
+        });
+  }
   if (canCache)
     cache.set(mod, to);
   return to;
@@ -32,7 +34,7 @@ var __toESM = (mod, isNodeMode, target) => {
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/codegen/code.js
-var require_code = __commonJS((exports) => {
+var require_code = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.regexpCode = exports.getEsmExportName = exports.getProperty = exports.safeStringify = exports.stringify = exports.strConcat = exports.addCodeArg = exports.str = exports._ = exports.nil = exports._Code = exports.Name = exports.IDENTIFIER = exports._CodeOrName = undefined;
 
@@ -186,7 +188,7 @@ var require_code = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/codegen/scope.js
-var require_scope = __commonJS((exports) => {
+var require_scope = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.ValueScope = exports.ValueScopeName = exports.Scope = exports.varKinds = exports.UsedValueState = undefined;
   var code_1 = require_code();
@@ -332,7 +334,7 @@ var require_scope = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/codegen/index.js
-var require_codegen = __commonJS((exports) => {
+var require_codegen = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.or = exports.and = exports.not = exports.CodeGen = exports.operators = exports.varKinds = exports.ValueScopeName = exports.ValueScope = exports.Scope = exports.Name = exports.regexpCode = exports.stringify = exports.getProperty = exports.nil = exports.strConcat = exports.str = exports._ = undefined;
   var code_1 = require_code();
@@ -1042,7 +1044,7 @@ var require_codegen = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/util.js
-var require_util = __commonJS((exports) => {
+var require_util = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.checkStrictMode = exports.getErrorPath = exports.Type = exports.useFunc = exports.setEvaluated = exports.evaluatedPropsToName = exports.mergeEvaluated = exports.eachItem = exports.unescapeJsonPointer = exports.escapeJsonPointer = exports.escapeFragment = exports.unescapeFragment = exports.schemaRefOrVal = exports.schemaHasRulesButRef = exports.schemaHasRules = exports.checkUnknownRules = exports.alwaysValidSchema = exports.toHash = undefined;
   var codegen_1 = require_codegen();
@@ -1206,7 +1208,7 @@ var require_util = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/names.js
-var require_names = __commonJS((exports) => {
+var require_names = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var names = {
@@ -1231,7 +1233,7 @@ var require_names = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/errors.js
-var require_errors = __commonJS((exports) => {
+var require_errors = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.extendErrors = exports.resetErrorsCount = exports.reportExtraError = exports.reportError = exports.keyword$DataError = exports.keywordError = undefined;
   var codegen_1 = require_codegen();
@@ -1349,7 +1351,7 @@ var require_errors = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/validate/boolSchema.js
-var require_boolSchema = __commonJS((exports) => {
+var require_boolSchema = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.boolOrEmptySchema = exports.topBoolOrEmptySchema = undefined;
   var errors_1 = require_errors();
@@ -1397,7 +1399,7 @@ var require_boolSchema = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/rules.js
-var require_rules = __commonJS((exports) => {
+var require_rules = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.getRules = exports.isJSONType = undefined;
   var _jsonTypes = ["string", "number", "integer", "boolean", "null", "object", "array"];
@@ -1425,7 +1427,7 @@ var require_rules = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/validate/applicability.js
-var require_applicability = __commonJS((exports) => {
+var require_applicability = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.shouldUseRule = exports.shouldUseGroup = exports.schemaHasRulesForType = undefined;
   function schemaHasRulesForType({ schema, self }, type) {
@@ -1445,7 +1447,7 @@ var require_applicability = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/validate/dataType.js
-var require_dataType = __commonJS((exports) => {
+var require_dataType = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.reportTypeError = exports.checkDataTypes = exports.checkDataType = exports.coerceAndCheckDataType = exports.getJSONTypes = exports.getSchemaTypes = exports.DataType = undefined;
   var rules_1 = require_rules();
@@ -1626,7 +1628,7 @@ var require_dataType = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/validate/defaults.js
-var require_defaults = __commonJS((exports) => {
+var require_defaults = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.assignDefaults = undefined;
   var codegen_1 = require_codegen();
@@ -1660,7 +1662,7 @@ var require_defaults = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/code.js
-var require_code2 = __commonJS((exports) => {
+var require_code2 = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.validateUnion = exports.validateArray = exports.usePattern = exports.callValidateCode = exports.schemaProperties = exports.allSchemaProperties = exports.noPropertyInData = exports.propertyInData = exports.isOwnProperty = exports.hasPropFunc = exports.reportMissingProp = exports.checkMissingProp = exports.checkReportMissingProp = undefined;
   var codegen_1 = require_codegen();
@@ -1789,7 +1791,7 @@ var require_code2 = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/validate/keyword.js
-var require_keyword = __commonJS((exports) => {
+var require_keyword = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.validateKeywordUsage = exports.validSchemaType = exports.funcKeywordCode = exports.macroKeywordCode = undefined;
   var codegen_1 = require_codegen();
@@ -1904,7 +1906,7 @@ var require_keyword = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/validate/subschema.js
-var require_subschema = __commonJS((exports) => {
+var require_subschema = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.extendSubschemaMode = exports.extendSubschemaData = exports.getSubschema = undefined;
   var codegen_1 = require_codegen();
@@ -1984,7 +1986,7 @@ var require_subschema = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/fast-deep-equal@3.1.3/node_modules/fast-deep-equal/index.js
-var require_fast_deep_equal = __commonJS((exports, module) => {
+var require_fast_deep_equal = __commonJS(function(exports, module) {
   module.exports = function equal(a, b) {
     if (a === b)
       return true;
@@ -2026,7 +2028,7 @@ var require_fast_deep_equal = __commonJS((exports, module) => {
 });
 
 // ../../node_modules/.bun/json-schema-traverse@1.0.0/node_modules/json-schema-traverse/index.js
-var require_json_schema_traverse = __commonJS((exports, module) => {
+var require_json_schema_traverse = __commonJS(function(exports, module) {
   var traverse = module.exports = function(schema, opts, cb) {
     if (typeof opts == "function") {
       cb = opts;
@@ -2109,7 +2111,7 @@ var require_json_schema_traverse = __commonJS((exports, module) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/resolve.js
-var require_resolve = __commonJS((exports) => {
+var require_resolve = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.getSchemaRefs = exports.resolveUrl = exports.normalizeId = exports._getFullPath = exports.getFullPath = exports.inlineRef = undefined;
   var util_1 = require_util();
@@ -2262,7 +2264,7 @@ var require_resolve = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/validate/index.js
-var require_validate = __commonJS((exports) => {
+var require_validate = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.getData = exports.KeywordCxt = exports.validateFunctionCode = undefined;
   var boolSchema_1 = require_boolSchema();
@@ -2767,7 +2769,7 @@ var require_validate = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/runtime/validation_error.js
-var require_validation_error = __commonJS((exports) => {
+var require_validation_error = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
 
   class ValidationError extends Error {
@@ -2781,7 +2783,7 @@ var require_validation_error = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/ref_error.js
-var require_ref_error = __commonJS((exports) => {
+var require_ref_error = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var resolve_1 = require_resolve();
 
@@ -2796,7 +2798,7 @@ var require_ref_error = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/index.js
-var require_compile = __commonJS((exports) => {
+var require_compile = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.resolveSchema = exports.getCompilingSchema = exports.resolveRef = exports.compileSchema = exports.SchemaEnv = undefined;
   var codegen_1 = require_codegen();
@@ -3017,7 +3019,7 @@ var require_compile = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/refs/data.json
-var require_data = __commonJS((exports, module) => {
+var require_data = __commonJS(function(exports, module) {
   module.exports = {
     $id: "https://raw.githubusercontent.com/ajv-validator/ajv/master/lib/refs/data.json#",
     description: "Meta-schema for $data reference (JSON AnySchema extension proposal)",
@@ -3034,7 +3036,7 @@ var require_data = __commonJS((exports, module) => {
 });
 
 // ../../node_modules/.bun/fast-uri@3.1.5/node_modules/fast-uri/lib/utils.js
-var require_utils = __commonJS((exports, module) => {
+var require_utils = __commonJS(function(exports, module) {
   var isUUID = RegExp.prototype.test.bind(/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/iu);
   var isIPv4 = RegExp.prototype.test.bind(/^(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$/u);
   var isHexPair = RegExp.prototype.test.bind(/^[\da-f]{2}$/iu);
@@ -3345,7 +3347,7 @@ var require_utils = __commonJS((exports, module) => {
 });
 
 // ../../node_modules/.bun/fast-uri@3.1.5/node_modules/fast-uri/lib/schemes.js
-var require_schemes = __commonJS((exports, module) => {
+var require_schemes = __commonJS(function(exports, module) {
   var { isUUID } = require_utils();
   var URN_REG = /([\da-z][\d\-a-z]{0,31}):((?:[\w!$'()*+,\-.:;=@]|%[\da-f]{2})+)/iu;
   var supportedSchemeNames = [
@@ -3519,7 +3521,7 @@ var require_schemes = __commonJS((exports, module) => {
 });
 
 // ../../node_modules/.bun/fast-uri@3.1.5/node_modules/fast-uri/index.js
-var require_fast_uri = __commonJS((exports, module) => {
+var require_fast_uri = __commonJS(function(exports, module) {
   var { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizePercentEncoding, normalizePathEncoding, escapePreservingEscapes, reescapeHostDelimiters, isIPv4, nonSimpleDomain } = require_utils();
   var { SCHEMES, getSchemeHandler } = require_schemes();
   function normalize(uri, options) {
@@ -3827,7 +3829,7 @@ var require_fast_uri = __commonJS((exports, module) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/runtime/uri.js
-var require_uri = __commonJS((exports) => {
+var require_uri = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var uri = require_fast_uri();
   uri.code = 'require("ajv/dist/runtime/uri").default';
@@ -3835,7 +3837,7 @@ var require_uri = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/core.js
-var require_core = __commonJS((exports) => {
+var require_core = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.CodeGen = exports.Name = exports.nil = exports.stringify = exports.str = exports._ = exports.KeywordCxt = undefined;
   var validate_1 = require_validate();
@@ -4428,7 +4430,7 @@ var require_core = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/core/id.js
-var require_id = __commonJS((exports) => {
+var require_id = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var def = {
     keyword: "id",
@@ -4440,7 +4442,7 @@ var require_id = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/core/ref.js
-var require_ref = __commonJS((exports) => {
+var require_ref = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.callRef = exports.getValidate = undefined;
   var ref_error_1 = require_ref_error();
@@ -4559,7 +4561,7 @@ var require_ref = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/core/index.js
-var require_core2 = __commonJS((exports) => {
+var require_core2 = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var id_1 = require_id();
   var ref_1 = require_ref();
@@ -4577,7 +4579,7 @@ var require_core2 = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/validation/limitNumber.js
-var require_limitNumber = __commonJS((exports) => {
+var require_limitNumber = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var ops = codegen_1.operators;
@@ -4606,7 +4608,7 @@ var require_limitNumber = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/validation/multipleOf.js
-var require_multipleOf = __commonJS((exports) => {
+var require_multipleOf = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var error = {
@@ -4631,7 +4633,7 @@ var require_multipleOf = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/runtime/ucs2length.js
-var require_ucs2length = __commonJS((exports) => {
+var require_ucs2length = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   function ucs2length(str) {
     const len = str.length;
@@ -4654,7 +4656,7 @@ var require_ucs2length = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/validation/limitLength.js
-var require_limitLength = __commonJS((exports) => {
+var require_limitLength = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var util_1 = require_util();
@@ -4683,7 +4685,7 @@ var require_limitLength = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/validation/pattern.js
-var require_pattern = __commonJS((exports) => {
+var require_pattern = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var code_1 = require_code2();
   var codegen_1 = require_codegen();
@@ -4708,7 +4710,7 @@ var require_pattern = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/validation/limitProperties.js
-var require_limitProperties = __commonJS((exports) => {
+var require_limitProperties = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var error = {
@@ -4734,7 +4736,7 @@ var require_limitProperties = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/validation/required.js
-var require_required = __commonJS((exports) => {
+var require_required = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var code_1 = require_code2();
   var codegen_1 = require_codegen();
@@ -4813,7 +4815,7 @@ var require_required = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/validation/limitItems.js
-var require_limitItems = __commonJS((exports) => {
+var require_limitItems = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var error = {
@@ -4839,7 +4841,7 @@ var require_limitItems = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/runtime/equal.js
-var require_equal = __commonJS((exports) => {
+var require_equal = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var equal = require_fast_deep_equal();
   equal.code = 'require("ajv/dist/runtime/equal").default';
@@ -4847,7 +4849,7 @@ var require_equal = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/validation/uniqueItems.js
-var require_uniqueItems = __commonJS((exports) => {
+var require_uniqueItems = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var dataType_1 = require_dataType();
   var codegen_1 = require_codegen();
@@ -4911,7 +4913,7 @@ var require_uniqueItems = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/validation/const.js
-var require_const = __commonJS((exports) => {
+var require_const = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var util_1 = require_util();
@@ -4937,7 +4939,7 @@ var require_const = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/validation/enum.js
-var require_enum = __commonJS((exports) => {
+var require_enum = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var util_1 = require_util();
@@ -4983,7 +4985,7 @@ var require_enum = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/validation/index.js
-var require_validation = __commonJS((exports) => {
+var require_validation = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var limitNumber_1 = require_limitNumber();
   var multipleOf_1 = require_multipleOf();
@@ -5013,7 +5015,7 @@ var require_validation = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/additionalItems.js
-var require_additionalItems = __commonJS((exports) => {
+var require_additionalItems = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.validateAdditionalItems = undefined;
   var codegen_1 = require_codegen();
@@ -5063,7 +5065,7 @@ var require_additionalItems = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/items.js
-var require_items = __commonJS((exports) => {
+var require_items = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.validateTuple = undefined;
   var codegen_1 = require_codegen();
@@ -5117,7 +5119,7 @@ var require_items = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/prefixItems.js
-var require_prefixItems = __commonJS((exports) => {
+var require_prefixItems = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var items_1 = require_items();
   var def = {
@@ -5131,7 +5133,7 @@ var require_prefixItems = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/items2020.js
-var require_items2020 = __commonJS((exports) => {
+var require_items2020 = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var util_1 = require_util();
@@ -5163,7 +5165,7 @@ var require_items2020 = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/contains.js
-var require_contains = __commonJS((exports) => {
+var require_contains = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var util_1 = require_util();
@@ -5254,7 +5256,7 @@ var require_contains = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/dependencies.js
-var require_dependencies = __commonJS((exports) => {
+var require_dependencies = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.validateSchemaDeps = exports.validatePropertyDeps = exports.error = undefined;
   var codegen_1 = require_codegen();
@@ -5339,7 +5341,7 @@ var require_dependencies = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/propertyNames.js
-var require_propertyNames = __commonJS((exports) => {
+var require_propertyNames = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var util_1 = require_util();
@@ -5379,7 +5381,7 @@ var require_propertyNames = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js
-var require_additionalProperties = __commonJS((exports) => {
+var require_additionalProperties = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var code_1 = require_code2();
   var codegen_1 = require_codegen();
@@ -5482,7 +5484,7 @@ var require_additionalProperties = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/properties.js
-var require_properties = __commonJS((exports) => {
+var require_properties = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var validate_1 = require_validate();
   var code_1 = require_code2();
@@ -5537,7 +5539,7 @@ var require_properties = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/patternProperties.js
-var require_patternProperties = __commonJS((exports) => {
+var require_patternProperties = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var code_1 = require_code2();
   var codegen_1 = require_codegen();
@@ -5608,7 +5610,7 @@ var require_patternProperties = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/not.js
-var require_not = __commonJS((exports) => {
+var require_not = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var util_1 = require_util();
   var def = {
@@ -5636,7 +5638,7 @@ var require_not = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/anyOf.js
-var require_anyOf = __commonJS((exports) => {
+var require_anyOf = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var code_1 = require_code2();
   var def = {
@@ -5650,7 +5652,7 @@ var require_anyOf = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/oneOf.js
-var require_oneOf = __commonJS((exports) => {
+var require_oneOf = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var util_1 = require_util();
@@ -5705,7 +5707,7 @@ var require_oneOf = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/allOf.js
-var require_allOf = __commonJS((exports) => {
+var require_allOf = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var util_1 = require_util();
   var def = {
@@ -5729,7 +5731,7 @@ var require_allOf = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/if.js
-var require_if = __commonJS((exports) => {
+var require_if = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var util_1 = require_util();
@@ -5795,7 +5797,7 @@ var require_if = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/thenElse.js
-var require_thenElse = __commonJS((exports) => {
+var require_thenElse = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var util_1 = require_util();
   var def = {
@@ -5810,7 +5812,7 @@ var require_thenElse = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/index.js
-var require_applicator = __commonJS((exports) => {
+var require_applicator = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var additionalItems_1 = require_additionalItems();
   var prefixItems_1 = require_prefixItems();
@@ -5853,7 +5855,7 @@ var require_applicator = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/dynamic/dynamicAnchor.js
-var require_dynamicAnchor = __commonJS((exports) => {
+var require_dynamicAnchor = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.dynamicAnchor = undefined;
   var codegen_1 = require_codegen();
@@ -5885,7 +5887,7 @@ var require_dynamicAnchor = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/dynamic/dynamicRef.js
-var require_dynamicRef = __commonJS((exports) => {
+var require_dynamicRef = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.dynamicRef = undefined;
   var codegen_1 = require_codegen();
@@ -5928,7 +5930,7 @@ var require_dynamicRef = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/dynamic/recursiveAnchor.js
-var require_recursiveAnchor = __commonJS((exports) => {
+var require_recursiveAnchor = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var dynamicAnchor_1 = require_dynamicAnchor();
   var util_1 = require_util();
@@ -5946,7 +5948,7 @@ var require_recursiveAnchor = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/dynamic/recursiveRef.js
-var require_recursiveRef = __commonJS((exports) => {
+var require_recursiveRef = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var dynamicRef_1 = require_dynamicRef();
   var def = {
@@ -5958,7 +5960,7 @@ var require_recursiveRef = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/dynamic/index.js
-var require_dynamic = __commonJS((exports) => {
+var require_dynamic = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var dynamicAnchor_1 = require_dynamicAnchor();
   var dynamicRef_1 = require_dynamicRef();
@@ -5969,7 +5971,7 @@ var require_dynamic = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/validation/dependentRequired.js
-var require_dependentRequired = __commonJS((exports) => {
+var require_dependentRequired = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var dependencies_1 = require_dependencies();
   var def = {
@@ -5983,7 +5985,7 @@ var require_dependentRequired = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/applicator/dependentSchemas.js
-var require_dependentSchemas = __commonJS((exports) => {
+var require_dependentSchemas = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var dependencies_1 = require_dependencies();
   var def = {
@@ -5996,7 +5998,7 @@ var require_dependentSchemas = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/validation/limitContains.js
-var require_limitContains = __commonJS((exports) => {
+var require_limitContains = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var util_1 = require_util();
   var def = {
@@ -6013,7 +6015,7 @@ var require_limitContains = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/next.js
-var require_next = __commonJS((exports) => {
+var require_next = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var dependentRequired_1 = require_dependentRequired();
   var dependentSchemas_1 = require_dependentSchemas();
@@ -6023,7 +6025,7 @@ var require_next = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/unevaluated/unevaluatedProperties.js
-var require_unevaluatedProperties = __commonJS((exports) => {
+var require_unevaluatedProperties = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var util_1 = require_util();
@@ -6086,7 +6088,7 @@ var require_unevaluatedProperties = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/unevaluated/unevaluatedItems.js
-var require_unevaluatedItems = __commonJS((exports) => {
+var require_unevaluatedItems = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var util_1 = require_util();
@@ -6127,7 +6129,7 @@ var require_unevaluatedItems = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/unevaluated/index.js
-var require_unevaluated = __commonJS((exports) => {
+var require_unevaluated = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var unevaluatedProperties_1 = require_unevaluatedProperties();
   var unevaluatedItems_1 = require_unevaluatedItems();
@@ -6136,7 +6138,7 @@ var require_unevaluated = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/format/format.js
-var require_format = __commonJS((exports) => {
+var require_format = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var error = {
@@ -6223,7 +6225,7 @@ var require_format = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/format/index.js
-var require_format2 = __commonJS((exports) => {
+var require_format2 = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var format_1 = require_format();
   var format = [format_1.default];
@@ -6231,7 +6233,7 @@ var require_format2 = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/metadata.js
-var require_metadata = __commonJS((exports) => {
+var require_metadata = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.contentVocabulary = exports.metadataVocabulary = undefined;
   exports.metadataVocabulary = [
@@ -6251,7 +6253,7 @@ var require_metadata = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/draft2020.js
-var require_draft2020 = __commonJS((exports) => {
+var require_draft2020 = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var core_1 = require_core2();
   var validation_1 = require_validation();
@@ -6276,7 +6278,7 @@ var require_draft2020 = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/discriminator/types.js
-var require_types = __commonJS((exports) => {
+var require_types = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.DiscrError = undefined;
   var DiscrError;
@@ -6287,7 +6289,7 @@ var require_types = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/vocabularies/discriminator/index.js
-var require_discriminator = __commonJS((exports) => {
+var require_discriminator = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var codegen_1 = require_codegen();
   var types_1 = require_types();
@@ -6389,7 +6391,7 @@ var require_discriminator = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/refs/json-schema-2020-12/schema.json
-var require_schema = __commonJS((exports, module) => {
+var require_schema = __commonJS(function(exports, module) {
   module.exports = {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     $id: "https://json-schema.org/draft/2020-12/schema",
@@ -6447,7 +6449,7 @@ var require_schema = __commonJS((exports, module) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/refs/json-schema-2020-12/meta/applicator.json
-var require_applicator2 = __commonJS((exports, module) => {
+var require_applicator2 = __commonJS(function(exports, module) {
   module.exports = {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     $id: "https://json-schema.org/draft/2020-12/meta/applicator",
@@ -6498,7 +6500,7 @@ var require_applicator2 = __commonJS((exports, module) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/refs/json-schema-2020-12/meta/unevaluated.json
-var require_unevaluated2 = __commonJS((exports, module) => {
+var require_unevaluated2 = __commonJS(function(exports, module) {
   module.exports = {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     $id: "https://json-schema.org/draft/2020-12/meta/unevaluated",
@@ -6516,7 +6518,7 @@ var require_unevaluated2 = __commonJS((exports, module) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/refs/json-schema-2020-12/meta/content.json
-var require_content = __commonJS((exports, module) => {
+var require_content = __commonJS(function(exports, module) {
   module.exports = {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     $id: "https://json-schema.org/draft/2020-12/meta/content",
@@ -6535,7 +6537,7 @@ var require_content = __commonJS((exports, module) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/refs/json-schema-2020-12/meta/core.json
-var require_core3 = __commonJS((exports, module) => {
+var require_core3 = __commonJS(function(exports, module) {
   module.exports = {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     $id: "https://json-schema.org/draft/2020-12/meta/core",
@@ -6589,7 +6591,7 @@ var require_core3 = __commonJS((exports, module) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/refs/json-schema-2020-12/meta/format-annotation.json
-var require_format_annotation = __commonJS((exports, module) => {
+var require_format_annotation = __commonJS(function(exports, module) {
   module.exports = {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     $id: "https://json-schema.org/draft/2020-12/meta/format-annotation",
@@ -6606,7 +6608,7 @@ var require_format_annotation = __commonJS((exports, module) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/refs/json-schema-2020-12/meta/meta-data.json
-var require_meta_data = __commonJS((exports, module) => {
+var require_meta_data = __commonJS(function(exports, module) {
   module.exports = {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     $id: "https://json-schema.org/draft/2020-12/meta/meta-data",
@@ -6645,7 +6647,7 @@ var require_meta_data = __commonJS((exports, module) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/refs/json-schema-2020-12/meta/validation.json
-var require_validation2 = __commonJS((exports, module) => {
+var require_validation2 = __commonJS(function(exports, module) {
   module.exports = {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     $id: "https://json-schema.org/draft/2020-12/meta/validation",
@@ -6738,7 +6740,7 @@ var require_validation2 = __commonJS((exports, module) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/refs/json-schema-2020-12/index.js
-var require_json_schema_2020_12 = __commonJS((exports) => {
+var require_json_schema_2020_12 = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var metaSchema = require_schema();
   var applicator = require_applicator2();
@@ -6769,7 +6771,7 @@ var require_json_schema_2020_12 = __commonJS((exports) => {
 });
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/2020.js
-var require_2020 = __commonJS((exports, module) => {
+var require__2020 = __commonJS(function(exports, module) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.MissingRefError = exports.ValidationError = exports.CodeGen = exports.Name = exports.nil = exports.stringify = exports.str = exports._ = exports.KeywordCxt = exports.Ajv2020 = undefined;
   var core_1 = require_core();
@@ -6863,7 +6865,7 @@ import { dirname, isAbsolute, join } from "path";
 import { createConnection } from "net";
 
 // ../protocol-ts/src/validate.ts
-var import__2020 = __toESM(require_2020(), 1);
+var import__2020 = __toESM(require__2020(), 1);
 // ../protocol-ts/schema/batman.schema.json
 var batman_schema_default = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -7337,7 +7339,7 @@ Serialized as the literal method name string used on the wire.`,
           ]
         },
         {
-          description: "Gracefully stops the daemon. Arbitrated (R82): refused with\n`-32602` while any run is live or another connection is being\nserved, unless `params.force == true` (the deliberate, logged\noperator escape hatch). The out-of-band `batcave stop`/SIGTERM\npath is deliberately unarbitrated.",
+          description: "Gracefully stops the daemon. Arbitrated (R82): refused with\n`-32602` while any run is live or another connection is being\nserved, unless `params.force == true` (the deliberate, logged\noperator escape hatch). The out-of-band `crewd stop`/SIGTERM\npath is deliberately unarbitrated.",
           type: "string",
           const: "runtime/shutdown"
         },
@@ -9512,7 +9514,7 @@ range (a self-check that always holds for a live, negotiated session).`,
       ]
     },
     BinarySource: {
-      description: "Where the running `batcave` binary was loaded from. `override` means a\ndeveloper override path, `package` a bundled/installed binary, and\n`unknown` that the source could not be determined.",
+      description: "Where the running `crewd` binary was loaded from. `override` means a\ndeveloper override path, `package` a bundled/installed binary, and\n`unknown` that the source could not be determined.",
       type: "string",
       enum: [
         "override",
@@ -9996,7 +9998,7 @@ class JsonRpcRemoteError extends Error {
     this.data = data;
   }
 }
-class BatmanClient {
+class CrewClient {
   #socket;
   #buffer = "";
   #maxFrameBytes = BOOTSTRAP_MAX_FRAME_BYTES;
@@ -10202,9 +10204,14 @@ class BatmanClient {
 function isObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+// src/env-flag.ts
+function envFlag(env, newName, oldName) {
+  return env[newName] ?? env[oldName];
+}
 // package.json
 var package_default = {
-  name: "@nikolasd/batman",
+  name: "@nikolasd/crew",
   version: "0.4.1",
   type: "module",
   exports: { ".": "./dist/index.js" },
@@ -10247,10 +10254,10 @@ async function ensureRuntime(options) {
   const child = spawn(binary.path, buildServeArgs(options), {
     detached: true,
     stdio: "ignore",
-    env: { ...process.env, BATMAN_BINARY_SOURCE: binary.source }
+    env: { ...process.env, CREW_BINARY_SOURCE: binary.source }
   });
   child.on("error", (err) => {
-    console.error(`batman runtime: failed to spawn ${binary.path}: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`crew runtime: failed to spawn ${binary.path}: ${err instanceof Error ? err.message : String(err)}`);
   });
   child.unref();
   const client = await connectWithBackoff(socketPath, options.repository, options.sessionId);
@@ -10290,25 +10297,25 @@ function pathExists(path) {
   }
 }
 function resolveOverride(env) {
-  const override = env.OMP_BATMAN_BINARY;
+  const override = envFlag(env, "OMP_CREW_BINARY", "OMP_BATMAN_BINARY");
   if (override === undefined || override === "") {
     return;
   }
   if (!isAbsolute(override)) {
-    throw new BinarySelectionError("not-absolute", `OMP_BATMAN_BINARY must be an absolute path, got ${JSON.stringify(override)}`);
+    throw new BinarySelectionError("not-absolute", `OMP_CREW_BINARY must be an absolute path, got ${JSON.stringify(override)}`);
   }
   let canonical;
   try {
     canonical = realpathSync(override);
   } catch {
-    throw new BinarySelectionError("not-found", `OMP_BATMAN_BINARY does not exist: ${override}`);
+    throw new BinarySelectionError("not-found", `OMP_CREW_BINARY does not exist: ${override}`);
   }
   const stat = statSync(canonical);
   if (!stat.isFile()) {
-    throw new BinarySelectionError("not-regular", `OMP_BATMAN_BINARY is not a regular file: ${override}`);
+    throw new BinarySelectionError("not-regular", `OMP_CREW_BINARY is not a regular file: ${override}`);
   }
   if ((stat.mode & 73) === 0) {
-    throw new BinarySelectionError("not-executable", `OMP_BATMAN_BINARY is not executable: ${override}`);
+    throw new BinarySelectionError("not-executable", `OMP_CREW_BINARY is not executable: ${override}`);
   }
   return { path: override, source: "override" };
 }
@@ -10320,15 +10327,15 @@ function selectBinary(env, packagedBinaryResolver) {
   if (packagedBinaryResolver !== undefined) {
     return { path: packagedBinaryResolver(), source: "package" };
   }
-  throw new BinarySelectionError("no-binary", "no OMP_BATMAN_BINARY override is set and no packaged-binary resolver was provided");
+  throw new BinarySelectionError("no-binary", "no OMP_CREW_BINARY override is set and no packaged-binary resolver was provided");
 }
 function initParams(repository, sessionId) {
   const canonical = realpathSync(repository);
   return {
-    client: { name: "@nikolasd/batman", version: package_default.version },
+    client: { name: "@nikolasd/crew", version: package_default.version },
     supported: { min: { major: 1, minor: 0 }, max: { major: 1, minor: 0 } },
     repository: { canonicalPath: canonical, vcsRoot: canonical },
-    auth: { role: "ompExtension", instanceId: sessionId ?? "batman-extension", agentDirectory: canonical },
+    auth: { role: "ompExtension", instanceId: sessionId ?? "crew-extension", agentDirectory: canonical },
     capabilities: { eventReplay: false, maxFrameBytes: CONNECT_MAX_FRAME_BYTES },
     lastSequence: null
   };
@@ -10337,7 +10344,7 @@ async function tryConnect(socketPath, repository, sessionId) {
   if (!existsSync(socketPath)) {
     return;
   }
-  const client = new BatmanClient({ socketPath });
+  const client = new CrewClient({ socketPath });
   try {
     await client.whenConnected();
     await client.initialize(initParams(repository, sessionId));
@@ -10409,17 +10416,17 @@ function resolveTarget(platform, arch, libc) {
 function runtimeCacheDir(stateRoot, version) {
   return join2(stateRoot, "bin", version);
 }
-function resolveBatcave(platform, arch, libc, env, stateRoot) {
+function resolveCrewd(platform, arch, libc, env, stateRoot) {
   const override = resolveOverride(env);
   if (override !== undefined) {
     return override;
   }
   const target = resolveTarget(platform, arch, libc);
   const dir = runtimeCacheDir(stateRoot, EXTENSION_VERSION);
-  const binPath = join2(dir, "batcave");
+  const binPath = join2(dir, "crewd");
   const manifestPath = join2(dir, "manifest.json");
   if (!existsSync2(binPath) || !existsSync2(manifestPath)) {
-    throw new BinarySelectionError("runtime-not-installed", `no batcave binary installed for version ${EXTENSION_VERSION}; run /batman-runtime-install to download it, or set OMP_BATMAN_BINARY to a local build`);
+    throw new BinarySelectionError("runtime-not-installed", `no crewd binary installed for version ${EXTENSION_VERSION}; run /crew-runtime-install to download it, or set OMP_CREW_BINARY to a local build`);
   }
   const manifest = readManifest(manifestPath);
   if (manifest.target !== target) {
@@ -10489,7 +10496,6 @@ function detectLibc(platform = process.platform) {
 
 // src/state.ts
 import { isAbsolute as isAbsolute2, join as join3 } from "path";
-
 class StateRootError extends Error {
   code;
   constructor(code, message) {
@@ -10499,12 +10505,12 @@ class StateRootError extends Error {
   }
 }
 function resolveStateRoot(env, home) {
-  const batmanStateDir = env.BATMAN_STATE_DIR;
-  if (batmanStateDir !== undefined) {
-    if (!isAbsolute2(batmanStateDir)) {
-      throw new StateRootError("relative-override", `BATMAN_STATE_DIR must be an absolute path, got ${JSON.stringify(batmanStateDir)}`);
+  const crewStateDir = envFlag(env, "CREW_STATE_DIR", "BATMAN_STATE_DIR");
+  if (crewStateDir !== undefined) {
+    if (!isAbsolute2(crewStateDir)) {
+      throw new StateRootError("relative-override", `CREW_STATE_DIR must be an absolute path, got ${JSON.stringify(crewStateDir)}`);
     }
-    return batmanStateDir;
+    return crewStateDir;
   }
   const xdgStateHome = env.XDG_STATE_HOME;
   if (xdgStateHome !== undefined) {
@@ -10530,7 +10536,7 @@ function buildStatusContext(options = {}) {
       repository,
       idleSeconds: DEFAULT_IDLE_SECONDS,
       env,
-      packagedBinaryResolver: options.packagedBinaryResolver ?? (() => resolveBatcave(process.platform, process.arch, detectLibc(), env, stateDir).path),
+      packagedBinaryResolver: options.packagedBinaryResolver ?? (() => resolveCrewd(process.platform, process.arch, detectLibc(), env, stateDir).path),
       sessionId: options.sessionId
     }
   };
@@ -10587,8 +10593,8 @@ function normalizeEventPayload(_payload) {
 }
 
 // src/omp-native/persistence.ts
-var OMP_NATIVE_FACT_ENTRY_TYPE = "batman-omp-native-fact";
-var OMP_NATIVE_CORRELATION_ENTRY_TYPE = "batman-omp-native-correlation";
+var OMP_NATIVE_FACT_ENTRY_TYPE = "crew-omp-native-fact";
+var OMP_NATIVE_CORRELATION_ENTRY_TYPE = "crew-omp-native-correlation";
 function asFact(data) {
   if (data === null || typeof data !== "object")
     return;
@@ -10732,7 +10738,7 @@ async function resolveClient(ctx) {
   ctx.cache.set(client);
   return client;
 }
-var GENERIC_FAILURE_MESSAGE = "The BATMAN runtime is not reachable for this repository. Run the doctor command below for details.";
+var GENERIC_FAILURE_MESSAGE = "The Crew runtime is not reachable for this repository. Run the doctor command below for details.";
 async function getRuntimeStatus(ctx) {
   let client;
   try {
@@ -10756,8 +10762,8 @@ async function getRuntimeStatus(ctx) {
 }
 function failureResult(options, err) {
   const code = errorCode(err);
-  const doctorCommand = `batcave status --repo ${options.repository}`;
-  const message = code === "runtime-not-installed" ? "The BATMAN runtime binary is not installed yet. Run /batman-runtime-install to download and verify it." : GENERIC_FAILURE_MESSAGE;
+  const doctorCommand = `crewd status --repo ${options.repository}`;
+  const message = code === "runtime-not-installed" ? "The Crew runtime binary is not installed yet. Run /crew-runtime-install to download and verify it." : GENERIC_FAILURE_MESSAGE;
   return {
     isError: true,
     content: [{ type: "text", text: message }],
@@ -10772,7 +10778,7 @@ function errorCode(err) {
 }
 function formatStatus(status) {
   return [
-    `BATMAN runtime: ${status.running ? "running" : "not running"}`,
+    `Crew runtime: ${status.running ? "running" : "not running"}`,
     `Protocol: ${status.protocol.major}.${status.protocol.minor} (healthy: ${status.protocolHealthy})`,
     `Project: ${status.projectId}`,
     `Active runs: ${status.activeRuns}`,
@@ -10788,16 +10794,16 @@ import { spawn as spawn2 } from "child_process";
 import { homedir as homedir2 } from "os";
 function buildDoctorContext(cwd, env = process.env) {
   const stateDir = resolveStateRoot(env, homedir2());
-  const binary = resolveBatcave(process.platform, process.arch, detectLibc(), env, stateDir);
+  const binary = resolveCrewd(process.platform, process.arch, detectLibc(), env, stateDir);
   return {
     stateDir,
     repository: cwd,
-    batcavePath: binary.path
+    crewdPath: binary.path
   };
 }
 async function runDoctorCommand(ctx) {
   return new Promise((resolve) => {
-    const proc = spawn2(ctx.batcavePath, ["doctor", "--json", "--state-dir", ctx.stateDir, "--repo", ctx.repository], {
+    const proc = spawn2(ctx.crewdPath, ["doctor", "--json", "--state-dir", ctx.stateDir, "--repo", ctx.repository], {
       stdio: ["ignore", "pipe", "pipe"]
     });
     let stdout = "";
@@ -10810,7 +10816,7 @@ async function runDoctorCommand(ctx) {
     });
     proc.on("close", (code) => {
       const exitCode = code ?? 1;
-      const doctorCommand = `${ctx.batcavePath} doctor --state-dir ${ctx.stateDir} --repo ${ctx.repository}`;
+      const doctorCommand = `${ctx.crewdPath} doctor --state-dir ${ctx.stateDir} --repo ${ctx.repository}`;
       if (exitCode !== 0) {
         let parsed;
         try {
@@ -10853,7 +10859,7 @@ async function runDoctorCommand(ctx) {
       }
     });
     proc.on("error", (err) => {
-      const doctorCommand = `${ctx.batcavePath} doctor --state-dir ${ctx.stateDir} --repo ${ctx.repository}`;
+      const doctorCommand = `${ctx.crewdPath} doctor --state-dir ${ctx.stateDir} --repo ${ctx.repository}`;
       resolve(failureResult2(ctx, "spawn-error", err.message, doctorCommand));
     });
   });
@@ -10865,7 +10871,7 @@ function failureResult2(ctx, code, message, doctorCommand) {
     details: {
       code,
       message,
-      doctorCommand: doctorCommand ?? `${ctx.batcavePath} doctor --state-dir ${ctx.stateDir} --repo ${ctx.repository}`
+      doctorCommand: doctorCommand ?? `${ctx.crewdPath} doctor --state-dir ${ctx.stateDir} --repo ${ctx.repository}`
     }
   };
 }
@@ -10920,7 +10926,7 @@ async function downloadRuntime(options) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const apiBaseUrl = options.apiBaseUrl ?? API_BASE_URL;
   const tag = `v${options.version}`;
-  const binaryName = `batcave-${options.target}`;
+  const binaryName = `crewd-${options.target}`;
   const manifestName = `${binaryName}.manifest.json`;
   const releaseUrl = `${apiBaseUrl}/releases/tags/${tag}`;
   const assets = await fetchReleaseAssets(fetchImpl, releaseUrl, options.token);
@@ -10936,9 +10942,9 @@ async function downloadRuntime(options) {
   }
   const binaryBytes = await fetchAssetBytes(fetchImpl, binaryAsset.url, options.token);
   const dir = runtimeCacheDir(options.stateRoot, options.version);
-  const finalPath = join4(dir, "batcave");
+  const finalPath = join4(dir, "crewd");
   const manifestPath = join4(dir, "manifest.json");
-  const tmpPath = join4(dir, `.batcave.${process.pid}.tmp`);
+  const tmpPath = join4(dir, `.crewd.${process.pid}.tmp`);
   try {
     mkdirSync(dir, { recursive: true, mode: 448 });
     writeFileSync(tmpPath, binaryBytes);
@@ -11014,7 +11020,7 @@ async function runRuntimeInstall(ctx) {
   try {
     const result = await downloadRuntime({ version: ctx.version, target: ctx.target, stateRoot: ctx.stateRoot, token: ctx.token });
     return {
-      content: [{ type: "text", text: `BATMAN runtime installed: batcave ${result.version} (${result.target})
+      content: [{ type: "text", text: `Crew runtime installed: crewd ${result.version} (${result.target})
 Path: ${result.path}` }],
       details: { version: result.version, target: result.target, path: result.path, sizeBytes: result.sizeBytes }
     };
@@ -11137,7 +11143,7 @@ function renderSummary(method, result) {
 }
 
 // src/tools/approvals.ts
-var BATMAN_APPROVAL_TOOL_NAME = "batman_approval";
+var CREW_APPROVAL_TOOL_NAME = "crew_approval";
 async function findPendingApproval(client, approvalId) {
   const result = await client.request("approval/list", {});
   if (typeof result !== "object" || result === null || !("approvals" in result)) {
@@ -11168,8 +11174,8 @@ function registerApprovalTool(pi, ctx) {
     reason: pi.zod.string().optional().describe("Required for decide: the reason for this decision.")
   });
   pi.registerTool({
-    name: BATMAN_APPROVAL_TOOL_NAME,
-    label: "BATMAN Approval",
+    name: CREW_APPROVAL_TOOL_NAME,
+    label: "Crew Approval",
     description: "Use when a worker escalates a decision to human (e.g., for risky operations). The runtime shows a dialog; call this to list pending approvals (with human-in-the-loop flag) or decide with the human's approve/deny decision. The runtime enforces humanRequired flags -- never auto-approve, even for list. Use when a worker pauses execution waiting for human input.",
     parameters: params,
     approval: { tier: "exec", override: true, reason: "Approval decisions are a user-facing safety action." },
@@ -11221,7 +11227,7 @@ function registerApprovalTool(pi, ctx) {
 
 // src/tools/artifacts.ts
 var ARTIFACT_KINDS = ["patch", "commitList", "conflictReport", "workspaceManifest"];
-var BATMAN_ARTIFACT_TOOL_NAME = "batman_artifact";
+var CREW_ARTIFACT_TOOL_NAME = "crew_artifact";
 function registerArtifactTool(pi, ctx) {
   const params = pi.zod.object({
     op: pi.zod.enum(["list", "fetch"]).describe("Which artifact operation to perform."),
@@ -11232,8 +11238,8 @@ function registerArtifactTool(pi, ctx) {
     length: pi.zod.number().int().optional().describe("Optional for fetch: how many bytes to read. The runtime caps this; the response's nextOffset says where to resume.")
   });
   pi.registerTool({
-    name: BATMAN_ARTIFACT_TOOL_NAME,
-    label: "BATMAN Artifact",
+    name: CREW_ARTIFACT_TOOL_NAME,
+    label: "Crew Artifact",
     description: "Use to read the evidence a worker produced: patches, commit lists, conflict reports, and workspace manifests. Use op: 'list' to see what a run published (optionally filtered by kind), then op: 'fetch' with an artifactId to read its bytes. Fetches are chunked -- the response carries nextOffset, so pass it back as offset to continue reading a large artifact. Artifacts are scoped to runs this session owns; taskId only narrows further within them.",
     parameters: params,
     approval: "read",
@@ -11254,7 +11260,7 @@ function registerArtifactTool(pi, ctx) {
 }
 
 // src/tools/children.ts
-var BATMAN_CHILD_TOOL_NAME = "batman_child";
+var CREW_CHILD_TOOL_NAME = "crew_child";
 function registerChildTool(pi, ctx) {
   const params = pi.zod.object({
     op: pi.zod.enum(["list", "decide"]).describe("Which child-request operation to perform."),
@@ -11267,8 +11273,8 @@ function registerChildTool(pi, ctx) {
     reason: pi.zod.string().optional().describe("Required when decision is deny: why the child was refused.")
   });
   pi.registerTool({
-    name: BATMAN_CHILD_TOOL_NAME,
-    label: "BATMAN Child",
+    name: CREW_CHILD_TOOL_NAME,
+    label: "Crew Child",
     description: "Use to see and decide nested-worker requests: a worker that wants to spawn a child records the intent, and nothing happens until you decide. Use op: 'list' to see pending requests (optionally filtered by runId), then op: 'decide' with parentRunId and decision. Accepting requires childTaskId, childWorkerId, and childRunId; denying requires reason. A request is only an intent -- accepting is what creates the child run.",
     parameters: params,
     approval: (args) => typeof args === "object" && args !== null && ("op" in args) && args.op === "decide" ? "exec" : "read",
@@ -11293,7 +11299,7 @@ function registerChildTool(pi, ctx) {
 
 // src/tools/messages.ts
 var MESSAGE_KINDS = ["assign", "steer", "followUp", "question", "answer", "peerMessage", "approvalDecision", "cancel", "shutdown"];
-var BATMAN_MESSAGE_TOOL_NAME = "batman_message";
+var CREW_MESSAGE_TOOL_NAME = "crew_message";
 function registerMessageTool(pi, ctx) {
   const params = pi.zod.object({
     op: pi.zod.enum(["send", "list"]).describe("Which message operation to perform."),
@@ -11306,8 +11312,8 @@ function registerMessageTool(pi, ctx) {
     replyTo: pi.zod.string().optional().describe("Optional id of a prior message this replies to.")
   });
   pi.registerTool({
-    name: BATMAN_MESSAGE_TOOL_NAME,
-    label: "BATMAN Message",
+    name: CREW_MESSAGE_TOOL_NAME,
+    label: "Crew Message",
     description: "Use to communicate between workers during an active multi-worker run, or to review message history. Use op: 'send' to send a message to another worker (requires runId, senderWorkerId, kind, payload), or op: 'list' to list messages for a run. Message kinds: assign, steer, followUp, question, answer, peerMessage, approvalDecision, cancel, shutdown. Use when workers need to coordinate or escalate decisions.",
     parameters: params,
     approval: "write",
@@ -11330,7 +11336,7 @@ function registerMessageTool(pi, ctx) {
 }
 
 // src/tools/profiles.ts
-var BATMAN_PROFILE_TOOL_NAME = "batman_profile";
+var CREW_PROFILE_TOOL_NAME = "crew_profile";
 function registerProfileTool(pi, ctx) {
   const params = pi.zod.object({
     adapter: pi.zod.string().describe("The adapter name this profile launches, e.g. claude, codex, copilot, ompRpc, terminalDegraded."),
@@ -11340,9 +11346,9 @@ function registerProfileTool(pi, ctx) {
     permissionEnvelope: pi.zod.record(pi.zod.string(), pi.zod.unknown()).optional()
   });
   pi.registerTool({
-    name: BATMAN_PROFILE_TOOL_NAME,
-    label: "BATMAN Profile",
-    description: "Use to register a reusable worker profile (adapter, model, startup options, environment allowlist) before provisioning workers against it. Call this once per adapter/model combination, then pass the returned profileId to batman_worker { op: 'create', profileId } instead of repeating fingerprint/adapter/model/permissionEnvelope on every worker. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
+    name: CREW_PROFILE_TOOL_NAME,
+    label: "Crew Profile",
+    description: "Use to register a reusable worker profile (adapter, model, startup options, environment allowlist) before provisioning workers against it. Call this once per adapter/model combination, then pass the returned profileId to crew_worker { op: 'create', profileId } instead of repeating fingerprint/adapter/model/permissionEnvelope on every worker. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
     parameters: params,
     approval: () => "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -11360,15 +11366,15 @@ function registerProfileTool(pi, ctx) {
 }
 
 // src/tools/reconcile.ts
-var BATMAN_RECONCILE_TOOL_NAME = "batman_reconcile";
+var CREW_RECONCILE_TOOL_NAME = "crew_reconcile";
 function registerReconcileTool(pi, ctx) {
   const params = pi.zod.object({
     taskId: pi.zod.string().describe("The task id to rebind to this OMP client instance."),
     revision: pi.zod.number().int().nonnegative().describe("The monotonic OMP revision that must match the stored task.")
   });
   pi.registerTool({
-    name: BATMAN_RECONCILE_TOOL_NAME,
-    label: "BATMAN Reconcile",
+    name: CREW_RECONCILE_TOOL_NAME,
+    label: "Crew Reconcile",
     description: "Use after a session drop or reconnect when your OMP session was interrupted and you had active tasks. Rebinds task ownership from the prior session to the current one. Requires matching taskId and monotonic revision (the runtime rejects rebinds on revision mismatch to prevent race conditions). Call when your session was interrupted and restarted, you have active tasks from a prior session that need to be reattached, or the runtime reports ownership conflicts.",
     parameters: params,
     approval: "write",
@@ -11383,11 +11389,11 @@ function registerReconcileTool(pi, ctx) {
 }
 
 // src/tools/runs.ts
-var BATMAN_RUN_TOOL_NAME = "batman_run";
+var CREW_RUN_TOOL_NAME = "crew_run";
 function registerRunTool(pi, ctx) {
   const params = pi.zod.object({
     op: pi.zod.enum(["submit", "list", "get", "retry", "cancel", "result"]).describe("Which run operation to perform."),
-    prompt: pi.zod.string().optional().describe("Required for submit and retry: the instruction the worker executes. BATMAN stores no task text, so the task's description must be passed here."),
+    prompt: pi.zod.string().optional().describe("Required for submit and retry: the instruction the worker executes. Crew stores no task text, so the task's description must be passed here."),
     taskId: pi.zod.string().optional().describe("Required for submit: the task to execute. Optional filter for list."),
     workerId: pi.zod.string().optional().describe("Required for submit and retry: the worker to execute with."),
     workspaceMode: pi.zod.enum(["shared", "isolated", "copy"]).optional().describe("Optional workspace mode for submit and retry: 'shared' (the repository itself, the default), 'isolated' (a per-run git worktree), or 'copy' (a per-run copy of the repository)."),
@@ -11396,9 +11402,9 @@ function registerRunTool(pi, ctx) {
     priorRunId: pi.zod.string().optional().describe("Required for retry: the terminal run id to retry.")
   });
   pi.registerTool({
-    name: BATMAN_RUN_TOOL_NAME,
-    label: "BATMAN Run",
-    description: "Use to execute, monitor, or manage task execution by external workers. Use op: 'submit' to start execution (requires taskId from batman_task, workerId from batman_worker, and prompt -- the instruction text the worker executes), op: 'get' to check progress/status of a run, op: 'result' to read a finished run's final output text and token usage (requires runId; refused until the run reaches a terminal state -- chain work by passing resultText into the next submit's prompt), op: 'list' to list runs for a task, op: 'retry' to re-execute a terminal run (creates a new runId and starts a fresh worker process; pass prompt again), or op: 'cancel' to stop a running run. After submitting, monitor with op: 'get'. If the run fails, retry with op: 'retry' (new runId). If stuck, cancel with op: 'cancel'.",
+    name: CREW_RUN_TOOL_NAME,
+    label: "Crew Run",
+    description: "Use to execute, monitor, or manage task execution by external workers. Use op: 'submit' to start execution (requires taskId from crew_task, workerId from crew_worker, and prompt -- the instruction text the worker executes), op: 'get' to check progress/status of a run, op: 'result' to read a finished run's final output text and token usage (requires runId; refused until the run reaches a terminal state -- chain work by passing resultText into the next submit's prompt), op: 'list' to list runs for a task, op: 'retry' to re-execute a terminal run (creates a new runId and starts a fresh worker process; pass prompt again), or op: 'cancel' to stop a running run. After submitting, monitor with op: 'get'. If the run fails, retry with op: 'retry' (new runId). If stuck, cancel with op: 'cancel'.",
     parameters: params,
     approval: (args) => typeof args === "object" && args !== null && ("op" in args) && (args.op === "submit" || args.op === "retry" || args.op === "cancel") ? "exec" : "read",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -11433,7 +11439,7 @@ function registerRunTool(pi, ctx) {
 }
 
 // src/tools/tasks.ts
-var BATMAN_TASK_TOOL_NAME = "batman_task";
+var CREW_TASK_TOOL_NAME = "crew_task";
 var INITIAL_TASK_REVISION = 0;
 function registerTaskTool(pi, ctx) {
   const params = pi.zod.object({
@@ -11441,9 +11447,9 @@ function registerTaskTool(pi, ctx) {
     taskId: pi.zod.string().optional().describe("Optional for upsert: reuse an existing task ID (for resume); auto-generated if omitted. Required for get.")
   });
   pi.registerTool({
-    name: BATMAN_TASK_TOOL_NAME,
-    label: "BATMAN Task",
-    description: "Use when you need to create a persistent, cross-session unit of work that will be executed by an external AI harness (Claude, Codex, Copilot, or OMP-RPC) -- not OMP's native in-process task subagent. Use op: 'upsert' to create or update a task, or op: 'get' to read one back. BATMAN stores no task text: the task graph and its descriptions live in OMP, and the instruction a worker executes is passed to batman_run as prompt. Persists across session disconnects (stored in SQLite journal), executes via external harness processes, and can be retried, cancelled, or reconciled after failure. Auto-generates a task ID and uses your OMP session as owner. After creating, select a worker with batman_worker { op: 'list' } and submit execution with batman_run { op: 'submit', taskId, workerId, prompt }.",
+    name: CREW_TASK_TOOL_NAME,
+    label: "Crew Task",
+    description: "Use when you need to create a persistent, cross-session unit of work that will be executed by an external AI harness (Claude, Codex, Copilot, or OMP-RPC) -- not OMP's native in-process task subagent. Use op: 'upsert' to create or update a task, or op: 'get' to read one back. Crew stores no task text: the task graph and its descriptions live in OMP, and the instruction a worker executes is passed to crew_run as prompt. Persists across session disconnects (stored in SQLite journal), executes via external harness processes, and can be retried, cancelled, or reconciled after failure. Auto-generates a task ID and uses your OMP session as owner. After creating, select a worker with crew_worker { op: 'list' } and submit execution with crew_run { op: 'submit', taskId, workerId, prompt }.",
     parameters: params,
     approval: (args) => typeof args === "object" && args !== null && ("op" in args) && args.op === "get" ? "read" : "write",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -11463,7 +11469,7 @@ function registerTaskTool(pi, ctx) {
                 revision: INITIAL_TASK_REVISION
               });
             } catch (err) {
-              pi.logger.warn("batman task: failed to persist task correlation", {
+              pi.logger.warn("crew task: failed to persist task correlation", {
                 taskId,
                 error: err instanceof Error ? err.message : String(err)
               });
@@ -11479,7 +11485,7 @@ function registerTaskTool(pi, ctx) {
 }
 
 // src/tools/violations.ts
-var BATMAN_VIOLATION_TOOL_NAME = "batman_violation";
+var CREW_VIOLATION_TOOL_NAME = "crew_violation";
 function registerViolationTool(pi, ctx) {
   const params = pi.zod.object({
     op: pi.zod.enum(["decide", "list"]).describe("Which violation operation to perform."),
@@ -11488,8 +11494,8 @@ function registerViolationTool(pi, ctx) {
     runId: pi.zod.string().optional().describe("Optional for list: narrow to one run's violations.")
   });
   pi.registerTool({
-    name: BATMAN_VIOLATION_TOOL_NAME,
-    label: "BATMAN Violation",
+    name: CREW_VIOLATION_TOOL_NAME,
+    label: "Crew Violation",
     description: `Use to find and resolve policy violations. Use op: 'list' (optionally with runId) to see every recorded violation and its decision state -- an entry with resolution: null on a quarantined run is the one holding the quarantine. Use op: 'decide' with the violationId and a resolution to resolve one. The deciding identity is taken from your session automatically. A "release" only lifts quarantine if this was the last unresolved violation on the run -- check the result's quarantineCleared field (true/false/absent) to tell whether it did; if false, use op: 'list' to find the still-open violation. Until every violation on a run is decided, the run makes no further progress.`,
     parameters: params,
     approval: (args) => typeof args === "object" && args !== null && ("op" in args) && args.op === "list" ? "read" : "exec",
@@ -11509,7 +11515,7 @@ function registerViolationTool(pi, ctx) {
 }
 
 // src/tools/workers.ts
-var BATMAN_WORKER_TOOL_NAME = "batman_worker";
+var CREW_WORKER_TOOL_NAME = "crew_worker";
 function registerWorkerTool(pi, ctx) {
   const params = pi.zod.object({
     op: pi.zod.enum(["create", "list", "get"]).describe("Which worker operation to perform."),
@@ -11522,9 +11528,9 @@ function registerWorkerTool(pi, ctx) {
     workerId: pi.zod.string().optional().describe("Required for get: the worker id to fetch.")
   });
   pi.registerTool({
-    name: BATMAN_WORKER_TOOL_NAME,
-    label: "BATMAN Worker",
-    description: "Use to find or provision external AI harness workers (Claude, Codex, Copilot, OMP-RPC) that execute tasks. Use op: 'list' to see available workers for a repository (call before submitting a run), op: 'get' to fetch details of a specific worker, or op: 'create' to provision a new worker identity for a specific harness/model combination (requires fingerprint, adapter, model). You need a workerId from batman_worker { op: 'list' } to submit a run with batman_run { op: 'submit' }.",
+    name: CREW_WORKER_TOOL_NAME,
+    label: "Crew Worker",
+    description: "Use to find or provision external AI harness workers (Claude, Codex, Copilot, OMP-RPC) that execute tasks. Use op: 'list' to see available workers for a repository (call before submitting a run), op: 'get' to fetch details of a specific worker, or op: 'create' to provision a new worker identity for a specific harness/model combination (requires fingerprint, adapter, model). You need a workerId from crew_worker { op: 'list' } to submit a run with crew_run { op: 'submit' }.",
     parameters: params,
     approval: (args) => typeof args === "object" && args !== null && ("op" in args) && args.op === "create" ? "exec" : "read",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -11552,7 +11558,7 @@ function registerWorkerTool(pi, ctx) {
 var LEASE_MODES = ["readOnly", "write"];
 var ISOLATION_KINDS = ["shared", "gitWorktree", "copy"];
 var APPLY_STRATEGIES = ["applyPatch", "cherryPick"];
-var BATMAN_WORKSPACE_TOOL_NAME = "batman_workspace";
+var CREW_WORKSPACE_TOOL_NAME = "crew_workspace";
 function registerWorkspaceTool(pi, ctx) {
   const params = pi.zod.object({
     op: pi.zod.enum(["acquire", "get", "release", "inspect", "apply"]).describe("Which workspace operation to perform."),
@@ -11561,13 +11567,13 @@ function registerWorkspaceTool(pi, ctx) {
     requestedIsolation: pi.zod.enum(ISOLATION_KINDS).optional().describe("Optional for acquire: the isolation strategy to materialize. Defaults to shared. Use gitWorktree or copy when a peer agent will work on the same task concurrently."),
     leaseId: pi.zod.string().optional().describe("Required for get, release, inspect, and apply: the lease id."),
     strategy: pi.zod.enum(APPLY_STRATEGIES).optional().describe("Required for apply: applyPatch applies a patch artifact, cherryPick replays commits."),
-    artifactId: pi.zod.string().optional().describe("Required for apply: the artifact to apply (from batman_artifact { op: 'list' })."),
+    artifactId: pi.zod.string().optional().describe("Required for apply: the artifact to apply (from crew_artifact { op: 'list' })."),
     expectedTargetRevision: pi.zod.string().optional().describe("Required for apply: the revision the workspace must currently be at. A mismatch is refused as STALE_REVISION rather than applied to the wrong base."),
     approvalCorrelationId: pi.zod.string().optional().describe("Optional for apply: correlates this application with an approval decision.")
   });
   pi.registerTool({
-    name: BATMAN_WORKSPACE_TOOL_NAME,
-    label: "BATMAN Workspace",
+    name: CREW_WORKSPACE_TOOL_NAME,
+    label: "Crew Workspace",
     description: "Use to acquire, inspect, apply changes to, or release an isolated (or shared) working directory for a run. Use op: 'acquire' before submitting a run that needs its own git worktree or copy (requires runId and mode; pass requestedIsolation: 'gitWorktree' for concurrent agents working on the same task in isolation), op: 'get' to fetch a lease's current path and state, op: 'inspect' to read the workspace's dirty/untracked file counts and diverged commits, op: 'apply' to land a patch or cherry-pick an artifact into the workspace (requires strategy, artifactId, and expectedTargetRevision), or op: 'release' to tear down the lease once the run is done with it. A shared-mode write lease is exclusive across the whole project; isolated (gitWorktree or copy) leases never conflict with each other or with shared leases.",
     parameters: params,
     approval: (args) => typeof args === "object" && args !== null && ("op" in args) && (args.op === "acquire" || args.op === "release" || args.op === "apply") ? "exec" : "read",
@@ -11802,7 +11808,7 @@ function codePointLength(text) {
   return Array.from(text).length;
 }
 var BAT_ICON = "\uDB82\uDF5F";
-var WIDGET_HEADER_TEXT = "BATMAN";
+var WIDGET_HEADER_TEXT = "Crew";
 var STATE_ICONS = {
   queued: "\uDB80\uDD50",
   starting: "\uDB85\uDCDF",
@@ -11880,13 +11886,13 @@ function renderWidgetBox(state, theme) {
   let lines;
   let colors;
   if (totalCount === 0) {
-    lines = ["No BATMAN runs yet."];
+    lines = ["No Crew runs yet."];
     colors = ["text"];
   } else {
     lines = rows.map(renderRowLine);
     colors = rows.map((row) => stateColor(row.state));
     if (totalCount > MAX_WIDGET_ROWS) {
-      lines.push(`\u2026 ${totalCount - MAX_WIDGET_ROWS} more; use /batman status <runId> for full details.`);
+      lines.push(`\u2026 ${totalCount - MAX_WIDGET_ROWS} more; use /crew status <runId> for full details.`);
       colors.push("muted");
     }
   }
@@ -11901,11 +11907,11 @@ function renderRowDetails(row) {
   const flags = activeFlagLabels(row.flags);
   lines.push(`Flags: ${flags.length > 0 ? flags.join(", ") : "none"}`);
   if (row.flags.childrenActive) {
-    lines.push("Children: active -- list and decide with batman_child");
+    lines.push("Children: active -- list and decide with crew_child");
   }
   const openViolations = Object.entries(row.openViolations);
   if (openViolations.length > 0) {
-    lines.push(`Open violations: ${openViolations.map(([id, code]) => `${code} (${id})`).join(", ")} -- decide with batman_violation`);
+    lines.push(`Open violations: ${openViolations.map(([id, code]) => `${code} (${id})`).join(", ")} -- decide with crew_violation`);
   }
   lines.push(`Pending approvals: ${row.pendingApprovalCount}`);
   if (row.workspaceMode !== undefined) {
@@ -11946,9 +11952,9 @@ function shortId(id) {
 }
 
 // src/monitor/controller.ts
-var MONITOR_ENTRY_TYPE = "batman-monitor";
-var WIDGET_KEY = "batman-monitor";
-var MONITOR_COMMAND_NAME = "batman";
+var MONITOR_ENTRY_TYPE = "crew-monitor";
+var WIDGET_KEY = "crew-monitor";
+var MONITOR_COMMAND_NAME = "crew";
 function lastPersistedSequence(entries) {
   for (let i = entries.length - 1;i >= 0; i--) {
     const entry = entries[i];
@@ -12009,7 +12015,7 @@ function registerMonitor(pi, ctx) {
       controller.start(client, fromSequence, () => refresh(extCtx));
       subscribedClient = client;
     } catch (err) {
-      pi.logger.warn("batman monitor: runtime unavailable", {
+      pi.logger.warn("crew monitor: runtime unavailable", {
         error: err instanceof Error ? err.message : String(err)
       });
     }
@@ -12021,12 +12027,12 @@ function registerMonitor(pi, ctx) {
     }
   });
   pi.registerCommand(MONITOR_COMMAND_NAME, {
-    description: "Opens or refreshes the embedded BATMAN worker monitor. `/batman status <runId>` shows full details.",
+    description: "Opens or refreshes the embedded Crew worker monitor. `/crew status <runId>` shows full details.",
     handler: async (args, cmdCtx) => {
       const [sub, runId] = args.trim().split(/\s+/, 2);
       if (sub === "status" && runId !== undefined && runId.length > 0) {
         const details = controller.renderStatus(runId);
-        cmdCtx.ui.notify(details ?? `No BATMAN run found for ${runId}.`, details === undefined ? "warning" : "info");
+        cmdCtx.ui.notify(details ?? `No Crew run found for ${runId}.`, details === undefined ? "warning" : "info");
         return;
       }
       await connect(cmdCtx);
@@ -12040,11 +12046,11 @@ function registerMonitor(pi, ctx) {
 }
 
 // src/index.ts
-var TOOL_NAME = "batman_status";
-var COMMAND_NAME = "batman-status";
-var STATUS_DESCRIPTION = "Use to verify the BATMAN runtime is reachable and healthy before orchestration operations. Returns connection status, runtime identity, and binary source. Call this if you're unsure the daemon is running, or after a connection failure.";
-var RUNTIME_INSTALL_TOOL_NAME = "batman_runtime_install";
-function batmanExtension(pi) {
+var TOOL_NAME = "crew_health";
+var COMMAND_NAME = "crew-status";
+var STATUS_DESCRIPTION = "Use to verify the Crew runtime is reachable and healthy before orchestration operations. Returns connection status, runtime identity, and binary source. Call this if you're unsure the daemon is running, or after a connection failure.";
+var RUNTIME_INSTALL_TOOL_NAME = "crew_runtime_install";
+function crewExtension(pi) {
   let cachedClient;
   function statusContextFor(extCtx) {
     const { ensureRuntimeOptions } = buildStatusContext({ cwd: extCtx.cwd, sessionId: extCtx.sessionManager.getSessionId() });
@@ -12063,7 +12069,7 @@ function batmanExtension(pi) {
   }
   pi.registerTool({
     name: TOOL_NAME,
-    label: "BATMAN Status",
+    label: "Crew Health",
     description: STATUS_DESCRIPTION,
     parameters: pi.zod.object({}),
     async execute(_toolCallId, _params, _signal, _onUpdate, extCtx) {
@@ -12089,16 +12095,16 @@ function batmanExtension(pi) {
     return buildDoctorContext(cwd);
   }
   pi.registerTool({
-    name: "batman_doctor",
-    label: "BATMAN Doctor",
-    description: "Use for deep diagnostics when batman_status fails or the runtime is unreachable. Runs checks without connecting to a running daemon -- verifies database, state directory, rollout gates, and configuration. Use when the runtime won't start or status reports errors.",
+    name: "crew_doctor",
+    label: "Crew Doctor",
+    description: "Use for deep diagnostics when crew_health fails or the runtime is unreachable. Runs checks without connecting to a running daemon -- verifies database, state directory, rollout gates, and configuration. Use when the runtime won't start or status reports errors.",
     parameters: pi.zod.object({}),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       return runDoctorCommand(doctorContextFor(ctx.cwd));
     }
   });
-  pi.registerCommand("batman-doctor", {
-    description: "Run diagnostic checks on the BATMAN runtime state and configuration.",
+  pi.registerCommand("crew-doctor", {
+    description: "Run diagnostic checks on the Crew runtime state and configuration.",
     handler: async (_args, ctx) => {
       const result = await runDoctorCommand(doctorContextFor(ctx.cwd));
       const text = result.content.map((block) => block.text).join(`
@@ -12112,16 +12118,16 @@ function batmanExtension(pi) {
   });
   pi.registerTool({
     name: RUNTIME_INSTALL_TOOL_NAME,
-    label: "BATMAN Runtime Install",
-    description: "Use to download and verify the batcave runtime binary for this platform. Call this when batman_status or any orchestration tool fails with code 'runtime-not-installed'. Downloads the GitHub release asset matching this extension's version, verifies its SHA-256 against the published manifest, and caches it under the BATMAN state root. nikolasd/batman is a private repository, so this needs read access to it: set GITHUB_TOKEN or GH_TOKEN, or run `gh auth login` locally.",
+    label: "Crew Runtime Install",
+    description: "Use to download and verify the crewd runtime binary for this platform. Call this when crew_health or any orchestration tool fails with code 'runtime-not-installed'. Downloads the GitHub release asset matching this extension's version, verifies its SHA-256 against the published manifest, and caches it under the Crew state root. nikolasd/batman is a private repository, so this needs read access to it: set GITHUB_TOKEN or GH_TOKEN, or run `gh auth login` locally.",
     parameters: pi.zod.object({}),
     approval: "exec",
     async execute(_toolCallId, _params, _signal, _onUpdate) {
       return installRuntimeForEnv(process.env);
     }
   });
-  pi.registerCommand("batman-runtime-install", {
-    description: "Download and verify the batcave runtime binary for this platform.",
+  pi.registerCommand("crew-runtime-install", {
+    description: "Download and verify the crewd runtime binary for this platform.",
     handler: async (_args, ctx) => {
       const result = await installRuntimeForEnv(process.env);
       const text = result.content.map((block) => block.text).join(`
@@ -12138,7 +12144,7 @@ function batmanExtension(pi) {
     try {
       pi.appendEntry(OMP_NATIVE_FACT_ENTRY_TYPE, { ...fact });
     } catch (err) {
-      pi.logger.warn("batman omp-native: failed to persist fact", {
+      pi.logger.warn("crew omp-native: failed to persist fact", {
         error: err instanceof Error ? err.message : String(err)
       });
     }
@@ -12182,14 +12188,14 @@ function batmanExtension(pi) {
         try {
           await reconcileWithRuntime(client, correlation);
         } catch (err) {
-          pi.logger.warn("batman omp-native: task reconciliation refused", {
+          pi.logger.warn("crew omp-native: task reconciliation refused", {
             taskId: correlation.taskId,
             error: err instanceof Error ? err.message : String(err)
           });
         }
       }
     } catch (err) {
-      pi.logger.warn("batman omp-native: runtime unavailable for reconciliation", {
+      pi.logger.warn("crew omp-native: runtime unavailable for reconciliation", {
         error: err instanceof Error ? err.message : String(err)
       });
     }
@@ -12205,5 +12211,5 @@ function batmanExtension(pi) {
   });
 }
 export {
-  batmanExtension as default
+  crewExtension as default
 };

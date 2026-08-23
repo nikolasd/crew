@@ -1,4 +1,4 @@
-//! Integration tests for the `batcave adapters`/`batcave conformance`
+//! Integration tests for the `crewd adapters`/`crewd conformance`
 //! CLI subcommands (`crates/runtime/src/cli.rs`), driven against the
 //! real compiled binary as a genuine subprocess -- not the library's
 //! own unit-level `conformance::run_fixture_conformance` dispatcher
@@ -7,25 +7,25 @@
 //!
 //! Never invokes a model: `--fixture` is this milestone's own zero-
 //! model-call design invariant, and every `--live` case here sets
-//! `BATMAN_DISABLE_VENDOR_CLI=1`, proving the CLI degrades to an honest
+//! `CREW_DISABLE_VENDOR_CLI=1`, proving the CLI degrades to an honest
 //! per-adapter error rather than ever making a real call.
 
 use std::process::Command;
 
-fn batcave() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_batcave"))
+fn crewd() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_crewd"))
 }
 
 #[test]
 fn adapters_json_reports_all_four_adapters_with_effective_capabilities() {
-    let output = batcave()
+    let output = crewd()
         .arg("adapters")
         .arg("--json")
         .output()
-        .expect("batcave adapters --json must be runnable");
+        .expect("crewd adapters --json must be runnable");
     assert!(
         output.status.success(),
-        "batcave adapters --json exited non-zero: {}",
+        "crewd adapters --json exited non-zero: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let reports: serde_json::Value =
@@ -74,11 +74,9 @@ fn adapters_json_reports_all_four_adapters_with_effective_capabilities() {
 
 #[test]
 fn conformance_fixture_all_writes_four_reports_matching_stdout() {
-    let output_path = std::env::temp_dir().join(format!(
-        "batman-conformance-test-{}.json",
-        std::process::id()
-    ));
-    let output = batcave()
+    let output_path =
+        std::env::temp_dir().join(format!("crew-conformance-test-{}.json", std::process::id()));
+    let output = crewd()
         .args(["conformance", "--adapter", "all", "--fixture", "--output"])
         .arg(&output_path)
         // The committed baseline declares the switch-set posture, and the
@@ -87,7 +85,7 @@ fn conformance_fixture_all_writes_four_reports_matching_stdout() {
         // have the vendor CLIs installed.
         .env(batman_runtime::conformance::DISABLE_VENDOR_CLI_ENV, "1")
         .output()
-        .expect("batcave conformance --adapter all --fixture must be runnable");
+        .expect("crewd conformance --adapter all --fixture must be runnable");
     assert!(
         output.status.success(),
         "conformance --adapter all --fixture exited non-zero: {}",
@@ -112,10 +110,10 @@ fn conformance_fixture_all_writes_four_reports_matching_stdout() {
 #[test]
 fn conformance_fixture_one_adapter_writes_a_single_element_array() {
     let output_path = std::env::temp_dir().join(format!(
-        "batman-conformance-test-single-{}.json",
+        "crew-conformance-test-single-{}.json",
         std::process::id()
     ));
-    let output = batcave()
+    let output = crewd()
         .args(["conformance", "--adapter", "codex", "--fixture", "--output"])
         .arg(&output_path)
         // Same reason as the `--adapter all` case above: the baseline gate is
@@ -134,8 +132,8 @@ fn conformance_fixture_one_adapter_writes_a_single_element_array() {
 
 #[test]
 fn conformance_rejects_an_unknown_adapter_kind() {
-    let output_path = std::env::temp_dir().join("batman-conformance-test-unknown.json");
-    let output = batcave()
+    let output_path = std::env::temp_dir().join("crew-conformance-test-unknown.json");
+    let output = crewd()
         .args(["conformance", "--adapter", "bogus", "--fixture", "--output"])
         .arg(&output_path)
         .output()
@@ -156,10 +154,10 @@ fn conformance_rejects_an_unknown_adapter_kind() {
 
 #[test]
 fn conformance_requires_exactly_one_of_fixture_or_live() {
-    let output_path = std::env::temp_dir().join("batman-conformance-test-both.json");
+    let output_path = std::env::temp_dir().join("crew-conformance-test-both.json");
 
     // Neither flag.
-    let neither = batcave()
+    let neither = crewd()
         .args(["conformance", "--adapter", "claude", "--output"])
         .arg(&output_path)
         .output()
@@ -170,7 +168,7 @@ fn conformance_requires_exactly_one_of_fixture_or_live() {
     );
 
     // Both flags.
-    let both = batcave()
+    let both = crewd()
         .args([
             "conformance",
             "--adapter",
@@ -195,7 +193,7 @@ fn conformance_requires_exactly_one_of_fixture_or_live() {
 /// `live_process_scenarios`/`cancellation_scope_scenario`, Codex's
 /// `spawn_raw_client`, Copilot's `real_client`, and OMP-RPC's
 /// `resolve_conformance_selector`/`resume_flag_probe` all spawned before
-/// anything consulted `BATMAN_DISABLE_VENDOR_CLI`.
+/// anything consulted `CREW_DISABLE_VENDOR_CLI`.
 ///
 /// `PATH` is scrubbed to `/usr/bin:/bin` so the assertion is meaningful on
 /// a developer machine that does have the vendor CLIs installed: with the
@@ -207,10 +205,10 @@ fn conformance_requires_exactly_one_of_fixture_or_live() {
 fn conformance_fixture_with_the_kill_switch_never_spawns_a_vendor_cli() {
     for adapter in ["claude", "codex", "copilot", "ompRpc"] {
         let output_path = std::env::temp_dir().join(format!(
-            "batman-conformance-test-no-spawn-{adapter}-{}.json",
+            "crew-conformance-test-no-spawn-{adapter}-{}.json",
             std::process::id()
         ));
-        let output = batcave()
+        let output = crewd()
             .args(["conformance", "--adapter", adapter, "--fixture", "--output"])
             .arg(&output_path)
             .env(batman_runtime::conformance::DISABLE_VENDOR_CLI_ENV, "1")
@@ -277,10 +275,10 @@ fn conformance_fixture_with_the_kill_switch_never_spawns_a_vendor_cli() {
 #[test]
 fn conformance_live_with_the_kill_switch_reports_an_honest_error_not_a_hard_failure() {
     let output_path = std::env::temp_dir().join(format!(
-        "batman-conformance-test-live-{}.json",
+        "crew-conformance-test-live-{}.json",
         std::process::id()
     ));
-    let output = batcave()
+    let output = crewd()
         .args(["conformance", "--adapter", "claude", "--live", "--output"])
         .arg(&output_path)
         // Setting the kill switch is what makes this deterministic: it

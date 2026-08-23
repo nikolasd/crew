@@ -15,10 +15,10 @@
 import type { OmpNativeAgentFact, OmpNativeTaskCorrelation } from "./types";
 
 /** The session-entry `customType` carrying one OMP-native fact. */
-export const OMP_NATIVE_FACT_ENTRY_TYPE = "batman-omp-native-fact";
+export const OMP_NATIVE_FACT_ENTRY_TYPE = "crew-omp-native-fact";
 
 /** The session-entry `customType` carrying one task correlation. */
-export const OMP_NATIVE_CORRELATION_ENTRY_TYPE = "batman-omp-native-correlation";
+export const OMP_NATIVE_CORRELATION_ENTRY_TYPE = "crew-omp-native-correlation";
 
 /**
  * The subset of `pi.appendEntry`'s session-entry log this module reads.

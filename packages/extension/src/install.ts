@@ -1,6 +1,6 @@
-// The shared install action behind both the `batman_runtime_install` tool
-// and the `/batman-runtime-install` command: download and verify the
-// `batcave` binary for this platform, so subsequent `resolveBatcave` calls
+// The shared install action behind both the `crew_runtime_install` tool
+// and the `/crew-runtime-install` command: download and verify the
+// `crewd` binary for this platform, so subsequent `resolveCrewd` calls
 // (`platform.ts`) find a populated cache instead of throwing
 // `runtime-not-installed`.
 
@@ -24,7 +24,7 @@ export interface RuntimeInstallContext {
   readonly version: string;
   /** This platform's target triple. */
   readonly target: string;
-  /** Absolute BATMAN state root the binary is cached under. */
+  /** Absolute Crew state root the binary is cached under. */
   readonly stateRoot: string;
   /** GitHub token for this private repo; forwarded as `Authorization: Bearer <token>`. */
   readonly token?: string;
@@ -84,7 +84,7 @@ export async function runRuntimeInstall(ctx: RuntimeInstallContext): Promise<Run
   try {
     const result = await downloadRuntime({ version: ctx.version, target: ctx.target, stateRoot: ctx.stateRoot, token: ctx.token });
     return {
-      content: [{ type: "text", text: `BATMAN runtime installed: batcave ${result.version} (${result.target})\nPath: ${result.path}` }],
+      content: [{ type: "text", text: `Crew runtime installed: crewd ${result.version} (${result.target})\nPath: ${result.path}` }],
       details: { version: result.version, target: result.target, path: result.path, sizeBytes: result.sizeBytes },
     };
   } catch (err) {
@@ -101,7 +101,7 @@ export async function runRuntimeInstall(ctx: RuntimeInstallContext): Promise<Run
 /**
  * Builds the install context for the current process and runs the install,
  * in one call that never throws. This is the entry point both the
- * `batman_runtime_install` tool and the `/batman-runtime-install` command
+ * `crew_runtime_install` tool and the `/crew-runtime-install` command
  * use -- it exists because {@link buildRuntimeInstallContext} itself can
  * throw {@link UnsupportedPlatformError}, before {@link runRuntimeInstall}'s
  * own try/catch would ever run.

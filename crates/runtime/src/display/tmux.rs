@@ -107,7 +107,7 @@ impl TmuxDisplay {
         }
     }
 
-    /// Creates a new Batman-owned pane running `command` at `placement`,
+    /// Creates a new Crew-owned pane running `command` at `placement`,
     /// using tmux's `-P -F '#{pane_id}'` print-format convention to
     /// recover the created pane's id directly, without parsing free-form
     /// terminal output.
@@ -184,7 +184,7 @@ impl TmuxDisplay {
         }
 
         if let Err(err) = self.execute_or_err(
-            &["select-pane", "-t", &pane_id, "-T", "batman"],
+            &["select-pane", "-t", &pane_id, "-T", "crew"],
             "select-pane",
         ) {
             let _ = self.execute_or_err(&["kill-pane", "-t", &pane_id], "cleanup kill-pane");
@@ -203,7 +203,7 @@ impl TmuxDisplay {
     /// never modified or closed.
     ///
     /// # Errors
-    /// Returns a message if `pane_id` is not tracked as Batman-owned, or
+    /// Returns a message if `pane_id` is not tracked as Crew-owned, or
     /// the close command itself fails.
     pub fn close_owned_pane(&self, pane_id: &str) -> Result<(), String> {
         let owned = {
@@ -254,9 +254,9 @@ impl DisplayBackendTrait for TmuxDisplay {
         if !self.is_available() {
             return Err("tmux not found, incompatible version, or no active session".to_string());
         }
-        match self.activate_tmux("batman-session") {
+        match self.activate_tmux("crew-session") {
             Ok(()) => {
-                self.mark_session_active("batman-session".to_string());
+                self.mark_session_active("crew-session".to_string());
                 Ok(())
             }
             Err(e) => Err(e),

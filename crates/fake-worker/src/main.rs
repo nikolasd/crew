@@ -272,7 +272,7 @@ fn run_omp_rpc_host_tool() {
                     "type": "host_tool_call",
                     "id": "htc-1",
                     "toolCallId": "tc-1",
-                    "toolName": "batman_task",
+                    "toolName": "crew_task",
                     "arguments": {},
                 }),
             );

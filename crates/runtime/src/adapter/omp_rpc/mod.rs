@@ -852,10 +852,10 @@ mod host_tool_bridge_tests {
     #[test]
     fn success_result_carries_only_content_with_no_top_level_is_error() {
         let mcp_result = mcp_protocol::tool_result_from_success(
-            "batman_peers",
+            "crew_peers",
             &serde_json::json!({ "peers": [] }),
         )
-        .expect("a valid batman_peers result must match its own output schema");
+        .expect("a valid crew_peers result must match its own output schema");
         let frame = mcp_result_to_host_tool_result_frame("req-1", &mcp_result);
         assert_eq!(frame["type"], "host_tool_result");
         assert_eq!(frame["id"], "req-1");
@@ -896,7 +896,7 @@ mod host_tool_bridge_tests {
             "type": "host_tool_call",
             "id": "htc-1",
             "toolCallId": "tc-1",
-            "toolName": "batman_task",
+            "toolName": "crew_task",
             "arguments": {},
         });
         let reply = handle_host_tool_call(&frame, None, scope())
@@ -973,7 +973,7 @@ mod host_tool_bridge_tests {
             "type": "host_tool_call",
             "id": "htc-real",
             "toolCallId": "tc-real",
-            "toolName": "batman_task",
+            "toolName": "crew_task",
             "arguments": {},
         });
 
@@ -984,14 +984,14 @@ mod host_tool_bridge_tests {
         assert_eq!(reply["id"], "htc-real");
         assert!(
             reply.get("isError").is_none(),
-            "a real, successful batman_task call must not be reported as an error: {reply}"
+            "a real, successful crew_task call must not be reported as an error: {reply}"
         );
         let content = reply["result"]["content"]
             .as_array()
             .expect("a successful result always carries a content array");
         assert!(
             !content.is_empty(),
-            "batman_task's real success content must not be empty"
+            "crew_task's real success content must not be empty"
         );
     }
 }

@@ -28,7 +28,7 @@ pub enum BatmanMethod {
     /// Gracefully stops the daemon. Arbitrated (R82): refused with
     /// `-32602` while any run is live or another connection is being
     /// served, unless `params.force == true` (the deliberate, logged
-    /// operator escape hatch). The out-of-band `batcave stop`/SIGTERM
+    /// operator escape hatch). The out-of-band `crewd stop`/SIGTERM
     /// path is deliberately unarbitrated.
     #[serde(rename = "runtime/shutdown")]
     RuntimeShutdown,

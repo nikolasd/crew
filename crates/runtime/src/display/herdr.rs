@@ -180,7 +180,7 @@ impl HerdrDisplay {
         }
     }
 
-    /// Creates a new Batman-owned pane running `command`, tagged with
+    /// Creates a new Crew-owned pane running `command`, tagged with
     /// `run_id`/`display_id` ownership, at `placement`. Probes `herdr
     /// status` first (via the 5-second cache) and issues no pane command
     /// at all when incompatible.
@@ -253,7 +253,7 @@ impl HerdrDisplay {
                     "pane",
                     "report-agent",
                     "--source",
-                    "batman",
+                    "crew",
                     "--agent",
                     display_id,
                     "--state",
@@ -288,7 +288,7 @@ impl HerdrDisplay {
     /// existing unrelated panes are never modified or closed.
     ///
     /// # Errors
-    /// Returns a message if `pane_id` is not tracked as Batman-owned, or
+    /// Returns a message if `pane_id` is not tracked as Crew-owned, or
     /// the close command itself fails.
     pub fn close_owned_pane(&self, pane_id: &str) -> Result<(), String> {
         let owned = {
@@ -476,7 +476,7 @@ mod tests {
         assert!(!display.is_available());
 
         let result = display.create_pane(
-            &["batcave".to_string(), "monitor".to_string()],
+            &["crewd".to_string(), "monitor".to_string()],
             DisplayPlacement::SplitRight,
             "run-1",
             "display-1",
@@ -492,10 +492,13 @@ mod tests {
         let executor = Arc::new(
             FixtureExecutor::new()
                 .with("herdr status --json", ok(COMPATIBLE_STATUS))
-                .with("herdr pane split --current --direction right", split_response)
-                .with("herdr pane run w1:p2 batcave monitor", ok("{}"))
                 .with(
-                    "herdr pane report-agent --source batman --agent display-1 --state working w1:p2",
+                    "herdr pane split --current --direction right",
+                    split_response,
+                )
+                .with("herdr pane run w1:p2 crewd monitor", ok("{}"))
+                .with(
+                    "herdr pane report-agent --source crew --agent display-1 --state working w1:p2",
                     ok("{}"),
                 ),
         );
@@ -503,7 +506,7 @@ mod tests {
 
         let pane_id = display
             .create_pane(
-                &["batcave".to_string(), "monitor".to_string()],
+                &["crewd".to_string(), "monitor".to_string()],
                 DisplayPlacement::SplitRight,
                 "run-1",
                 "display-1",

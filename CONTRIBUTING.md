@@ -1,9 +1,9 @@
-# Contributing to BATMAN
+# Contributing to Crew
 
-Thank you for your interest in contributing to BATMAN! This document provides guidelines and instructions for contributing to the project.
+Thank you for your interest in contributing to Crew! This document provides guidelines and instructions for contributing to the project.
 
 **Audience & purpose:** contributors — the process guide (branch/PR/release flow, non-negotiable
-invariants). For the technical *how* of building and testing BATMAN itself, see
+invariants). For the technical *how* of building and testing Crew itself, see
 [`docs/getting-started.md`](docs/getting-started.md), the developer manual.
 
 ## Development Environment
@@ -23,7 +23,7 @@ invariants). For the technical *how* of building and testing BATMAN itself, see
 git clone https://github.com/nikolasd/batman.git
 cd batman
 
-# Install JS deps and build the batcave runtime in one step
+# Install JS deps and build the crewd runtime in one step
 bun run setup
 ```
 
@@ -78,7 +78,7 @@ bun run check
 
 These hold everywhere in the codebase; changes that weaken them will be rejected in review:
 
-1. **Rust types are canonical.** `packages/protocol-ts/src/generated/` and `packages/protocol-ts/schema/batman.schema.json` are build outputs (`bun run generate`). Generated files are never hand-edited.
+1. **Rust types are canonical.** `packages/protocol-ts/src/generated/` and `packages/protocol-ts/schema/crew.schema.json` are build outputs (`bun run generate`). Generated files are never hand-edited.
 
 2. **TypeScript validates every message** received from the daemon before it reaches extension logic: the JSON-RPC envelope and every event notification are Ajv schema-validated; result payloads are Ajv-validated for every method with a canonical protocol result type and structurally validated (must be a JSON object) otherwise.
 
@@ -96,11 +96,11 @@ These hold everywhere in the codebase; changes that weaken them will be rejected
 
 ```
 crates/protocol/          Canonical Rust wire types (source of truth for the protocol)
-crates/runtime/           The batcave daemon: CLI, lifecycle, IPC server, SQLite journal, security,
+crates/runtime/           The crewd daemon: CLI, lifecycle, IPC server, SQLite journal, security,
                           domain persistence, orchestration/coordination/approval services
 crates/xtask/             Codegen (schema + TS bindings) and platform package assembly
 packages/extension/       The OMP extension: client, launcher, platform loader, orchestration
-                          tools, OMP-native reconciliation, embedded /batman monitor
+                          tools, OMP-native reconciliation, embedded /crew monitor
 packages/protocol-ts/     Generated TypeScript bindings + JSON Schema + Ajv validators
 fixtures/                 Cross-language golden fixtures (protocol frames, state roots, repo ids)
 docs/                     Engineering documentation (start here: docs/getting-started.md)
@@ -160,10 +160,10 @@ git push origin v<version>
 ```
 
 Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which:
-1. Builds `batcave` for macOS ARM/Intel and Linux x64/ARM
+1. Builds `crewd` for macOS ARM/Intel and Linux x64/ARM
 2. Assembles each target's release manifest (`cargo run -p batman-xtask -- package`), then validates the four together and emits one aggregate `release-manifest.json` (`package-set`)
 3. Runs the fixture-mode conformance gate
-4. Uploads the four `batcave-<target>` binaries, their four `.manifest.json` files, and `release-manifest.json` as GitHub Release assets on the tag — no package is published anywhere
+4. Uploads the four `crewd-<target>` binaries, their four `.manifest.json` files, and `release-manifest.json` as GitHub Release assets on the tag — no package is published anywhere
 
 **Requires:** only the default `GITHUB_TOKEN` (already available to the workflow) — no separate secret to configure.
 
@@ -176,11 +176,11 @@ Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/
 When contributing, consider updating documentation:
 
 - **docs/plugin-usage.md** — the user manual: every tool/command an OMP session can call
-- **docs/getting-started.md** — the developer manual: building, configuring, and testing BATMAN from source
+- **docs/getting-started.md** — the developer manual: building, configuring, and testing Crew from source
 - **docs/code-walkthrough.md** / **docs/rust-primer.md** — developer-manual companions: source map, debugging playbook, Rust-via-this-codebase tutorial
 - **docs/manual-testing.md** — manual/QA verification procedures
 - **docs/architecture.md** — system design (the C4-model "why")
-- **docs/cli-reference.md** — `batcave` CLI command reference
+- **docs/cli-reference.md** — `crewd` CLI command reference
 - **docs/operations.md** — daemon lifecycle, crash recovery, install/upgrade procedures
 - **docs/compatibility.md** — supported platforms and the adapter conformance matrix
 - **docs/engineering-lessons.md** — hard-won lessons from real bugs, cross-referenced by file/ADR
@@ -194,4 +194,4 @@ When contributing, consider updating documentation:
 - Check existing documentation in `docs/`
 - Reach out to maintainers
 
-Thank you for helping make BATMAN better!
+Thank you for helping make Crew better!

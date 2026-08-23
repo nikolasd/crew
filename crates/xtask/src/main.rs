@@ -1,8 +1,8 @@
-//! Build tooling for the `batman` workspace.
+//! Build tooling for the `crew` workspace.
 //!
 //! `cargo run -p batman-xtask -- generate` regenerates the canonical JSON
 //! Schema document and TypeScript bindings from `batman-protocol`, the sole
-//! source of truth for every BATMAN wire type. `--check` verifies the
+//! source of truth for every Crew wire type. `--check` verifies the
 //! committed outputs are up to date and that Rust crate versions match the
 //! npm source of truth, without modifying anything.
 use std::collections::BTreeSet;
@@ -45,13 +45,13 @@ enum Command {
         check: bool,
     },
     /// Assemble a platform leaf package: copy `--binary` into the matching
-    /// `packages/batman-<target>/bin/batcave` and emit its `manifest.json`.
+    /// `packages/crew-<target>/bin/crewd` and emit its `manifest.json`.
     Package {
         /// One of the four supported target triples: `darwin-arm64`,
         /// `darwin-x64`, `linux-arm64-gnu`, `linux-x64-gnu`.
         #[arg(long)]
         target: String,
-        /// Path to the built `batcave` binary to package.
+        /// Path to the built `crewd` binary to package.
         #[arg(long)]
         binary: PathBuf,
     },
@@ -61,7 +61,7 @@ enum Command {
         /// The release version every leaf must declare.
         #[arg(long)]
         version: String,
-        /// Directory containing one `batman-<target>/` per supported target.
+        /// Directory containing one `crew-<target>/` per supported target.
         #[arg(long)]
         input: PathBuf,
         /// Directory to write `release-manifest.json` into.
@@ -184,7 +184,7 @@ fn workspace_root() -> PathBuf {
 }
 
 /// Renders the canonical protocol schema. The renderer lives in
-/// `batman-protocol` because `batcave doctor`'s `schema_compatibility`
+/// `batman-protocol` because `crewd doctor`'s `schema_compatibility`
 /// check compares against the same bytes; a second copy here would let the
 /// two drift.
 fn render_schema() -> Result<Vec<u8>> {
@@ -400,7 +400,7 @@ fn run_generate(check: bool) -> Result<()> {
         check_barrel_completeness(&root, &temp_generated_dir)?;
 
         // Verify Rust crate versions match the npm source of truth.
-        // If they drift, `batcave --version` (which reports CARGO_PKG_VERSION
+        // If they drift, `crewd --version` (which reports CARGO_PKG_VERSION
         // from the runtime crate) would disagree with the npm package version,
         // and the leaf manifest version (read from the extension package.json)
         // would lie about what the binary actually reports.
@@ -432,19 +432,19 @@ fn run_generate(check: bool) -> Result<()> {
 }
 
 /// This leaf package's `name` field for a given target triple, e.g.
-/// `@nikolasd/batman-darwin-arm64` for `darwin-arm64`.
+/// `@nikolasd/crew-darwin-arm64` for `darwin-arm64`.
 fn leaf_package_name(target: &str) -> String {
-    format!("@nikolasd/batman-{target}")
+    format!("@nikolasd/crew-{target}")
 }
 
 /// The leaf package directory for a given target triple, rooted at
-/// `packages/batman-<target>` under the workspace root.
+/// `packages/crew-<target>` under the workspace root.
 fn leaf_package_dir(root: &Path, target: &str) -> PathBuf {
-    root.join("packages").join(format!("batman-{target}"))
+    root.join("packages").join(format!("crew-{target}"))
 }
 
 /// Reads the `version` field out of `packages/extension/package.json`; every
-/// leaf manifest's `version` must equal it so `resolveBatcave` (the
+/// leaf manifest's `version` must equal it so `resolveCrewd` (the
 /// TypeScript loader) can require an exact match before running a packaged
 /// binary.
 fn read_extension_version(root: &Path) -> Result<String> {
@@ -493,14 +493,14 @@ fn read_cargo_version(path: &Path) -> Result<String> {
 /// Verifies every Rust crate's version matches the npm source of truth
 /// (`packages/extension/package.json`).
 ///
-/// If a Rust crate drifts, `batcave --version` (which reports `CARGO_PKG_VERSION`
+/// If a Rust crate drifts, `crewd --version` (which reports `CARGO_PKG_VERSION`
 /// from the runtime crate) would disagree with the npm package version, and the
 /// leaf manifest version (read from the extension package.json, not the binary)
 /// would lie about what the shipped binary actually reports.
 fn check_version_coherence(root: &Path) -> Result<()> {
     let expected = read_extension_version(root)?;
 
-    // The runtime crate is critical: `batcave --version` reports its
+    // The runtime crate is critical: `crewd --version` reports its
     // `CARGO_PKG_VERSION`, so a drift here means the binary lies about
     // its version relative to the npm package that ships it.
     let runtime_path = root.join("crates/runtime/Cargo.toml");
@@ -509,7 +509,7 @@ fn check_version_coherence(root: &Path) -> Result<()> {
         bail!(
             "version drift: crates/runtime/Cargo.toml declares version {:?} but \
              packages/extension/package.json declares {:?}; \
-             `batcave --version` would report {:?} while the npm package ships as {:?}; \
+             `crewd --version` would report {:?} while the npm package ships as {:?}; \
              update crates/runtime/Cargo.toml to match",
             runtime_version,
             expected,
@@ -534,7 +534,7 @@ fn check_version_coherence(root: &Path) -> Result<()> {
 
     // The OMP marketplace catalog is what users actually install from; a
     // stale version here ships silently because nothing else reads it.
-    // Both `metadata.version` and the `batman` plugin entry's `version`
+    // Both `metadata.version` and the `crew` plugin entry's `version`
     // must equal the extension version (R64).
     let marketplace_path = root.join(".claude-plugin/marketplace.json");
     let raw = fs::read_to_string(&marketplace_path)
@@ -566,19 +566,19 @@ fn check_version_coherence(root: &Path) -> Result<()> {
         .and_then(|plugins| {
             plugins
                 .iter()
-                .find(|p| p.get("name").and_then(serde_json::Value::as_str) == Some("batman"))
+                .find(|p| p.get("name").and_then(serde_json::Value::as_str) == Some("crew"))
         })
         .and_then(|p| p.get("version"))
         .and_then(serde_json::Value::as_str)
         .with_context(|| {
             format!(
-                "{} has no `batman` plugin entry with a string `version` field",
+                "{} has no `crew` plugin entry with a string `version` field",
                 marketplace_path.display()
             )
         })?;
     if plugin_version != expected {
         bail!(
-            "version drift: {}'s `batman` plugin entry declares version {:?} but \
+            "version drift: {}'s `crew` plugin entry declares version {:?} but \
              packages/extension/package.json declares {:?}; \
              update .claude-plugin/marketplace.json to match",
             marketplace_path.display(),
@@ -591,7 +591,7 @@ fn check_version_coherence(root: &Path) -> Result<()> {
 }
 
 /// Copies `binary` into the leaf package directory matching `target` as
-/// `bin/batcave` (mode `0755` on Unix) and writes its deterministic
+/// `bin/crewd` (mode `0755` on Unix) and writes its deterministic
 /// `manifest.json` (SHA-256 + size + target + version provenance).
 ///
 /// `root` is the workspace root, parameterized so this is independently
@@ -605,7 +605,7 @@ fn package_leaf(root: &Path, target: &str, binary: &Path) -> Result<()> {
 
     let bin_dir = leaf_dir.join("bin");
     fs::create_dir_all(&bin_dir).with_context(|| format!("creating {}", bin_dir.display()))?;
-    let bin_path = bin_dir.join("batcave");
+    let bin_path = bin_dir.join("crewd");
 
     let bytes =
         fs::read(binary).with_context(|| format!("reading binary at {}", binary.display()))?;
@@ -767,7 +767,7 @@ fn package_set(root: &Path, version: &str, input: &Path, output: &Path) -> Resul
 
     let mut leaves: Vec<LeafManifest> = Vec::with_capacity(targets.len());
     for entry in &targets {
-        let leaf_dir = input.join(format!("batman-{}", entry.leaf));
+        let leaf_dir = input.join(format!("crew-{}", entry.leaf));
         if !leaf_dir.is_dir() {
             bail!(
                 "target {:?} is missing from the assembled set: {} does not exist",
@@ -791,18 +791,18 @@ fn package_set(root: &Path, version: &str, input: &Path, output: &Path) -> Resul
         }
         if manifest.target != entry.leaf {
             bail!(
-                "leaf directory batman-{} contains a manifest for target {:?}",
+                "leaf directory crew-{} contains a manifest for target {:?}",
                 entry.leaf,
                 manifest.target
             );
         }
 
-        // The binary must be named `batcave` exactly: the TypeScript loader
-        // resolves `<leaf>/bin/batcave` and nothing else.
-        let bin_path = leaf_dir.join("bin").join("batcave");
+        // The binary must be named `crewd` exactly: the TypeScript loader
+        // resolves `<leaf>/bin/crewd` and nothing else.
+        let bin_path = leaf_dir.join("bin").join("crewd");
         if !bin_path.is_file() {
             bail!(
-                "leaf {:?} has no bin/batcave (found nothing at {})",
+                "leaf {:?} has no bin/crewd (found nothing at {})",
                 entry.leaf,
                 bin_path.display()
             );
@@ -817,7 +817,7 @@ fn package_set(root: &Path, version: &str, input: &Path, output: &Path) -> Resul
                 .mode();
             if mode & 0o111 == 0 {
                 bail!(
-                    "leaf {:?} bin/batcave is not executable (mode {:o})",
+                    "leaf {:?} bin/crewd is not executable (mode {:o})",
                     entry.leaf,
                     mode & 0o777
                 );
@@ -829,7 +829,7 @@ fn package_set(root: &Path, version: &str, input: &Path, output: &Path) -> Resul
         let actual = sha256_hex(&bytes);
         if actual != manifest.sha256 {
             bail!(
-                "leaf {:?} checksum mismatch: manifest declares {} but bin/batcave hashes to {}",
+                "leaf {:?} checksum mismatch: manifest declares {} but bin/crewd hashes to {}",
                 entry.leaf,
                 manifest.sha256,
                 actual
@@ -884,7 +884,7 @@ mod package_tests {
 
     /// Builds a fixture workspace root with everything `package_leaf` reads:
     /// `packages/extension/package.json` declaring `version`, an empty
-    /// `packages/batman-<target>` leaf directory, a `release/targets.json`
+    /// `packages/crew-<target>` leaf directory, a `release/targets.json`
     /// copied from the real one, a committed schema document to fingerprint,
     /// and an initialized git repository so `git rev-parse HEAD` resolves.
     fn fixture_root(version: &str, target: &str) -> tempfile::TempDir {
@@ -894,14 +894,11 @@ mod package_tests {
         fs::create_dir_all(&extension_dir).expect("creating fixture extension dir");
         fs::write(
             extension_dir.join("package.json"),
-            format!(r#"{{"name": "@nikolasd/batman", "version": "{version}"}}"#),
+            format!(r#"{{"name": "@nikolasd/crew", "version": "{version}"}}"#),
         )
         .expect("writing fixture extension package.json");
 
-        let leaf_dir = root
-            .path()
-            .join("packages")
-            .join(format!("batman-{target}"));
+        let leaf_dir = root.path().join("packages").join(format!("crew-{target}"));
         fs::create_dir_all(&leaf_dir).expect("creating fixture leaf dir");
 
         // The real targets file, so a fixture can never drift from the
@@ -945,7 +942,7 @@ mod package_tests {
     #[test]
     fn package_leaf_rejects_unsupported_targets() {
         let root = fixture_root("0.1.0", "darwin-arm64");
-        let binary = root.path().join("batcave-built");
+        let binary = root.path().join("crewd-built");
         fs::write(&binary, b"binary-bytes").unwrap();
 
         let err = package_leaf(root.path(), "windows-x64", &binary).unwrap_err();
@@ -960,14 +957,14 @@ mod package_tests {
         fs::remove_dir_all(&leaf_dir).expect("removing fixture leaf dir to simulate a fresh clone");
         assert!(!leaf_dir.is_dir());
 
-        let binary = root.path().join("batcave-built");
+        let binary = root.path().join("crewd-built");
         fs::write(&binary, b"binary-bytes-for-missing-leaf-dir-test").unwrap();
 
         package_leaf(root.path(), target, &binary)
             .expect("package_leaf should create the missing leaf directory rather than bail");
 
         assert!(leaf_dir.is_dir());
-        let bin_path = leaf_dir.join("bin").join("batcave");
+        let bin_path = leaf_dir.join("bin").join("crewd");
         assert!(bin_path.is_file());
     }
 
@@ -975,14 +972,14 @@ mod package_tests {
     fn package_leaf_writes_binary_and_manifest() {
         let target = "darwin-arm64";
         let root = fixture_root("0.1.0", target);
-        let binary = root.path().join("batcave-built");
-        let bytes = b"pretend-this-is-a-batcave-binary";
+        let binary = root.path().join("crewd-built");
+        let bytes = b"pretend-this-is-a-crewd-binary";
         fs::write(&binary, bytes).unwrap();
 
         package_leaf(root.path(), target, &binary).expect("package_leaf should succeed");
 
         let leaf_dir = leaf_package_dir(root.path(), target);
-        let bin_path = leaf_dir.join("bin").join("batcave");
+        let bin_path = leaf_dir.join("bin").join("crewd");
         assert_eq!(fs::read(&bin_path).unwrap(), bytes);
 
         #[cfg(unix)]
@@ -997,7 +994,7 @@ mod package_tests {
         assert!(manifest_bytes.ends_with(b"\n"));
 
         let manifest: LeafManifest = serde_json::from_slice(&manifest_bytes).unwrap();
-        assert_eq!(manifest.name, "@nikolasd/batman-darwin-arm64");
+        assert_eq!(manifest.name, "@nikolasd/crew-darwin-arm64");
         assert_eq!(manifest.version, "0.1.0");
         assert_eq!(manifest.target, target);
         assert_eq!(manifest.size_bytes, bytes.len() as u64);
@@ -1011,7 +1008,7 @@ mod package_tests {
     fn package_leaf_manifest_is_byte_identical_across_runs() {
         let target = "linux-x64-gnu";
         let root = fixture_root("0.1.0", target);
-        let binary = root.path().join("batcave-built");
+        let binary = root.path().join("crewd-built");
         fs::write(&binary, b"deterministic-fixture-bytes").unwrap();
 
         package_leaf(root.path(), target, &binary).unwrap();
@@ -1050,7 +1047,7 @@ mod version_coherence_tests {
         };
         write(
             "packages/extension/package.json",
-            format!(r#"{{"name": "@nikolasd/batman", "version": "{extension}"}}"#),
+            format!(r#"{{"name": "@nikolasd/crew", "version": "{extension}"}}"#),
         );
         write(
             "crates/runtime/Cargo.toml",
@@ -1063,7 +1060,7 @@ mod version_coherence_tests {
         write(
             ".claude-plugin/marketplace.json",
             format!(
-                r#"{{"name": "batman", "metadata": {{"version": "{metadata}"}}, "plugins": [{{"name": "batman", "version": "{plugin}"}}]}}"#
+                r#"{{"name": "crew", "metadata": {{"version": "{metadata}"}}, "plugins": [{{"name": "crew", "version": "{plugin}"}}]}}"#
             ),
         );
         root

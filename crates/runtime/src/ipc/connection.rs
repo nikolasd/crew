@@ -230,7 +230,7 @@ async fn handle_bootstrap(line: &str, ctx: &ConnContext, shared: &Arc<Shared>) -
 
     let result = InitializeResult {
         runtime: RuntimeInfo {
-            name: "batman-runtime".to_string(),
+            name: "crew-runtime".to_string(),
             version: crate::VERSION.to_string(),
         },
         negotiated: runtime,
@@ -373,7 +373,7 @@ async fn dispatch(
                 protocol: negotiated_version,
                 project_id: shared.project_id,
                 // The live adapter count from the run driver (R87) -- never
-                // a placeholder: /batman-status and batcave status report
+                // a placeholder: /crew-status and crewd status report
                 // this, and the idle-shutdown decision consumes the same
                 // source.
                 active_runs: shared.active_run_count() as u32,

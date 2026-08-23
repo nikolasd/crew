@@ -16,7 +16,7 @@ source of truth for unfinished work.
 
 **Specified by:** Workspaces/Displays plan, Task 5  
 **Deferred per:** M2/M3 gap-closure Decision #6  
-**References:** `crates/protocol/src/method.rs`, `.../2026-07-22-batman-workspaces-displays.md` (Task 5), `.../2026-07-27-batman-m2-m3-gap-closure.md` (Decision 6)
+**References:** `crates/protocol/src/method.rs`, `.../2026-07-22-crew-workspaces-displays.md` (Task 5), `.../2026-07-27-crew-m2-m3-gap-closure.md` (Decision 6)
 
 ### What it is
 
@@ -43,9 +43,9 @@ You run both Herdr (terminal) and a web dashboard. Herdr crashes. Today the `Dis
 
 **3. Multi-tenant / shared daemon**
 
-Five developers share one BATMAN daemon, each with their own display client (different terminals, different machines). `display/list` lets the operator see who's connected and what backends are active. `display/unregister` lets a dev's client clean up when they disconnect, so stale registrations don't pollute the pool.
+Five developers share one Crew daemon, each with their own display client (different terminals, different machines). `display/list` lets the operator see who's connected and what backends are active. `display/unregister` lets a dev's client clean up when they disconnect, so stale registrations don't pollute the pool.
 
-**4. Operator visibility in `batcave doctor`**
+**4. Operator visibility in `crewd doctor`**
 
 Doctor's display check (TODO #21) currently checks if Herdr/tmux *could* work. With `display/list`, it could report which backends are actually registered and live right now, giving operators real-time visibility into display infrastructure health.
 
@@ -55,7 +55,7 @@ Doctor's display check (TODO #21) currently checks if Herdr/tmux *could* work. W
 - The event-stream model (`events/replay` + `events/subscribe`) already supports read-only third-party viewers
 - No operator has asked for a third-party display client
 - Adds protocol surface area and state management (registry, heartbeat expiry) for a use case that doesn't exist yet
-- Would be needed only if BATMAN becomes a shared daemon serving multiple independent display clients — a post-M4, multi-tenant scenario
+- Would be needed only if Crew becomes a shared daemon serving multiple independent display clients — a post-M4, multi-tenant scenario
 
 ### Decision trigger
 
@@ -79,17 +79,17 @@ Every worker run should be visibly started for the user, in whichever display ba
 
 `TerminalDisplay` has no pane/window-opening capability at all today — no `create_pane` equivalent exists for it, so there is currently no code path that opens a new terminal window either.
 
-The worker process itself is always spawned by the supervisor (`crates/runtime/src/supervisor/process.rs`) with fully piped stdio, in its own process group, regardless of which display backend was selected. The only thing a user can currently see live is the embedded read-only `/batman` monitor inside OMP, which tails the event journal — not a real pane or window running the worker. Checked the TypeScript extension (`packages/extension/src/`) too: nothing there shells out to `tmux`/`herdr` or opens a terminal either.
+The worker process itself is always spawned by the supervisor (`crates/runtime/src/supervisor/process.rs`) with fully piped stdio, in its own process group, regardless of which display backend was selected. The only thing a user can currently see live is the embedded read-only `/crew` monitor inside OMP, which tails the event journal — not a real pane or window running the worker. Checked the TypeScript extension (`packages/extension/src/`) too: nothing there shells out to `tmux`/`herdr` or opens a terminal either.
 
 ### Why this hasn't been wired up
 
 - The event-stream model (`events/replay` + `events/subscribe`, surfaced via the embedded monitor) already gives a working way to watch a run, so nothing forced this further.
-- Wiring `create_pane` into `start_queued_run` requires design decisions that haven't been made yet: what actually runs inside the opened pane/window (the raw vendor CLI directly, or `batcave monitor --run-id <id>` tailing that run's events), who closes the pane/window when the run settles vs. when the daemon restarts mid-run, and what happens if pane creation itself fails partway through a run that's already started.
+- Wiring `create_pane` into `start_queued_run` requires design decisions that haven't been made yet: what actually runs inside the opened pane/window (the raw vendor CLI directly, or `crewd monitor --run-id <id>` tailing that run's events), who closes the pane/window when the run settles vs. when the daemon restarts mid-run, and what happens if pane creation itself fails partway through a run that's already started.
 - `TerminalDisplay` additionally needs real window-spawning logic added (an OS-specific "open a new terminal emulator running X" command) — it currently does nothing beyond reporting itself as always-available.
 
 ### Decision trigger
 
-This is the maintainer's stated expectation for how BATMAN should behave — every worker visibly started in a pane (tmux/Herdr) or a new terminal window (plain-terminal fallback) — so treat this entry as scoping outstanding wiring work, not as an indefinitely-deferred nice-to-have. Revisit as soon as the pane-lifecycle questions above are settled.
+This is the maintainer's stated expectation for how Crew should behave — every worker visibly started in a pane (tmux/Herdr) or a new terminal window (plain-terminal fallback) — so treat this entry as scoping outstanding wiring work, not as an indefinitely-deferred nice-to-have. Revisit as soon as the pane-lifecycle questions above are settled.
 
 ---
 
@@ -157,7 +157,7 @@ version check as the token-usage entry above — revisit both together.
 ### What it is
 
 Org-level config currently loads only from a local file path
-(`--org-config /etc/batman/org.yaml`). This would let it also accept an
+(`--org-config /etc/crew/org.yaml`). This would let it also accept an
 `http://`/`https://` URL, fetching and parsing the YAML remotely — e.g.
 `--org-config https://config.example.com/org.yaml` — so a central org can
 publish one config that every install pulls from instead of distributing
@@ -193,7 +193,7 @@ description.
 ### Config templates
 
 **What it is:** A way to scaffold a new org/repo/user config from a named
-template (e.g. `batman config init --template minimal`) instead of writing
+template (e.g. `crew config init --template minimal`) instead of writing
 YAML from scratch.
 
 **Why deferred:** No concrete template catalog or user request exists yet —
@@ -236,9 +236,9 @@ otherwise break existing deployed config files.
 **What it is:** Allow secrets embedded in config (API keys, tokens) to be
 stored encrypted at rest rather than plaintext YAML, decrypted on load.
 
-**Why deferred:** No sensitive values currently live in BATMAN's own config
+**Why deferred:** No sensitive values currently live in Crew's own config
 files — credentials for adapters are handled by each vendor CLI's own auth
-(e.g. `codex login`), not stored in `batman.yaml`. Encrypting a file that
+(e.g. `codex login`), not stored in `crew.yaml`. Encrypting a file that
 holds no secrets today is speculative.
 
 **Decision trigger:** Implement if/when a config field is added that must

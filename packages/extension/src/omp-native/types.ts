@@ -3,7 +3,7 @@
 // mutating OMP's own state.
 
 /**
- * The Batman-facing status bucket an OMP-native mirror can occupy. Distinct
+ * The Crew-facing status bucket an OMP-native mirror can occupy. Distinct
  * from the runtime's authoritative `RunState`: these are parent-scoped
  * facts the extension observes, never a `Run` row the extension itself
  * transitions.
@@ -14,7 +14,7 @@ export type OmpNativeStatus = "working" | "succeeded" | "failed" | "lost";
 export interface OmpNativeAgentFact {
   /** The OMP subagent id. */
   readonly ompAgentId: string;
-  /** The mapped Batman-facing status. */
+  /** The mapped Crew-facing status. */
   readonly status: OmpNativeStatus;
   /** The agent/assignment description, when known. */
   readonly description?: string;
@@ -28,7 +28,7 @@ export interface OmpNativeAgentFact {
   readonly observedAtMs: number;
 }
 
-/** Identifies the Batman task a prior `task/upsert` correlated with an
+/** Identifies the Crew task a prior `task/upsert` correlated with an
  * OMP-native subagent, so `reconcile/omp` can rebind its ownership. */
 export interface OmpNativeTaskCorrelation {
   readonly taskId: string;

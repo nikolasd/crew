@@ -1,19 +1,21 @@
-// On-demand launcher for the per-repository `batcave` runtime daemon.
+// On-demand launcher for the per-repository `crewd` runtime daemon.
 //
 // `ensureRuntime` connects to an existing runtime if one is already serving
-// the repository; otherwise it selects a `batcave` binary (a validated
-// `OMP_BATMAN_BINARY` development override, or an injected packaged-binary
-// resolver), spawns it detached, and retries connecting with bounded
-// exponential backoff. Concurrent callers converge on a single runtime: the
-// daemon's own `O_EXCL` lock guarantees exactly one wins the race, and every
-// caller ends up connected to that winner.
+// the repository; otherwise it selects a `crewd` binary (a validated
+// `OMP_CREW_BINARY` development override -- or its pre-rename name,
+// `OMP_BATMAN_BINARY` -- or an injected packaged-binary resolver), spawns it
+// detached, and retries connecting with bounded exponential backoff.
+// Concurrent callers converge on a single runtime: the daemon's own
+// `O_EXCL` lock guarantees exactly one wins the race, and every caller ends
+// up connected to that winner.
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 
-import { BatmanClient } from "./client";
+import { CrewClient } from "./client";
+import { envFlag } from "./env-flag";
 import type { InitializeParams } from "@nikolasd/batman-protocol";
 
 import pkg from "../package.json" with { type: "json" };
@@ -25,13 +27,13 @@ const CONNECT_DEADLINE_MS = 5000;
 
 /** Options for {@link ensureRuntime} and {@link buildServeArgs}. */
 export interface EnsureRuntimeOptions {
-  /** Absolute BATMAN state root, passed verbatim to `batcave`. */
+  /** Absolute Crew state root, passed verbatim to `crewd`. */
   readonly stateDir: string;
   /** Absolute repository path the runtime serves. */
   readonly repository: string;
   /** Idle interval, in seconds, the detached daemon is launched with. */
   readonly idleSeconds: number;
-  /** Environment to read `OMP_BATMAN_BINARY` from. Defaults to `process.env`. */
+  /** Environment to read `OMP_CREW_BINARY` (or the legacy `OMP_BATMAN_BINARY`) from. Defaults to `process.env`. */
   readonly env?: Readonly<Record<string, string | undefined>>;
   /**
    * Resolves the packaged binary path when no override is set. Task 9 supplies
@@ -50,7 +52,7 @@ export interface EnsureRuntimeOptions {
 /** The result of {@link ensureRuntime}. */
 export interface EnsureRuntimeResult {
   /** A connected, initialized client for the runtime. */
-  readonly client: BatmanClient;
+  readonly client: CrewClient;
   /** Whether this call spawned the runtime it connected to. */
   readonly childStarted: boolean;
 }
@@ -58,7 +60,7 @@ export interface EnsureRuntimeResult {
 /** Machine-readable reason a binary could not be selected. */
 export type BinarySelectionCode = "not-absolute" | "not-found" | "not-regular" | "not-executable" | "no-binary" | "runtime-not-installed";
 
-/** Thrown before any spawn when a `batcave` binary cannot be selected. */
+/** Thrown before any spawn when a `crewd` binary cannot be selected. */
 export class BinarySelectionError extends Error {
   readonly code: BinarySelectionCode;
 
@@ -79,7 +81,7 @@ export interface SelectedBinary {
 }
 
 /**
- * The exact argument vector for a detached `batcave serve`. Detached launches
+ * The exact argument vector for a detached `crewd serve`. Detached launches
  * deliberately omit `--foreground`, so the daemon owns `runtime.log` before
  * its inherited stdio is discarded.
  */
@@ -108,7 +110,7 @@ export async function ensureRuntime(options: EnsureRuntimeOptions): Promise<Ensu
   const child = spawn(binary.path, buildServeArgs(options), {
     detached: true,
     stdio: "ignore",
-    env: { ...process.env, BATMAN_BINARY_SOURCE: binary.source },
+    env: { ...process.env, CREW_BINARY_SOURCE: binary.source },
   });
   // An async spawn failure (EAGAIN, EMFILE, a binary deleted between
   // validation and exec) surfaces as an `error` event, not a throw. Without
@@ -117,7 +119,7 @@ export async function ensureRuntime(options: EnsureRuntimeOptions): Promise<Ensu
   // file has no logger seam, so console.error is deliberate. Attached
   // before unref() so the event cannot race the listener registration.
   child.on("error", (err) => {
-    console.error(`batman runtime: failed to spawn ${binary.path}: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`crew runtime: failed to spawn ${binary.path}: ${err instanceof Error ? err.message : String(err)}`);
   });
   child.unref();
 
@@ -196,23 +198,24 @@ function pathExists(path: string): boolean {
 }
 
 /**
- * Validates and returns the `OMP_BATMAN_BINARY` development override from
- * `env`, or `undefined` if it is unset (or empty). The override must be
+ * Validates and returns the `OMP_CREW_BINARY` development override (or its
+ * pre-rename name, `OMP_BATMAN_BINARY`) from `env`, or `undefined` if
+ * neither is set (or set to an empty string). The override must be
  * absolute, exist, be a regular file, and be executable; each violation
  * throws a {@link BinarySelectionError} before any spawn.
  *
  * Shared by {@link ensureRuntime}'s binary selection and by
- * `platform.ts`'s `resolveBatcave`, so override precedence and validation
- * behave identically wherever a `batcave` binary is selected.
+ * `platform.ts`'s `resolveCrewd`, so override precedence and validation
+ * behave identically wherever a `crewd` binary is selected.
  */
 export function resolveOverride(env: Readonly<Record<string, string | undefined>>): SelectedBinary | undefined {
-  const override = env.OMP_BATMAN_BINARY;
+  const override = envFlag(env, "OMP_CREW_BINARY", "OMP_BATMAN_BINARY");
   if (override === undefined || override === "") {
     return undefined;
   }
 
   if (!isAbsolute(override)) {
-    throw new BinarySelectionError("not-absolute", `OMP_BATMAN_BINARY must be an absolute path, got ${JSON.stringify(override)}`);
+    throw new BinarySelectionError("not-absolute", `OMP_CREW_BINARY must be an absolute path, got ${JSON.stringify(override)}`);
   }
 
   // Canonicalize to prove existence (and follow symlinks for the file-type
@@ -221,16 +224,16 @@ export function resolveOverride(env: Readonly<Record<string, string | undefined>
   try {
     canonical = realpathSync(override);
   } catch {
-    throw new BinarySelectionError("not-found", `OMP_BATMAN_BINARY does not exist: ${override}`);
+    throw new BinarySelectionError("not-found", `OMP_CREW_BINARY does not exist: ${override}`);
   }
 
   const stat = statSync(canonical);
   if (!stat.isFile()) {
-    throw new BinarySelectionError("not-regular", `OMP_BATMAN_BINARY is not a regular file: ${override}`);
+    throw new BinarySelectionError("not-regular", `OMP_CREW_BINARY is not a regular file: ${override}`);
   }
   // Owner/group/other execute bit set?
   if ((stat.mode & 0o111) === 0) {
-    throw new BinarySelectionError("not-executable", `OMP_BATMAN_BINARY is not executable: ${override}`);
+    throw new BinarySelectionError("not-executable", `OMP_CREW_BINARY is not executable: ${override}`);
   }
 
   // Selected verbatim: the override path is used as given.
@@ -238,9 +241,10 @@ export function resolveOverride(env: Readonly<Record<string, string | undefined>
 }
 
 /**
- * Selects the `batcave` binary. A set `OMP_BATMAN_BINARY` wins as a
- * development override (see {@link resolveOverride}); otherwise the packaged
- * resolver is used if provided.
+ * Selects the `crewd` binary. A set `OMP_CREW_BINARY` (or legacy
+ * `OMP_BATMAN_BINARY`) wins as a development override (see
+ * {@link resolveOverride}); otherwise the packaged resolver is used if
+ * provided.
  */
 function selectBinary(env: Readonly<Record<string, string | undefined>>, packagedBinaryResolver?: () => string): SelectedBinary {
   const override = resolveOverride(env);
@@ -252,7 +256,7 @@ function selectBinary(env: Readonly<Record<string, string | undefined>>, package
     return { path: packagedBinaryResolver(), source: "package" };
   }
 
-  throw new BinarySelectionError("no-binary", "no OMP_BATMAN_BINARY override is set and no packaged-binary resolver was provided");
+  throw new BinarySelectionError("no-binary", "no OMP_CREW_BINARY override is set and no packaged-binary resolver was provided");
 }
 
 /**
@@ -265,10 +269,10 @@ function selectBinary(env: Readonly<Record<string, string | undefined>>, package
 function initParams(repository: string, sessionId?: string): InitializeParams {
   const canonical = realpathSync(repository);
   return {
-    client: { name: "@nikolasd/batman", version: pkg.version },
+    client: { name: "@nikolasd/crew", version: pkg.version },
     supported: { min: { major: 1, minor: 0 }, max: { major: 1, minor: 0 } },
     repository: { canonicalPath: canonical, vcsRoot: canonical },
-    auth: { role: "ompExtension", instanceId: sessionId ?? "batman-extension", agentDirectory: canonical },
+    auth: { role: "ompExtension", instanceId: sessionId ?? "crew-extension", agentDirectory: canonical },
     capabilities: { eventReplay: false, maxFrameBytes: CONNECT_MAX_FRAME_BYTES },
     lastSequence: null,
   } as InitializeParams;
@@ -278,11 +282,11 @@ function initParams(repository: string, sessionId?: string): InitializeParams {
  * Attempts one connect + initialize. Resolves to the client on success, or
  * `undefined` if the runtime is absent or the handshake fails.
  */
-async function tryConnect(socketPath: string, repository: string, sessionId?: string): Promise<BatmanClient | undefined> {
+async function tryConnect(socketPath: string, repository: string, sessionId?: string): Promise<CrewClient | undefined> {
   if (!existsSync(socketPath)) {
     return undefined;
   }
-  const client = new BatmanClient({ socketPath });
+  const client = new CrewClient({ socketPath });
   try {
     await client.whenConnected();
     await client.initialize(initParams(repository, sessionId));
@@ -297,7 +301,7 @@ async function tryConnect(socketPath: string, repository: string, sessionId?: st
  * Retries {@link tryConnect} with exponential backoff, up to
  * {@link CONNECT_DEADLINE_MS} total.
  */
-async function connectWithBackoff(socketPath: string, repository: string, sessionId?: string): Promise<BatmanClient> {
+async function connectWithBackoff(socketPath: string, repository: string, sessionId?: string): Promise<CrewClient> {
   const deadline = Date.now() + CONNECT_DEADLINE_MS;
   let delay = 25;
   for (;;) {

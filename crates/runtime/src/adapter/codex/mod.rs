@@ -123,9 +123,9 @@ impl CodexAdapter {
 
     /// Builds this run's `app-server` command line and environment.
     /// `mcp_injection`, when `Some`, is `(launch context, reserved scope
-    /// token)` -- appends the two `-c mcp_servers.batman.*` overrides to
+    /// token)` -- appends the two `-c mcp_servers.crew.*` overrides to
     /// `args` (alongside, never replacing, any `config_overrides`-derived
-    /// `-c` pairs already present) and merges `BATMAN_WORKER_SCOPE_TOKEN`
+    /// `-c` pairs already present) and merges `CREW_WORKER_SCOPE_TOKEN`
     /// into `env`. Exposed `pub` so this adapter's own tests can assert
     /// on the exact injected shape without spawning a process.
     #[must_use]
@@ -159,7 +159,7 @@ impl CodexAdapter {
             .call(
                 "initialize",
                 json!({
-                    "clientInfo": {"name": "@nikolasd/batman", "version": env!("CARGO_PKG_VERSION")},
+                    "clientInfo": {"name": "@nikolasd/crew", "version": env!("CARGO_PKG_VERSION")},
                     "capabilities": {"experimentalApi": true}
                 }),
             )

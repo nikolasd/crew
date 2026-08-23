@@ -1,18 +1,18 @@
-// The `@nikolasd/batman` OMP extension entry point. Registers `batman_status`
-// (an LLM-callable tool), `/batman-status` (a slash command),
-// `batman_doctor`/`/batman-doctor`, `batman_runtime_install`/
-// `/batman-runtime-install`, the `/batman` monitor, and every deterministic
-// orchestration tool (`batman_task`, `batman_worker`, `batman_profile`,
-// `batman_run`, `batman_workspace`, `batman_artifact`, `batman_child`,
-// `batman_violation`, `batman_message`, `batman_approval`,
-// `batman_reconcile`). All share the single cached-client path: OMP loading
-// this extension starts or reconnects to the per-repository `batcave` runtime
+// The `@nikolasd/crew` OMP extension entry point. Registers `crew_health`
+// (an LLM-callable tool), `/crew-status` (a slash command),
+// `crew_doctor`/`/crew-doctor`, `crew_runtime_install`/
+// `/crew-runtime-install`, the `/crew` monitor, and every deterministic
+// orchestration tool (`crew_task`, `crew_worker`, `crew_profile`,
+// `crew_run`, `crew_workspace`, `crew_artifact`, `crew_child`,
+// `crew_violation`, `crew_message`, `crew_approval`,
+// `crew_reconcile`). All share the single cached-client path: OMP loading
+// this extension starts or reconnects to the per-repository `crewd` runtime
 // once per session, and every tool reuses that connection.
 
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { TASK_SUBAGENT_EVENT_CHANNEL, TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL, type SubagentEventPayload, type SubagentLifecyclePayload, type SubagentProgressPayload } from "@oh-my-pi/pi-coding-agent/task";
 
-import type { BatmanClient } from "./client";
+import type { CrewClient } from "./client";
 import { buildStatusContext } from "./context";
 import { normalizeEventPayload, normalizeLifecyclePayload, normalizeProgressPayload } from "./omp-native/events";
 import { OMP_NATIVE_FACT_ENTRY_TYPE, persistedCorrelations, persistedFacts, type SessionEntryLike } from "./omp-native/persistence";
@@ -23,14 +23,14 @@ import { installRuntimeForEnv } from "./install";
 import { registerOrchestrationTools } from "./tools";
 import { registerMonitor } from "./monitor/controller";
 
-const TOOL_NAME = "batman_status";
-const COMMAND_NAME = "batman-status";
-const STATUS_DESCRIPTION = "Use to verify the BATMAN runtime is reachable and healthy before orchestration operations. Returns connection status, runtime identity, and binary source. Call this if you're unsure the daemon is running, or after a connection failure.";
-const RUNTIME_INSTALL_TOOL_NAME = "batman_runtime_install";
+const TOOL_NAME = "crew_health";
+const COMMAND_NAME = "crew-status";
+const STATUS_DESCRIPTION = "Use to verify the Crew runtime is reachable and healthy before orchestration operations. Returns connection status, runtime identity, and binary source. Call this if you're unsure the daemon is running, or after a connection failure.";
+const RUNTIME_INSTALL_TOOL_NAME = "crew_runtime_install";
 
-export default function batmanExtension(pi: ExtensionAPI): void {
+export default function crewExtension(pi: ExtensionAPI): void {
   // Cached per extension instance (one per OMP session), closed on shutdown.
-  let cachedClient: BatmanClient | undefined;
+  let cachedClient: CrewClient | undefined;
 
   function statusContextFor(extCtx: ExtensionContext): GetRuntimeStatusContext {
     const { ensureRuntimeOptions } = buildStatusContext({ cwd: extCtx.cwd, sessionId: extCtx.sessionManager.getSessionId() });
@@ -51,13 +51,13 @@ export default function batmanExtension(pi: ExtensionAPI): void {
    * its socket is still open; a closed cached client is replaced so a daemon
    * idle-exit or socket failure repairs itself on the next call.
    */
-  async function getClient(extCtx: ExtensionContext): Promise<BatmanClient> {
+  async function getClient(extCtx: ExtensionContext): Promise<CrewClient> {
     return resolveClient(statusContextFor(extCtx));
   }
 
   pi.registerTool({
     name: TOOL_NAME,
-    label: "BATMAN Status",
+    label: "Crew Health",
     description: STATUS_DESCRIPTION,
     parameters: pi.zod.object({}),
     async execute(_toolCallId, _params, _signal, _onUpdate, extCtx) {
@@ -86,7 +86,7 @@ export default function batmanExtension(pi: ExtensionAPI): void {
   registerOrchestrationTools(pi, { getClient });
   registerMonitor(pi, { getClient });
   /**
-   * Context builder for the doctor command: resolves the batcave binary path
+   * Context builder for the doctor command: resolves the crewd binary path
    * and repository state for direct CLI invocation.
    */
   function doctorContextFor(cwd: ExtensionContext["cwd"]): DoctorContext {
@@ -94,17 +94,17 @@ export default function batmanExtension(pi: ExtensionAPI): void {
   }
 
   pi.registerTool({
-    name: "batman_doctor",
-    label: "BATMAN Doctor",
-    description: "Use for deep diagnostics when batman_status fails or the runtime is unreachable. Runs checks without connecting to a running daemon -- verifies database, state directory, rollout gates, and configuration. Use when the runtime won't start or status reports errors.",
+    name: "crew_doctor",
+    label: "Crew Doctor",
+    description: "Use for deep diagnostics when crew_health fails or the runtime is unreachable. Runs checks without connecting to a running daemon -- verifies database, state directory, rollout gates, and configuration. Use when the runtime won't start or status reports errors.",
     parameters: pi.zod.object({}),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       return runDoctorCommand(doctorContextFor(ctx.cwd));
     },
   });
 
-  pi.registerCommand("batman-doctor", {
-    description: "Run diagnostic checks on the BATMAN runtime state and configuration.",
+  pi.registerCommand("crew-doctor", {
+    description: "Run diagnostic checks on the Crew runtime state and configuration.",
     handler: async (_args, ctx) => {
       const result = await runDoctorCommand(doctorContextFor(ctx.cwd));
       const text = result.content.map((block) => block.text).join("\n");
@@ -118,9 +118,9 @@ export default function batmanExtension(pi: ExtensionAPI): void {
 
   pi.registerTool({
     name: RUNTIME_INSTALL_TOOL_NAME,
-    label: "BATMAN Runtime Install",
+    label: "Crew Runtime Install",
     description:
-      "Use to download and verify the batcave runtime binary for this platform. Call this when batman_status or any orchestration tool fails with code 'runtime-not-installed'. Downloads the GitHub release asset matching this extension's version, verifies its SHA-256 against the published manifest, and caches it under the BATMAN state root. nikolasd/batman is a private repository, so this needs read access to it: set GITHUB_TOKEN or GH_TOKEN, or run `gh auth login` locally.",
+      "Use to download and verify the crewd runtime binary for this platform. Call this when crew_health or any orchestration tool fails with code 'runtime-not-installed'. Downloads the GitHub release asset matching this extension's version, verifies its SHA-256 against the published manifest, and caches it under the Crew state root. nikolasd/batman is a private repository, so this needs read access to it: set GITHUB_TOKEN or GH_TOKEN, or run `gh auth login` locally.",
     parameters: pi.zod.object({}),
     approval: "exec",
     async execute(_toolCallId, _params, _signal, _onUpdate) {
@@ -128,8 +128,8 @@ export default function batmanExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("batman-runtime-install", {
-    description: "Download and verify the batcave runtime binary for this platform.",
+  pi.registerCommand("crew-runtime-install", {
+    description: "Download and verify the crewd runtime binary for this platform.",
     handler: async (_args, ctx) => {
       const result = await installRuntimeForEnv(process.env);
       const text = result.content.map((block) => block.text).join("\n");
@@ -158,7 +158,7 @@ export default function batmanExtension(pi: ExtensionAPI): void {
       // Persistence is best-effort telemetry: losing one entry degrades a
       // later restart's classification, and must never break the live
       // session that produced the fact.
-      pi.logger.warn("batman omp-native: failed to persist fact", {
+      pi.logger.warn("crew omp-native: failed to persist fact", {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -226,14 +226,14 @@ export default function batmanExtension(pi: ExtensionAPI): void {
         } catch (err) {
           // A stale revision is the expected, benign case: another
           // instance already rebound this task.
-          pi.logger.warn("batman omp-native: task reconciliation refused", {
+          pi.logger.warn("crew omp-native: task reconciliation refused", {
             taskId: correlation.taskId,
             error: err instanceof Error ? err.message : String(err),
           });
         }
       }
     } catch (err) {
-      pi.logger.warn("batman omp-native: runtime unavailable for reconciliation", {
+      pi.logger.warn("crew omp-native: runtime unavailable for reconciliation", {
         error: err instanceof Error ? err.message : String(err),
       });
     }

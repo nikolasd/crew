@@ -4,7 +4,7 @@
 companion to [getting-started.md](getting-started.md), the developer manual, and to
 [journal.md](journal.md) (each "Day" below is the concept behind one of that document's commits).
 
-You know TypeScript. You don't know Rust. This guide gets you productive in the BATMAN Rust crates
+You know TypeScript. You don't know Rust. This guide gets you productive in the Crew Rust crates
 in about a week by teaching each concept with the code that's already in this repository. Every
 section names real files — open them next to this document.
 
@@ -30,9 +30,9 @@ The plan:
 |---|---|
 | `package.json` | `Cargo.toml` (root one defines the *workspace*; each crate has its own) |
 | `bun.lock` | `Cargo.lock` |
-| a package | a **crate** (this repo has four: `batman-protocol`, `batman-runtime`, `batman-xtask`, `batman-fake-worker`) |
+| a package | a **crate** (this repo has four: `batman-protocol`, `batman-runtime`, `batman-xtask`, `fake-worker`) |
 | `bun test` | `cargo test` |
-| `bun run build` | `cargo build` (`target/debug/batcave` is the output binary) |
+| `bun run build` | `cargo build` (`target/debug/crewd` is the output binary) |
 | eslint / prettier | `cargo clippy` / `cargo fmt` |
 
 `cargo test -p batman-protocol` = "run tests for that one workspace package".
@@ -291,7 +291,7 @@ key types. When you're lost about where something lives, start from `lib.rs`.
 
 **Do now:** pick `RuntimeStatus` in `rpc.rs`, follow it to
 `packages/protocol-ts/src/generated/RuntimeStatus.ts` and to its entry in
-`packages/protocol-ts/schema/batman.schema.json`. Change nothing; just see that the Rust struct is
+`packages/protocol-ts/schema/crew.schema.json`. Change nothing; just see that the Rust struct is
 the one place that shape is defined, and that both other files are downstream of it.
 
 ## Day 5 — Visibility as a security boundary ("make illegal states unrepresentable")
@@ -428,7 +428,7 @@ architecture doc promises: stopping event committed → actor closed → socket 
   `ipc`, `lifecycle`, `domain_repository`, `orchestration_rpc`, `coordination`, `approval`, every
   adapter (claude, codex, copilot, omp_rpc), every display (terminal, tmux, herdr), audit,
   conformance, supervisor, workspace (apply, lease, materialize), config, and monitor. The
-  lifecycle suite runs the actual compiled binary via `env!("CARGO_BIN_EXE_batcave")` as real
+  lifecycle suite runs the actual compiled binary via `env!("CARGO_BIN_EXE_crewd")` as real
   child processes.
 - Protocol integration tests live in `crates/protocol/tests/`: `wire_contract.rs`,
   `workspace_contract.rs`, `domain_contract.rs`, `coordination_contract.rs`, `fixtures.rs`.
@@ -465,7 +465,7 @@ You don't need to *write* macros for a long time, but you'll read three kinds he
    points at. Then `bun run generate` and watch the TS type update itself. Revert.
 2. Write a unit test in `security/redaction.rs` proving a new secret-shaped pattern of your
    choosing is masked (then add the regex rule to make it pass — TDD, as this repo practices it).
-3. Add a `batcave paths --repo <dir>` debug subcommand to `cli.rs` that prints the resolved
+3. Add a `crewd paths --repo <dir>` debug subcommand to `cli.rs` that prints the resolved
    `RuntimePaths` as JSON. Touches clap, `Result`, serde — Days 1–4 in one exercise. (Don't ship
    it; it's a kata.)
 4. Read `lifecycle.rs` start to finish. When the flock/`LockGuard`/`Drop` interplay makes sense —

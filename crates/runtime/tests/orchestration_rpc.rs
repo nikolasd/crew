@@ -1636,7 +1636,7 @@ impl Client {
             "id": 1,
             "method": "initialize",
             "params": {
-                "client": { "name": "@nikolasd/batman", "version": "0.1.0" },
+                "client": { "name": "@nikolasd/crew", "version": "0.1.0" },
                 "supported": { "min": { "major": 1, "minor": 0 }, "max": { "major": 1, "minor": 0 } },
                 "repository": { "canonicalPath": agent_dir.unwrap_or("/tmp"), "vcsRoot": agent_dir.unwrap_or("/tmp") },
                 "auth": auth,
@@ -2548,6 +2548,74 @@ async fn message_send_on_a_driver_backed_run_reaches_send_follow_up_exactly_once
     assert_eq!(recorded_task.to_string(), task_id);
     assert_eq!(recorded_worker.to_string(), worker_id);
     assert_eq!(recorded_payload, "verbatim payload text");
+}
+
+/// A message whose `send_follow_up` genuinely succeeds must advance past
+/// `recorded` -- leaving it there forever regardless of outcome is the
+/// deliveryState inversion this test guards against.
+#[tokio::test]
+async fn message_send_on_successful_delivery_advances_delivery_state_to_sent() {
+    let driver = Arc::new(RecordingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+
+    let task = client
+        .call(
+            2,
+            "task/upsert",
+            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
+        )
+        .await;
+    let task_id = task["result"]["taskId"].as_str().unwrap().to_string();
+    let worker = client
+        .call(
+            3,
+            "worker/create",
+            json!({ "fingerprint": "sha256:f", "adapter": "fake", "model": "m" }),
+        )
+        .await;
+    let worker_id = worker["result"]["workerId"].as_str().unwrap().to_string();
+    let submit = client
+        .call(
+            4,
+            "run/submit",
+            json!({ "taskId": task_id, "workerId": worker_id }),
+        )
+        .await;
+    let run_id = submit["result"]["runId"].as_str().unwrap().to_string();
+
+    let send = client
+        .call(
+            5,
+            "message/send",
+            json!({
+                "runId": run_id,
+                "senderWorkerId": worker_id,
+                "taskId": task_id,
+                "kind": "question",
+                "payload": "should this be delivered?"
+            }),
+        )
+        .await;
+    assert!(send.get("error").is_none(), "message/send failed: {send:?}");
+
+    let list = client
+        .call(6, "message/list", json!({ "runId": run_id }))
+        .await;
+    let messages = list["result"]["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(
+        messages[0]["deliveryState"], "sent",
+        "a message whose delivery genuinely succeeded must advance past \
+         recorded: {messages:?}"
+    );
+    assert!(
+        messages[0]["sentAt"].is_string(),
+        "sentAt must be stamped once delivery succeeds: {messages:?}"
+    );
 }
 
 // --------------------------------------------------------------- sequence

@@ -10,7 +10,7 @@ use uuid::Uuid;
 /// bounded tree copy, so a row still `allocating` long after this belongs
 /// to a call that died between [`LeaseService::acquire`] and
 /// [`LeaseService::activate`] (crash, `SIGKILL`) rather than one still
-/// working -- [`LeaseService::stale`] surfaces it to `batcave doctor` even
+/// working -- [`LeaseService::stale`] surfaces it to `crewd doctor` even
 /// though its `path` is still empty and therefore invisible to the
 /// missing-path check below it.
 pub const ALLOCATING_LEASE_GRACE: Duration = Duration::minutes(10);
@@ -61,7 +61,7 @@ pub struct LeaseService {
 
 impl LeaseService {
     pub fn open_in_memory(_project_id: ProjectId) -> Result<Self, LeaseError> {
-        let db_path = std::env::temp_dir().join(format!("batman-lease-{}.db", Uuid::now_v7()));
+        let db_path = std::env::temp_dir().join(format!("crew-lease-{}.db", Uuid::now_v7()));
         Self::open(_project_id, &db_path)
     }
 

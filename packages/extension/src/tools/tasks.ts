@@ -1,4 +1,4 @@
-// `batman_task`: the extension-side front for OMP-owner `task/upsert` and
+// `crew_task`: the extension-side front for OMP-owner `task/upsert` and
 // `task/get`. A worker-scoped MCP tool of the same display name runs in a
 // different process/tool registry and exposes read-only task context; this
 // tool is the ompExtension-authorized counterpart.
@@ -9,7 +9,7 @@ import { OMP_NATIVE_CORRELATION_ENTRY_TYPE } from "../omp-native/persistence";
 import type { OrchestrationToolContext } from "./shared";
 import { callOrchestration } from "./shared";
 
-export const BATMAN_TASK_TOOL_NAME = "batman_task";
+export const CREW_TASK_TOOL_NAME = "crew_task";
 
 /**
  * The revision every task this tool creates is stored with. `task/upsert`
@@ -26,10 +26,10 @@ export function registerTaskTool(pi: ExtensionAPI, ctx: OrchestrationToolContext
   });
 
   pi.registerTool({
-    name: BATMAN_TASK_TOOL_NAME,
-    label: "BATMAN Task",
+    name: CREW_TASK_TOOL_NAME,
+    label: "Crew Task",
     description:
-      "Use when you need to create a persistent, cross-session unit of work that will be executed by an external AI harness (Claude, Codex, Copilot, or OMP-RPC) -- not OMP's native in-process task subagent. Use op: 'upsert' to create or update a task, or op: 'get' to read one back. BATMAN stores no task text: the task graph and its descriptions live in OMP, and the instruction a worker executes is passed to batman_run as prompt. Persists across session disconnects (stored in SQLite journal), executes via external harness processes, and can be retried, cancelled, or reconciled after failure. Auto-generates a task ID and uses your OMP session as owner. After creating, select a worker with batman_worker { op: 'list' } and submit execution with batman_run { op: 'submit', taskId, workerId, prompt }.",
+      "Use when you need to create a persistent, cross-session unit of work that will be executed by an external AI harness (Claude, Codex, Copilot, or OMP-RPC) -- not OMP's native in-process task subagent. Use op: 'upsert' to create or update a task, or op: 'get' to read one back. Crew stores no task text: the task graph and its descriptions live in OMP, and the instruction a worker executes is passed to crew_run as prompt. Persists across session disconnects (stored in SQLite journal), executes via external harness processes, and can be retried, cancelled, or reconciled after failure. Auto-generates a task ID and uses your OMP session as owner. After creating, select a worker with crew_worker { op: 'list' } and submit execution with crew_run { op: 'submit', taskId, workerId, prompt }.",
     parameters: params,
     // `get` is a read: charging it a write approval made reading a task
     // cost the same as mutating one.
@@ -55,7 +55,7 @@ export function registerTaskTool(pi: ExtensionAPI, ctx: OrchestrationToolContext
                 revision: INITIAL_TASK_REVISION,
               });
             } catch (err) {
-              pi.logger.warn("batman task: failed to persist task correlation", {
+              pi.logger.warn("crew task: failed to persist task correlation", {
                 taskId,
                 error: err instanceof Error ? err.message : String(err),
               });

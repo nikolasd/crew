@@ -378,7 +378,7 @@ async fn real_transport_completes_initialize_and_thread_start_with_zero_model_ca
         client.call(
             "initialize",
             serde_json::json!({
-                "clientInfo": {"name": "@nikolasd/batman", "version": "0.0.0-test"},
+                "clientInfo": {"name": "@nikolasd/crew", "version": "0.0.0-test"},
                 "capabilities": {"experimentalApi": true}
             }),
         ),
@@ -428,7 +428,7 @@ async fn real_transport_completes_initialize_and_thread_start_with_zero_model_ca
 /// default specifically because it is the one path in this test file
 /// that is not free of model calls. An explicit `--ignored` run is
 /// itself the signal that a human wants the live call; the only thing
-/// that still skips it is `BATMAN_DISABLE_VENDOR_CLI=1`, which forbids
+/// that still skips it is `CREW_DISABLE_VENDOR_CLI=1`, which forbids
 /// observation-only vendor invocation. A human wanting to exercise it
 /// locally: `cargo test -p batman-runtime --test codex_adapter --
 /// --ignored live_start_actually_runs_a_turn_against_a_real_model`.
@@ -439,7 +439,7 @@ async fn live_start_actually_runs_a_turn_against_a_real_model() {
     // live call -- the only remaining reason to refuse is the kill
     // switch, which forbids observation-only vendor invocation.
     if batman_runtime::conformance::vendor_cli_invocation_disabled() {
-        eprintln!("skipping: BATMAN_DISABLE_VENDOR_CLI=1 forbids live vendor-CLI invocation");
+        eprintln!("skipping: CREW_DISABLE_VENDOR_CLI=1 forbids live vendor-CLI invocation");
         return;
     }
     let adapter = CodexAdapter::new(
@@ -477,17 +477,17 @@ fn spawn_spec_with_no_mcp_config_injects_nothing() {
     let spec = adapter.spawn_spec(None);
     assert_eq!(spec.args, vec!["app-server".to_string()]);
     assert!(
-        !spec.env.contains_key("BATMAN_WORKER_SCOPE_TOKEN"),
+        !spec.env.contains_key("CREW_WORKER_SCOPE_TOKEN"),
         "no scope token env without an AdapterMcpConfig"
     );
     assert!(
-        spec.args.iter().all(|a| !a.contains("mcp_servers.batman")),
-        "no batman MCP override without an AdapterMcpConfig"
+        spec.args.iter().all(|a| !a.contains("mcp_servers.crew")),
+        "no crew MCP override without an AdapterMcpConfig"
     );
 }
 
 #[test]
-fn spawn_spec_injects_batman_mcp_overrides_alongside_existing_config_overrides() {
+fn spawn_spec_injects_crew_mcp_overrides_alongside_existing_config_overrides() {
     let startup_options = CodexStartupOptions {
         config_overrides: Some(vec!["model=\"o3\"".to_string()]),
         ..CodexStartupOptions::default()
@@ -500,7 +500,7 @@ fn spawn_spec_injects_batman_mcp_overrides_alongside_existing_config_overrides()
         None,
     );
     let context = McpLaunchContext {
-        batcave_path: PathBuf::from("/opt/batman/bin/batcave"),
+        crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
         state_dir: std::env::temp_dir(),
         repository: std::env::temp_dir(),
         run_id: RunId::new(),
@@ -509,7 +509,7 @@ fn spawn_spec_injects_batman_mcp_overrides_alongside_existing_config_overrides()
     let spec = adapter.spawn_spec(Some((&context, token)));
 
     // The pre-existing `-c` override from `config_overrides` survives,
-    // never replaced by the batman MCP injection.
+    // never replaced by the crew MCP injection.
     let model_idx = spec
         .args
         .iter()
@@ -517,24 +517,24 @@ fn spawn_spec_injects_batman_mcp_overrides_alongside_existing_config_overrides()
         .expect("pre-existing config override must survive MCP injection");
     assert_eq!(spec.args[model_idx - 1], "-c");
 
-    // The batman MCP server override is additive.
+    // The crew MCP server override is additive.
     let command_idx = spec
         .args
         .iter()
-        .position(|a| a == "mcp_servers.batman.command=\"/opt/batman/bin/batcave\"")
-        .expect("batman command override must be present");
+        .position(|a| a == "mcp_servers.crew.command=\"/opt/crew/bin/crewd\"")
+        .expect("crew command override must be present");
     assert_eq!(spec.args[command_idx - 1], "-c");
     assert!(
         spec.args
             .iter()
-            .any(|a| a.starts_with("mcp_servers.batman.args=[\"coordination-mcp\", ")),
-        "batman args override must be present"
+            .any(|a| a.starts_with("mcp_servers.crew.args=[\"coordination-mcp\", ")),
+        "crew args override must be present"
     );
 
     // The scope token lives only in the vendor process's own env, never
     // in argv (checkable via `ps` on a real spawned process).
     assert_eq!(
-        spec.env.get("BATMAN_WORKER_SCOPE_TOKEN"),
+        spec.env.get("CREW_WORKER_SCOPE_TOKEN"),
         Some(&token.to_string())
     );
     assert!(
@@ -553,13 +553,13 @@ fn spawn_spec_with_mcp_config_leaves_native_discovery_flags_untouched() {
         None,
     );
     let context = McpLaunchContext {
-        batcave_path: PathBuf::from("/opt/batman/bin/batcave"),
+        crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
         state_dir: std::env::temp_dir(),
         repository: std::env::temp_dir(),
         run_id: RunId::new(),
     };
     let spec = adapter.spawn_spec(Some((&context, "a-token")));
-    // The batman MCP server is additive alongside the base `app-server`
+    // The crew MCP server is additive alongside the base `app-server`
     // invocation -- no flag suppressing or replacing Codex's own native
     // MCP/config discovery is ever introduced.
     assert_eq!(spec.args[0], "app-server");
@@ -603,7 +603,7 @@ async fn fixture_conformance_report_covers_every_canonical_scenario_exactly_once
     // rollout once a turn actually runs, and turn/start is what invokes
     // the model, so none of these four are provable here; each is
     // honestly reported `passed: false` (proven instead under
-    // live_report, which runs by default unless BATMAN_DISABLE_VENDOR_CLI=1 is set).
+    // live_report, which runs by default unless CREW_DISABLE_VENDOR_CLI=1 is set).
     let requires_live_turn = [
         scenario::FOLLOW_UP,
         scenario::CANCELLATION_SCOPE,

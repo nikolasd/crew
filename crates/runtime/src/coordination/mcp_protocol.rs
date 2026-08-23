@@ -63,7 +63,7 @@ pub enum ToolCallError {
 pub fn tool_specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
-            name: "batman_task",
+            name: "crew_task",
             description: "Read the worker-safe view of the task this run belongs to.",
             input_schema: json!({
                 "type": "object",
@@ -81,8 +81,8 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
-            name: "batman_peers",
-            description: "List sibling workers on the same task as this run, including each peer's run id for use with batman_peer_workspace.",
+            name: "crew_peers",
+            description: "List sibling workers on the same task as this run, including each peer's run id for use with crew_peer_workspace.",
             input_schema: json!({
                 "type": "object",
                 "properties": {},
@@ -108,8 +108,8 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
-            name: "batman_peer_workspace",
-            description: "Discover the workspace path of a peer agent on the same task, by the peer's run id (from batman_peers). Fails if the peer has no active workspace lease.",
+            name: "crew_peer_workspace",
+            description: "Discover the workspace path of a peer agent on the same task, by the peer's run id (from crew_peers). Fails if the peer has no active workspace lease.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -130,7 +130,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
-            name: "batman_artifact_list",
+            name: "crew_artifact_list",
             description: "List artifacts published by any agent on this task. Never exposes artifacts from other tasks.",
             input_schema: json!({
                 "type": "object",
@@ -152,7 +152,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
-            name: "batman_artifact_fetch",
+            name: "crew_artifact_fetch",
             description: "Read one bounded chunk of an artifact on this task. Follow nextOffset until complete is true; the chunk size is fixed by the runtime.",
             input_schema: json!({
                 "type": "object",
@@ -175,7 +175,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
-            name: "batman_send",
+            name: "crew_send",
             description: "Send a correlated, journaled message to a peer worker or to OMP.",
             input_schema: json!({
                 "type": "object",
@@ -206,7 +206,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
-            name: "batman_request_child",
+            name: "crew_request_child",
             description: "Ask OMP to authorize a child worker. Never creates a task or worker itself.",
             input_schema: json!({
                 "type": "object",
@@ -223,7 +223,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
-            name: "batman_publish_artifact",
+            name: "crew_publish_artifact",
             description: "Record a reference to an artifact produced by this run.",
             input_schema: json!({
                 "type": "object",
@@ -244,7 +244,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
-            name: "batman_report_blocked",
+            name: "crew_report_blocked",
             description: "Report this run is blocked (e.g. on a peer answer) without changing ownership.",
             input_schema: json!({
                 "type": "object",
@@ -264,7 +264,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
-            name: "batman_ask_policy",
+            name: "crew_ask_policy",
             description: "Ask OMP a policy question (e.g. \"may I write to this path?\") without deciding it locally.",
             input_schema: json!({
                 "type": "object",
@@ -380,9 +380,9 @@ pub fn translate_tool_call(
     reject_unknown_properties(name, arguments)?;
     let run_id = scope.run_id.to_string();
     match name {
-        "batman_task" => Ok(("coordination/task", json!({ "runId": run_id }))),
-        "batman_peers" => Ok(("coordination/peers", json!({ "runId": run_id }))),
-        "batman_send" => {
+        "crew_task" => Ok(("coordination/task", json!({ "runId": run_id }))),
+        "crew_peers" => Ok(("coordination/peers", json!({ "runId": run_id }))),
+        "crew_send" => {
             let kind = required_str(arguments, "kind")?;
             let payload = required_bounded_str(arguments, "payload", FREE_TEXT_MAX_CHARS)?;
             let mut params = json!({
@@ -396,41 +396,41 @@ pub fn translate_tool_call(
             copy_optional_bounded_str(arguments, "replyTo", ID_MAX_CHARS, &mut params)?;
             Ok(("coordination/send", params))
         }
-        "batman_request_child" => {
+        "crew_request_child" => {
             let reason = required_bounded_str(arguments, "reason", FREE_TEXT_MAX_CHARS)?;
             Ok((
                 "coordination/requestChild",
                 json!({ "runId": run_id, "reason": reason }),
             ))
         }
-        "batman_publish_artifact" => {
+        "crew_publish_artifact" => {
             let artifact_ref = required_bounded_str(arguments, "artifactRef", ID_MAX_CHARS)?;
             let mut params = json!({ "runId": run_id, "artifactRef": artifact_ref });
             copy_optional_bounded_str(arguments, "description", FREE_TEXT_MAX_CHARS, &mut params)?;
             Ok(("coordination/publishArtifact", params))
         }
-        "batman_report_blocked" => {
+        "crew_report_blocked" => {
             let reason = required_bounded_str(arguments, "reason", FREE_TEXT_MAX_CHARS)?;
             Ok((
                 "coordination/reportBlocked",
                 json!({ "runId": run_id, "reason": reason }),
             ))
         }
-        "batman_ask_policy" => {
+        "crew_ask_policy" => {
             let question = required_bounded_str(arguments, "question", FREE_TEXT_MAX_CHARS)?;
             Ok((
                 "coordination/askPolicy",
                 json!({ "runId": run_id, "question": question }),
             ))
         }
-        "batman_peer_workspace" => {
+        "crew_peer_workspace" => {
             let peer_run_id = required_bounded_str(arguments, "peerRunId", ID_MAX_CHARS)?;
             Ok((
                 "coordination/peerWorkspace",
                 json!({ "runId": run_id, "peerRunId": peer_run_id }),
             ))
         }
-        "batman_artifact_list" => {
+        "crew_artifact_list" => {
             let kind = arguments.get("kind").and_then(Value::as_str);
             Ok((
                 "coordination/artifactList",
@@ -440,7 +440,7 @@ pub fn translate_tool_call(
                 },
             ))
         }
-        "batman_artifact_fetch" => {
+        "crew_artifact_fetch" => {
             let artifact_id = required_bounded_str(arguments, "artifactId", ID_MAX_CHARS)?;
             let offset = arguments.get("offset").and_then(Value::as_u64).unwrap_or(0);
             Ok((
@@ -589,11 +589,11 @@ mod tests {
     }
 
     #[test]
-    fn every_tool_spec_has_a_batman_prefixed_name_and_object_schema() {
+    fn every_tool_spec_has_a_crew_prefixed_name_and_object_schema() {
         let specs = tool_specs();
         assert_eq!(specs.len(), 10);
         for spec in &specs {
-            assert!(spec.name.starts_with("batman_"), "{}", spec.name);
+            assert!(spec.name.starts_with("crew_"), "{}", spec.name);
             assert_eq!(spec.input_schema["type"], "object");
             assert!(!spec.description.is_empty());
         }
@@ -616,23 +616,23 @@ mod tests {
     }
 
     #[test]
-    fn batman_task_and_peers_take_no_arguments_and_bind_the_scoped_run() {
+    fn crew_task_and_peers_take_no_arguments_and_bind_the_scoped_run() {
         let scope = scope();
-        let (method, params) = translate_tool_call("batman_task", &json!({}), scope).unwrap();
+        let (method, params) = translate_tool_call("crew_task", &json!({}), scope).unwrap();
         assert_eq!(method, "coordination/task");
         assert_eq!(params["runId"], scope.run_id.to_string());
         assert_eq!(params.as_object().unwrap().len(), 1);
 
-        let (method, params) = translate_tool_call("batman_peers", &json!({}), scope).unwrap();
+        let (method, params) = translate_tool_call("crew_peers", &json!({}), scope).unwrap();
         assert_eq!(method, "coordination/peers");
         assert_eq!(params["runId"], scope.run_id.to_string());
     }
 
     #[test]
-    fn batman_send_binds_sender_and_task_from_the_bound_scope() {
+    fn crew_send_binds_sender_and_task_from_the_bound_scope() {
         let scope = scope();
         let (method, params) = translate_tool_call(
-            "batman_send",
+            "crew_send",
             &json!({ "kind": "question", "payload": "hi" }),
             scope,
         )
@@ -648,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn batman_send_rejects_a_smuggled_sender_worker_id_argument_outright() {
+    fn crew_send_rejects_a_smuggled_sender_worker_id_argument_outright() {
         let scope = scope();
         let spoofed_sender = WorkerId::new();
         let arguments = json!({
@@ -659,23 +659,20 @@ mod tests {
             // caller believe it took effect when it never does.
             "senderWorkerId": spoofed_sender.to_string(),
         });
-        let err = translate_tool_call("batman_send", &arguments, scope).unwrap_err();
+        let err = translate_tool_call("crew_send", &arguments, scope).unwrap_err();
         assert!(matches!(err, ToolCallError::InvalidArguments(_)));
     }
 
     #[test]
     fn every_tool_rejects_a_runid_or_task_id_argument_outright() {
         for (name, mut arguments) in [
-            ("batman_task", json!({})),
-            ("batman_peers", json!({})),
-            (
-                "batman_send",
-                json!({ "kind": "question", "payload": "hi" }),
-            ),
-            ("batman_request_child", json!({ "reason": "x" })),
-            ("batman_publish_artifact", json!({ "artifactRef": "x" })),
-            ("batman_report_blocked", json!({ "reason": "x" })),
-            ("batman_ask_policy", json!({ "question": "x" })),
+            ("crew_task", json!({})),
+            ("crew_peers", json!({})),
+            ("crew_send", json!({ "kind": "question", "payload": "hi" })),
+            ("crew_request_child", json!({ "reason": "x" })),
+            ("crew_publish_artifact", json!({ "artifactRef": "x" })),
+            ("crew_report_blocked", json!({ "reason": "x" })),
+            ("crew_ask_policy", json!({ "question": "x" })),
         ] {
             arguments["runId"] = json!(RunId::new().to_string());
             let err = translate_tool_call(name, &arguments, scope()).unwrap_err();
@@ -684,7 +681,7 @@ mod tests {
     }
 
     #[test]
-    fn batman_send_carries_optional_recipient_and_reply_to_when_present() {
+    fn crew_send_carries_optional_recipient_and_reply_to_when_present() {
         let scope = scope();
         let recipient = WorkerId::new();
         let arguments = json!({
@@ -693,21 +690,21 @@ mod tests {
             "recipientWorkerId": recipient.to_string(),
             "replyTo": "some-message-id",
         });
-        let (_, params) = translate_tool_call("batman_send", &arguments, scope).unwrap();
+        let (_, params) = translate_tool_call("crew_send", &arguments, scope).unwrap();
         assert_eq!(params["recipientWorkerId"], recipient.to_string());
         assert_eq!(params["replyTo"], "some-message-id");
     }
 
     #[test]
-    fn batman_send_missing_payload_is_invalid_arguments_not_a_panic() {
+    fn crew_send_missing_payload_is_invalid_arguments_not_a_panic() {
         let scope = scope();
         let err =
-            translate_tool_call("batman_send", &json!({ "kind": "question" }), scope).unwrap_err();
+            translate_tool_call("crew_send", &json!({ "kind": "question" }), scope).unwrap_err();
         assert!(matches!(err, ToolCallError::InvalidArguments(_)));
     }
 
     #[test]
-    fn batman_send_rejects_a_payload_over_the_byte_budget_even_with_multi_byte_characters() {
+    fn crew_send_rejects_a_payload_over_the_byte_budget_even_with_multi_byte_characters() {
         let scope = scope();
         // A 4-byte-per-character string well under `FREE_TEXT_MAX_CHARS`
         // (a character count) can still overflow the real byte budget --
@@ -716,29 +713,29 @@ mod tests {
         assert!(over_budget.chars().count() <= FREE_TEXT_MAX_CHARS);
         assert!(over_budget.len() > FREE_TEXT_MAX_CHARS);
         let arguments = json!({ "kind": "question", "payload": over_budget });
-        let err = translate_tool_call("batman_send", &arguments, scope).unwrap_err();
+        let err = translate_tool_call("crew_send", &arguments, scope).unwrap_err();
         assert!(matches!(err, ToolCallError::InvalidArguments(_)));
 
         let at_budget = "a".repeat(FREE_TEXT_MAX_CHARS);
         let arguments = json!({ "kind": "question", "payload": at_budget });
-        assert!(translate_tool_call("batman_send", &arguments, scope).is_ok());
+        assert!(translate_tool_call("crew_send", &arguments, scope).is_ok());
     }
 
     #[test]
-    fn batman_publish_artifact_rejects_an_oversized_artifact_ref() {
+    fn crew_publish_artifact_rejects_an_oversized_artifact_ref() {
         let scope = scope();
         let too_long = "a".repeat(ID_MAX_CHARS + 1);
         let arguments = json!({ "artifactRef": too_long });
-        let err = translate_tool_call("batman_publish_artifact", &arguments, scope).unwrap_err();
+        let err = translate_tool_call("crew_publish_artifact", &arguments, scope).unwrap_err();
         assert!(matches!(err, ToolCallError::InvalidArguments(_)));
     }
 
     #[test]
-    fn batman_request_child_report_blocked_and_ask_policy_map_their_one_field() {
+    fn crew_request_child_report_blocked_and_ask_policy_map_their_one_field() {
         let scope = scope();
 
         let (method, params) = translate_tool_call(
-            "batman_request_child",
+            "crew_request_child",
             &json!({ "reason": "need help" }),
             scope,
         )
@@ -748,7 +745,7 @@ mod tests {
         assert_eq!(params["runId"], scope.run_id.to_string());
 
         let (method, params) = translate_tool_call(
-            "batman_report_blocked",
+            "crew_report_blocked",
             &json!({ "reason": "waiting on peer" }),
             scope,
         )
@@ -757,7 +754,7 @@ mod tests {
         assert_eq!(params["reason"], "waiting on peer");
 
         let (method, params) = translate_tool_call(
-            "batman_ask_policy",
+            "crew_ask_policy",
             &json!({ "question": "may I write here?" }),
             scope,
         )
@@ -767,10 +764,10 @@ mod tests {
     }
 
     #[test]
-    fn batman_publish_artifact_carries_optional_description() {
+    fn crew_publish_artifact_carries_optional_description() {
         let scope = scope();
         let (method, params) = translate_tool_call(
-            "batman_publish_artifact",
+            "crew_publish_artifact",
             &json!({ "artifactRef": "artifact://abc" }),
             scope,
         )
@@ -780,7 +777,7 @@ mod tests {
         assert!(params.get("description").is_none());
 
         let (_, params) = translate_tool_call(
-            "batman_publish_artifact",
+            "crew_publish_artifact",
             &json!({ "artifactRef": "artifact://abc", "description": "the diff" }),
             scope,
         )
@@ -800,7 +797,7 @@ mod tests {
     #[test]
     fn success_result_carries_content_and_structured_content_when_it_matches_its_schema() {
         let result = json!({ "taskId": "t-1", "ownerClientInstanceId": "omp-1", "revision": 1 });
-        let success = tool_result_from_success("batman_task", &result).unwrap();
+        let success = tool_result_from_success("crew_task", &result).unwrap();
         assert_eq!(success["isError"], false);
         assert_eq!(success["content"][0]["type"], "text");
         assert!(
@@ -818,9 +815,9 @@ mod tests {
 
     #[test]
     fn success_result_is_rejected_when_the_broker_result_drifts_from_the_advertised_schema() {
-        // Missing every required field of batman_task's output schema.
+        // Missing every required field of crew_task's output schema.
         let drifted = json!({ "unexpected": true });
-        let err = tool_result_from_success("batman_task", &drifted).unwrap_err();
+        let err = tool_result_from_success("crew_task", &drifted).unwrap_err();
         assert!(matches!(err, ToolCallError::InvalidArguments(_)));
     }
 

@@ -1,8 +1,8 @@
-//! `batcave coordination-mcp`: the stdio Model Context Protocol server a
+//! `crewd coordination-mcp`: the stdio Model Context Protocol server a
 //! supervised vendor process (or its own MCP-launching child) speaks to
 //! reach the worker coordination tools -- see [`super::mcp_protocol`] for
 //! the tool schemas and translation, and this module's `run` for the
-//! process itself: read `BATMAN_WORKER_SCOPE_TOKEN` from the inherited
+//! process itself: read `CREW_WORKER_SCOPE_TOKEN` from the inherited
 //! environment and remove it immediately, connect back to the owner-only
 //! repository socket authenticated as `workerMcp`, then proxy MCP
 //! `initialize`/`tools/list`/`tools/call` on stdio to the corresponding
@@ -31,7 +31,7 @@ use crate::paths::RuntimePaths;
 /// process's own environment before the socket connects -- never
 /// forwarded to anything this process might itself spawn (it spawns
 /// nothing).
-pub const SCOPE_TOKEN_ENV_VAR: &str = "BATMAN_WORKER_SCOPE_TOKEN";
+pub const SCOPE_TOKEN_ENV_VAR: &str = "CREW_WORKER_SCOPE_TOKEN";
 
 /// How long the initial socket connection retries an `InvalidToken`-shaped
 /// `initialize` rejection before giving up. A token reserved by
@@ -48,7 +48,7 @@ const BIND_RACE_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 /// Errors serving `coordination-mcp`.
 #[derive(Debug, thiserror::Error)]
 pub enum McpProxyError {
-    #[error("BATMAN_WORKER_SCOPE_TOKEN is not set in the environment")]
+    #[error("CREW_WORKER_SCOPE_TOKEN is not set in the environment")]
     MissingScopeToken,
     #[error("resolving repository paths: {0}")]
     Paths(#[from] crate::paths::PathError),
@@ -76,7 +76,7 @@ pub enum McpProxyError {
     StdoutWrite(std::io::Error),
 }
 
-/// Where `run` reads `BATMAN_WORKER_SCOPE_TOKEN` from and removes it --
+/// Where `run` reads `CREW_WORKER_SCOPE_TOKEN` from and removes it --
 /// injectable so tests never need a real process environment.
 pub trait ScopeTokenSource {
     fn take_scope_token(&self) -> Option<String>;
@@ -258,7 +258,7 @@ async fn try_connect_and_authenticate(
 
     let params = InitializeParams {
         client: ClientInfo {
-            name: "@nikolasd/batman-coordination-mcp".to_string(),
+            name: "@nikolasd/crew-coordination-mcp".to_string(),
             version: crate::VERSION.to_string(),
         },
         supported: batman_protocol::VersionRange {
@@ -404,7 +404,7 @@ async fn dispatch_mcp_request(
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": { "tools": {} },
-                "serverInfo": { "name": "batman-coordination", "version": crate::VERSION },
+                "serverInfo": { "name": "crew-coordination", "version": crate::VERSION },
             },
         }),
         "tools/list" => json!({

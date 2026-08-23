@@ -399,7 +399,7 @@ fn isolated_write_scenario(declared_capabilities: AdapterCapabilities) -> Scenar
 fn vendor_reconnect_scenario() -> ScenarioResult {
     ScenarioResult::pass(
         scenario::VENDOR_RECONNECT,
-        "not applicable to claude: worker MCP tools are injected via a --mcp-config file naming a coordination-mcp command that the claude CLI itself spawns exactly once per session, activating a single-use scope token carried only in the vendor process's BATMAN_WORKER_SCOPE_TOKEN environment variable; there is no persistent worker-MCP subprocess for this adapter to reconnect to -- a new vendor session gets a freshly injected MCP subprocess and a freshly activated token instead of reconnecting an existing one",
+        "not applicable to claude: worker MCP tools are injected via a --mcp-config file naming a coordination-mcp command that the claude CLI itself spawns exactly once per session, activating a single-use scope token carried only in the vendor process's CREW_WORKER_SCOPE_TOKEN environment variable; there is no persistent worker-MCP subprocess for this adapter to reconnect to -- a new vendor session gets a freshly injected MCP subprocess and a freshly activated token instead of reconnecting an existing one",
     )
 }
 
@@ -680,7 +680,7 @@ pub async fn fixture_report() -> ConformanceReport {
 /// Runs the live conformance suite against the installed `claude` CLI.
 ///
 /// Real invocation is the default: the `claude` CLI is an ordinary
-/// installed dependency. Set `BATMAN_DISABLE_VENDOR_CLI=1` to forbid it in
+/// installed dependency. Set `CREW_DISABLE_VENDOR_CLI=1` to forbid it in
 /// CI or on a machine without the CLI installed.
 ///
 /// Every scenario proven by `fixture_report()` needs no model call at
@@ -689,7 +689,7 @@ pub async fn fixture_report() -> ConformanceReport {
 /// installed CLI rather than recorded fixtures.
 ///
 /// # Errors
-/// Returns a message if `BATMAN_DISABLE_VENDOR_CLI=1` is set.
+/// Returns a message if `CREW_DISABLE_VENDOR_CLI=1` is set.
 pub async fn live_report() -> Result<ConformanceReport, String> {
     if batman_runtime::conformance::vendor_cli_invocation_disabled() {
         return Err(format!(

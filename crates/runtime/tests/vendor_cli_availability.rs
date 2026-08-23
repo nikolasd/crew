@@ -1,10 +1,10 @@
 //! The availability probe's two contracts: a run whose vendor CLI is not
 //! installed is denied at authorization time (never at spawn time), and
-//! `BATMAN_DISABLE_VENDOR_CLI` stays *permissive* rather than turning into
+//! `CREW_DISABLE_VENDOR_CLI` stays *permissive* rather than turning into
 //! a denial.
 //!
 //! This file deliberately contains exactly **one** test. Both contracts
-//! are decided by process-global state -- the `BATMAN_DISABLE_VENDOR_CLI`
+//! are decided by process-global state -- the `CREW_DISABLE_VENDOR_CLI`
 //! variable and `PATH` -- which `std::env::set_var` may only mutate
 //! soundly when no other thread is running (edition 2024 makes it
 //! `unsafe` for precisely this reason). `cargo test` gives every

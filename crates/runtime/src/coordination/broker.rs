@@ -217,9 +217,13 @@ impl CoordinationBroker {
 
     /// `coordination/send`: validates bounds, reply visibility, and task
     /// ownership, checks the rate limit, then records the message
-    /// (`recorded`) and immediately marks it `sent` -- no adapter exists in
-    /// this milestone to acknowledge it further, so it settles there until
-    /// a future adapter integration acknowledges or fails it.
+    /// (`recorded`). This broker has no `RunDriver` to hand the message to,
+    /// so it cannot attempt delivery at all -- unlike `OrchestrationService`'s
+    /// `message/send`, it must never advance the message to `sent`, which
+    /// would claim a delivery attempt that structurally never happened. The
+    /// message settles at `recorded` until a future adapter integration
+    /// (or, on a crash, [`Self::sweep_unacknowledged_as_unknown`]) advances
+    /// or resolves it.
     #[allow(clippy::too_many_arguments)]
     pub async fn send(
         &self,
@@ -311,21 +315,14 @@ impl CoordinationBroker {
             .await?;
         self.broadcast(&mut recorded_sequence);
 
-        let mut sent_sequence = self
-            .db
-            .run_domain_op(Box::new(move |conn| {
-                let mut repo = DomainRepository::new(conn, project_id);
-                repo.update_delivery(message_id, &DeliveryState::Sent)
-                    .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
-            }))
-            .await?;
-        self.broadcast(&mut sent_sequence);
-
+        // No `RunDriver` exists on this path -- unlike
+        // `OrchestrationService::message_send` -- so there is no delivery
+        // to attempt. The message stays `recorded`; advancing it to `sent`
+        // here would claim a delivery attempt that never happened.
         Ok(json!({
             "messageId": message_id.to_string(),
-            "deliveryState": "sent",
+            "deliveryState": "recorded",
             "recordedSequence": recorded_sequence["sequence"],
-            "sentSequence": sent_sequence["sequence"],
         }))
     }
 

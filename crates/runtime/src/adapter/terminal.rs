@@ -111,7 +111,7 @@ impl Adapter for TerminalAdapter {
 
     fn start(&self, spec: StartSpec, sink: Arc<dyn AdapterEventSink>) -> AdapterFuture<'_, ()> {
         let harness = self.harness.clone();
-        let session_name = format!("batman-{}", spec.run_id);
+        let session_name = format!("crew-{}", spec.run_id);
         let command_runner = self.command_runner.clone();
         // Capture the sink and run identity for `cancel`'s synthetic
         // settlement (R95) before the fallible spawn: a failed start

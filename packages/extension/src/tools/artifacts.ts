@@ -1,4 +1,4 @@
-// `batman_artifact`: lists and fetches artifacts published by runs this
+// `crew_artifact`: lists and fetches artifacts published by runs this
 // session owns (patches, commit lists, conflict reports, workspace
 // manifests). Both ops are tier `read` -- neither mutates anything; fetching
 // an artifact only streams bytes the runtime already stored.
@@ -19,7 +19,7 @@ type _ArtifactKindExhaustive = Exclude<ArtifactKind, (typeof ARTIFACT_KINDS)[num
 const _artifactKindExhaustive: _ArtifactKindExhaustive = true;
 void _artifactKindExhaustive;
 
-export const BATMAN_ARTIFACT_TOOL_NAME = "batman_artifact";
+export const CREW_ARTIFACT_TOOL_NAME = "crew_artifact";
 
 export function registerArtifactTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
@@ -32,8 +32,8 @@ export function registerArtifactTool(pi: ExtensionAPI, ctx: OrchestrationToolCon
   });
 
   pi.registerTool({
-    name: BATMAN_ARTIFACT_TOOL_NAME,
-    label: "BATMAN Artifact",
+    name: CREW_ARTIFACT_TOOL_NAME,
+    label: "Crew Artifact",
     description:
       "Use to read the evidence a worker produced: patches, commit lists, conflict reports, and workspace manifests. Use op: 'list' to see what a run published (optionally filtered by kind), then op: 'fetch' with an artifactId to read its bytes. Fetches are chunked -- the response carries nextOffset, so pass it back as offset to continue reading a large artifact. Artifacts are scoped to runs this session owns; taskId only narrows further within them.",
     parameters: params,

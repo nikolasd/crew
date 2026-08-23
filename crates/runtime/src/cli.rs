@@ -1,4 +1,4 @@
-//! The `batcave` command-line interface: `serve`, `status`, `stop`,
+//! The `crewd` command-line interface: `serve`, `status`, `stop`,
 //! `version`, `schema`, `monitor`, `audit`, `doctor`, and
 //! `coordination-mcp`. This layer only
 //! parses arguments, resolves the state root when `--state-dir` is omitted,
@@ -20,9 +20,9 @@ struct FixtureBaseline {
     expected_failures: std::collections::HashMap<String, Vec<String>>,
 }
 
-/// The BATMAN runtime daemon.
+/// The Crew runtime daemon.
 #[derive(Parser)]
-#[command(name = "batcave", version, about = "The BATMAN runtime daemon")]
+#[command(name = "crewd", version, about = "The Crew runtime daemon")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -32,7 +32,7 @@ struct Cli {
 enum Command {
     /// Serve the runtime socket protocol for a repository.
     Serve {
-        /// The BATMAN state root. Defaults to the resolved state root.
+        /// The Crew state root. Defaults to the resolved state root.
         #[arg(long)]
         state_dir: Option<PathBuf>,
         /// The repository this runtime instance serves.
@@ -61,7 +61,7 @@ enum Command {
         /// Retry connecting for up to this many seconds (startup races).
         #[arg(long)]
         wait_seconds: Option<u64>,
-        /// The BATMAN state root. Defaults to the resolved state root.
+        /// The Crew state root. Defaults to the resolved state root.
         #[arg(long)]
         state_dir: Option<PathBuf>,
         /// The repository whose runtime to query.
@@ -70,7 +70,7 @@ enum Command {
     },
     /// Gracefully stop the runtime serving a repository.
     Stop {
-        /// The BATMAN state root. Defaults to the resolved state root.
+        /// The Crew state root. Defaults to the resolved state root.
         #[arg(long)]
         state_dir: Option<PathBuf>,
         /// The repository whose runtime to stop.
@@ -79,7 +79,7 @@ enum Command {
     },
     /// Display runtime events for one or all runs.
     Monitor {
-        /// The BATMAN state root. Defaults to the resolved state root.
+        /// The Crew state root. Defaults to the resolved state root.
         #[arg(long)]
         state_dir: Option<PathBuf>,
         /// The repository whose events to display.
@@ -100,7 +100,7 @@ enum Command {
     },
     /// Run diagnostic checks on the runtime state and configuration.
     Doctor {
-        /// The BATMAN state root. Defaults to the resolved state root.
+        /// The Crew state root. Defaults to the resolved state root.
         #[arg(long)]
         state_dir: Option<PathBuf>,
         /// The repository to diagnose.
@@ -121,7 +121,7 @@ enum Command {
     },
     /// Serve the worker-coordination MCP proxy for one run over stdio.
     CoordinationMcp {
-        /// The BATMAN state root. Defaults to the resolved state root.
+        /// The Crew state root. Defaults to the resolved state root.
         #[arg(long)]
         state_dir: Option<PathBuf>,
         /// The repository this run belongs to.
@@ -185,15 +185,15 @@ enum LeaseCommand {
     /// was never persisted (extension crashed before the recording
     /// upsert): such a lease is unreleasable over RPC, because
     /// `workspace/release` is owner-gated and a new session is a
-    /// different principal. `batcave doctor` reports these as stale.
+    /// different principal. `crewd doctor` reports these as stale.
     Release {
-        /// The BATMAN state root. Defaults to the resolved state root.
+        /// The Crew state root. Defaults to the resolved state root.
         #[arg(long)]
         state_dir: Option<PathBuf>,
         /// The repository whose lease to release.
         #[arg(long)]
         repo: PathBuf,
-        /// The lease to release (full id, as `batcave doctor` prints it).
+        /// The lease to release (full id, as `crewd doctor` prints it).
         #[arg(long)]
         lease_id: String,
         /// Confirm releasing a lease that is still `active` -- this strips
@@ -207,7 +207,7 @@ enum LeaseCommand {
 enum AuditCommand {
     /// Export events to a JSONL file.
     Export {
-        /// The BATMAN state root. Defaults to the resolved state root.
+        /// The Crew state root. Defaults to the resolved state root.
         #[arg(long)]
         state_dir: Option<PathBuf>,
         /// The repository whose events to export.
@@ -219,7 +219,8 @@ enum AuditCommand {
         /// Export events up to this timestamp (ISO 8601).
         #[arg(long)]
         to: Option<String>,
-        /// The output file path (defaults to stdout).
+        /// The output file path. Required -- the export always writes to
+        /// this file, never to stdout.
         #[arg(long)]
         output: PathBuf,
     },
@@ -274,7 +275,7 @@ pub async fn run() -> ExitCode {
             run_id,
         } => run_monitor(state_dir, repo, run_id).await,
         Command::Version => {
-            println!("batcave {VERSION}");
+            println!("crewd {VERSION}");
             ExitCode::SUCCESS
         }
         Command::Schema => run_schema().await,
@@ -328,20 +329,20 @@ pub async fn run() -> ExitCode {
     }
 }
 
-/// Reads the launcher's `BATMAN_BINARY_SOURCE` hint. The extension sets it
+/// Reads the launcher's `CREW_BINARY_SOURCE` hint. The extension sets it
 /// when it spawns the daemon (`packages/extension/src/runtime.ts`); a
-/// hand-run `batcave` leaves it unset, which is `Unknown` rather than an
+/// hand-run `crewd` leaves it unset, which is `Unknown` rather than an
 /// error -- the field is diagnostic, never load-bearing.
 fn binary_source_from_env() -> batman_protocol::BinarySource {
     use batman_protocol::BinarySource;
-    match std::env::var("BATMAN_BINARY_SOURCE").as_deref() {
+    match std::env::var("CREW_BINARY_SOURCE").as_deref() {
         Ok("override") => BinarySource::Override,
         Ok("package") => BinarySource::Package,
         _ => BinarySource::Unknown,
     }
 }
 
-/// Runs `batcave serve`: acquires the single-instance lock, starts the IPC
+/// Runs `crewd serve`: acquires the single-instance lock, starts the IPC
 /// server, and serves until signalled, idle-shutdown, or in-band stop.
 async fn run_serve(
     state_dir: Option<PathBuf>,
@@ -385,7 +386,7 @@ async fn run_serve(
     }
 }
 
-/// Runs `batcave status`: connects to the runtime, queries `runtime/status`,
+/// Runs `crewd status`: connects to the runtime, queries `runtime/status`,
 /// and prints the result as JSON.
 async fn run_status(
     wait_seconds: Option<u64>,
@@ -417,7 +418,7 @@ async fn run_status(
     }
 }
 
-/// Runs `batcave stop`: signals a live runtime and waits for it to shut down.
+/// Runs `crewd stop`: signals a live runtime and waits for it to shut down.
 async fn run_stop(state_dir: Option<PathBuf>, repo: PathBuf) -> ExitCode {
     use batman_runtime::lifecycle::{self, StopOptions};
 
@@ -441,7 +442,7 @@ async fn run_stop(state_dir: Option<PathBuf>, repo: PathBuf) -> ExitCode {
     }
 }
 
-/// Runs `batcave lease release`: force-releases a workspace lease by id,
+/// Runs `crewd lease release`: force-releases a workspace lease by id,
 /// directly against the lease database -- no daemon required. Prints the
 /// released lease's materialized path (when one exists) so the operator
 /// can remove a leaked worktree the runtime will no longer tear down.
@@ -477,13 +478,13 @@ async fn run_lease_release(
     // A live daemon owns this state: its subscribers would never see an
     // out-of-band mutation (invariant 7), and the lease may belong to an
     // in-flight run it is supervising. Liveness is proven by the advisory
-    // flock, the same probe `batcave stop` uses -- NOT by the socket
+    // flock, the same probe `crewd stop` uses -- NOT by the socket
     // file, which an unclean crash (the exact case this command exists
     // for) leaves behind.
     if batman_runtime::lifecycle::runtime_is_live(&paths.lock) {
         eprintln!(
             "a runtime is serving this repository; release the lease over RPC \
-             (workspace/release) or run `batcave stop` first"
+             (workspace/release) or run `crewd stop` first"
         );
         return ExitCode::from(1);
     }
@@ -637,7 +638,7 @@ async fn run_lease_release(
     ExitCode::SUCCESS
 }
 
-/// Runs `batcave monitor`: connects to the runtime, replays events, and
+/// Runs `crewd monitor`: connects to the runtime, replays events, and
 /// renders them as plain-text lines until interrupted.
 async fn run_monitor(
     state_dir: Option<PathBuf>,
@@ -663,10 +664,10 @@ async fn run_monitor(
     }
 }
 
-/// Runs `batcave schema`: prints the canonical JSON Schema document.
+/// Runs `crewd schema`: prints the canonical JSON Schema document.
 async fn run_schema() -> ExitCode {
     // Read the schema file from the protocol package.
-    let schema_path = std::path::Path::new("packages/protocol-ts/schema/batman.schema.json");
+    let schema_path = std::path::Path::new("packages/protocol-ts/schema/crew.schema.json");
     match std::fs::read_to_string(schema_path) {
         Ok(schema) => {
             print!("{schema}");
@@ -679,7 +680,7 @@ async fn run_schema() -> ExitCode {
     }
 }
 
-/// Runs `batcave audit export`: exports events to a JSONL file.
+/// Runs `crewd audit export`: exports events to a JSONL file.
 async fn run_audit_export(
     state_dir: Option<PathBuf>,
     repo: PathBuf,
@@ -687,24 +688,42 @@ async fn run_audit_export(
     to: Option<String>,
     output: PathBuf,
 ) -> ExitCode {
-    // A failed resolve must not silently fall back to `.batman`: the
+    // A failed resolve must not silently fall back to `.crew`: the
     // export would then report success against a directory that may not
     // exist.
-    let state_dir_resolved = match resolve_state_dir(state_dir) {
+    let state_root = match resolve_state_dir(state_dir) {
         Ok(dir) => dir,
         Err(err) => return fail(&err),
     };
 
-    let db = match batman_runtime::db::DatabaseHandle::start(state_dir_resolved.join("runtime.db"))
-        .await
-    {
+    // `--state-dir` is the state ROOT here, exactly like every other
+    // subcommand -- `RuntimePaths::resolve` derives the per-repository
+    // runtime directory from it plus `--repo`, rather than treating
+    // `--state-dir` itself as that directory.
+    let paths = match batman_runtime::paths::RuntimePaths::resolve(&state_root, &repo) {
+        Ok(paths) => paths,
+        Err(err) => return fail(&format!("failed to resolve runtime paths: {err}")),
+    };
+
+    // `DatabaseHandle::start` migrates a missing file into an empty,
+    // freshly-initialized database rather than erroring -- which would
+    // make this export silently "succeed" with zero events against a repo
+    // that was never actually served. Refuse before that happens.
+    if !paths.database.exists() {
+        return fail(&format!(
+            "no database at {}; this repository has never been served under this state root",
+            paths.database.display()
+        ));
+    }
+
+    let db = match batman_runtime::db::DatabaseHandle::start(paths.database.clone()).await {
         Ok(handle) => handle,
         Err(err) => return fail(&format!("failed to open database: {err}")),
     };
 
     let mut export = batman_runtime::audit::Export::new(
         repo.to_string_lossy().to_string(),
-        state_dir_resolved.to_string_lossy().to_string(),
+        paths.root.to_string_lossy().to_string(),
         output.to_string_lossy().to_string(),
     );
     export.from = from;
@@ -722,17 +741,17 @@ async fn run_audit_export(
     }
 }
 
-/// Resolves the state directory, defaulting to `.batman` if `None`.
+/// Resolves the state directory, defaulting to `.crew` if `None`.
 fn resolve_state_dir(state_dir: Option<PathBuf>) -> Result<PathBuf, String> {
     match state_dir {
         Some(dir) => Ok(dir),
         None => {
-            let default = PathBuf::from(".batman");
+            let default = PathBuf::from(".crew");
             if default.exists() {
                 Ok(default)
             } else {
                 Err(
-                    "state directory `.batman` does not exist; use --state-dir to specify it"
+                    "state directory `.crew` does not exist; use --state-dir to specify it"
                         .to_string(),
                 )
             }
@@ -740,7 +759,7 @@ fn resolve_state_dir(state_dir: Option<PathBuf>) -> Result<PathBuf, String> {
     }
 }
 
-/// Runs `batcave doctor`: runs the diagnostic check catalog against the
+/// Runs `crewd doctor`: runs the diagnostic check catalog against the
 /// same paths `serve` uses, so it diagnoses the state a daemon actually
 /// writes rather than a directory only `doctor` believes in.
 async fn run_doctor(
@@ -832,9 +851,9 @@ async fn run_doctor(
     }
 }
 
-/// Runs `batcave coordination-mcp`: proxies MCP `initialize`/`tools/list`/
+/// Runs `crewd coordination-mcp`: proxies MCP `initialize`/`tools/list`/
 /// `tools/call` on stdio to the worker coordination tools over the
-/// runtime socket, authenticated with `BATMAN_WORKER_SCOPE_TOKEN` read
+/// runtime socket, authenticated with `CREW_WORKER_SCOPE_TOKEN` read
 /// from (and removed from) this process's own inherited environment. All
 /// protocol/auth behavior lives in `batman_runtime::coordination::mcp`;
 /// this function only resolves CLI arguments into that call.
@@ -861,7 +880,7 @@ async fn run_coordination_mcp(
     }
 }
 
-/// Runs `batcave display probe`: probes one display backend's status and
+/// Runs `crewd display probe`: probes one display backend's status and
 /// prints it as JSON or human-readable text. Never activates the backend;
 /// this only reads availability/version, exactly like `DisplayBackendTrait::status`.
 async fn run_display_probe(backend: String, json: bool) -> ExitCode {
@@ -916,11 +935,11 @@ async fn run_display_probe(backend: String, json: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Runs `batcave conformance`: runs one or all adapters' fixture or live
+/// Runs `crewd conformance`: runs one or all adapters' fixture or live
 /// conformance suite and writes the resulting report(s) to `output` as a
 /// JSON array, printing the exact same JSON to stdout. Exactly one of
 /// `fixture`/`live` must be set. Live mode runs by default; when
-/// `BATMAN_DISABLE_VENDOR_CLI=1` is set, the adapter's `live_report()`
+/// `CREW_DISABLE_VENDOR_CLI=1` is set, the adapter's `live_report()`
 /// returns `Err`, which this command reports as a `{adapter,
 /// mode:"live", passed:false, error}` entry, never a hard process
 /// failure.
@@ -1064,7 +1083,7 @@ async fn run_conformance(adapter: String, fixture: bool, live: bool, output: Pat
     ExitCode::SUCCESS
 }
 
-/// Runs `batcave adapters`: runs every reserved adapter kind's fixture
+/// Runs `crewd adapters`: runs every reserved adapter kind's fixture
 /// conformance suite and prints the resulting reports (the only source of
 /// truth for OMP-facing effective capabilities) as JSON or human-readable
 /// text.
@@ -1102,7 +1121,7 @@ async fn run_adapters(json: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Runs `batcave capture`: re-records adapter fixtures from a real vendor CLI,
+/// Runs `crewd capture`: re-records adapter fixtures from a real vendor CLI,
 /// normalizes known nondeterministic values, and rewrites fixture bytes when
 /// the resulting capture differs from the committed artifact.
 async fn run_capture(adapter: String, fixture: Option<String>, dry_run: bool) -> ExitCode {
@@ -1184,5 +1203,94 @@ mod tests {
         assert_eq!(capture_status(true, false), "unchanged");
         assert_eq!(capture_status(false, false), "rewritten");
         assert_eq!(capture_status(false, true), "would rewrite");
+    }
+
+    /// `run_audit_export` must resolve the database the same way every
+    /// other subcommand does: `RuntimePaths::resolve(state_root, repo)`,
+    /// not a direct join of `runtime.db` onto `--state-dir`.
+    #[tokio::test]
+    async fn audit_export_resolves_the_db_via_runtime_paths_like_every_other_subcommand() {
+        let state_root = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
+
+        // Seed events at the location `RuntimePaths::resolve` computes for
+        // this repo -- the correct per-repository database -- not at
+        // `<state-root>/runtime.db`, which is what the old buggy code read.
+        let paths =
+            batman_runtime::paths::RuntimePaths::resolve(state_root.path(), repo.path()).unwrap();
+        {
+            let db = batman_runtime::db::DatabaseHandle::start(paths.database.clone())
+                .await
+                .unwrap();
+            let redactor = batman_runtime::security::redaction::Redactor::new();
+            for text in ["first", "second", "third"] {
+                let event = batman_runtime::security::redaction::RawRuntimeEvent {
+                    timestamp: batman_protocol::Timestamp::now(),
+                    project_id: batman_protocol::ProjectId::new(),
+                    run_id: None,
+                    kind: batman_runtime::security::redaction::RawEventKind::Diagnostic {
+                        level: batman_protocol::DiagnosticLevel::Info,
+                        code: "fixture".to_string(),
+                        fragments: vec![batman_protocol::Classified {
+                            class: batman_protocol::ContentClass::Visible,
+                            value: text.to_string(),
+                        }],
+                    },
+                };
+                db.append_event(redactor.sanitize(event)).await.unwrap();
+            }
+        }
+
+        let output = state_root.path().join("audit.jsonl");
+        let code = run_audit_export(
+            Some(state_root.path().to_path_buf()),
+            repo.path().to_path_buf(),
+            None,
+            None,
+            output.clone(),
+        )
+        .await;
+
+        assert_eq!(code, ExitCode::SUCCESS);
+        let lines: Vec<_> = std::fs::read_to_string(&output)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(lines.len(), 3, "expected all 3 seeded events exported");
+    }
+
+    /// A `--state-dir`/`--repo` pair whose resolved database was never
+    /// created must be refused -- opening it would silently migrate an
+    /// empty database into existence and export zero events with no
+    /// indication anything was wrong.
+    #[tokio::test]
+    async fn audit_export_refuses_a_nonexistent_database_without_creating_one() {
+        let state_root = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
+        let output = state_root.path().join("audit.jsonl");
+
+        let code = run_audit_export(
+            Some(state_root.path().to_path_buf()),
+            repo.path().to_path_buf(),
+            None,
+            None,
+            output.clone(),
+        )
+        .await;
+
+        assert_eq!(code, ExitCode::FAILURE);
+        assert!(
+            !output.exists(),
+            "a refused export must not write an output file"
+        );
+        let paths =
+            batman_runtime::paths::RuntimePaths::resolve(state_root.path(), repo.path()).unwrap();
+        assert!(
+            !paths.database.exists(),
+            "a refused export must not have silently created the database either"
+        );
     }
 }

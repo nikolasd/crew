@@ -216,7 +216,7 @@ async fn omp_client(harness: &Harness, instance_id: &str) -> Client {
             "id": 1,
             "method": "initialize",
             "params": {
-                "client": { "name": "@nikolasd/batman", "version": "0.1.0" },
+                "client": { "name": "@nikolasd/crew", "version": "0.1.0" },
                 "supported": { "min": { "major": 1, "minor": 0 }, "max": { "major": 1, "minor": 0 } },
                 "repository": { "canonicalPath": harness.owned_dir, "vcsRoot": harness.owned_dir },
                 "auth": { "role": "ompExtension", "instanceId": instance_id, "agentDirectory": harness.owned_dir },
@@ -312,7 +312,7 @@ async fn execute_tool_call_fulfills_every_tool_against_the_real_broker() {
     let harness = Harness::start().await;
     let mut omp = omp_client(&harness, "omp-1").await;
     let (_token, run_id, task_id, worker_id) = seed_scoped_run(&harness, &mut omp).await;
-    // A second worker on the same task, so batman_peers has someone to see.
+    // A second worker on the same task, so crew_peers has someone to see.
     let peer_worker = omp
         .call(
             6,
@@ -335,13 +335,13 @@ async fn execute_tool_call_fulfills_every_tool_against_the_real_broker() {
     let scope = bound_scope(run_id, task_id, worker_id);
 
     let task = broker
-        .execute_tool_call("batman_task", &json!({}), scope)
+        .execute_tool_call("crew_task", &json!({}), scope)
         .await;
     assert_eq!(task["isError"], false, "{task:?}");
     assert_eq!(task["structuredContent"]["taskId"], task_id.to_string());
 
     let peers = broker
-        .execute_tool_call("batman_peers", &json!({}), scope)
+        .execute_tool_call("crew_peers", &json!({}), scope)
         .await;
     assert_eq!(peers["isError"], false, "{peers:?}");
     assert_eq!(
@@ -354,17 +354,17 @@ async fn execute_tool_call_fulfills_every_tool_against_the_real_broker() {
 
     let send = broker
         .execute_tool_call(
-            "batman_send",
+            "crew_send",
             &json!({ "kind": "peerMessage", "payload": "hi peer" }),
             scope,
         )
         .await;
     assert_eq!(send["isError"], false, "{send:?}");
-    assert_eq!(send["structuredContent"]["deliveryState"], "sent");
+    assert_eq!(send["structuredContent"]["deliveryState"], "recorded");
 
     let request_child = broker
         .execute_tool_call(
-            "batman_request_child",
+            "crew_request_child",
             &json!({ "reason": "need help" }),
             scope,
         )
@@ -374,7 +374,7 @@ async fn execute_tool_call_fulfills_every_tool_against_the_real_broker() {
 
     let publish = broker
         .execute_tool_call(
-            "batman_publish_artifact",
+            "crew_publish_artifact",
             &json!({ "artifactRef": "artifact://abc", "description": "the diff" }),
             scope,
         )
@@ -387,23 +387,23 @@ async fn execute_tool_call_fulfills_every_tool_against_the_real_broker() {
 
     let blocked = broker
         .execute_tool_call(
-            "batman_report_blocked",
+            "crew_report_blocked",
             &json!({ "reason": "waiting" }),
             scope,
         )
         .await;
     assert_eq!(blocked["isError"], false, "{blocked:?}");
-    assert_eq!(blocked["structuredContent"]["deliveryState"], "sent");
+    assert_eq!(blocked["structuredContent"]["deliveryState"], "recorded");
 
     let policy = broker
         .execute_tool_call(
-            "batman_ask_policy",
+            "crew_ask_policy",
             &json!({ "question": "may I write here?" }),
             scope,
         )
         .await;
     assert_eq!(policy["isError"], false, "{policy:?}");
-    assert_eq!(policy["structuredContent"]["deliveryState"], "sent");
+    assert_eq!(policy["structuredContent"]["deliveryState"], "recorded");
 }
 
 #[tokio::test]
@@ -417,7 +417,7 @@ async fn execute_tool_call_rejects_a_smuggled_sender_worker_id_and_journals_noth
     let spoofed = WorkerId::new();
     let result = broker
         .execute_tool_call(
-            "batman_send",
+            "crew_send",
             &json!({
                 "kind": "peerMessage",
                 "payload": "hi",
@@ -510,7 +510,7 @@ async fn artifact_tools_only_expose_artifacts_from_the_callers_own_task() {
     let scope = bound_scope(run_id, task_id, worker_id);
 
     let listed = broker
-        .execute_tool_call("batman_artifact_list", &json!({}), scope)
+        .execute_tool_call("crew_artifact_list", &json!({}), scope)
         .await;
     assert_eq!(listed["isError"], false, "{listed:?}");
     let ids: Vec<&str> = listed["structuredContent"]["artifacts"]
@@ -523,7 +523,7 @@ async fn artifact_tools_only_expose_artifacts_from_the_callers_own_task() {
 
     let fetched = broker
         .execute_tool_call(
-            "batman_artifact_fetch",
+            "crew_artifact_fetch",
             &json!({ "artifactId": mine.to_string() }),
             scope,
         )
@@ -536,7 +536,7 @@ async fn artifact_tools_only_expose_artifacts_from_the_callers_own_task() {
         for id in [theirs, orphan, ArtifactId::new()] {
             let denied = broker
                 .execute_tool_call(
-                    "batman_artifact_fetch",
+                    "crew_artifact_fetch",
                     &json!({ "artifactId": id.to_string() }),
                     scope,
                 )
@@ -681,7 +681,7 @@ async fn coordination_send_accepts_a_payload_at_the_limit() {
         )
         .await;
     assert!(result.get("error").is_none(), "{result:?}");
-    assert_eq!(result["result"]["deliveryState"], "sent");
+    assert_eq!(result["result"]["deliveryState"], "recorded");
 }
 
 #[tokio::test]
@@ -1186,7 +1186,7 @@ async fn sweep_unacknowledged_as_unknown_settles_recorded_and_sent_messages() {
             }),
         )
         .await;
-    assert_eq!(sent["result"]["deliveryState"], "sent");
+    assert_eq!(sent["result"]["deliveryState"], "recorded");
 
     // Simulate crash recovery: a fresh broker over the same database sweeps
     // every non-terminal delivery state to `unknown`, never resending.

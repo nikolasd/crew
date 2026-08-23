@@ -1,6 +1,6 @@
 //! Display backend implementations.
 //!
-//! Provides concrete display backends for rendering Batman output:
+//! Provides concrete display backends for rendering Crew output:
 //! - [`HerdrDisplay`]: Herdr terminal multiplexer backend, with real
 //!   client/server protocol compatibility gating and pane-level
 //!   operations (split/run/move/close/report-agent).

@@ -26,7 +26,7 @@
 //! own pre-start guard clauses. The optional, `#[ignore]`d
 //! `claude_live.rs` end-to-end test is what actually exercises the
 //! spawn+stdin+reader-task path; it is skipped unless explicitly run
-//! with `--ignored` and `BATMAN_DISABLE_VENDOR_CLI` is unset.
+//! with `--ignored` and `CREW_DISABLE_VENDOR_CLI` is unset.
 
 pub mod command;
 pub mod conformance;
@@ -37,7 +37,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use batman_protocol::{RunId, TaskId, WorkerId};
+use batman_protocol::{Classified, ContentClass, RunId, TaskId, WorkerId};
 use batman_runtime::adapter::mcp_config::{
     AdapterMcpConfig, coordination_mcp_config_document, coordination_mcp_env,
 };
@@ -78,7 +78,9 @@ struct SharedSessionInfo {
 
 /// A message the background session task acts on.
 enum SessionCommand {
-    WriteStdin(Vec<u8>),
+    /// The reply carries the real outcome of the write -- never
+    /// discarded, so a broken pipe is never reported as a false success.
+    WriteStdin(Vec<u8>, oneshot::Sender<std::io::Result<()>>),
     Terminate(oneshot::Sender<()>),
 }
 
@@ -337,7 +339,7 @@ pub fn build_mcp_injection(mcp: &AdapterMcpConfig, run_id: RunId) -> std::io::Re
     let context = mcp.launch_context(run_id);
     let token = mcp.reserve();
     let extra_env = coordination_mcp_env(&token);
-    let config_path = std::env::temp_dir().join(format!("batman-mcp-{run_id}.json"));
+    let config_path = std::env::temp_dir().join(format!("crew-mcp-{run_id}.json"));
     let document = coordination_mcp_config_document(&context);
     write_mcp_config_file(&config_path, &document)?;
     Ok(McpInjection {
@@ -422,8 +424,25 @@ async fn run_session(
             }
             cmd = commands.recv() => {
                 match cmd {
-                    Some(SessionCommand::WriteStdin(bytes)) => {
-                        let _ = process.write_stdin(&bytes).await;
+                    Some(SessionCommand::WriteStdin(bytes, reply)) => {
+                        let outcome = process.write_stdin(&bytes).await;
+                        if let Err(err) = &outcome {
+                            let _ = sink
+                                .emit(AdapterEvent {
+                                    run_id,
+                                    task_id,
+                                    worker_id,
+                                    payload: AdapterEventPayload::ProtocolHealthChanged {
+                                        healthy: false,
+                                        detail: Classified {
+                                            class: ContentClass::Visible,
+                                            value: format!("stdin write failed: {err}"),
+                                        },
+                                    },
+                                })
+                                .await;
+                        }
+                        let _ = reply.send(outcome);
                     }
                     Some(SessionCommand::Terminate(reply)) => {
                         let outcome = process.terminate().await;
@@ -602,8 +621,9 @@ impl Adapter for ClaudeAdapter {
             };
             drop(state);
             let bytes = command::build_stdin_user_message(&text);
+            let (reply_tx, reply_rx) = oneshot::channel();
             commands
-                .send(SessionCommand::WriteStdin(bytes))
+                .send(SessionCommand::WriteStdin(bytes, reply_tx))
                 .await
                 .map_err(|_| {
                     AdapterError::invalid_vendor_state(
@@ -611,7 +631,23 @@ impl Adapter for ClaudeAdapter {
                         "send",
                         "the vendor session's background task has already exited",
                     )
-                })
+                })?;
+            // Wait for the real write outcome rather than the command
+            // merely having been enqueued -- a broken pipe must not be
+            // reported to the caller as a successful send.
+            match reply_rx.await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(err)) => Err(AdapterError::process(
+                    self.kind(),
+                    "send",
+                    format!("stdin write failed: {err}"),
+                )),
+                Err(_) => Err(AdapterError::invalid_vendor_state(
+                    self.kind(),
+                    "send",
+                    "the vendor session's background task exited before confirming delivery",
+                )),
+            }
         })
     }
 
@@ -845,6 +881,71 @@ mod session_exit_tests {
             exited.len(),
             1,
             "expected exactly one ProcessExited, got {exited:?}"
+        );
+    }
+
+    /// A stdin write that fails (here: deterministically, by closing the
+    /// process's stdin before the session ever sees it, rather than racing
+    /// a real process's exit) used to be discarded with `let _ = ...`,
+    /// reporting a false success to both the command's own reply and the
+    /// journal. It must instead surface as a `ProtocolHealthChanged`
+    /// diagnostic and a failed reply.
+    #[tokio::test]
+    async fn a_failed_stdin_write_emits_a_protocol_health_diagnostic_and_replies_with_the_error() {
+        let supervisor = Supervisor::with_escalation(fast_escalation());
+        let spec = SpawnSpec {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "sleep 30".into()],
+            cwd: PathBuf::from("/tmp"),
+            env: std::collections::HashMap::new(),
+            max_stdout_frame_bytes: 8192,
+            max_stderr_capture_bytes: 4096,
+        };
+        let mut process = supervisor.spawn(spec).await.expect("spawn /bin/sh");
+        // Deterministically force every subsequent `write_stdin` to fail,
+        // instead of racing a real process's exit to close the pipe.
+        process.close_stdin();
+        let (commands_tx, commands_rx) = mpsc::channel(4);
+
+        let sink = RecordingSink::new();
+        let handle = tokio::spawn(run_session(
+            process,
+            commands_rx,
+            ClaudeNormalizer::new(),
+            sink.clone(),
+            (RunId::new(), TaskId::new(), WorkerId::new()),
+            Arc::new(StdMutex::new(SharedSessionInfo::default())),
+            "claude".to_string(),
+            None,
+        ));
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        commands_tx
+            .send(SessionCommand::WriteStdin(b"hello\n".to_vec(), reply_tx))
+            .await
+            .expect("send write_stdin");
+        let outcome = reply_rx.await.expect("write_stdin reply is delivered");
+        assert!(
+            outcome.is_err(),
+            "a closed stdin must be reported as a failed write, not a false success"
+        );
+
+        let (term_tx, term_rx) = tokio::sync::oneshot::channel();
+        commands_tx
+            .send(SessionCommand::Terminate(term_tx))
+            .await
+            .expect("send terminate");
+        term_rx.await.expect("terminate reply");
+        handle.await.expect("run_session completed");
+
+        let payloads = sink.payloads();
+        assert!(
+            payloads.iter().any(|p| matches!(
+                p,
+                AdapterEventPayload::ProtocolHealthChanged { healthy: false, .. }
+            )),
+            "expected a ProtocolHealthChanged(healthy: false) diagnostic for the failed stdin \
+             write: {payloads:?}"
         );
     }
 }

@@ -1,4 +1,4 @@
-//! End-to-end integration tests for `batcave coordination-mcp`: spawns
+//! End-to-end integration tests for `crewd coordination-mcp`: spawns
 //! the real compiled binary as a genuine child process (no faked peer
 //! credentials -- the kernel reports its actual pid via `SO_PEERCRED`/
 //! `LOCAL_PEERCRED`), drives it over real stdio as an MCP client would,
@@ -152,7 +152,7 @@ impl Drop for Harness {
 
 // ------------------------------------------------------------- subprocess
 
-/// Spawns the real `batcave coordination-mcp` binary, following the
+/// Spawns the real `crewd coordination-mcp` binary, following the
 /// documented reserve/spawn/bind sequence: reserve a token, put it in
 /// the child's environment, spawn, then bind to the real returned pid.
 struct McpSubprocess {
@@ -217,7 +217,7 @@ impl McpSubprocess {
         run_id: RunId,
         token: &str,
     ) -> (Child, ChildStdin, BufReader<ChildStdout>) {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_batcave"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_crewd"))
             .arg("coordination-mcp")
             .arg("--state-dir")
             .arg(&harness.state_dir)
@@ -228,7 +228,7 @@ impl McpSubprocess {
             .env_clear()
             .env("HOME", std::env::var("HOME").unwrap_or_default())
             .env("PATH", std::env::var("PATH").unwrap_or_default())
-            .env("BATMAN_WORKER_SCOPE_TOKEN", token)
+            .env("CREW_WORKER_SCOPE_TOKEN", token)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -240,9 +240,9 @@ impl McpSubprocess {
         (child, stdin, stdout)
     }
 
-    /// Spawns with `BATMAN_WORKER_SCOPE_TOKEN` absent entirely.
+    /// Spawns with `CREW_WORKER_SCOPE_TOKEN` absent entirely.
     fn spawn_without_scope_token(harness: &Harness, run_id: RunId) -> Child {
-        Command::new(env!("CARGO_BIN_EXE_batcave"))
+        Command::new(env!("CARGO_BIN_EXE_crewd"))
             .arg("coordination-mcp")
             .arg("--state-dir")
             .arg(&harness.state_dir)
@@ -333,16 +333,16 @@ async fn coordination_mcp_lists_all_ten_tools() {
     assert_eq!(
         names,
         vec![
-            "batman_task",
-            "batman_peers",
-            "batman_peer_workspace",
-            "batman_artifact_list",
-            "batman_artifact_fetch",
-            "batman_send",
-            "batman_request_child",
-            "batman_publish_artifact",
-            "batman_report_blocked",
-            "batman_ask_policy",
+            "crew_task",
+            "crew_peers",
+            "crew_peer_workspace",
+            "crew_artifact_list",
+            "crew_artifact_fetch",
+            "crew_send",
+            "crew_request_child",
+            "crew_publish_artifact",
+            "crew_report_blocked",
+            "crew_ask_policy",
         ]
     );
     for tool in tools {
@@ -352,7 +352,7 @@ async fn coordination_mcp_lists_all_ten_tools() {
 }
 
 #[tokio::test]
-async fn coordination_mcp_fulfills_batman_task_and_batman_send_against_the_real_broker() {
+async fn coordination_mcp_fulfills_crew_task_and_crew_send_against_the_real_broker() {
     let harness = Harness::start().await;
     let (run_id, task_id, worker_id) = harness.seed_run().await;
     let mut proxy = McpSubprocess::spawn(&harness, run_id, task_id, worker_id).await;
@@ -362,7 +362,7 @@ async fn coordination_mcp_fulfills_batman_task_and_batman_send_against_the_real_
         .call(
             2,
             "tools/call",
-            json!({ "name": "batman_task", "arguments": {} }),
+            json!({ "name": "crew_task", "arguments": {} }),
         )
         .await;
     let result = &task_call["result"];
@@ -374,14 +374,14 @@ async fn coordination_mcp_fulfills_batman_task_and_batman_send_against_the_real_
             3,
             "tools/call",
             json!({
-                "name": "batman_send",
+                "name": "crew_send",
                 "arguments": { "kind": "peerMessage", "payload": "hello from the real subprocess" },
             }),
         )
         .await;
     let result = &send_call["result"];
     assert_eq!(result["isError"], false, "{send_call:?}");
-    assert_eq!(result["structuredContent"]["deliveryState"], "sent");
+    assert_eq!(result["structuredContent"]["deliveryState"], "recorded");
 
     // Verify against the real database directly: the message the
     // subprocess sent is journaled with the *bound* worker id, never one
@@ -410,7 +410,7 @@ async fn coordination_mcp_rejects_a_smuggled_sender_worker_id_over_real_stdio() 
             2,
             "tools/call",
             json!({
-                "name": "batman_send",
+                "name": "crew_send",
                 "arguments": {
                     "kind": "peerMessage",
                     "payload": "hi",

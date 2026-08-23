@@ -1,7 +1,7 @@
 //! The adapter conformance runner: fixture (default, always safe, zero
 //! model calls) and live scenario suites that decide which of an adapter's
 //! *declared* capabilities are actually *effective* -- the only set
-//! `crate::adapter::registry::AdapterRegistry` and `batcave adapters --json`
+//! `crate::adapter::registry::AdapterRegistry` and `crewd adapters --json`
 //! may ever expose to OMP.
 //!
 //! Each adapter owns its own scenario implementations in a `conformance`
@@ -27,6 +27,7 @@ pub mod scrub;
 pub use report::{ConformanceMode, ConformanceReport, ScenarioOutcome, ScenarioResult};
 
 use crate::adapter::{AdapterCapabilities, AdapterKind};
+use crate::env_flag::env_flag;
 
 /// Set to `"1"` to forbid every vendor-CLI process this runtime would
 /// spawn purely to *observe* the CLI -- conformance live *and fixture*
@@ -38,12 +39,16 @@ use crate::adapter::{AdapterCapabilities, AdapterKind};
 /// It deliberately does **not** gate `Adapter::start()`: run execution is
 /// authorized by policy, so a development switch must never be able to
 /// silently stop production work.
-pub const DISABLE_VENDOR_CLI_ENV: &str = "BATMAN_DISABLE_VENDOR_CLI";
+pub const DISABLE_VENDOR_CLI_ENV: &str = "CREW_DISABLE_VENDOR_CLI";
+
+/// The pre-rename name for [`DISABLE_VENDOR_CLI_ENV`], still honored as a
+/// fallback so an existing shell or CI job keeps working unchanged.
+pub const DISABLE_VENDOR_CLI_ENV_LEGACY: &str = "BATMAN_DISABLE_VENDOR_CLI";
 
 /// Whether observation-only vendor-CLI invocation is disabled.
 #[must_use]
 pub fn vendor_cli_invocation_disabled() -> bool {
-    std::env::var(DISABLE_VENDOR_CLI_ENV).as_deref() == Ok("1")
+    env_flag(DISABLE_VENDOR_CLI_ENV, DISABLE_VENDOR_CLI_ENV_LEGACY).as_deref() == Some("1")
 }
 
 /// An honest, non-spawning result for a scenario that can only be proven by

@@ -1,4 +1,4 @@
-// `batman_violation`: lists and decides recorded policy violations. A
+// `crew_violation`: lists and decides recorded policy violations. A
 // winning "release" resolves that specific violation but lifts quarantine
 // only if it was the *last* unresolved violation on the run -- a
 // different, still-open violation on the same run keeps it quarantined
@@ -12,7 +12,7 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import type { OrchestrationToolContext } from "./shared";
 import { callOrchestration } from "./shared";
 
-export const BATMAN_VIOLATION_TOOL_NAME = "batman_violation";
+export const CREW_VIOLATION_TOOL_NAME = "crew_violation";
 
 export function registerViolationTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
@@ -23,8 +23,8 @@ export function registerViolationTool(pi: ExtensionAPI, ctx: OrchestrationToolCo
   });
 
   pi.registerTool({
-    name: BATMAN_VIOLATION_TOOL_NAME,
-    label: "BATMAN Violation",
+    name: CREW_VIOLATION_TOOL_NAME,
+    label: "Crew Violation",
     description:
       "Use to find and resolve policy violations. Use op: 'list' (optionally with runId) to see every recorded violation and its decision state -- an entry with resolution: null on a quarantined run is the one holding the quarantine. Use op: 'decide' with the violationId and a resolution to resolve one. The deciding identity is taken from your session automatically. A \"release\" only lifts quarantine if this was the last unresolved violation on the run -- check the result's quarantineCleared field (true/false/absent) to tell whether it did; if false, use op: 'list' to find the still-open violation. Until every violation on a run is decided, the run makes no further progress.",
     parameters: params,

@@ -318,8 +318,8 @@ fn set_host_uri_schemes_command_uses_the_real_schemes_field_and_scheme_shape() {
     // Grounded against the installed binary's own `setSchemes`: each
     // scheme entry is `{scheme, description?, writable?, immutable?}`.
     let params = client::set_host_uri_schemes_command(&[client::HostUriScheme {
-        scheme: "batman".to_string(),
-        description: Some("BATMAN run/task/worker state".to_string()),
+        scheme: "crew".to_string(),
+        description: Some("Crew run/task/worker state".to_string()),
         writable: false,
         immutable: true,
     }]);
@@ -330,7 +330,7 @@ fn set_host_uri_schemes_command_uses_the_real_schemes_field_and_scheme_shape() {
     assert_eq!(schemes.len(), 1);
     assert_eq!(
         schemes[0].get("scheme").and_then(Value::as_str),
-        Some("batman")
+        Some("crew")
     );
     assert_eq!(
         schemes[0].get("writable").and_then(Value::as_bool),
@@ -352,7 +352,7 @@ fn host_tools_and_host_uri_schemes_are_established_before_the_prompt_command() {
         hidden: false,
     }];
     let schemes = [client::HostUriScheme {
-        scheme: "batman".to_string(),
+        scheme: "crew".to_string(),
         description: None,
         writable: false,
         immutable: true,
@@ -590,7 +590,7 @@ async fn set_host_tools_and_host_uri_schemes_round_trip_against_installed_omp() 
     };
 
     let tools = [client::HostToolDefinition {
-        name: "batman_test_tool".to_string(),
+        name: "crew_test_tool".to_string(),
         description: "A no-op tool registered only to prove set_host_tools round-trips".to_string(),
         parameters: serde_json::json!({ "type": "object", "properties": {} }),
         label: None,
@@ -618,7 +618,7 @@ async fn set_host_tools_and_host_uri_schemes_round_trip_against_installed_omp() 
         .iter()
         .filter_map(Value::as_str)
         .collect();
-    assert!(tool_names.contains(&"batman_test_tool"));
+    assert!(tool_names.contains(&"crew_test_tool"));
 
     let schemes = [client::HostUriScheme {
         scheme: "battest".to_string(),

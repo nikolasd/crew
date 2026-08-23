@@ -70,7 +70,7 @@ impl Fixture {
         assert!(status.success(), "git commit should succeed");
 
         // Compute the materializer root path and clean it up
-        let root = std::env::temp_dir().join(format!("batman-workspace-{}", project_id));
+        let root = std::env::temp_dir().join(format!("crew-workspace-{}", project_id));
         if root.exists() {
             std::fs::remove_dir_all(&root).ok();
         }
@@ -241,7 +241,7 @@ fn path_guard_rejects_symlink_escape() {
 
     // Create the materializer first to get the computed root
     let project_id = ProjectId::parse("01900000-0000-0000-0000-000000000009").unwrap();
-    let root = std::env::temp_dir().join(format!("batman-workspace-{}", project_id));
+    let root = std::env::temp_dir().join(format!("crew-workspace-{}", project_id));
     std::fs::create_dir_all(&root).unwrap();
     let materializer = WorkspaceMaterializer::new(project_id, repo).unwrap();
 
@@ -289,7 +289,7 @@ fn copy_isolation_recreates_directory_symlinks() {
 
     // Create the materializer
     let project_id = ProjectId::parse("01900000-0000-0000-0000-000000000021").unwrap();
-    let root = std::env::temp_dir().join(format!("batman-workspace-{}", project_id));
+    let root = std::env::temp_dir().join(format!("crew-workspace-{}", project_id));
     if root.exists() {
         std::fs::remove_dir_all(&root).ok();
     }
@@ -352,7 +352,7 @@ fn copy_isolation_recreates_symlinks() {
 
     // Create the materializer
     let project_id = ProjectId::parse("01900000-0000-0000-0000-000000000020").unwrap();
-    let root = std::env::temp_dir().join(format!("batman-workspace-{}", project_id));
+    let root = std::env::temp_dir().join(format!("crew-workspace-{}", project_id));
     if root.exists() {
         std::fs::remove_dir_all(&root).ok();
     }
@@ -423,7 +423,7 @@ fn copy_isolation_refuses_a_tree_over_the_byte_ceiling() {
     // A partially copied workspace is worse than none: an adapter would run
     // against a silently incomplete checkout.
     let copy_path = std::env::temp_dir()
-        .join(format!("batman-workspace-{}", test_project_id(7)))
+        .join(format!("crew-workspace-{}", test_project_id(7)))
         .join(run.to_string());
     assert!(
         !copy_path.exists(),

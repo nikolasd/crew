@@ -1,13 +1,13 @@
-# BATMAN Getting Started Guide
+# Crew Getting Started Guide
 
-**This is the BATMAN developer manual.** Audience: contributors building, configuring, or testing
-BATMAN from source. This guide covers everything you need to **build BATMAN from source as a
+**This is the Crew developer manual.** Audience: contributors building, configuring, or testing
+Crew from source. This guide covers everything you need to **build Crew from source as a
 contributor** — from setup to troubleshooting, including configuration, security, recovery,
 doctor, and testing. Its companions are [`code-walkthrough.md`](code-walkthrough.md) (source map
 and debugging playbook), [`rust-primer.md`](rust-primer.md) (Rust via this codebase), and
 [`manual-testing.md`](manual-testing.md) (QA verification steps).
 
-> **Just want to use BATMAN, not build it?** See [README.md's Installation section](../README.md#installation) — `/marketplace add nikolasd/batman` then `/marketplace install batman@batman` installs the extension, then a session restart, then `/batman-runtime-install` in the new session downloads the runtime binary; no build step. Note this is a private repository, so both need your own GitHub read access. Then see [`plugin-usage.md`](plugin-usage.md), the user manual. This guide is for developing BATMAN itself.
+> **Just want to use Crew, not build it?** See [README.md's Installation section](../README.md#installation) — `/marketplace add nikolasd/batman` then `/marketplace install crew@crew` installs the extension, then a session restart, then `/crew-runtime-install` in the new session downloads the runtime binary; no build step. Note this is a private repository, so both need your own GitHub read access. Then see [`plugin-usage.md`](plugin-usage.md), the user manual. This guide is for developing Crew itself.
 
 ## Prerequisites
 
@@ -31,7 +31,7 @@ cd batman
 ### Build
 
 ```bash
-# Install JS deps and build the batcave runtime in one step
+# Install JS deps and build the crewd runtime in one step
 bun run setup
 
 # Bundle the OMP extension (required before manual testing loads dist/index.js)
@@ -48,7 +48,7 @@ rebuilt `dist/index.js`.
 
 ### Configuration Layers
 
-BATMAN uses a layered configuration system with strict precedence (highest wins):
+Crew uses a layered configuration system with strict precedence (highest wins):
 
 1. **Org config** (lowest precedence)
 2. **Repo config**
@@ -61,14 +61,14 @@ Configuration files are YAML with strict unknown-key rejection (fails closed wit
 
 There is no auto-discovery: each layer is loaded only from the path you pass explicitly via
 `--org-config`, `--repo-config`, or `--user-config` (to `serve` or `doctor`) — a layer you don't
-pass is simply absent from the merge, and there's no `BATMAN_ORG_CONFIG`-style environment variable
-either. `<repo>/.batman/config.yaml` and `~/.batman/config.yaml` below are conventional locations to
-point those flags at, not defaults BATMAN looks for on its own.
+pass is simply absent from the merge, and there's no `CREW_ORG_CONFIG`-style environment variable
+either. `<repo>/.crew/config.yaml` and `~/.crew/config.yaml` below are conventional locations to
+point those flags at, not defaults Crew looks for on its own.
 
 ### Configuration File Example
 
 ```yaml
-# ~/.batman/config.yaml
+# ~/.crew/config.yaml
 max_workers: 4
 concurrency:
   ceiling: 8
@@ -129,65 +129,65 @@ All gates must be `true` before production use.
 
 ## Usage
 
-Examples below invoke `batcave` bare — nothing puts it on your `PATH`; alias it or substitute the
+Examples below invoke `crewd` bare — nothing puts it on your `PATH`; alias it or substitute the
 full path (see [`cli-reference.md`](cli-reference.md) for where installed and source-built binaries
 live). To point the extension at your local build, set
-`OMP_BATMAN_BINARY="$PWD/target/debug/batcave"` — resolution details in
-[How the extension finds and starts `batcave`](#how-the-extension-finds-and-starts-batcave) below.
+`OMP_CREW_BINARY="$PWD/target/debug/crewd"` — resolution details in
+[How the extension finds and starts `crewd`](#how-the-extension-finds-and-starts-crewd) below.
 
 ### Start the Server
 
 `--repo` is required; `--state-dir` should point at the same state root the OMP extension would
 resolve for you (see [`cli-reference.md`](cli-reference.md#before-you-start-state-directories) —
-omitting it falls back to a bare `.batman` in the current directory, which is *not* that location):
+omitting it falls back to a bare `.crew` in the current directory, which is *not* that location):
 
 ```bash
-batcave serve --repo "$PWD" --state-dir "$HOME/.omp/batman"
+crewd serve --repo "$PWD" --state-dir "$HOME/.omp/batman"
 ```
 
 With explicit configuration files:
 
 ```bash
-batcave serve --repo "$PWD" --state-dir "$HOME/.omp/batman" \
-  --org-config /etc/batman/org.yaml \
-  --repo-config .batman/config.yaml \
-  --user-config ~/.batman/config.yaml
+crewd serve --repo "$PWD" --state-dir "$HOME/.omp/batman" \
+  --org-config /etc/crew/org.yaml \
+  --repo-config .crew/config.yaml \
+  --user-config ~/.crew/config.yaml
 ```
 
-### How the extension finds and starts `batcave`
+### How the extension finds and starts `crewd`
 
-What `batman_status` reports as "Binary source", and what `OMP_BATMAN_BINARY` is for:
+What `crew_health` reports as "Binary source", and what `OMP_CREW_BINARY` is for:
 
 1. On first use in a session, the extension tries to connect to the repository's existing runtime
    socket. If one answers, it's reused — no process is spawned.
-2. If nothing answers, it picks a binary in two tiers: `OMP_BATMAN_BINARY` (an absolute, executable
+2. If nothing answers, it picks a binary in two tiers: `OMP_CREW_BINARY` (an absolute, executable
    path) wins outright if set — this is the local-development override, and it skips checksum/
-   version validation entirely. Otherwise it looks for `<state root>/bin/<version>/batcave`, verifies
+   version validation entirely. Otherwise it looks for `<state root>/bin/<version>/crewd`, verifies
    its SHA-256 and version against a sibling `manifest.json` (and rejects a manifest whose `target`
    doesn't match this platform), and only trusts it once that check passes. That cache is populated
-   by `/batman-runtime-install`, which downloads both files from this extension version's GitHub
-   Release. The state root itself resolves as `BATMAN_STATE_DIR` (env var) →
+   by `/crew-runtime-install`, which downloads both files from this extension version's GitHub
+   Release. The state root itself resolves as `CREW_STATE_DIR` (env var) →
    `$XDG_STATE_HOME/omp/batman` → `$HOME/${PI_CONFIG_DIR:-.omp}/batman`.
-3. It spawns `batcave serve` detached, with `BATMAN_BINARY_SOURCE` set to `override` or `package`
-   accordingly (the "Binary source" field `batman_status` reports), then retries connecting with
+3. It spawns `crewd serve` detached, with `CREW_BINARY_SOURCE` set to `override` or `package`
+   accordingly (the "Binary source" field `crew_health` reports), then retries connecting with
    bounded exponential backoff. If a different concurrent caller won the daemon's single-instance
    lock in the meantime, this session simply connects to that winner.
 
 ### Run Status Check with Doctor
 
-`batcave status` requires a live runtime — it queries `runtime/status` over the socket:
+`crewd status` requires a live runtime — it queries `runtime/status` over the socket:
 
 ```bash
-batcave status --repo "$PWD" --state-dir "$HOME/.omp/batman"
+crewd status --repo "$PWD" --state-dir "$HOME/.omp/batman"
 ```
 
 For diagnostics that don't require a live runtime, use `doctor` instead — it runs the full check
 catalog (database connectivity, state directory permissions, platform support, schema
 compatibility, adapter availability, disk space, stale runs/workspaces, rollout gates, and more —
-see [`cli-reference.md`](cli-reference.md#batcave-doctor) for the complete list):
+see [`cli-reference.md`](cli-reference.md#crewd-doctor) for the complete list):
 
 ```bash
-batcave doctor --repo "$PWD" --state-dir "$HOME/.omp/batman" --json
+crewd doctor --repo "$PWD" --state-dir "$HOME/.omp/batman" --json
 ```
 
 **Note:** there is no `--recover` flag on `status` or `doctor`. Crash recovery is not something you
@@ -199,25 +199,25 @@ five minutes without acting on it.
 ### Stop the Server
 
 ```bash
-batcave stop --repo "$PWD" --state-dir "$HOME/.omp/batman"
+crewd stop --repo "$PWD" --state-dir "$HOME/.omp/batman"
 ```
 
 ### Audit Export
 
-Export audit events to JSONL format. Note that `--state-dir` here must be the repository's actual
-runtime directory (what `serve`/`status`/`doctor` would derive internally from a state root plus
-`--repo`), not a top-level state root — `audit export` opens `<state-dir>/runtime.db` directly and
-does not derive it from `--repo` itself (see [`cli-reference.md`](cli-reference.md#batcave-audit-export)):
+Export audit events to JSONL format. `--state-dir` here is the same state root every other
+subcommand takes — `audit export` derives the per-repository runtime directory from it plus
+`--repo`, exactly like `serve`/`status`/`doctor` (see
+[`cli-reference.md`](cli-reference.md#crewd-audit-export)):
 
 ```bash
-batcave audit export --repo "$PWD" --state-dir "$HOME/.omp/batman/repos/<repository-id>" --output /tmp/audit.jsonl
+crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/batman" --output /tmp/audit.jsonl
 ```
 
 ## Security Features
 
 ### Redaction
 
-BATMAN enforces a strict redaction boundary: raw vendor content (which may contain `Thinking` or `Secret` fragments) is sanitized before persistence. The [`Redactor`] is the sole path from raw content to [`PersistableEvent`]:
+Crew enforces a strict redaction boundary: raw vendor content (which may contain `Thinking` or `Secret` fragments) is sanitized before persistence. The [`Redactor`] is the sole path from raw content to [`PersistableEvent`]:
 
 - Drops `Thinking` and `Secret` fragments entirely
 - Rewrites built-in regex-pattern matches (e.g., API keys) with `[REDACTED:<rule id>]` markers
@@ -257,7 +257,7 @@ These are compiled once at startup and applied to every redaction call.
 
 ### File Security
 
-BATMAN ensures all on-disk state is private (mode `0700`/`0600`, owned by current user) before writing:
+Crew ensures all on-disk state is private (mode `0700`/`0600`, owned by current user) before writing:
 
 ```rust
 // Ensures directory is mode 0700 and owned by current user
@@ -295,12 +295,12 @@ Audit events export to JSONL for offline analysis — command and the `--state-d
 ### Manual Recovery
 
 There's no flag to trigger recovery on demand — it only ever runs automatically, once, inside
-`batcave serve` at startup, before the socket accepts any connection. To see a run that has gone
+`crewd serve` at startup, before the socket accepts any connection. To see a run that has gone
 silent while the daemon is up, check `doctor`'s `stale_runs` check, which reports runs silent for
 longer than five minutes, read-only:
 
 ```bash
-batcave doctor --repo "$PWD" --state-dir "$HOME/.omp/batman" --json
+crewd doctor --repo "$PWD" --state-dir "$HOME/.omp/batman" --json
 ```
 
 ### Recovery Configuration
@@ -338,7 +338,7 @@ The catalog runs 13 checks in total — database connectivity, configuration val
 directory permissions, platform support, binary integrity, socket permissions, schema
 compatibility, per-adapter availability (Claude/Codex/Copilot/OMP-RPC), display backend
 availability, disk space, stale workspaces, stale runs, and rollout gate resolution. See
-[`cli-reference.md`](cli-reference.md#batcave-doctor) for what each one actually verifies — it's
+[`cli-reference.md`](cli-reference.md#crewd-doctor) for what each one actually verifies — it's
 the single source of truth for the catalog, kept alongside the CLI flags it's exposed through.
 
 ### DoctorResult
@@ -368,7 +368,7 @@ cargo test --test adapter_registry
 cargo test --test approval
 cargo test --test audit
 cargo test --test claude_adapter
-cargo test --test claude_live -- --ignored   # #[ignore]d; real model call; skips if BATMAN_DISABLE_VENDOR_CLI=1
+cargo test --test claude_live -- --ignored   # #[ignore]d; real model call; skips if CREW_DISABLE_VENDOR_CLI=1
 cargo test --test codex_adapter
 cargo test --test config
 cargo test --test conformance
@@ -423,20 +423,20 @@ The test suite includes 34 Rust integration test files (`crates/runtime/tests/`)
 
 ### `serve` exits with code 73
 
-There is no TCP port to conflict on — `batcave` communicates over a Unix domain socket, not a
+There is no TCP port to conflict on — `crewd` communicates over a Unix domain socket, not a
 network port, and `serve` has no `--port` flag. Exit code 73 (`EX_TEMPFAIL`) means the repository's
-`runtime.lock` is already held by a live `batcave serve` process; it prints that process's identity
+`runtime.lock` is already held by a live `crewd serve` process; it prints that process's identity
 (pid, project id, socket path) as JSON on stdout when it happens.
 
 **Solution**:
 1. This usually isn't an error to fix — connect to the existing runtime instead of starting another:
-   `batcave status --repo <path> --state-dir <same state-dir>`.
+   `crewd status --repo <path> --state-dir <same state-dir>`.
 2. If you're sure it should have exited (e.g. a previous test run leaked it), find and stop it:
-   `ps aux | grep batcave`, then `batcave stop --repo <path> --state-dir <state-dir>` or `kill <pid>`.
+   `ps aux | grep crewd`, then `crewd stop --repo <path> --state-dir <state-dir>` or `kill <pid>`.
 
 ### Database Connection Errors
 
-BATMAN has no configurable database URL — the SQLite file is always `<runtime-dir>/runtime.db`,
+Crew has no configurable database URL — the SQLite file is always `<runtime-dir>/runtime.db`,
 where `<runtime-dir>` is `<state-dir>/repos/<repository-id>/`, derived automatically from
 `--state-dir` and `--repo`. A "failed to open database" error almost always means that directory
 doesn't exist or isn't writable.
@@ -444,7 +444,7 @@ doesn't exist or isn't writable.
 **Solution**:
 1. Confirm the state dir resolves the way you expect (see
    [`cli-reference.md`](cli-reference.md#before-you-start-state-directories)).
-2. Ensure it exists and is writable — `batcave doctor --json` reports this directly as the
+2. Ensure it exists and is writable — `crewd doctor --json` reports this directly as the
    `state_dir_writable` and `database_connectivity` checks.
 
 ### Rollout Gates Unresolved
@@ -456,18 +456,18 @@ authorization outright; the rest are advisory.
 1. Review your configuration files.
 2. Ensure the relevant `rollout_gates` fields are set to `true` in whichever config layer you
    control.
-3. Check current status: `batcave doctor --repo <path> --state-dir <state-dir> --json` — the
+3. Check current status: `crewd doctor --repo <path> --state-dir <state-dir> --json` — the
    `unresolved_gates` array and the per-gate `rollout_gate_<gate>` checks name exactly what's left.
 
 ### Permission Errors
 
 **Solution**:
-1. Check file permissions: `ls -ld <state-dir>` — BATMAN expects its state directory at mode
-   `0700` and its socket at `0600`, both owned by the user running `batcave`.
+1. Check file permissions: `ls -ld <state-dir>` — Crew expects its state directory at mode
+   `0700` and its socket at `0600`, both owned by the user running `crewd`.
 2. **Do not widen permissions** (e.g. `chmod 755`) to work around a permission error — that defeats
    the same-user isolation the redaction/security boundary depends on, and `doctor`'s
    `state_dir_writable`/`socket_permissions` checks will simply fail again with a different reason.
-   If ownership is wrong, fix ownership (`chown`) or remove and let `batcave` recreate the directory
+   If ownership is wrong, fix ownership (`chown`) or remove and let `crewd` recreate the directory
    at the correct mode.
 
 ### Recovery Issues
@@ -483,7 +483,7 @@ on `RecoveryConfig`, used by whatever code calls `RecoveryCoordinator` (currentl
 2. Recovery only runs at `serve` startup, not continuously — a run that goes silent while the daemon
    is up stays where it is until the next restart, deliberately: a quiet run is not a dead run while
    its supervisor is alive.
-3. Use `batcave doctor --json`'s `stale_runs` check to see runs silent for longer than five minutes,
+3. Use `crewd doctor --json`'s `stale_runs` check to see runs silent for longer than five minutes,
    without waiting for a restart.
 
 ## Contributing
@@ -493,7 +493,7 @@ We welcome contributions! Please see the [CONTRIBUTING.md](../CONTRIBUTING.md) f
 ### Development Setup
 
 1. Clone the repository
-2. Run `bun run setup` — installs JS deps, builds the batcave runtime
+2. Run `bun run setup` — installs JS deps, builds the crewd runtime
 3. Run tests: `bun run check`
 4. Make your changes
 5. Submit a pull request
@@ -506,7 +506,7 @@ We welcome contributions! Please see the [CONTRIBUTING.md](../CONTRIBUTING.md) f
 
 ## Getting Help
 
-- **Documentation**: See the other files in [`docs/`](.) — start with [architecture.md](architecture.md) and [code-walkthrough.md](code-walkthrough.md). For running `batcave` day-to-day, see [`cli-reference.md`](cli-reference.md) (full flag reference) and [`operations.md`](operations.md) (lifecycle procedures).
+- **Documentation**: See the other files in [`docs/`](.) — start with [architecture.md](architecture.md) and [code-walkthrough.md](code-walkthrough.md). For running `crewd` day-to-day, see [`cli-reference.md`](cli-reference.md) (full flag reference) and [`operations.md`](operations.md) (lifecycle procedures).
 - **Issues**: Open a GitHub Issue on this repository
 
 ## License

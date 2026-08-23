@@ -2,7 +2,7 @@ import { afterEach, beforeAll, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { BatmanClient } from "./client";
+import type { CrewClient } from "./client";
 import { BinarySelectionError, buildServeArgs, ensureRuntime, type EnsureRuntimeOptions, repositoryId, repositoryIdFromRoot } from "./runtime";
 
 interface RepoIdCase {
@@ -47,12 +47,12 @@ test("a broken .git symlink still counts as a VCS marker (matches Rust lstat sem
 });
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
-const BATCAVE = join(REPO_ROOT, "target", "debug", "batcave");
+const CREWD = join(REPO_ROOT, "target", "debug", "crewd");
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Clients/daemons started by each test, torn down in afterEach. */
-const openClients: BatmanClient[] = [];
+const openClients: CrewClient[] = [];
 const stateDirs: string[] = [];
 
 function newRepo(): string {
@@ -72,7 +72,7 @@ function baseOptions(stateDir: string, repository: string): EnsureRuntimeOptions
     stateDir,
     repository,
     idleSeconds: 30,
-    env: { OMP_BATMAN_BINARY: BATCAVE },
+    env: { OMP_CREW_BINARY: CREWD },
   };
 }
 
@@ -155,7 +155,7 @@ test("foreground startup writes the runtime_started record to stderr instead", a
   const stateDir = newStateDir();
   const repository = newRepo();
 
-  const proc = Bun.spawn([BATCAVE, "serve", "--foreground", "--state-dir", stateDir, "--repo", repository, "--idle-seconds", "30"], { stdout: "ignore", stderr: "pipe" });
+  const proc = Bun.spawn([CREWD, "serve", "--foreground", "--state-dir", stateDir, "--repo", repository, "--idle-seconds", "30"], { stdout: "ignore", stderr: "pipe" });
 
   try {
     // Read stderr until the runtime_started record shows up.
@@ -187,7 +187,7 @@ test("foreground startup writes the runtime_started record to stderr instead", a
   }
 });
 
-test("a missing OMP_BATMAN_BINARY override fails before spawn", async () => {
+test("a missing OMP_CREW_BINARY override fails before spawn", async () => {
   const stateDir = newStateDir();
   const repository = newRepo();
   await expect(
@@ -195,12 +195,12 @@ test("a missing OMP_BATMAN_BINARY override fails before spawn", async () => {
       stateDir,
       repository,
       idleSeconds: 30,
-      env: { OMP_BATMAN_BINARY: "/nonexistent/batcave-does-not-exist" },
+      env: { OMP_CREW_BINARY: "/nonexistent/crewd-does-not-exist" },
     }),
   ).rejects.toBeInstanceOf(BinarySelectionError);
 });
 
-test("a relative OMP_BATMAN_BINARY override fails before spawn", async () => {
+test("a relative OMP_CREW_BINARY override fails before spawn", async () => {
   const stateDir = newStateDir();
   const repository = newRepo();
   await expect(
@@ -208,12 +208,12 @@ test("a relative OMP_BATMAN_BINARY override fails before spawn", async () => {
       stateDir,
       repository,
       idleSeconds: 30,
-      env: { OMP_BATMAN_BINARY: "relative/batcave" },
+      env: { OMP_CREW_BINARY: "relative/crewd" },
     }),
   ).rejects.toMatchObject({ code: "not-absolute" });
 });
 
-test("a non-regular (directory) OMP_BATMAN_BINARY override fails before spawn", async () => {
+test("a non-regular (directory) OMP_CREW_BINARY override fails before spawn", async () => {
   const stateDir = newStateDir();
   const repository = newRepo();
   const dir = mkdtempSync("/tmp/bat-rt-dir-");
@@ -222,15 +222,15 @@ test("a non-regular (directory) OMP_BATMAN_BINARY override fails before spawn", 
       stateDir,
       repository,
       idleSeconds: 30,
-      env: { OMP_BATMAN_BINARY: dir },
+      env: { OMP_CREW_BINARY: dir },
     }),
   ).rejects.toMatchObject({ code: "not-regular" });
 });
 
-test("a non-executable OMP_BATMAN_BINARY override fails before spawn", async () => {
+test("a non-executable OMP_CREW_BINARY override fails before spawn", async () => {
   const stateDir = newStateDir();
   const repository = newRepo();
-  const file = join(mkdtempSync("/tmp/bat-rt-ne-"), "batcave");
+  const file = join(mkdtempSync("/tmp/bat-rt-ne-"), "crewd");
   writeFileSync(file, "#!/bin/sh\n");
   chmodSync(file, 0o644);
   await expect(
@@ -238,7 +238,7 @@ test("a non-executable OMP_BATMAN_BINARY override fails before spawn", async () 
       stateDir,
       repository,
       idleSeconds: 30,
-      env: { OMP_BATMAN_BINARY: file },
+      env: { OMP_CREW_BINARY: file },
     }),
   ).rejects.toMatchObject({ code: "not-executable" });
 });
@@ -249,7 +249,7 @@ test("an async spawn failure is logged by the error listener and surfaces as an 
   // Passes every selectBinary check (absolute, regular, executable) but
   // fails at exec time: the shebang interpreter does not exist, so spawn
   // emits an async `error` event instead of throwing.
-  const file = join(mkdtempSync("/tmp/bat-rt-sh-"), "batcave");
+  const file = join(mkdtempSync("/tmp/bat-rt-sh-"), "crewd");
   writeFileSync(file, "#!/nonexistent/interpreter\n");
   chmodSync(file, 0o755);
 
@@ -264,7 +264,7 @@ test("an async spawn failure is logged by the error listener and surfaces as an 
         stateDir,
         repository,
         idleSeconds: 30,
-        env: { OMP_BATMAN_BINARY: file },
+        env: { OMP_CREW_BINARY: file },
       }),
     ).rejects.toThrow();
     expect(logged.some((line) => line.includes("failed to spawn"))).toBe(true);
@@ -282,7 +282,7 @@ test("a valid override is selected verbatim, bypassing the package resolver", as
     stateDir,
     repository,
     idleSeconds: 30,
-    env: { OMP_BATMAN_BINARY: BATCAVE },
+    env: { OMP_CREW_BINARY: CREWD },
     packagedBinaryResolver: () => {
       resolverCalled = true;
       return "/should/not/be/used";

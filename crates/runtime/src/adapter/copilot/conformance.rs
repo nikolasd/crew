@@ -493,12 +493,12 @@ async fn runtime_restart_scenario(cached: &Result<String, VendorUnavailable>) ->
 
 /// OMP-RPC-specific reconnection has no analog here: this adapter's
 /// worker-MCP tools are injected via `--additional-mcp-config` into a
-/// real `batcave coordination-mcp` subprocess Copilot itself spawns and
+/// real `crewd coordination-mcp` subprocess Copilot itself spawns and
 /// reconnects to on its own terms.
 fn vendor_reconnect_scenario() -> ScenarioResult {
     ScenarioResult::pass(
         scenario::VENDOR_RECONNECT,
-        "not applicable to Copilot: worker MCP reconnection is handled by Copilot's own `--additional-mcp-config`-injected `batcave coordination-mcp` subprocess, which Copilot itself spawns and reconnects to, not a separate MCP subprocess this adapter manages",
+        "not applicable to Copilot: worker MCP reconnection is handled by Copilot's own `--additional-mcp-config`-injected `crewd coordination-mcp` subprocess, which Copilot itself spawns and reconnects to, not a separate MCP subprocess this adapter manages",
     )
 }
 
@@ -573,8 +573,8 @@ fn mcp_config_for_conformance() -> AdapterMcpConfig {
     AdapterMcpConfig {
         scope_tokens: Arc::new(ScopeTokenStore::new()),
         project_id: batman_protocol::ProjectId::new(),
-        batcave_path: PathBuf::from("/opt/batman/bin/batcave"),
-        state_dir: PathBuf::from("/tmp/batman-state"),
+        crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
+        state_dir: PathBuf::from("/tmp/crew-state"),
         repository: PathBuf::from("/tmp/my-repo"),
     }
 }
@@ -622,10 +622,10 @@ fn redaction_scenario() -> ScenarioResult {
             "the worker-MCP scope token leaked into argv",
         );
     }
-    if plan.env.get("BATMAN_WORKER_SCOPE_TOKEN") != Some(&token) {
+    if plan.env.get("CREW_WORKER_SCOPE_TOKEN") != Some(&token) {
         return ScenarioResult::fail(
             scenario::REDACTION,
-            "the worker-MCP scope token was not present in env under BATMAN_WORKER_SCOPE_TOKEN",
+            "the worker-MCP scope token was not present in env under CREW_WORKER_SCOPE_TOKEN",
         );
     }
     ScenarioResult::pass(
@@ -743,7 +743,7 @@ pub async fn fixture_report() -> ConformanceReport {
 /// conversational context is itself provably continued (that would
 /// need a second real turn checking the first is remembered, which
 /// this suite does not spend). Only reachable through [`live_report`],
-/// which runs by default unless `BATMAN_DISABLE_VENDOR_CLI=1` is set.
+/// which runs by default unless `CREW_DISABLE_VENDOR_CLI=1` is set.
 async fn session_resume_probe_live() -> Result<String, VendorUnavailable> {
     let cwd = std::env::temp_dir();
     let cwd_str = cwd.to_string_lossy().to_string();
@@ -793,11 +793,11 @@ async fn session_resume_probe_live() -> Result<String, VendorUnavailable> {
 /// suite as [`fixture_report`], substituting a real, turn-completed
 /// [`session_resume_probe_live`] for `SESSION_RESUME`/`RUNTIME_RESTART` --
 /// the two scenarios fixture mode cannot prove past the flag/mechanism
-/// level (see `REVIEW.md`). Set `BATMAN_DISABLE_VENDOR_CLI=1` to
+/// level (see `REVIEW.md`). Set `CREW_DISABLE_VENDOR_CLI=1` to
 /// forbid it in CI or on a machine without the CLI installed.
 ///
 /// # Errors
-/// Returns a message if `BATMAN_DISABLE_VENDOR_CLI=1` is set.
+/// Returns a message if `CREW_DISABLE_VENDOR_CLI=1` is set.
 pub async fn live_report() -> Result<ConformanceReport, String> {
     if batman_runtime::conformance::vendor_cli_invocation_disabled() {
         return Err(format!(

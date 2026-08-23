@@ -156,7 +156,7 @@ async fn terminal_adapter_herdr_start_success() {
     let adapter = TerminalAdapter::with_command_runner("herdr".to_string(), runner);
 
     let spec = make_spec();
-    let session = format!("batman-{}", spec.run_id);
+    let session = format!("crew-{}", spec.run_id);
     let result = adapter.start(spec, Arc::new(NullSink)).await;
     assert!(result.is_ok());
     mock.assert_command_invoked("herdr", &["new", &session]);
@@ -198,7 +198,7 @@ async fn terminal_adapter_tmux_start_success() {
     let adapter = TerminalAdapter::with_command_runner("tmux".to_string(), runner);
 
     let spec = make_spec();
-    let session = format!("batman-{}", spec.run_id);
+    let session = format!("crew-{}", spec.run_id);
     let result = adapter.start(spec, Arc::new(NullSink)).await;
     assert!(result.is_ok());
     mock.assert_command_invoked("tmux", &["new-session", "-d", "-s", &session]);

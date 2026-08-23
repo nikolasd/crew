@@ -1,4 +1,4 @@
-//! The machine-readable conformance report shape `batcave conformance
+//! The machine-readable conformance report shape `crewd conformance
 //! --output <path>` writes, and the effective-capability computation
 //! `crate::adapter::registry::AdapterRegistry` gates run start on.
 //!
@@ -95,7 +95,7 @@ impl ScenarioResult {
 /// verbatim: it is computed by [`Self::new`] as the subset of declared
 /// capabilities this report's own scenarios actually proved, per the
 /// plan's "a capability whose scenario failed is removed from effective
-/// capabilities" requirement. OMP-facing surfaces (`batcave adapters
+/// capabilities" requirement. OMP-facing surfaces (`crewd adapters
 /// --json`, `AdapterRegistry`) must only ever consult
 /// `effective_capabilities`, never `declared_capabilities`.
 #[derive(Debug, Clone, Serialize)]

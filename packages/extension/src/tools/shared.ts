@@ -1,5 +1,5 @@
 // The single execution path shared by every orchestration tool: call the
-// runtime's JSON-RPC method through the cached `BatmanClient` and return its
+// runtime's JSON-RPC method through the cached `CrewClient` and return its
 // result verbatim as tool `details`, or map a JSON-RPC error to a stable
 // tool error shape. Tools never select a worker, retry, mutate OMP todos,
 // approve, merge, or infer lifecycle state here -- that authority stays with
@@ -7,11 +7,11 @@
 
 import type { AgentToolResult, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
-import { BatmanClient, JsonRpcRemoteError } from "../client";
+import { CrewClient, JsonRpcRemoteError } from "../client";
 
 /** Resolves the cached (or newly connected) runtime client for `cwd`. */
 export interface OrchestrationToolContext {
-  getClient(extCtx: ExtensionContext): Promise<BatmanClient>;
+  getClient(extCtx: ExtensionContext): Promise<CrewClient>;
 }
 
 /** The stable, structured shape of a mapped JSON-RPC tool error. */
@@ -28,7 +28,7 @@ export interface OrchestrationToolError {
  * the runtime includes them, travel in `data`) rather than throwing --
  * callers see a stable tool error instead of an unhandled rejection.
  */
-export async function callOrchestration(client: BatmanClient, method: string, params: unknown): Promise<AgentToolResult<unknown>> {
+export async function callOrchestration(client: CrewClient, method: string, params: unknown): Promise<AgentToolResult<unknown>> {
   try {
     const result = await client.request(method, params);
     return {

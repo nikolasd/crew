@@ -45,7 +45,7 @@ pub struct WorkspaceMaterializer {
 
 impl WorkspaceMaterializer {
     pub fn new(project_id: ProjectId, repository: PathBuf) -> Result<Self, MaterializerError> {
-        let root = std::env::temp_dir().join(format!("batman-workspace-{}", project_id));
+        let root = std::env::temp_dir().join(format!("crew-workspace-{}", project_id));
         std::fs::create_dir_all(&root)?;
         Ok(WorkspaceMaterializer {
             project_id,

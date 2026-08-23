@@ -1,10 +1,11 @@
-// Selects the `batcave` binary this extension runs: a validated
-// `OMP_BATMAN_BINARY` development override (see `runtime.ts`), or the
+// Selects the `crewd` binary this extension runs: a validated
+// `OMP_CREW_BINARY` development override (or its pre-rename name,
+// `OMP_BATMAN_BINARY` -- see `runtime.ts`), or the
 // platform-specific binary downloaded from a GitHub Release and cached
 // locally, verified by SHA-256 checksum and extension-version match before
 // it is ever spawned.
 //
-// `resolveBatcave` takes `platform`/`arch`/`libc`/`env`/`stateRoot` explicitly
+// `resolveCrewd` takes `platform`/`arch`/`libc`/`env`/`stateRoot` explicitly
 // (rather than reading `process.platform`/`process.arch`/`process.env`
 // itself) so it stays pure and hermetically testable; production wiring
 // lives in `context.ts` and `doctor.ts`.
@@ -20,7 +21,7 @@ import pkg from "../package.json" with { type: "json" };
 /** This extension's own version; a cached binary's manifest must match it exactly. */
 const EXTENSION_VERSION: string = pkg.version;
 
-/** The four target triples the foundation ships prebuilt `batcave` binaries for. */
+/** The four target triples the foundation ships prebuilt `crewd` binaries for. */
 export type SupportedTarget = "darwin-arm64" | "darwin-x64" | "linux-arm64-gnu" | "linux-x64-gnu";
 
 /** Every {@link SupportedTarget}, in a stable order, for error messages and iteration. */
@@ -50,11 +51,11 @@ export class UnsupportedPlatformError extends Error {
 export type BinaryIntegrityErrorCode = "manifest-invalid" | "checksum-mismatch" | "version-mismatch";
 
 /**
- * Thrown before any spawn when a cached `batcave` binary's manifest is
+ * Thrown before any spawn when a cached `crewd` binary's manifest is
  * missing/malformed, its SHA-256 does not match the manifest, its manifest's
  * `target` does not match this platform, or its manifest's `version` does
  * not match this extension's version. Never thrown for an
- * `OMP_BATMAN_BINARY` override -- override binaries are not checksummed.
+ * `OMP_CREW_BINARY` override -- override binaries are not checksummed.
  */
 export class BinaryIntegrityError extends Error {
   readonly code: BinaryIntegrityErrorCode;
@@ -68,7 +69,7 @@ export class BinaryIntegrityError extends Error {
 
 /**
  * The deterministic checksum/provenance payload written alongside every
- * cached `batcave` binary -- both the one `/batman-runtime-install` downloads
+ * cached `crewd` binary -- both the one `/crew-runtime-install` downloads
  * (`download.ts`) and the one a manual `cp` into the cache directory
  * provides for local testing.
  */
@@ -93,7 +94,7 @@ export function resolveTarget(platform: string, arch: string, libc: string | und
 }
 
 /**
- * The version-scoped directory a downloaded `batcave` and its manifest live
+ * The version-scoped directory a downloaded `crewd` and its manifest live
  * in. Shared with `download.ts` so the two can never disagree on the path.
  */
 export function runtimeCacheDir(stateRoot: string, version: string): string {
@@ -101,20 +102,20 @@ export function runtimeCacheDir(stateRoot: string, version: string): string {
 }
 
 /**
- * Resolves the `batcave` binary to run.
+ * Resolves the `crewd` binary to run.
  *
  * Order:
- * 1. A valid absolute executable `OMP_BATMAN_BINARY` in `env` wins outright
+ * 1. A valid absolute executable `OMP_CREW_BINARY` (or legacy `OMP_BATMAN_BINARY`) in `env` wins outright
  *    -- source `"override"`. No checksum or version validation is performed
  *    for an override; validation applies only to the cached binary.
  * 2. Otherwise, `platform`/`arch`/`libc` are mapped to one of the four
  *    supported target triples (or a typed {@link UnsupportedPlatformError}).
- *    The cached binary at `<stateRoot>/bin/<version>/batcave` is
+ *    The cached binary at `<stateRoot>/bin/<version>/crewd` is
  *    SHA-256-verified against its sibling `manifest.json`, and the
  *    manifest's `target` and `version` must match, before returning --
  *    source `"package"`.
  */
-export function resolveBatcave(platform: string, arch: string, libc: string | undefined, env: Readonly<Record<string, string | undefined>>, stateRoot: string): SelectedBinary {
+export function resolveCrewd(platform: string, arch: string, libc: string | undefined, env: Readonly<Record<string, string | undefined>>, stateRoot: string): SelectedBinary {
   const override = resolveOverride(env);
   if (override !== undefined) {
     return override;
@@ -122,11 +123,11 @@ export function resolveBatcave(platform: string, arch: string, libc: string | un
 
   const target = resolveTarget(platform, arch, libc);
   const dir = runtimeCacheDir(stateRoot, EXTENSION_VERSION);
-  const binPath = join(dir, "batcave");
+  const binPath = join(dir, "crewd");
   const manifestPath = join(dir, "manifest.json");
 
   if (!existsSync(binPath) || !existsSync(manifestPath)) {
-    throw new BinarySelectionError("runtime-not-installed", `no batcave binary installed for version ${EXTENSION_VERSION}; run /batman-runtime-install to download it, or set OMP_BATMAN_BINARY to a local build`);
+    throw new BinarySelectionError("runtime-not-installed", `no crewd binary installed for version ${EXTENSION_VERSION}; run /crew-runtime-install to download it, or set OMP_CREW_BINARY to a local build`);
   }
 
   const manifest = readManifest(manifestPath);
@@ -198,7 +199,7 @@ function mapTarget(platform: string, arch: string, libc: string | undefined): Su
 
 /**
  * Best-effort Linux libc detection: `"glibc"`, `"musl"`, or `undefined` when
- * undetermined (which `resolveBatcave` treats as unsupported). Not meaningful
+ * undetermined (which `resolveCrewd` treats as unsupported). Not meaningful
  * off Linux. Foundation-scope heuristic: checks Node's build report for a
  * glibc runtime version, then falls back to checking for musl's well-known
  * dynamic loader paths.

@@ -1,6 +1,6 @@
 //! The initialized JSON-RPC runtime socket protocol.
 //!
-//! BATMAN's runtime speaks JSON-RPC 2.0 over NDJSON on a per-repository Unix
+//! Crew's runtime speaks JSON-RPC 2.0 over NDJSON on a per-repository Unix
 //! domain socket. This module owns the server side: binding the socket,
 //! enforcing the operating-system security boundary (same-user peer
 //! credentials, checked before a single byte of JSON is parsed), the bounded

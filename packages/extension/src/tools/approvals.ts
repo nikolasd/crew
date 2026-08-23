@@ -1,4 +1,4 @@
-// `batman_approval`: lists pending approvals and records a human decision.
+// `crew_approval`: lists pending approvals and records a human decision.
 // The whole tool is gated at tier `exec` with `override: true` -- an
 // approval decision is a user-facing safety action that must never
 // auto-approve, even for the `list` op.
@@ -17,7 +17,7 @@ import { showApprovalDialog, type PendingApproval } from "../approval-ui";
 import type { OrchestrationToolContext } from "./shared";
 import { callOrchestration } from "./shared";
 
-export const BATMAN_APPROVAL_TOOL_NAME = "batman_approval";
+export const CREW_APPROVAL_TOOL_NAME = "crew_approval";
 
 /** Fetches the pending approval matching `approvalId`, if still pending. */
 async function findPendingApproval(client: { request(method: string, params?: unknown): Promise<unknown> }, approvalId: string): Promise<PendingApproval | undefined> {
@@ -52,8 +52,8 @@ export function registerApprovalTool(pi: ExtensionAPI, ctx: OrchestrationToolCon
   });
 
   pi.registerTool({
-    name: BATMAN_APPROVAL_TOOL_NAME,
-    label: "BATMAN Approval",
+    name: CREW_APPROVAL_TOOL_NAME,
+    label: "Crew Approval",
     description:
       "Use when a worker escalates a decision to human (e.g., for risky operations). The runtime shows a dialog; call this to list pending approvals (with human-in-the-loop flag) or decide with the human's approve/deny decision. The runtime enforces humanRequired flags -- never auto-approve, even for list. Use when a worker pauses execution waiting for human input.",
     parameters: params,

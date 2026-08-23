@@ -144,7 +144,7 @@ impl Client {
             "id": 1,
             "method": "initialize",
             "params": {
-                "client": { "name": "@nikolasd/batman", "version": "0.1.0" },
+                "client": { "name": "@nikolasd/crew", "version": "0.1.0" },
                 "supported": { "min": { "major": 1, "minor": 0 }, "max": { "major": 1, "minor": 0 } },
                 "repository": { "canonicalPath": agent_dir.unwrap_or("/tmp"), "vcsRoot": agent_dir.unwrap_or("/tmp") },
                 "auth": auth,

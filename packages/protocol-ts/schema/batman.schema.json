@@ -463,7 +463,7 @@
           ]
         },
         {
-          "description": "Gracefully stops the daemon. Arbitrated (R82): refused with\n`-32602` while any run is live or another connection is being\nserved, unless `params.force == true` (the deliberate, logged\noperator escape hatch). The out-of-band `batcave stop`/SIGTERM\npath is deliberately unarbitrated.",
+          "description": "Gracefully stops the daemon. Arbitrated (R82): refused with\n`-32602` while any run is live or another connection is being\nserved, unless `params.force == true` (the deliberate, logged\noperator escape hatch). The out-of-band `crewd stop`/SIGTERM\npath is deliberately unarbitrated.",
           "type": "string",
           "const": "runtime/shutdown"
         },
@@ -2611,7 +2611,7 @@
       ]
     },
     "BinarySource": {
-      "description": "Where the running `batcave` binary was loaded from. `override` means a\ndeveloper override path, `package` a bundled/installed binary, and\n`unknown` that the source could not be determined.",
+      "description": "Where the running `crewd` binary was loaded from. `override` means a\ndeveloper override path, `package` a bundled/installed binary, and\n`unknown` that the source could not be determined.",
       "type": "string",
       "enum": [
         "override",

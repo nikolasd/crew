@@ -1,4 +1,4 @@
-//! Crash recovery for the BATMAN runtime.
+//! Crash recovery for the Crew runtime.
 //!
 //! After an unclean shutdown (crash, OOM kill, SIGKILL), runs may be left in
 //! non-terminal states (`queued`, `starting`, `working`, `waitingUser`,
@@ -121,7 +121,7 @@ pub struct RecoveredRun {
     pub error: Option<String>,
 }
 
-/// Coordinates crash recovery for the BATMAN runtime.
+/// Coordinates crash recovery for the Crew runtime.
 ///
 /// The [`RecoveryCoordinator`] finds runs that are stuck in non-terminal states
 /// after an unclean shutdown and transitions them to appropriate terminal states.

@@ -22,6 +22,7 @@ pub mod db;
 pub mod display;
 pub mod doctor;
 pub mod domain;
+pub mod env_flag;
 pub mod ipc;
 pub mod lifecycle;
 pub mod paths;

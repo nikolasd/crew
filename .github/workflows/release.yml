@@ -103,8 +103,8 @@ jobs:
           echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
           echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc-ar" >> "$GITHUB_ENV"
 
-      - name: Build batcave
-        run: cargo build --release --target ${{ matrix.rust_target }} --bin batcave
+      - name: Build crewd
+        run: cargo build --release --target ${{ matrix.rust_target }} --bin crewd
 
       # Pin the packaging clock to the tagged commit's own commit time, so a
       # rebuild of the same commit produces a byte-identical manifest.
@@ -115,20 +115,20 @@ jobs:
         run: |
           cargo run -p batman-xtask -- package \
             --target ${{ matrix.leaf_target }} \
-            --binary target/${{ matrix.rust_target }}/release/batcave
+            --binary target/${{ matrix.rust_target }}/release/crewd
 
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
-          file: packages/batman-${{ matrix.leaf_target }}/bin/batcave
+          file: packages/crew-${{ matrix.leaf_target }}/bin/crewd
           artifact-name: sbom-${{ matrix.leaf_target }}.spdx.json
 
 
       - name: Upload leaf package
         uses: actions/upload-artifact@v4
         with:
-          name: batman-${{ matrix.leaf_target }}
-          path: packages/batman-${{ matrix.leaf_target }}/
+          name: crew-${{ matrix.leaf_target }}
+          path: packages/crew-${{ matrix.leaf_target }}/
 
   conformance:
     needs: build
@@ -141,7 +141,7 @@ jobs:
     # `crates/runtime/src/conformance/mod.rs`). This gate uses fixture mode
     # only regardless -- the switch is a second, independent safeguard.
     env:
-      BATMAN_DISABLE_VENDOR_CLI: "1"
+      CREW_DISABLE_VENDOR_CLI: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -156,14 +156,14 @@ jobs:
       - name: Run conformance unit tests
         run: bun test tests/conformance
 
-      # The gate needs a real `batcave`: it spawns the CLI rather than
+      # The gate needs a real `crewd`: it spawns the CLI rather than
       # hand-writing a report, which is what let the previous stub pass a
       # fabricated payload through validation.
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build batcave
-        run: cargo build -p batman-runtime --bin batcave
+      - name: Build crewd
+        run: cargo build -p batman-runtime --bin crewd
 
       - name: Generate conformance report
         run: bun run -e "import { runAllFixtures } from './tests/conformance/run.ts'; await runAllFixtures('conformance-report.json');"
@@ -178,7 +178,7 @@ jobs:
           path: conformance-report.json
 
   # Validates the four leaves TOGETHER -- shared version, identical schema
-  # fingerprint, real checksums, an executable named `batcave` -- and emits
+  # fingerprint, real checksums, an executable named `crewd` -- and emits
   # one aggregate release manifest. No single `package` run can make these
   # checks, so this is the only place a mismatched set is caught.
   package-set:
@@ -195,14 +195,14 @@ jobs:
       - name: Download all leaf packages
         uses: actions/download-artifact@v4
         with:
-          pattern: batman-*
+          pattern: crew-*
           path: assembled
       - name: Restore executable bits
         run: |
           # actions/upload-artifact zips files and download-artifact restores
           # them as 0644. package-set validates the executable bit, so we
           # must restore it before validation.
-          find assembled -name batcave -exec chmod +x {} +
+          find assembled -name crewd -exec chmod +x {} +
 
       - name: Read release version
         run: echo "RELEASE_VERSION=${{ needs.version-gate.outputs.version }}" >> "$GITHUB_ENV"
@@ -236,14 +236,14 @@ jobs:
       - name: Download all leaf packages
         uses: actions/download-artifact@v4
         with:
-          pattern: batman-*
+          pattern: crew-*
           path: assembled
 
       - name: Restore executable bits
         run: |
           # actions/upload-artifact zips files and download-artifact restores
           # them as 0644; the uploaded asset must stay executable.
-          find assembled -name batcave -exec chmod +x {} +
+          find assembled -name crewd -exec chmod +x {} +
 
       - name: Download release manifest
         uses: actions/download-artifact@v4
@@ -252,14 +252,14 @@ jobs:
           path: release
 
       - name: Stage release assets
-        # `download.ts` fetches exactly these names -- `batcave-${target}`
-        # and `batcave-${target}.manifest.json` -- so this pairing is the
+        # `download.ts` fetches exactly these names -- `crewd-${target}`
+        # and `crewd-${target}.manifest.json` -- so this pairing is the
         # contract between the two files.
         run: |
           mkdir -p release-assets
           for leaf in $(jq -r '.targets[].leaf' release/targets.json); do
-            cp "assembled/batman-$leaf/bin/batcave" "release-assets/batcave-$leaf"
-            cp "assembled/batman-$leaf/manifest.json" "release-assets/batcave-$leaf.manifest.json"
+            cp "assembled/crew-$leaf/bin/crewd" "release-assets/crewd-$leaf"
+            cp "assembled/crew-$leaf/manifest.json" "release-assets/crewd-$leaf.manifest.json"
           done
           cp release/release-manifest.json release-assets/release-manifest.json
 

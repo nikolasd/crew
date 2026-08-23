@@ -100,7 +100,7 @@ fn the_mismatch_fixture_makes_the_backend_unavailable_with_restart_guidance_and_
     assert!(!herdr.is_available());
 
     let result = herdr.create_pane(
-        &["batcave".to_string(), "monitor".to_string()],
+        &["crewd".to_string(), "monitor".to_string()],
         DisplayPlacement::SplitRight,
         "run-1",
         "display-1",
@@ -118,7 +118,7 @@ fn the_mismatch_fixture_makes_the_backend_unavailable_with_restart_guidance_and_
 }
 
 #[test]
-fn a_created_pane_updates_state_three_times_and_close_only_touches_batman_tagged_panes() {
+fn a_created_pane_updates_state_three_times_and_close_only_touches_crew_tagged_panes() {
     let split = ok(r#"{"id":"cli:pane:split","result":{"pane":{"pane_id":"w1:p9"}}}"#);
     let executor = Arc::new(
         FixtureExecutor::new()
@@ -128,11 +128,11 @@ fn a_created_pane_updates_state_three_times_and_close_only_touches_batman_tagged
             )
             .with("herdr pane split --current --direction right", split)
             .with(
-                "herdr pane run w1:p9 batcave monitor --run-id run-1",
+                "herdr pane run w1:p9 crewd monitor --run-id run-1",
                 ok("{}"),
             )
             .with(
-                "herdr pane report-agent --source batman --agent display-1 --state working w1:p9",
+                "herdr pane report-agent --source crew --agent display-1 --state working w1:p9",
                 ok("{}"),
             )
             .with("herdr pane close w1:p9", ok("{}")),
@@ -145,7 +145,7 @@ fn a_created_pane_updates_state_three_times_and_close_only_touches_batman_tagged
     let pane_id = herdr
         .create_pane(
             &[
-                "batcave".to_string(),
+                "crewd".to_string(),
                 "monitor".to_string(),
                 "--run-id".to_string(),
                 "run-1".to_string(),

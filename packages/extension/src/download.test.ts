@@ -35,8 +35,8 @@ function fakeFetch(routes: Record<string, FakeResponse>): typeof fetch {
 function releaseJson(overrides: { manifestName?: string; binaryName?: string } = {}): string {
   return JSON.stringify({
     assets: [
-      { name: overrides.manifestName ?? `batcave-${TARGET}.manifest.json`, url: MANIFEST_ASSET_URL },
-      { name: overrides.binaryName ?? `batcave-${TARGET}`, url: BINARY_ASSET_URL },
+      { name: overrides.manifestName ?? `crewd-${TARGET}.manifest.json`, url: MANIFEST_ASSET_URL },
+      { name: overrides.binaryName ?? `crewd-${TARGET}`, url: BINARY_ASSET_URL },
     ],
   });
 }
@@ -44,7 +44,7 @@ function releaseJson(overrides: { manifestName?: string; binaryName?: string } =
 /** Builds a manifest JSON payload; `sha256` defaults to the real digest of `binaryBytes`. */
 function manifestJson(overrides: Partial<{ version: string; target: string; sha256: string; sizeBytes: number }>, binaryBytes: Buffer): string {
   return JSON.stringify({
-    name: "batcave",
+    name: "crewd",
     version: overrides.version ?? VERSION,
     target: overrides.target ?? TARGET,
     sha256: overrides.sha256 ?? createHash("sha256").update(binaryBytes).digest("hex"),
@@ -55,7 +55,7 @@ function manifestJson(overrides: Partial<{ version: string; target: string; sha2
 describe("downloadRuntime: success", () => {
   test("verifies and caches the binary, returning its path/version/target/sizeBytes", async () => {
     const stateRoot = mkdtempSync(join(tmpdir(), "bat-dl-"));
-    const binaryBytes = Buffer.from("fake-batcave-binary-fixture-bytes");
+    const binaryBytes = Buffer.from("fake-crewd-binary-fixture-bytes");
     const manifest = manifestJson({}, binaryBytes);
     const fetchImpl = fakeFetch({
       [RELEASE_URL]: { status: 200, body: releaseJson() },
@@ -66,14 +66,14 @@ describe("downloadRuntime: success", () => {
     const result = await downloadRuntime({ version: VERSION, target: TARGET, stateRoot, fetchImpl, apiBaseUrl: API_BASE_URL });
 
     const dir = runtimeCacheDir(stateRoot, VERSION);
-    expect(result).toEqual({ path: join(dir, "batcave"), version: VERSION, target: TARGET, sizeBytes: binaryBytes.length });
-    expect(readFileSync(join(dir, "batcave"))).toEqual(binaryBytes);
+    expect(result).toEqual({ path: join(dir, "crewd"), version: VERSION, target: TARGET, sizeBytes: binaryBytes.length });
+    expect(readFileSync(join(dir, "crewd"))).toEqual(binaryBytes);
     expect(JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"))).toEqual(JSON.parse(manifest));
   });
 
   test("forwards the token as a Bearer Authorization header on every request", async () => {
     const stateRoot = mkdtempSync(join(tmpdir(), "bat-dl-"));
-    const binaryBytes = Buffer.from("fake-batcave-binary-fixture-bytes");
+    const binaryBytes = Buffer.from("fake-crewd-binary-fixture-bytes");
     const manifest = manifestJson({}, binaryBytes);
     const seenAuth: (string | undefined)[] = [];
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -92,7 +92,7 @@ describe("downloadRuntime: success", () => {
 
   test("omits the Authorization header entirely when no token is given", async () => {
     const stateRoot = mkdtempSync(join(tmpdir(), "bat-dl-"));
-    const binaryBytes = Buffer.from("fake-batcave-binary-fixture-bytes");
+    const binaryBytes = Buffer.from("fake-crewd-binary-fixture-bytes");
     const manifest = manifestJson({}, binaryBytes);
     const seenAuth: (string | undefined)[] = [];
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -127,7 +127,7 @@ describe("downloadRuntime: release/asset lookup", () => {
   test("a release missing the requested manifest asset throws RuntimeDownloadError with code http-error, without ever fetching the binary", async () => {
     const stateRoot = mkdtempSync(join(tmpdir(), "bat-dl-"));
     const fetchImpl = fakeFetch({
-      [RELEASE_URL]: { status: 200, body: releaseJson({ manifestName: "batcave-linux-x64-gnu.manifest.json" }) },
+      [RELEASE_URL]: { status: 200, body: releaseJson({ manifestName: "crewd-linux-x64-gnu.manifest.json" }) },
     });
 
     try {
@@ -208,7 +208,7 @@ describe("downloadRuntime: checksum verification", () => {
     }
 
     const dir = runtimeCacheDir(stateRoot, VERSION);
-    expect(existsSync(join(dir, "batcave"))).toBe(false);
+    expect(existsSync(join(dir, "crewd"))).toBe(false);
     expect(existsSync(join(dir, "manifest.json"))).toBe(false);
   });
 });

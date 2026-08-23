@@ -30,7 +30,7 @@ pub struct Scrubber {
 
 impl Scrubber {
     /// `cwd` is the absolute working directory the capture ran in; it is
-    /// rewritten to `/workspace/batman` wherever it appears.
+    /// rewritten to `/workspace/crew` wherever it appears.
     pub fn new(cwd: String) -> Self {
         Self {
             redactor: crate::security::redaction::Redactor::default(),
@@ -130,7 +130,7 @@ impl Scrubber {
 
     /// Rewrites path and secret text without applying key-specific rules.
     fn rewrite_text(&self, text: &str) -> String {
-        let cwd_rewritten = text.replace(&self.cwd, "/workspace/batman");
+        let cwd_rewritten = text.replace(&self.cwd, "/workspace/crew");
         self.redactor.redact_text(&cwd_rewritten)
     }
 
@@ -354,7 +354,7 @@ mod tests {
         let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/adapters/claude/initialize.jsonl");
         let content = std::fs::read_to_string(&fixture_path).expect("fixture must be readable");
-        let mut scrubber = Scrubber::new("/workspace/batman".into());
+        let mut scrubber = Scrubber::new("/workspace/crew".into());
 
         for line in content.lines() {
             if line.is_empty() {
@@ -395,20 +395,17 @@ mod tests {
         let scrubbed = scrubber.scrub_line(input.as_bytes()).expect("must parse");
         let obj: Value = serde_json::from_str(&scrubbed).expect("scrubbed must be valid JSON");
         let obj = obj.as_object().expect("must be object");
-        assert_eq!(
-            obj.get("cwd").unwrap().as_str().unwrap(),
-            "/workspace/batman"
-        );
+        assert_eq!(obj.get("cwd").unwrap().as_str().unwrap(), "/workspace/crew");
         assert_eq!(
             obj.get("file_path").unwrap().as_str().unwrap(),
-            "/workspace/batman/config.toml"
+            "/workspace/crew/config.toml"
         );
     }
 
     /// Numeric timestamps are rewritten.
     #[test]
     fn rewrites_numeric_timestamps() {
-        let mut scrubber = Scrubber::new("/workspace/batman".into());
+        let mut scrubber = Scrubber::new("/workspace/crew".into());
         let input = r#"{"startedAtMs":1732400000000,"completedAtMs":1732400001000}"#;
         let scrubbed = scrubber.scrub_line(input.as_bytes()).expect("must parse");
         let obj: Value = serde_json::from_str(&scrubbed).expect("scrubbed must be valid JSON");
@@ -434,7 +431,7 @@ mod tests {
 
     #[test]
     fn nested_thread_id_and_thread_id_share_one_stable_session_identity() {
-        let mut scrubber = Scrubber::new("/workspace/batman".into());
+        let mut scrubber = Scrubber::new("/workspace/crew".into());
         let scrubbed = scrubber
             .scrub_line(br#"{"thread":{"id":"thread-actual"},"threadId":"thread-actual"}"#)
             .expect("frame must be retained");
@@ -447,7 +444,7 @@ mod tests {
 
     #[test]
     fn nested_turn_id_and_turn_id_share_one_stable_session_identity() {
-        let mut scrubber = Scrubber::new("/workspace/batman".into());
+        let mut scrubber = Scrubber::new("/workspace/crew".into());
         let scrubbed = scrubber
             .scrub_line(br#"{"turn":{"id":"turn-actual"},"turnId":"turn-actual"}"#)
             .expect("frame must be retained");
@@ -471,7 +468,7 @@ mod tests {
                 r#"{{"sessionId":"{session_id}","sessionFile":".omp/sessions/{session_id}.jsonl"}}"#
             ),
         ] {
-            let mut scrubber = Scrubber::new("/workspace/batman".into());
+            let mut scrubber = Scrubber::new("/workspace/crew".into());
             let scrubbed = scrubber
                 .scrub_line(input.as_bytes())
                 .expect("frame must be retained");
@@ -488,7 +485,7 @@ mod tests {
 
     #[test]
     fn prefixed_ids_are_renumbered_by_encounter_order() {
-        let mut scrubber = Scrubber::new("/workspace/batman".into());
+        let mut scrubber = Scrubber::new("/workspace/crew".into());
         let session_ids: Vec<String> = [
             r#"{"session_id":"11111111-1111-4111-8111-111111111111"}"#,
             r#"{"session_id":"11111111-1111-4111-8111-111111111111"}"#,
@@ -546,7 +543,7 @@ mod tests {
 
     #[test]
     fn correlation_ids_are_renumbered_by_family_and_encounter_order() {
-        let mut scrubber = Scrubber::new("/workspace/batman".into());
+        let mut scrubber = Scrubber::new("/workspace/crew".into());
         let first = scrubber
             .scrub_line(
                 br#"{"message":{"id":"msg-first"},"messageId":"msg-first","tool_use":{"id":"toolu-first"},"parent_tool_use_id":"toolu-first","tool_use_id":"toolu-first","callId":"toolu-first","toolCallId":"toolu-first","hook_id":"hook-first","item":{"id":"item-first"},"itemId":"item-first","agentId":"agent-first"}"#,
@@ -605,14 +602,14 @@ mod tests {
         assert_eq!(value["sessionId"], expected);
         assert_eq!(
             value["sessionFile"],
-            format!("/workspace/batman/.omp/sessions/{expected}.jsonl")
+            format!("/workspace/crew/.omp/sessions/{expected}.jsonl")
         );
         assert_eq!(value["token"], "[REDACTED:api_key]");
     }
 
     #[test]
     fn normalizes_command_paths_without_misclassifying_prose_or_nested_turns() {
-        let mut scrubber = Scrubber::new("/workspace/batman".into());
+        let mut scrubber = Scrubber::new("/workspace/crew".into());
         let scrubbed = scrubber
             .scrub_line(
                 br#"{"command":"/opt/homebrew/bin/copilot","prose":"meetingTendsAtZ","thread":{"turns":[{"id":"turn-actual"}]}}"#,
@@ -630,7 +627,7 @@ mod tests {
 
     #[test]
     fn correlation_prefixes_are_only_normalized_in_id_fields() {
-        let mut scrubber = Scrubber::new("/workspace/batman".into());
+        let mut scrubber = Scrubber::new("/workspace/crew".into());
         let scrubbed = scrubber
             .scrub_line(
                 br#"{"subtype":"hook_started","type":"item_started","text":"msg-not-an-id","hook_id":"hook-real"}"#,

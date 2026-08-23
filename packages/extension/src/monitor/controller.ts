@@ -1,25 +1,25 @@
 // Wires the monitor's pure model/render layers into the live extension:
 // replay-first startup (resuming from the last persisted sequence),
-// continuous widget updates as events arrive, and the `/batman` /
-// `/batman status <runId>` commands.
+// continuous widget updates as events arrive, and the `/crew` /
+// `/crew status <runId>` commands.
 
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
-import type { BatmanClient } from "../client";
+import type { CrewClient } from "../client";
 import { EMPTY_MONITOR_STATE, hasVisibleRows, reduceEvent, type MonitorState } from "./model";
 import { renderRowDetails, renderWidgetBox } from "./render";
 
 /** The custom session-entry type the last-rendered sequence is persisted under. */
-export const MONITOR_ENTRY_TYPE = "batman-monitor";
+export const MONITOR_ENTRY_TYPE = "crew-monitor";
 
 /** The widget key the monitor renders under. */
-const WIDGET_KEY = "batman-monitor";
+const WIDGET_KEY = "crew-monitor";
 
 /** The slash command that opens or refreshes the monitor. */
-export const MONITOR_COMMAND_NAME = "batman";
+export const MONITOR_COMMAND_NAME = "crew";
 
 export interface MonitorControllerContext {
-  getClient(extCtx: ExtensionContext): Promise<BatmanClient>;
+  getClient(extCtx: ExtensionContext): Promise<CrewClient>;
 }
 
 /** The subset of `pi.appendEntry`'s session-entry log the controller reads
@@ -32,7 +32,7 @@ export interface SessionEntryLike {
 
 /**
  * Scans `entries` (oldest to newest, as `getEntries()` returns them) for
- * the most recent `batman-monitor` custom entry and returns its persisted
+ * the most recent `crew-monitor` custom entry and returns its persisted
  * sequence, or `0` if none exists yet.
  */
 export function lastPersistedSequence(entries: readonly SessionEntryLike[]): number {
@@ -69,7 +69,7 @@ export class MonitorController {
    * applied event so the caller can re-render the widget and persist the
    * new sequence.
    */
-  start(client: BatmanClient, fromSequence: number, onUpdate: () => void): void {
+  start(client: CrewClient, fromSequence: number, onUpdate: () => void): void {
     this.#onUpdate = onUpdate;
     this.#unsubscribe = client.subscribe(fromSequence, (event) => {
       this.#state = reduceEvent(this.#state, event);
@@ -84,7 +84,7 @@ export class MonitorController {
     this.#onUpdate = undefined;
   }
 
-  /** Full detail text for `/batman status <runId>`, or `undefined` if no
+  /** Full detail text for `/crew status <runId>`, or `undefined` if no
    *  row exists for that run. */
   renderStatus(runId: string): string | undefined {
     const row = this.#state.rows[runId];
@@ -92,16 +92,16 @@ export class MonitorController {
   }
 }
 
-/** Registers the `/batman` command and the replay-first monitor lifecycle. */
+/** Registers the `/crew` command and the replay-first monitor lifecycle. */
 export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext): void {
   const controller = new MonitorController();
-  let subscribedClient: BatmanClient | undefined;
+  let subscribedClient: CrewClient | undefined;
 
   /**
    * Syncs the widget with the current state: renders the box when there are
    * rows to show, removes the widget when there are none. `force` renders
-   * the box even when empty — the explicit `/batman` command uses it, so a
-   * healthy-but-empty runtime still answers with the "No BATMAN runs yet."
+   * the box even when empty — the explicit `/crew` command uses it, so a
+   * healthy-but-empty runtime still answers with the "No Crew runs yet."
    * box rather than silence; the session-start and live-event paths stay
    * hidden when there is nothing to show.
    */
@@ -131,7 +131,7 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
       controller.start(client, fromSequence, () => refresh(extCtx));
       subscribedClient = client;
     } catch (err) {
-      pi.logger.warn("batman monitor: runtime unavailable", {
+      pi.logger.warn("crew monitor: runtime unavailable", {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -148,16 +148,16 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
   });
 
   pi.registerCommand(MONITOR_COMMAND_NAME, {
-    description: "Opens or refreshes the embedded BATMAN worker monitor. `/batman status <runId>` shows full details.",
+    description: "Opens or refreshes the embedded Crew worker monitor. `/crew status <runId>` shows full details.",
     handler: async (args, cmdCtx) => {
       const [sub, runId] = args.trim().split(/\s+/, 2);
       if (sub === "status" && runId !== undefined && runId.length > 0) {
         const details = controller.renderStatus(runId);
-        cmdCtx.ui.notify(details ?? `No BATMAN run found for ${runId}.`, details === undefined ? "warning" : "info");
+        cmdCtx.ui.notify(details ?? `No Crew run found for ${runId}.`, details === undefined ? "warning" : "info");
         return;
       }
       // Deliberately asymmetric with session_start's auto-hide: an explicit
-      // user command renders unconditionally, so /batman against an empty or
+      // user command renders unconditionally, so /crew against an empty or
       // dead runtime still shows the (empty) monitor box rather than nothing.
       await connect(cmdCtx);
       refresh(cmdCtx, true);

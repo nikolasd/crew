@@ -7,8 +7,8 @@
 //! error, never silently coerced to a default.
 //!
 //! Plain `serde` derives only (no `schemars`/`ts-rs`): these types never
-//! cross the extension-facing wire directly. `batcave adapters --json`
-//! and `batcave conformance ... --output` serialize them ad hoc, the same
+//! cross the extension-facing wire directly. `crewd adapters --json`
+//! and `crewd conformance ... --output` serialize them ad hoc, the same
 //! way `crates/runtime/src/lifecycle.rs`'s `AlreadyRunning`/`LockContents`
 //! already do for CLI-facing JSON that isn't part of the generated
 //! protocol schema.

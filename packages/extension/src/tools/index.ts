@@ -1,7 +1,7 @@
-// Registers every deterministic BATMAN orchestration tool: `batman_task`,
-// `batman_worker`, `batman_profile`, `batman_run`, `batman_workspace`,
-// `batman_artifact`, `batman_child`, `batman_violation`, `batman_message`,
-// `batman_approval`, and `batman_reconcile`. Each tool is a thin validated
+// Registers every deterministic Crew orchestration tool: `crew_task`,
+// `crew_worker`, `crew_profile`, `crew_run`, `crew_workspace`,
+// `crew_artifact`, `crew_child`, `crew_violation`, `crew_message`,
+// `crew_approval`, and `crew_reconcile`. Each tool is a thin validated
 // adapter over the runtime's JSON-RPC methods -- no worker selection,
 // retry, merge, or lifecycle inference happens in TypeScript.
 
@@ -21,17 +21,17 @@ import { registerWorkspaceTool } from "./workspaces";
 import type { OrchestrationToolContext } from "./shared";
 
 export type { OrchestrationToolContext } from "./shared";
-export { BATMAN_TASK_TOOL_NAME } from "./tasks";
-export { BATMAN_WORKER_TOOL_NAME } from "./workers";
-export { BATMAN_RUN_TOOL_NAME } from "./runs";
-export { BATMAN_MESSAGE_TOOL_NAME } from "./messages";
-export { BATMAN_APPROVAL_TOOL_NAME } from "./approvals";
-export { BATMAN_RECONCILE_TOOL_NAME } from "./reconcile";
-export { BATMAN_PROFILE_TOOL_NAME } from "./profiles";
-export { BATMAN_WORKSPACE_TOOL_NAME } from "./workspaces";
-export { BATMAN_ARTIFACT_TOOL_NAME } from "./artifacts";
-export { BATMAN_CHILD_TOOL_NAME } from "./children";
-export { BATMAN_VIOLATION_TOOL_NAME } from "./violations";
+export { CREW_TASK_TOOL_NAME } from "./tasks";
+export { CREW_WORKER_TOOL_NAME } from "./workers";
+export { CREW_RUN_TOOL_NAME } from "./runs";
+export { CREW_MESSAGE_TOOL_NAME } from "./messages";
+export { CREW_APPROVAL_TOOL_NAME } from "./approvals";
+export { CREW_RECONCILE_TOOL_NAME } from "./reconcile";
+export { CREW_PROFILE_TOOL_NAME } from "./profiles";
+export { CREW_WORKSPACE_TOOL_NAME } from "./workspaces";
+export { CREW_ARTIFACT_TOOL_NAME } from "./artifacts";
+export { CREW_CHILD_TOOL_NAME } from "./children";
+export { CREW_VIOLATION_TOOL_NAME } from "./violations";
 
 /** Registers every orchestration tool against the extension API. */
 export function registerOrchestrationTools(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {

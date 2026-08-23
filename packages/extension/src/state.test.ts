@@ -27,7 +27,11 @@ for (const testCase of cases) {
   });
 }
 
-test("rejects a relative BATMAN_STATE_DIR override", () => {
+test("rejects a relative CREW_STATE_DIR override", () => {
+  expect(() => resolveStateRoot({ CREW_STATE_DIR: "relative/state" }, "/home/alice")).toThrow(StateRootError);
+});
+
+test("rejects a relative legacy BATMAN_STATE_DIR override", () => {
   expect(() => resolveStateRoot({ BATMAN_STATE_DIR: "relative/state" }, "/home/alice")).toThrow(StateRootError);
 });
 
@@ -35,15 +39,24 @@ test("rejects a relative XDG_STATE_HOME override", () => {
   expect(() => resolveStateRoot({ XDG_STATE_HOME: "relative/state" }, "/home/alice")).toThrow(StateRootError);
 });
 
-test("BATMAN_STATE_DIR wins over XDG_STATE_HOME and the default", () => {
+test("CREW_STATE_DIR wins over XDG_STATE_HOME and the default", () => {
   const root = resolveStateRoot(
     {
-      BATMAN_STATE_DIR: "/var/lib/batman",
+      CREW_STATE_DIR: "/var/lib/crew",
       XDG_STATE_HOME: "/home/alice/.local/state",
     },
     "/home/alice",
   );
-  expect(root).toBe("/var/lib/batman");
+  expect(root).toBe("/var/lib/crew");
+});
+
+test("the legacy BATMAN_STATE_DIR name still works when CREW_STATE_DIR is unset", () => {
+  expect(resolveStateRoot({ BATMAN_STATE_DIR: "/var/lib/batman" }, "/home/alice")).toBe("/var/lib/batman");
+});
+
+test("CREW_STATE_DIR wins over the legacy BATMAN_STATE_DIR when both are set", () => {
+  const root = resolveStateRoot({ CREW_STATE_DIR: "/var/lib/crew", BATMAN_STATE_DIR: "/var/lib/batman" }, "/home/alice");
+  expect(root).toBe("/var/lib/crew");
 });
 
 test("falls back to $HOME/.omp/batman when nothing is set", () => {
@@ -55,15 +68,15 @@ test("PI_CONFIG_DIR overrides the default .omp directory name", () => {
 });
 
 test("does not read process-global env or home", () => {
-  const originalStateDir = process.env.BATMAN_STATE_DIR;
-  process.env.BATMAN_STATE_DIR = "/should/not/be/read";
+  const originalStateDir = process.env.CREW_STATE_DIR;
+  process.env.CREW_STATE_DIR = "/should/not/be/read";
   try {
     expect(resolveStateRoot({}, "/home/alice")).toBe("/home/alice/.omp/batman");
   } finally {
     if (originalStateDir === undefined) {
-      delete process.env.BATMAN_STATE_DIR;
+      delete process.env.CREW_STATE_DIR;
     } else {
-      process.env.BATMAN_STATE_DIR = originalStateDir;
+      process.env.CREW_STATE_DIR = originalStateDir;
     }
   }
 });

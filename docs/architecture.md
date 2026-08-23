@@ -1,6 +1,6 @@
 # Architecture
 
-This document explains how the foundation of BATMAN is designed and why. It assumes you have read
+This document explains how the foundation of Crew is designed and why. It assumes you have read
 the [README](../README.md) and want the engineering detail behind it.
 
 **Audience & purpose:** contributors and reviewers who want the design rationale — the *why*
@@ -35,7 +35,7 @@ with no history in it — for how it got this way, see [journal.md](journal.md) 
 
 ## Level 1: System Context (C4-1)
 
-The system context shows BATMAN as a whole and its relationships with users and other systems.
+The system context shows Crew as a whole and its relationships with users and other systems.
 
 ```mermaid
 graph TB
@@ -43,9 +43,9 @@ graph TB
         U[Developer]
     end
 
-    subgraph "BATMAN System"
-        OE[OMP Extension<br/>@nikolasd/batman]
-        BR[BATMAN Runtime<br/>batcave]
+    subgraph "Crew System"
+        OE[OMP Extension<br/>@nikolasd/crew]
+        BR[Crew Runtime<br/>crewd]
     end
 
     subgraph "External Systems"
@@ -64,8 +64,8 @@ graph TB
 ```
 
 **System boundaries:**
-- **OMP Extension** (`@nikolasd/batman`): TypeScript extension registering tools and commands with OMP
-- **BATMAN Runtime** (`batcave`): Rust daemon handling worker supervision, persistence, and IPC
+- **OMP Extension** (`@nikolasd/crew`): TypeScript extension registering tools and commands with OMP
+- **Crew Runtime** (`crewd`): Rust daemon handling worker supervision, persistence, and IPC
 - **Worker Processes**: Supervised vendor CLI processes (Claude, Codex, Copilot, OMP-RPC)
 
 **Responsibilities:**
@@ -73,9 +73,9 @@ graph TB
 |---|---|
 | Task intake, task graph, scheduling, worker selection | OMP Extension |
 | Approvals, policy, merge/reject decisions, synthesis | OMP Extension |
-| Worker process supervision, adapter protocols | BATMAN Runtime |
-| Durable event/state persistence and recovery | BATMAN Runtime |
-| Workspace mechanics requested by OMP, display subscriptions | BATMAN Runtime |
+| Worker process supervision, adapter protocols | Crew Runtime |
+| Durable event/state persistence and recovery | Crew Runtime |
+| Workspace mechanics requested by OMP, display subscriptions | Crew Runtime |
 | Model-callable tools, commands, UI inside OMP | OMP Extension |
 
 The extension is not process-isolated inside OMP, so it never owns the only durable copy of any
@@ -89,15 +89,15 @@ The container level shows high-level technology choices and how containers commu
 graph TB
     subgraph "OMP Extension Container"
         subgraph "TypeScript/Node.js"
-            TO[OMP Tools<br/>batman_task, batman_worker,<br/>batman_run, etc.]
+            TO[OMP Tools<br/>crew_task, crew_worker,<br/>crew_run, etc.]
             RC[OMP Native Reconciler]
             MN[Embedded Monitor]
             CL[Runtime Client<br/>packages/extension/src/client.ts]
         end
     end
 
-    subgraph "BATMAN Runtime Container"
-        subgraph "Rust/batcave"
+    subgraph "Crew Runtime Container"
+        subgraph "Rust/crewd"
             IS[IPC Server<br/>JSON-RPC 2.0 over NDJSON]
             DA[Database Actor<br/>SQLite journal]
             AR[Adapter Registry<br/>4 worker adapters]
@@ -141,7 +141,7 @@ graph TB
 | Container | Technology | Communication |
 |---|---|---|
 | OMP Extension | TypeScript/Node.js (Bun) | JSON-RPC 2.0 over NDJSON |
-| BATMAN Runtime | Rust (tokio, rusqlite) | JSON-RPC 2.0 over NDJSON |
+| Crew Runtime | Rust (tokio, rusqlite) | JSON-RPC 2.0 over NDJSON |
 | Worker Processes | Claude/Codex/Copilot/OMP CLI | NDJSON over stdio |
 
 **Communication protocol:** JSON-RPC 2.0 over bounded NDJSON on per-repository Unix domain sockets.
@@ -191,16 +191,16 @@ graph LR
 
 **Key components:**
 - **Extension entry point** ([`packages/extension/src/index.ts`](packages/extension/src/index.ts)): Registers tools and commands with OMP
-- **Status tool** ([`packages/extension/src/status.ts`](packages/extension/src/status.ts)): `batman_status` tool, `/batman-status` command, and the shared `resolveClient()` resolver — liveness-checks the cached connection and reconnects on demand
-- **Doctor tool** ([`packages/extension/src/doctor.ts`](packages/extension/src/doctor.ts)): `batman_doctor` tool and `/batman-doctor` command — runs `batcave doctor` without needing a live connection
+- **Status tool** ([`packages/extension/src/status.ts`](packages/extension/src/status.ts)): `crew_health` tool, `/crew-status` command, and the shared `resolveClient()` resolver — liveness-checks the cached connection and reconnects on demand
+- **Doctor tool** ([`packages/extension/src/doctor.ts`](packages/extension/src/doctor.ts)): `crew_doctor` tool and `/crew-doctor` command — runs `crewd doctor` without needing a live connection
 - **Runtime client** ([`packages/extension/src/client.ts`](packages/extension/src/client.ts)): JSON-RPC client with correlation table and `isClosed` liveness flag
 - **Runtime launcher** ([`packages/extension/src/runtime.ts`](packages/extension/src/runtime.ts)): `ensureRuntime()` with binary selection and connection retry
-- **Platform resolver** ([`packages/extension/src/platform.ts`](packages/extension/src/platform.ts)): `resolveBatcave()` for platform-specific binaries
+- **Platform resolver** ([`packages/extension/src/platform.ts`](packages/extension/src/platform.ts)): `resolveCrewd()` for platform-specific binaries
 - **Integrity** ([`packages/extension/src/integrity.ts`](packages/extension/src/integrity.ts)): `sha256File` — verifies packaged binaries against their manifest checksum
 - **State root resolver** ([`packages/extension/src/state.ts`](packages/extension/src/state.ts)): `resolveStateRoot(env, home)` — must stay semantically identical to Rust's `StateRoot::resolve`
 - **Approval UI** ([`packages/extension/src/approval-ui.ts`](packages/extension/src/approval-ui.ts)): Approval UI components
-- **Orchestration tools** ([`packages/extension/src/tools/`](packages/extension/src/tools/)): 11 tools sharing one `callOrchestration` execute body (`shared.ts`) — `batman_profile`, `batman_worker`, `batman_task`, `batman_run`, `batman_workspace`, `batman_artifact`, `batman_child`, `batman_violation`, `batman_message`, `batman_approval`, `batman_reconcile`. See [plugin-usage.md](plugin-usage.md) for what each does.
-- **OMP-native reconciler** ([`packages/extension/src/omp-native/`](packages/extension/src/omp-native/)): Mirrors OMP bus events into Batman facts
+- **Orchestration tools** ([`packages/extension/src/tools/`](packages/extension/src/tools/)): 11 tools sharing one `callOrchestration` execute body (`shared.ts`) — `crew_profile`, `crew_worker`, `crew_task`, `crew_run`, `crew_workspace`, `crew_artifact`, `crew_child`, `crew_violation`, `crew_message`, `crew_approval`, `crew_reconcile`. See [plugin-usage.md](plugin-usage.md) for what each does.
+- **OMP-native reconciler** ([`packages/extension/src/omp-native/`](packages/extension/src/omp-native/)): Mirrors OMP bus events into Crew facts
 - **Embedded monitor** ([`packages/extension/src/monitor/`](packages/extension/src/monitor/)): `model.ts`, `render.ts`, `controller.ts`, `compat.ts`
 
 Configuration has no TypeScript-side counterpart — the layered org/repo/user config lives entirely
@@ -209,11 +209,11 @@ in `crates/runtime/src/config/`; the extension only ever reads the daemon's alre
 runner — it's driven by [`tests/conformance/run.ts`](../tests/conformance/run.ts) and
 `assert-report.ts`, invoked by CI, not by the extension at runtime.
 
-### 3.2. BATMAN Runtime Components
+### 3.2. Crew Runtime Components
 
 ```mermaid
 graph TB
-    subgraph "BATMAN Runtime"
+    subgraph "Crew Runtime"
         CLI[cli.rs]
         LC[lifecycle.rs]
         DO[doctor.rs]
@@ -390,7 +390,7 @@ The code level shows the internal structure of each component — the actual imp
 **Protocol identifiers** ([`crates/protocol/src/ids.rs`](crates/protocol/src/ids.rs)):
 
 ```rust
-/// UUIDv7-backed string identifiers used throughout the BATMAN wire protocol.
+/// UUIDv7-backed string identifiers used throughout the Crew wire protocol.
 /// Every identifier is a distinct newtype around `uuid::Uuid` so that, for
 /// example, a `TaskId` can never be passed where a `WorkerId` is expected.
 macro_rules! uuid_id {
@@ -429,7 +429,7 @@ pub struct JsonRpcRequest<P> {
 }
 
 /// A JSON-RPC 2.0 notification envelope: a method call with no `id`, for
-/// which no response is expected. BATMAN uses these to push runtime events to
+/// which no response is expected. Crew uses these to push runtime events to
 /// subscribed clients via the `events/event` method.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -730,8 +730,8 @@ This appendix provides fast access to common operations, error codes, and file p
 | Generate TypeScript bindings | `cargo run -p batman-xtask -- generate` or `bun run generate` |
 | Check for drift (CI) | `bun run check` |
 | Package binary for platform | `cargo run -p batman-xtask -- package --target <triple> --binary <path>` |
-| Start daemon (foreground) | `batcave serve --foreground` |
-| Stop daemon | `batcave stop` |
+| Start daemon (foreground) | `crewd serve --foreground` |
+| Stop daemon | `crewd stop` |
 
 ### Key File Paths
 
@@ -739,7 +739,7 @@ This appendix provides fast access to common operations, error codes, and file p
 |---|---|
 | Protocol types (Rust) | [`crates/protocol/src/*.rs`](crates/protocol/src/) |
 | Protocol types (TypeScript) | [`packages/protocol-ts/src/generated/*.ts`](packages/protocol-ts/src/generated/) |
-| JSON Schema | [`packages/protocol-ts/schema/batman.schema.json`](packages/protocol-ts/schema/batman.schema.json) |
+| JSON Schema | [`packages/protocol-ts/schema/crew.schema.json`](packages/protocol-ts/schema/crew.schema.json) |
 | Database actor | [`crates/runtime/src/db/actor.rs`](crates/runtime/src/db/actor.rs) |
 | IPC server | [`crates/runtime/src/ipc/server.rs`](crates/runtime/src/ipc/server.rs) |
 | IPC connection handler | [`crates/runtime/src/ipc/connection.rs`](crates/runtime/src/ipc/connection.rs) |
@@ -767,7 +767,7 @@ This appendix provides fast access to common operations, error codes, and file p
 
 State lives under `<state root>/repos/<repository-id>/`, where the state root resolves with this precedence:
 
-1. `BATMAN_STATE_DIR` (must be absolute)
+1. `CREW_STATE_DIR` (must be absolute)
 2. `$XDG_STATE_HOME/omp/batman` when `XDG_STATE_HOME` is set (must be absolute)
 3. `$HOME/${PI_CONFIG_DIR:-.omp}/batman`
 

@@ -172,7 +172,7 @@ impl CopilotAdapter {
     /// (`ensure_client`) builds for [`CopilotAcpClient::spawn`], factored
     /// out pure -- never spawns anything -- so this crate's own test
     /// suite can assert on the injected `--additional-mcp-config`/
-    /// `BATMAN_WORKER_SCOPE_TOKEN` shape without spawning a real vendor
+    /// `CREW_WORKER_SCOPE_TOKEN` shape without spawning a real vendor
     /// process. `reserved_token` is `Some` only when this adapter was
     /// constructed with `mcp: Some(_)`; the caller must
     /// [`AdapterMcpConfig::activate`] it once the real vendor pid is

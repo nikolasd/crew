@@ -1,4 +1,4 @@
-// `batman_run`: submits, lists, fetches, retries, and cancels runs.
+// `crew_run`: submits, lists, fetches, retries, and cancels runs.
 // `submit`, `retry`, and `cancel` are tier `exec` -- they start, restart,
 // or stop adapter processes. `retry` creates a distinct run (never mutates the prior one).
 
@@ -7,12 +7,12 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import type { OrchestrationToolContext } from "./shared";
 import { callOrchestration } from "./shared";
 
-export const BATMAN_RUN_TOOL_NAME = "batman_run";
+export const CREW_RUN_TOOL_NAME = "crew_run";
 
 export function registerRunTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
     op: pi.zod.enum(["submit", "list", "get", "retry", "cancel", "result"]).describe("Which run operation to perform."),
-    prompt: pi.zod.string().optional().describe("Required for submit and retry: the instruction the worker executes. BATMAN stores no task text, so the task's description must be passed here."),
+    prompt: pi.zod.string().optional().describe("Required for submit and retry: the instruction the worker executes. Crew stores no task text, so the task's description must be passed here."),
     taskId: pi.zod.string().optional().describe("Required for submit: the task to execute. Optional filter for list."),
     workerId: pi.zod.string().optional().describe("Required for submit and retry: the worker to execute with."),
     workspaceMode: pi.zod.enum(["shared", "isolated", "copy"]).optional().describe("Optional workspace mode for submit and retry: 'shared' (the repository itself, the default), 'isolated' (a per-run git worktree), or 'copy' (a per-run copy of the repository)."),
@@ -22,10 +22,10 @@ export function registerRunTool(pi: ExtensionAPI, ctx: OrchestrationToolContext)
   });
 
   pi.registerTool({
-    name: BATMAN_RUN_TOOL_NAME,
-    label: "BATMAN Run",
+    name: CREW_RUN_TOOL_NAME,
+    label: "Crew Run",
     description:
-      "Use to execute, monitor, or manage task execution by external workers. Use op: 'submit' to start execution (requires taskId from batman_task, workerId from batman_worker, and prompt -- the instruction text the worker executes), op: 'get' to check progress/status of a run, op: 'result' to read a finished run's final output text and token usage (requires runId; refused until the run reaches a terminal state -- chain work by passing resultText into the next submit's prompt), op: 'list' to list runs for a task, op: 'retry' to re-execute a terminal run (creates a new runId and starts a fresh worker process; pass prompt again), or op: 'cancel' to stop a running run. After submitting, monitor with op: 'get'. If the run fails, retry with op: 'retry' (new runId). If stuck, cancel with op: 'cancel'.",
+      "Use to execute, monitor, or manage task execution by external workers. Use op: 'submit' to start execution (requires taskId from crew_task, workerId from crew_worker, and prompt -- the instruction text the worker executes), op: 'get' to check progress/status of a run, op: 'result' to read a finished run's final output text and token usage (requires runId; refused until the run reaches a terminal state -- chain work by passing resultText into the next submit's prompt), op: 'list' to list runs for a task, op: 'retry' to re-execute a terminal run (creates a new runId and starts a fresh worker process; pass prompt again), or op: 'cancel' to stop a running run. After submitting, monitor with op: 'get'. If the run fails, retry with op: 'retry' (new runId). If stuck, cancel with op: 'cancel'.",
     parameters: params,
     approval: (args) => (typeof args === "object" && args !== null && "op" in args && (args.op === "submit" || args.op === "retry" || args.op === "cancel") ? "exec" : "read"),
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {

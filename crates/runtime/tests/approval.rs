@@ -195,7 +195,7 @@ async fn omp_client(harness: &Harness, instance_id: &str) -> Client {
             "id": 1,
             "method": "initialize",
             "params": {
-                "client": { "name": "@nikolasd/batman", "version": "0.1.0" },
+                "client": { "name": "@nikolasd/crew", "version": "0.1.0" },
                 "supported": { "min": { "major": 1, "minor": 0 }, "max": { "major": 1, "minor": 0 } },
                 "repository": { "canonicalPath": harness.owned_dir, "vcsRoot": harness.owned_dir },
                 "auth": { "role": "ompExtension", "instanceId": instance_id, "agentDirectory": harness.owned_dir },
@@ -661,7 +661,7 @@ async fn a_human_required_approval_is_accepted_when_decided_by_a_human() {
 /// R92: `decided_by` has been persisted since MIGRATION_7 and `reason`
 /// since MIGRATION_9, both carried on `ApprovalDecided` events -- but
 /// `approval/list` projected neither, so decision provenance was readable
-/// only via `events/replay` or `batcave audit export`. The list must
+/// only via `events/replay` or `crewd audit export`. The list must
 /// carry both for a decided approval and neither key for a pending one.
 #[tokio::test]
 async fn approval_list_projects_decision_provenance() {

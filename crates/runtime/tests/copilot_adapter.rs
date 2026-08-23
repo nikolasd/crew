@@ -664,8 +664,8 @@ fn mcp_config_for_test() -> AdapterMcpConfig {
     AdapterMcpConfig {
         scope_tokens: std::sync::Arc::new(ScopeTokenStore::new()),
         project_id: batman_protocol::ProjectId::new(),
-        batcave_path: PathBuf::from("/opt/batman/bin/batcave"),
-        state_dir: PathBuf::from("/tmp/batman-state"),
+        crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
+        state_dir: PathBuf::from("/tmp/crew-state"),
         repository: PathBuf::from("/tmp/my-repo"),
     }
 }
@@ -703,8 +703,8 @@ fn spawn_plan_injects_additional_mcp_config_matching_the_shared_document_shape()
         .expect("--additional-mcp-config value must be well-formed JSON");
 
     let context = McpLaunchContext {
-        batcave_path: PathBuf::from("/opt/batman/bin/batcave"),
-        state_dir: PathBuf::from("/tmp/batman-state"),
+        crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
+        state_dir: PathBuf::from("/tmp/crew-state"),
         repository: PathBuf::from("/tmp/my-repo"),
         run_id,
     };
@@ -727,9 +727,9 @@ fn spawn_plan_never_puts_the_scope_token_in_argv_only_in_env() {
         plan.args
     );
     assert_eq!(
-        plan.env.get("BATMAN_WORKER_SCOPE_TOKEN"),
+        plan.env.get("CREW_WORKER_SCOPE_TOKEN"),
         Some(&token),
-        "the scope token must be present in env under BATMAN_WORKER_SCOPE_TOKEN"
+        "the scope token must be present in env under CREW_WORKER_SCOPE_TOKEN"
     );
 }
 
@@ -775,7 +775,7 @@ fn spawn_plan_is_unchanged_when_mcp_is_none() {
         ]
     );
     assert!(plan.reserved_token.is_none());
-    assert!(!plan.env.contains_key("BATMAN_WORKER_SCOPE_TOKEN"));
+    assert!(!plan.env.contains_key("CREW_WORKER_SCOPE_TOKEN"));
 }
 
 // -------------------------------------------------------- conformance.rs

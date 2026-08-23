@@ -46,7 +46,7 @@ fn fixture_root(version: &str) -> tempfile::TempDir {
     fs::create_dir_all(&extension_dir).unwrap();
     fs::write(
         extension_dir.join("package.json"),
-        format!(r#"{{"name": "@nikolasd/batman", "version": "{version}"}}"#),
+        format!(r#"{{"name": "@nikolasd/crew", "version": "{version}"}}"#),
     )
     .unwrap();
     let release_dir = root.path().join("release");
@@ -66,7 +66,7 @@ struct Corrupt {
     missing: Option<String>,
     /// Give this target a different `version`.
     wrong_version: Option<String>,
-    /// Name the binary something other than `batcave`.
+    /// Name the binary something other than `crewd`.
     wrong_binary_name: Option<String>,
     /// Drop the executable bit.
     not_executable: Option<String>,
@@ -76,22 +76,22 @@ struct Corrupt {
     bad_checksum: Option<String>,
 }
 
-/// Assembles a full set of leaf packages under `<dir>/batman-<target>/`.
+/// Assembles a full set of leaf packages under `<dir>/crew-<target>/`.
 fn assemble(version: &str, corrupt: &Corrupt) -> tempfile::TempDir {
     let input = tempfile::tempdir().unwrap();
     for target in targets() {
         if corrupt.missing.as_deref() == Some(target.as_str()) {
             continue;
         }
-        let leaf = input.path().join(format!("batman-{target}"));
+        let leaf = input.path().join(format!("crew-{target}"));
         let bin_dir = leaf.join("bin");
         fs::create_dir_all(&bin_dir).unwrap();
 
-        let bytes = format!("batcave-for-{target}").into_bytes();
+        let bytes = format!("crewd-for-{target}").into_bytes();
         let bin_name = if corrupt.wrong_binary_name.as_deref() == Some(target.as_str()) {
-            "batcave-renamed"
+            "crewd-renamed"
         } else {
-            "batcave"
+            "crewd"
         };
         let bin_path = bin_dir.join(bin_name);
         fs::write(&bin_path, &bytes).unwrap();
@@ -124,7 +124,7 @@ fn assemble(version: &str, corrupt: &Corrupt) -> tempfile::TempDir {
         };
 
         let manifest = serde_json::json!({
-            "name": format!("@nikolasd/batman-{target}"),
+            "name": format!("@nikolasd/crew-{target}"),
             "version": declared_version,
             "target": target,
             "sha256": declared_sha,
@@ -284,9 +284,9 @@ fn a_binary_with_the_wrong_name_is_rejected() {
     let (ok, out) = run_package_set(&workspace_root(), &version, input.path(), output.path());
     assert!(
         !ok,
-        "the loader only resolves bin/batcave, so any other name must be refused"
+        "the loader only resolves bin/crewd, so any other name must be refused"
     );
-    assert!(out.contains("no bin/batcave"), "unexpected error: {out}");
+    assert!(out.contains("no bin/crewd"), "unexpected error: {out}");
 }
 
 #[cfg(unix)]
@@ -306,7 +306,7 @@ fn a_binary_without_the_executable_bit_is_rejected() {
     let (ok, out) = run_package_set(&workspace_root(), &version, input.path(), output.path());
     assert!(
         !ok,
-        "a non-executable batcave would fail at launch, not at package time"
+        "a non-executable crewd would fail at launch, not at package time"
     );
     assert!(out.contains("not executable"), "unexpected error: {out}");
 }
@@ -359,7 +359,7 @@ fn windows_and_musl_are_rejected_by_absence_from_targets_json() {
     // musl are unsupported by not appearing in release/targets.json at all,
     // and the error names the supported set rather than guessing a fallback.
     let root = fixture_root(&real_version());
-    let binary = root.path().join("batcave-built");
+    let binary = root.path().join("crewd-built");
     fs::write(&binary, b"bytes").unwrap();
 
     for unsupported in ["windows-x64", "linux-x64-musl", "linux-arm64-musl"] {

@@ -2010,26 +2010,46 @@ impl OrchestrationService {
         // fail this RPC or unwind the message already durably recorded
         // above: the message stays `recorded` and the run's state is
         // untouched, matching `RunDriver::send_follow_up`'s own contract.
-        if let Some(driver) = self.run_driver.clone()
-            && let Err(err) = driver
+        // A genuine success, symmetrically, must advance the message past
+        // `recorded` -- leaving it there forever regardless of outcome is
+        // exactly the deliveryState inversion this branch exists to avoid.
+        if let Some(driver) = self.run_driver.clone() {
+            match driver
                 .send_follow_up(run_id, task_id, sender_worker_id, follow_up_payload)
                 .await
-        {
-            let mut diagnostic = self
-                .db
-                .run_domain_op(Box::new(move |conn| {
-                    let mut repo = DomainRepository::new(conn, project_id);
-                    repo.record_diagnostic(
-                        run_id,
-                        batman_protocol::DiagnosticLevel::Warning,
-                        "follow_up_delivery_failed",
-                        format!("run {run_id}: {err}"),
-                    )
-                    .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
-                }))
-                .await
-                .map_err(ServiceError::from)?;
-            self.broadcast(&mut diagnostic);
+            {
+                Ok(()) => {
+                    let mut sent = self
+                        .db
+                        .run_domain_op(Box::new(move |conn| {
+                            let mut repo = DomainRepository::new(conn, project_id);
+                            repo.update_delivery(message_id, &DeliveryState::Sent)
+                                .map(|c| {
+                                    embed_envelope(json!({ "sequence": c.sequence }), &c.envelope)
+                                })
+                        }))
+                        .await
+                        .map_err(ServiceError::from)?;
+                    self.broadcast(&mut sent);
+                }
+                Err(err) => {
+                    let mut diagnostic = self
+                        .db
+                        .run_domain_op(Box::new(move |conn| {
+                            let mut repo = DomainRepository::new(conn, project_id);
+                            repo.record_diagnostic(
+                                run_id,
+                                batman_protocol::DiagnosticLevel::Warning,
+                                "follow_up_delivery_failed",
+                                format!("run {run_id}: {err}"),
+                            )
+                            .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                        }))
+                        .await
+                        .map_err(ServiceError::from)?;
+                    self.broadcast(&mut diagnostic);
+                }
+            }
         }
 
         Ok(json!({

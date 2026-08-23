@@ -1,6 +1,6 @@
-// A validated JSON-RPC client for the BATMAN runtime socket.
+// A validated JSON-RPC client for the Crew runtime socket.
 //
-// `BatmanClient` connects to the runtime's per-repository Unix domain socket,
+// `CrewClient` connects to the runtime's per-repository Unix domain socket,
 // performs the `initialize` handshake, and correlates requests to responses by
 // a monotonically increasing string id. Validation boundary (R55): the
 // JSON-RPC envelope of every inbound message and every event notification is
@@ -43,8 +43,8 @@ const EVENTS_EVENT_METHOD = "events/event";
 
 /** Per-method result validators: every method whose result has a canonical
  *  protocol type is schema-validated here; the rest get the structural
- *  object check in {@link BatmanClient.request}. `initialize` is validated
- *  separately in {@link BatmanClient.initialize}. */
+ *  object check in {@link CrewClient.request}. `initialize` is validated
+ *  separately in {@link CrewClient.initialize}. */
 const RESULT_VALIDATORS: Record<string, ValidateFunction> = {
   "runtime/status": validateRuntimeStatus,
   "artifact/list": validateArtifactListResult,
@@ -56,11 +56,11 @@ const RESULT_VALIDATORS: Record<string, ValidateFunction> = {
   "run/result": validateRunResultResult,
 };
 
-/** Removes a subscription registered with {@link BatmanClient.subscribe}. */
+/** Removes a subscription registered with {@link CrewClient.subscribe}. */
 export type Unsubscribe = () => void;
 
-/** Options for constructing a {@link BatmanClient}. */
-export interface BatmanClientOptions {
+/** Options for constructing a {@link CrewClient}. */
+export interface CrewClientOptions {
   /** Filesystem path of the runtime's Unix domain socket. */
   socketPath: string;
 }
@@ -86,7 +86,7 @@ interface PendingRequest {
 
 export { ValidationError };
 
-export class BatmanClient {
+export class CrewClient {
   #socket: Socket;
   #buffer = "";
   #maxFrameBytes = BOOTSTRAP_MAX_FRAME_BYTES;
@@ -98,7 +98,7 @@ export class BatmanClient {
   readonly #subscribers = new Set<(event: EventEnvelope) => void>();
   readonly #ready: Promise<void>;
 
-  constructor(options: BatmanClientOptions) {
+  constructor(options: CrewClientOptions) {
     this.#socket = createConnection({ path: options.socketPath });
     this.#socket.setEncoding("utf8");
 
@@ -129,7 +129,7 @@ export class BatmanClient {
    * Sends a JSON-RPC request and resolves with its `result`. Methods with a
    * canonical protocol result type are schema-validated; every other result
    * must at least be a JSON object (events/replay's array is validated in
-   * {@link BatmanClient.subscribe} before this guard would see it).
+   * {@link CrewClient.subscribe} before this guard would see it).
    */
   async request(method: string, params?: unknown): Promise<unknown> {
     if (!this.#initialized && method !== "initialize") {
