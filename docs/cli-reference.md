@@ -61,7 +61,7 @@ Starts the runtime for one repository and serves until stopped.
 
 ```bash
 crewd serve --repo <path> [--state-dir <path>] [--idle-seconds <n>] [--foreground]
-              [--org-config <path>] [--repo-config <path>] [--user-config <path>]
+              [--config <path>]...
 ```
 
 | Flag | Required | Default | Meaning |
@@ -70,7 +70,7 @@ crewd serve --repo <path> [--state-dir <path>] [--idle-seconds <n>] [--foregroun
 | `--state-dir` | no | `.crew` (relative to cwd) | State root; see above |
 | `--idle-seconds` | no | none — runs until signalled | Exit after this many seconds with zero connections and zero active runs |
 | `--foreground` | no | `false` | Log structured records to stderr instead of `runtime.log` |
-| `--org-config` / `--repo-config` / `--user-config` | no | none | Explicit paths for the three config layers (see `docs/architecture.md`'s config-merge notes) |
+| `--config` | no (repeatable) | none | A crew.json config layer file, lowest precedence first (e.g. the user file before the project file); later occurrences deep-merge over earlier ones, `security.patterns` additive. A path that doesn't exist is an absent layer, not an error. |
 
 **Single-instance enforcement:** `serve` takes an exclusive, non-blocking advisory `flock(2)` on
 `<runtime-dir>/runtime.lock` (not an `O_EXCL` create — the lock file itself is never deleted, only
@@ -165,7 +165,7 @@ daemon actually writes, not a directory only `doctor` believes in.
 
 ```bash
 crewd doctor --repo <path> [--state-dir <path>] [--json]
-              [--org-config <path>] [--repo-config <path>] [--user-config <path>]
+              [--config <path>]...
 ```
 
 Exits **0** if every check passes, **1** if any check fails (the process still ran to completion —
@@ -178,7 +178,7 @@ Check catalog, in run order:
 | Check | Verifies |
 |---|---|
 | `database_connectivity` | Journal is reachable (`SELECT count(*) FROM events`) |
-| `configuration_valid` | Merged policy's `max_workers`/`concurrency_ceiling` are nonzero, retention period parses, security regexes compile |
+| `configuration_valid` | Merged policy's `concurrency_ceiling` is nonzero, retention period parses, security regexes compile |
 | `state_dir_writable` | State dir exists, is mode `0700` owned by the current uid, and accepts a write-then-remove probe |
 | `platform_supported` | OS/arch is one of the four supported targets; on Linux, that a glibc (not musl) loader is present |
 | `binary_integrity` | `current_exe()` resolves |
@@ -189,7 +189,11 @@ Check catalog, in run order:
 | `disk_space` | State dir's filesystem has ≥ 512 MiB free |
 | `stale_workspaces` | Counts workspace leases whose worktree vanished, failed cleanup, or have sat `allocating` past a 10-minute grace period (abandoned before materialization completed) |
 | `stale_runs` | Counts runs stuck in a non-terminal state with no live adapter |
-| `rollout_gates_resolved` / `rollout_gate_<gate>` | Unresolved rollout gates; `native_discovery_reviewed` unresolved blocks authorization outright, the rest are advisory |
+
+`DoctorResult.unresolved_gates` is still present on the wire (always empty) but the catalog no
+longer has `rollout_gates_resolved`/`rollout_gate_<gate>` rows: the org-governance rollout gates they
+reported on were retired with the YAML org config layer they were sourced from (crew-v2 gap-closure
+WP5) — see [`future-features.md`](future-features.md#org-governance-enforcement-modeladapter-allowlists-cost-ceilings-rollout-gates).
 
 A check that's missing required context (no db handle, no policy, etc.) reports a failure prefixed
 `skipped:` rather than silently passing.

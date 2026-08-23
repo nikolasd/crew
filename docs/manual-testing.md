@@ -49,42 +49,35 @@ export OMP_CREW_BINARY="$PWD/target/debug/crewd"
 2. `$XDG_STATE_HOME/omp/batman` when `XDG_STATE_HOME` is set (must be absolute)
 3. `$HOME/${PI_CONFIG_DIR:-.omp}/batman`
 
-**Configuration file locations** (in precedence order, lowest to highest). There is no
-auto-discovery and no `CREW_ORG_CONFIG`-style environment variable for any layer — each is
-loaded only from the path passed explicitly via `--org-config`/`--repo-config`/`--user-config`:
-1. **Org config** — path passed to `--org-config`
-2. **Repo config** — path passed to `--repo-config`, conventionally `<repo>/.crew/config.yaml`
-3. **User config** — path passed to `--user-config`, conventionally `~/.crew/config.yaml`
+**Configuration file locations** (in precedence order, lowest to highest). The CLI itself has no
+auto-discovery and no `CREW_CONFIG`-style environment variable — each layer is loaded only from a
+path passed explicitly via repeatable `--config <path>`; the extension resolves and passes these
+for you:
+1. **User config** — `~/.omp/crew.json`
+2. **Project config** — `<repo>/.omp/crew.json`
 
-Configuration files are YAML with strict unknown-key rejection (fails closed with line/column diagnostics). Example:
+Configuration files are strict JSON (`crew.json`, spec §10) with unknown-key rejection at every
+depth, failing closed with the exact JSON path that named the unknown key. Example:
 
-```yaml
-# ~/.crew/config.yaml
-max_workers: 4
-concurrency:
-  ceiling: 8
-retention: "30d"
-display:
-  backend: auto
-models:
-  allowlist:
-    - "gpt-4"
-    - "claude-3-opus"
-security:
-  patterns:
-    - "AKIA[0-9A-Za-z]{16}"  # AWS access key pattern
-    - "sk-[a-zA-Z0-9]{32}"  # API key pattern
-rollout_gates:
-  vendor_terms_accepted: true
-  retention_configured: true
-  model_allowlist_set: true
-  concurrency_explicit: true
-  native_discovery_reviewed: true
-  ornith_identity_set: true
+```json
+// ~/.omp/crew.json
+{
+  "limits": { "maxConcurrentWorkers": 4 },
+  "retention": { "period": "30d", "maxRuns": 20 },
+  "display": { "backend": "auto" },
+  "security": {
+    "patterns": [
+      "AKIA[0-9A-Za-z]{16}",
+      "sk-[a-zA-Z0-9]{32}"
+    ]
+  }
+}
 ```
 
 **Security notes:**
-- Adapter authorization is decided entirely by org policy — `models`, `adapters`, `capabilities.required`, `concurrency`, `cost`, and the `native_discovery_reviewed` rollout gate. No environment variable grants or withholds it.
+- `security.patterns` is additive across layers (concatenated, never replaced), so a lower layer's
+  redaction patterns can never be silently dropped by a higher one. An org pattern that fails to
+  compile as a regex refuses the daemon's startup rather than degrading to built-in rules only.
 - Vendor CLIs are ordinary installed dependencies; live conformance and the availability probe run by default. `CREW_DISABLE_VENDOR_CLI=1` should always be set in CI jobs or unattended runs — it forbids observation-only vendor invocation and guarantees no billed model call is made.
 
 ## 1. The daemon through OMP (no model call, no extension CLI needed)
@@ -489,16 +482,21 @@ wired into the running daemon: `lifecycle::serve()`'s `ServerConfig` sets `run_d
 `AdapterRegistry` instance (`cargo test -p batman-runtime --test adapter_registry` exercises it
 directly).
 
-However, whether the registry starts an adapter is decided by the merged org policy, evaluated by
-`PolicyEvaluator`: the `models` and `adapters` allowlists (empty means "all allowed"), any
-`capabilities.required` entries checked against the adapter's conformance-proven capability set,
-the `concurrency` ceiling, the `cost` ceilings, and the `native_discovery_reviewed` rollout gate
-for adapters that can observe vendor-created child workers.
+However, whether the registry starts an adapter is still gated by `PolicyEvaluator`: the
+`limits.maxConcurrentWorkers` concurrency ceiling (from `crew.json`), and a nested-worker check
+that denies unexpected child workers pre-authorization. The wider org-governance surface this
+evaluator used to also enforce -- model/adapter allowlists, a required-capability list, cost
+ceilings, and the `native_discovery_reviewed` rollout gate -- is retired (crew-v2 gap-closure WP5;
+see
+[`future-features.md`](future-features.md#org-governance-enforcement-modeladapter-allowlists-cost-ceilings-rollout-gates)):
+that surface was config-sourced from the YAML org layer removed in that WP, which was never
+actually reachable in production.
 
 Practically: submitting a run through a live `omp` session with a real adapter's vendor CLI
-installed **will** attempt to start the adapter as long as the merged policy permits it. A denial
-names the dimension that refused (for example `adapter 'codex' is not authorized`), and an absent
-vendor CLI still reports `adapter_unavailable` — a separate, availability-level answer.
+installed **will** attempt to start the adapter as long as the concurrency ceiling isn't reached
+and the worker isn't an unexpected nested one. A denial names the dimension that refused (for
+example `concurrency ceiling 8 reached; 8 active runs`), and an absent vendor CLI still reports
+`adapter_unavailable` — a separate, availability-level answer.
 
 To exercise the registry's own start/reject/authorize/construct logic directly:
 

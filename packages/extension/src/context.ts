@@ -7,6 +7,7 @@
 
 import { homedir } from "node:os";
 
+import { resolveCrewConfigPaths } from "./crew-config";
 import { detectLibc, resolveCrewd } from "./platform";
 import type { EnsureRuntimeOptions } from "./runtime";
 import { resolveStateRoot } from "./state";
@@ -49,13 +50,20 @@ export interface StatusRuntimeContext {
 
 /**
  * Builds the {@link StatusRuntimeContext} for a status request. Pure aside
- * from the `process.env`/`os.homedir()` defaults, which callers can override.
+ * from the `process.env`/`os.homedir()` defaults (which callers can
+ * override) and the crew config layer files it checks for existence and
+ * JSON validity on disk (see {@link resolveCrewConfigPaths}).
+ *
+ * @throws {@link CrewConfigError} (re-thrown from `resolveCrewConfigPaths`)
+ * if an existing `~/.omp/crew.json` or `<repository>/.omp/crew.json` is not
+ * valid JSON.
  */
 export function buildStatusContext(options: BuildStatusContextOptions = {}): StatusRuntimeContext {
   const env = options.env ?? process.env;
   const home = options.home ?? homedir();
   const repository = options.cwd ?? process.cwd();
   const stateDir = resolveStateRoot(env, home);
+  const configPaths = resolveCrewConfigPaths(home, repository);
 
   return {
     ensureRuntimeOptions: {
@@ -65,6 +73,7 @@ export function buildStatusContext(options: BuildStatusContextOptions = {}): Sta
       env,
       packagedBinaryResolver: options.packagedBinaryResolver ?? (() => resolveCrewd(process.platform, process.arch, detectLibc(), env, stateDir).path),
       sessionId: options.sessionId,
+      configPaths,
     },
   };
 }

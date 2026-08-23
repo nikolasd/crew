@@ -182,8 +182,8 @@ impl Server {
             artifact_store.clone(),
             config.repository.clone(),
         );
-        if let Some((layers, policy)) = config.policy.clone() {
-            orchestration = orchestration.with_policy(layers, policy);
+        if let Some((config_paths, policy)) = config.policy.clone() {
+            orchestration = orchestration.with_policy(config_paths, policy);
         }
         let orchestration = Arc::new(orchestration);
         let coordination = Arc::new(crate::coordination::CoordinationBroker::new(

@@ -32,10 +32,6 @@ pub enum DoctorError {
     #[error("state directory is not accessible: {0}")]
     StateDirError(String),
 
-    /// A rollout gate is unresolved.
-    #[error("rollout gate '{gate}' is unresolved")]
-    RolloutGateUnresolved { gate: String },
-
     /// A configuration error was detected.
     #[error("configuration error: {0}")]
     ConfigError(String),
@@ -192,46 +188,6 @@ impl Doctor {
         report.record("stale_workspaces", self.check_stale_workspaces());
         report.record("stale_runs", self.check_stale_runs().await);
 
-        // Advisory: unresolved gates are listed, and each is also a failed
-        // check so `healthy` reflects them.
-        let unresolved_gates = match &self.policy {
-            Some(policy) => policy
-                .unresolved_gates()
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
-            None => Vec::new(),
-        };
-        match &self.policy {
-            None => report.record(
-                "rollout_gates_resolved",
-                Err(DoctorError::ConfigError(
-                    "skipped: no runtime policy was supplied".to_string(),
-                )),
-            ),
-            Some(_) if unresolved_gates.is_empty() => {
-                report.record("rollout_gates_resolved", Ok(()));
-            }
-            Some(_) => {
-                for gate in &unresolved_gates {
-                    // `native_discovery_reviewed` is enforced at
-                    // authorization time, so an unresolved value denies
-                    // runs rather than merely warning.
-                    let consequence = if gate == "native_discovery_reviewed" {
-                        "blocks authorization until resolved"
-                    } else {
-                        "advisory"
-                    };
-                    report.record(
-                        &format!("rollout_gate_{gate}"),
-                        Err(DoctorError::RolloutGateUnresolved {
-                            gate: format!("{gate} ({consequence})"),
-                        }),
-                    );
-                }
-            }
-        }
-
         let Report {
             passed_checks,
             failed_checks,
@@ -241,7 +197,11 @@ impl Doctor {
             healthy: failed_checks.is_empty(),
             passed_checks,
             failed_checks,
-            unresolved_gates,
+            // No config surface models a rollout gate any more (crew-v2
+            // gap-closure WP5); always empty. Kept on the result rather
+            // than removed so `packages/extension/src/doctor.ts`'s render
+            // of this field needs no change.
+            unresolved_gates: Vec::new(),
         })
     }
 
@@ -271,9 +231,6 @@ impl Doctor {
                 "skipped: no runtime policy was supplied".to_string(),
             ));
         };
-        if policy.max_workers == 0 {
-            return Err(DoctorError::ConfigError("max_workers is 0".to_string()));
-        }
         if policy.concurrency_ceiling == 0 {
             return Err(DoctorError::ConfigError(
                 "concurrency_ceiling is 0".to_string(),
@@ -472,7 +429,7 @@ impl Doctor {
         let forced = self
             .policy
             .as_ref()
-            .and_then(|policy| policy.display_backend.parse::<DisplayBackend>().ok());
+            .and_then(|policy| crate::config::protocol_display_backend(policy.display_backend));
 
         if let Some(forced) = forced {
             let available = availability

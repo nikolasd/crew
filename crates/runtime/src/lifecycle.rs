@@ -66,12 +66,10 @@ pub struct ServeOptions {
     pub foreground: bool,
     /// Where this binary was loaded from, reported by `runtime/status`.
     pub binary_source: BinarySource,
-    /// Path to the org-level configuration file.
-    pub org_config: Option<PathBuf>,
-    /// Path to the repo-level configuration file.
-    pub repo_config: Option<PathBuf>,
-    /// Path to the user-level configuration file.
-    pub user_config: Option<PathBuf>,
+    /// Crew config layer files, lowest precedence first (e.g. the user
+    /// file before the project file). A path that does not exist is
+    /// treated as an absent layer, not an error.
+    pub config_paths: Vec<PathBuf>,
 }
 
 /// The machine-readable identity of an already-running runtime, printed by
@@ -181,18 +179,12 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     }
 
     // Use the config paths from ServeOptions (passed through from CLI).
-    // The layers are retained alongside the merged policy so `run/submit`
+    // The paths are retained alongside the merged policy so `run/submit`
     // can re-merge a run's own `policyOverrides` onto them.
-    let layers = crate::config::LayeredConfig::load(
-        opts.org_config.as_deref(),
-        opts.repo_config.as_deref(),
-        opts.user_config.as_deref(),
-    )
-    .map_err(|e| ServeError::ConfigError(e.to_string()))?;
-    let policy = layers
-        .merge(None)
+    let config_paths = opts.config_paths.clone();
+    let path_refs: Vec<&Path> = config_paths.iter().map(PathBuf::as_path).collect();
+    let policy = crate::config::resolve_policy(&path_refs, None)
         .map_err(|e| ServeError::ConfigError(e.to_string()))?;
-    let layers = Arc::new(layers);
 
     // Org security patterns fail *closed*. An org configures these to keep
     // specific secrets out of a durable journal it cannot retroactively
@@ -259,14 +251,10 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         }
     };
     let org_security_patterns = policy.org_security_patterns.clone();
-    let nested_violation_action = policy.rollout_gates.nested_violation_action;
+    let nested_violation_action = policy.nested_violation_action;
     let policy = Arc::new(policy);
     let registry = Arc::new(AdapterRegistry::new(
-        Arc::new(
-            PolicyEvaluator::new((*policy).clone()).with_daily_spend(Arc::new(
-                crate::policy::JournalDailySpend::new(paths.database.clone(), paths.project_id),
-            )),
-        ),
+        Arc::new(PolicyEvaluator::new((*policy).clone())),
         repo_root.clone(),
         mcp,
         org_security_patterns,
@@ -277,7 +265,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         repository: repo_root.clone(),
         worker_verifier: Arc::new(ScopeTokenVerifier::new(Arc::clone(&scope_tokens))),
         nested_violation_action,
-        policy: Some((Arc::clone(&layers), Arc::clone(&policy))),
+        policy: Some((config_paths.clone(), Arc::clone(&policy))),
         ..ServerConfig::default()
     };
     let server = Server::bind(

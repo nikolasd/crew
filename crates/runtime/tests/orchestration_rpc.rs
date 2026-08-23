@@ -327,7 +327,6 @@ impl ViolationTriggeringRunDriver {
             vec![],
             true,
             Arc::clone(&ctx.violation_service),
-            None,
         )
         .expect("built-in patterns always compile");
         sink.emit(AdapterEvent {
@@ -359,7 +358,6 @@ impl RunDriver for ViolationTriggeringRunDriver {
                 vec![],
                 true,
                 Arc::clone(&ctx.violation_service),
-                None,
             )
             .expect("built-in patterns always compile");
             sink.emit(AdapterEvent {
@@ -422,7 +420,6 @@ impl RunDriver for ConfigurableCancelViolationDriver {
                 vec![],
                 true,
                 Arc::clone(&ctx.violation_service),
-                None,
             )
             .expect("built-in patterns always compile");
             sink.emit(AdapterEvent {
@@ -744,159 +741,66 @@ async fn policy_violation_decide_release_is_refused_on_an_already_terminal_run()
         "the refused release must never revive the run"
     );
 }
-// ------------------------------------------------------------------ cost ceiling
-
-/// Simulates a run whose adapter reports usage crossing the merged policy's
-/// per-run cost ceiling: emits one `UsageReported` through a real
-/// [`batman_runtime::adapter::DomainAdapterEventSink`] built with
-/// `nested_not_managed: false` (so only the ceiling can trigger a violation)
-/// and `cost_ceiling_per_run_usd: Some(1.0)`, exercising the whole
-/// `ViolationService::record_cost_ceiling` pipeline with no vendor process.
-#[derive(Default)]
-struct CostCeilingRunDriver {
-    cancel_calls: parking_lot::Mutex<Vec<(RunId, CancelScope)>>,
-    captured: parking_lot::Mutex<Option<RunDriverContext>>,
-}
-
-impl CostCeilingRunDriver {
-    fn cancel_calls(&self) -> Vec<(RunId, CancelScope)> {
-        self.cancel_calls.lock().clone()
-    }
-}
-
-impl RunDriver for CostCeilingRunDriver {
-    fn active_run_count(&self) -> usize {
-        0
-    }
-
-    fn start(&self, ctx: RunDriverContext) -> AdapterFuture<'static, Result<(), String>> {
-        *self.captured.lock() = Some(ctx.clone());
-        Box::pin(async move {
-            let sink = batman_runtime::adapter::DomainAdapterEventSink::new(
-                ctx.db.clone(),
-                ctx.project_id,
-                ctx.events_tx.clone(),
-                vec![],
-                false,
-                Arc::clone(&ctx.violation_service),
-                Some(1.0),
-            )
-            .expect("built-in patterns always compile");
-            sink.emit(AdapterEvent {
-                run_id: ctx.run_id,
-                task_id: ctx.task_id,
-                worker_id: ctx.worker_id,
-                payload: AdapterEventPayload::UsageReported {
-                    input_tokens: 1_000,
-                    output_tokens: 2_000,
-                    cost_usd: Some(2.5),
-                },
-            })
-            .await
-            .map_err(|e| e.to_string())?;
-            Ok(())
-        })
-    }
-
-    fn send_follow_up(
-        &self,
-        _run_id: RunId,
-        _task_id: TaskId,
-        _worker_id: WorkerId,
-        _prompt: String,
-    ) -> AdapterFuture<'static, Result<(), String>> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn running_adapter(&self, _run_id: RunId) -> Option<Arc<dyn Adapter>> {
-        None
-    }
-
-    fn cancel_run(
-        &self,
-        run_id: RunId,
-        scope: CancelScope,
-    ) -> AdapterFuture<'static, Result<batman_runtime::service::CancelOutcome, String>> {
-        self.cancel_calls.lock().push((run_id, scope));
-        Box::pin(async { Ok(batman_runtime::service::CancelOutcome::Cancelled) })
-    }
-}
-
-/// A run whose adapter reports $2.50 against a $1.00 per-run ceiling
-/// records a `cost_ceiling_exceeded` violation, quarantines the run,
-/// and allows the owning client to release the quarantine via
-/// `policy/violation/decide` — proving the full `record_cost_ceiling`
-/// pipeline (R48).
+/// A crew.json layer's `workspace.copyMaxFiles` reaches the live
+/// `WorkspaceMaterializer` a `run/submit` actually uses -- not just a unit
+/// test against `RuntimePolicy::from_crew_config` in isolation. The path
+/// this proves: `--config` file -> `resolve_policy` -> `RuntimePolicy`
+/// (`orchestration.rs`'s `self.policy`) -> `materializer()`
+/// (`orchestration.rs:1159`) -> `WorkspaceMaterializer::with_copy_limits`
+/// -> `CopyIsolation`'s per-file budget check. A ceiling of `0` files
+/// means even a one-file repository (this harness's real git repo, whose
+/// only tracked file is `README.md`) must fail to materialize.
 #[tokio::test]
-async fn crossing_the_per_run_cost_ceiling_records_an_actionable_violation() {
-    let driver = Arc::new(CostCeilingRunDriver::default());
-    let harness = Harness::start(|c| {
-        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
-        c.nested_violation_action = batman_runtime::config::NestedViolationAction::Quarantine;
+async fn workspace_copy_max_files_from_config_reaches_the_live_materializer() {
+    let config = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(config.path(), r#"{"workspace":{"copyMaxFiles":0}}"#).unwrap();
+    let config_paths = vec![config.path().to_path_buf()];
+    let policy = Arc::new(batman_runtime::config::resolve_policy(&[config.path()], None).unwrap());
+    assert_eq!(
+        policy.copy_max_files, 0,
+        "sanity: the layer must actually override the default ceiling"
+    );
+
+    let harness = Harness::start(move |c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver) as Arc<dyn RunDriver>);
+        c.policy = Some((config_paths, policy));
     })
     .await;
+    init_real_git_repo(&harness.owned_dir);
     let mut client = omp_client(&harness, "omp-1").await;
 
-    let (_, _, run_id) = submit_run_with_driver(&mut client, "omp-1").await;
-
-    // The pure-Quarantine action never cancels: the run stays non-terminal.
-    let get = client.call(5, "run/get", json!({ "runId": run_id })).await;
-    assert_eq!(
-        get["result"]["flags"]["policyQuarantined"], true,
-        "run must be quarantined after cost ceiling breach: {get:?}"
-    );
-    assert_ne!(
-        get["result"]["state"], "cancelled",
-        "Quarantine-only action must never cancel the run"
-    );
-    assert!(
-        driver.cancel_calls().is_empty(),
-        "Quarantine-only action must never call cancel_run"
-    );
-
-    // Find the recorded cost-ceiling violation from the replayed events.
-    let replay = client
-        .call(6, "events/replay", json!({ "afterSequence": 0 }))
-        .await;
-    let events = replay["result"].as_array().unwrap();
-    let recorded = events
-        .iter()
-        .find(|e| e["event"]["type"] == "policyViolationRecorded")
-        .expect("a policyViolationRecorded event must be journaled");
-    let kind = &recorded["event"]["payload"]["kind"]["policyViolationRecorded"];
-    assert_eq!(
-        kind["code"], "cost_ceiling_exceeded",
-        "the recorded violation must carry the cost ceiling code: {kind:?}"
-    );
-    assert!(
-        kind["vendor_child_id"].is_null(),
-        "a cost-ceiling violation has no vendor child: {kind:?}"
-    );
-    assert!(
-        kind["vendor_parent_ref"].is_null(),
-        "a cost-ceiling violation has no vendor parent: {kind:?}"
-    );
-    let violation_id = kind["violation_id"]
-        .as_str()
-        .expect("violation_id must be present")
-        .to_string();
-
-    // The owning client releases the quarantine — this step reads the
-    // policy_violations projection row, so it proves the row was persisted.
-    let decide = client
+    let task = client
         .call(
-            7,
-            "policy/violation/decide",
-            json!({ "violationId": violation_id, "resolution": "release" }),
+            2,
+            "task/upsert",
+            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
         )
         .await;
-    assert!(decide.get("error").is_none(), "decide failed: {decide:?}");
-    assert_eq!(decide["result"]["outcome"], "decided");
+    let task_id = task["result"]["taskId"].as_str().unwrap().to_string();
+    let worker = client
+        .call(
+            3,
+            "worker/create",
+            json!({ "fingerprint": "sha256:f", "adapter": "fake", "model": "m" }),
+        )
+        .await;
+    let worker_id = worker["result"]["workerId"].as_str().unwrap().to_string();
 
-    let get_after = client.call(8, "run/get", json!({ "runId": run_id })).await;
-    assert_eq!(
-        get_after["result"]["flags"]["policyQuarantined"], false,
-        "release must clear the quarantine flag: {get_after:?}"
+    let submit = client
+        .call(
+            4,
+            "run/submit",
+            json!({ "taskId": task_id, "workerId": worker_id, "workspaceMode": "copy" }),
+        )
+        .await;
+
+    let error = submit
+        .get("error")
+        .expect("a zero-file copy ceiling from config must refuse materialization, proving the config value reached the live materializer");
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("ceiling") && message.contains("file"),
+        "expected the copy ceiling's own error naming the file-count breach: {submit:?}"
     );
 }
 
@@ -906,19 +810,17 @@ async fn crossing_the_per_run_cost_ceiling_records_an_actionable_violation() {
 #[tokio::test]
 async fn per_run_policy_overrides_snapshot_only_their_own_run() {
     let org = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(org.path(), "max_workers: 8\n").unwrap();
-    let layers = Arc::new(
-        batman_runtime::config::LayeredConfig::load(Some(org.path()), None, None).unwrap(),
-    );
-    let startup = Arc::new(layers.merge(None).unwrap());
+    std::fs::write(org.path(), r#"{"limits":{"maxConcurrentWorkers":8}}"#).unwrap();
+    let config_paths = vec![org.path().to_path_buf()];
+    let startup = Arc::new(batman_runtime::config::resolve_policy(&[org.path()], None).unwrap());
     let startup_fingerprint = startup.fingerprint.clone();
 
     let harness = Harness::start({
-        let layers = Arc::clone(&layers);
+        let config_paths = config_paths.clone();
         let startup = Arc::clone(&startup);
         move |c| {
             c.run_driver = Some(Arc::new(FakeRunDriver) as Arc<dyn RunDriver>);
-            c.policy = Some((layers, startup));
+            c.policy = Some((config_paths, startup));
         }
     })
     .await;
@@ -957,13 +859,13 @@ async fn per_run_policy_overrides_snapshot_only_their_own_run() {
             json!({
                 "taskId": task_id,
                 "workerId": worker_id,
-                "policyOverrides": { "max_workers": 2 },
+                "policyOverrides": { "limits": { "maxConcurrentWorkers": 2 } },
             }),
         )
         .await;
     assert!(
         overridden.get("error").is_none(),
-        "an override that violates no lock must be accepted: {overridden:?}"
+        "a well-formed override must be accepted: {overridden:?}"
     );
     let overridden_run = overridden["result"]["runId"].as_str().unwrap().to_string();
 
@@ -1452,7 +1354,6 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
                 vec![],
                 true,
                 Arc::clone(&ctx.violation_service),
-                None,
             )
             .expect("built-in patterns always compile");
             sink.emit(AdapterEvent {

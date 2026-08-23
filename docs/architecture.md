@@ -305,7 +305,7 @@ graph TB
 #### Core Infrastructure
 - **CLI** ([`crates/runtime/src/cli.rs`](crates/runtime/src/cli.rs)): `serve`, `status`, `stop`, `version`, `schema`, `monitor`, `audit` commands
 - **Lifecycle** ([`crates/runtime/src/lifecycle.rs`](crates/runtime/src/lifecycle.rs)): Single-instance locking, serving, idle shutdown, graceful stop
-- **Doctor** ([`crates/runtime/src/doctor.rs`](crates/runtime/src/doctor.rs)): Health checking with rollout gates
+- **Doctor** ([`crates/runtime/src/doctor.rs`](crates/runtime/src/doctor.rs)): Health checking (database, state directory, platform, schema, adapters, display, disk space, stale runs/workspaces)
 - **Recovery** ([`crates/runtime/src/recovery.rs`](crates/runtime/src/recovery.rs)): Crash recovery for stuck runs
 - **Paths** ([`crates/runtime/src/paths.rs`](crates/runtime/src/paths.rs)): Repository identity and state path resolution
 
@@ -536,9 +536,12 @@ pub struct FixtureAuthorization {
     pub allow: bool,
 }
 
-/// The production `AdapterAuthorization`: evaluates the merged org policy's
-/// model and adapter allowlists, required capabilities, concurrency and cost
-/// ceilings, and the `native_discovery_reviewed` rollout gate.
+/// The production `AdapterAuthorization`: evaluates the merged crew.json
+/// policy's concurrency ceiling and nested-worker policy. The wider
+/// org-governance surface this used to also enforce (model/adapter
+/// allowlists, required capabilities, cost ceilings, the
+/// `native_discovery_reviewed` rollout gate) is retired -- see
+/// `docs/future-features.md`'s org-governance entry.
 pub struct PolicyEvaluator { ... }
 
 /// Implements `RunDriver` against the four real worker adapters.

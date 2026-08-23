@@ -130,7 +130,7 @@ Work through this ladder:
 2. **`/crew-runtime-install`** — downloads and verifies the `crewd` binary, if it's missing.
 3. **`/crew-doctor`** — works even with no live daemon; runs the full check catalog (database,
    state directory permissions, platform support, schema compatibility, adapter availability, disk
-   space, unresolved rollout gates, and more — see
+   space, stale runs/workspaces, and more — see
    [`cli-reference.md`](cli-reference.md#crewd-doctor) for the complete list).
 
 Every Crew tool failure has the same shape: text `"<method> failed: <message>"`,

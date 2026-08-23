@@ -59,7 +59,7 @@ OMP_CREW_BINARY="$PWD/target/debug/crewd" \
   omp --extension ./packages/extension/src/index.ts
 
 # crewd CLI directly
-crewd serve --repo /path/to/repo [--org-config ... --repo-config ... --user-config ...]
+crewd serve --repo /path/to/repo [--config /path/to/crew.json]...
 crewd status --repo /path/to/repo
 crewd stop --repo /path/to/repo
 crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/batman" --output /tmp/audit.jsonl

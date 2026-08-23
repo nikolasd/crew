@@ -170,12 +170,13 @@ pub struct ServerConfig {
     /// `quarantineAndCancel` (the default). Applied by
     /// [`crate::policy::ViolationService::record`].
     pub nested_violation_action: crate::config::NestedViolationAction,
-    /// The merged startup policy and the layers it came from. `Some` in the
-    /// daemon (`crate::lifecycle::serve`); `None` in tests and embeddings,
-    /// which then authorize every run under the authorizer's own startup
-    /// policy and ignore per-run `policyOverrides`.
+    /// The merged startup policy and the config layer paths it came from.
+    /// `Some` in the daemon (`crate::lifecycle::serve`); `None` in tests
+    /// and embeddings, which then authorize every run under the
+    /// authorizer's own startup policy and ignore per-run
+    /// `policyOverrides`.
     pub policy: Option<(
-        std::sync::Arc<crate::config::LayeredConfig>,
+        Vec<std::path::PathBuf>,
         std::sync::Arc<crate::config::RuntimePolicy>,
     )>,
     /// Test hook: inject a shared artifact store so the test can seed

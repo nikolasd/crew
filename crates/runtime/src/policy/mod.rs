@@ -3,16 +3,17 @@
 //! nested-worker policy violations.
 //!
 //! The evaluator enforces:
-//! - Model allowlist (deny by default when allowlist is non-empty)
 //! - Concurrency ceiling (block runs exceeding the ceiling)
 //! - Nested worker policy (deny unexpected child workers)
-//! - Security pattern enforcement (org-defined redaction patterns)
+//!
+//! Config-sourced org-governance enforcement (model/adapter allowlists,
+//! required capabilities, cost ceilings, the `native_discovery_reviewed`
+//! gate) is retired -- see `evaluate`'s module doc.
 
 mod evaluate;
 mod violation;
 
 pub use evaluate::{
-    DailySpend, JournalDailySpend, PolicyError, PolicyEvaluation, PolicyEvaluator, PolicyViolation,
-    PolicyViolationKind,
+    PolicyError, PolicyEvaluation, PolicyEvaluator, PolicyViolation, PolicyViolationKind,
 };
 pub use violation::{DecideOutcome, ViolationError, ViolationService};
