@@ -70,6 +70,11 @@ pub struct RuntimePaths {
     pub log: PathBuf,
     /// `<root>/artifacts/`, created mode `0700`.
     pub artifacts: PathBuf,
+    /// `<root>/panes/`, created mode `0700`. Holds one per-worker attach
+    /// socket per active run (see [`Self::pane_socket`]); the attach
+    /// server binds a fresh socket here and removes it on stop, but the
+    /// directory itself persists across runs like `artifacts`.
+    pub panes: PathBuf,
 }
 
 impl RuntimePaths {
@@ -118,9 +123,11 @@ impl RuntimePaths {
 
         let root = state_root.join("repos").join(&repository_id);
         let artifacts = root.join("artifacts");
+        let panes = root.join("panes");
 
         ensure_private_dir(&root)?;
         ensure_private_dir(&artifacts)?;
+        ensure_private_dir(&panes)?;
 
         Ok(Self {
             project_id,
@@ -129,8 +136,18 @@ impl RuntimePaths {
             database: root.join("runtime.db"),
             log: root.join("runtime.log"),
             artifacts,
+            panes,
             root,
         })
+    }
+
+    /// The per-worker attach socket path for `run_id`:
+    /// `<panes>/<run_id>.sock`. Pure path arithmetic -- does not bind or
+    /// otherwise touch the filesystem; [`crate::display::attach::AttachServer`]
+    /// is what actually creates the socket node here.
+    #[must_use]
+    pub fn pane_socket(&self, run_id: &batman_protocol::RunId) -> PathBuf {
+        self.panes.join(format!("{run_id}.sock"))
     }
 }
 
@@ -173,6 +190,7 @@ fn discover_vcs_root(canonical: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn discover_vcs_root_finds_dot_git_directory_in_ancestor() {
@@ -204,5 +222,34 @@ mod tests {
             return;
         }
         assert_eq!(discover_vcs_root(repo.path()), None);
+    }
+
+    #[test]
+    fn resolve_creates_a_private_panes_directory() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir(repo.path().join(".git")).unwrap();
+        let state_root = tempfile::tempdir().unwrap();
+
+        let paths = RuntimePaths::resolve(state_root.path(), repo.path()).unwrap();
+
+        assert!(paths.panes.is_dir());
+        assert_eq!(paths.panes, paths.root.join("panes"));
+        let mode = fs::metadata(&paths.panes).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "panes directory must be created owner-only");
+    }
+
+    #[test]
+    fn pane_socket_is_named_after_the_run_id_under_panes() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir(repo.path().join(".git")).unwrap();
+        let state_root = tempfile::tempdir().unwrap();
+
+        let paths = RuntimePaths::resolve(state_root.path(), repo.path()).unwrap();
+        let run_id = batman_protocol::RunId::new();
+
+        assert_eq!(
+            paths.pane_socket(&run_id),
+            paths.panes.join(format!("{run_id}.sock"))
+        );
     }
 }

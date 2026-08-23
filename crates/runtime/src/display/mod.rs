@@ -9,10 +9,12 @@
 //! - [`TerminalDisplay`]: raw terminal backend (degraded capabilities),
 //!   always available as a fallback.
 
+pub mod attach;
 mod herdr;
 mod terminal;
 mod tmux;
 
+pub use attach::{AttachError, AttachServer, AttachTarget, PumpOutcome};
 pub use herdr::{HerdrDisplay, HerdrStatus};
 pub use terminal::TerminalDisplay;
 pub use tmux::TmuxDisplay;

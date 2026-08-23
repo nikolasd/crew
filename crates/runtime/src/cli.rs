@@ -154,6 +154,22 @@ enum Command {
         #[command(subcommand)]
         command: LeaseCommand,
     },
+    /// Attach to a running worker's pseudo-terminal.
+    Attach {
+        /// The run to attach to.
+        run_id: String,
+        /// The Crew state root. Defaults to the resolved state root.
+        #[arg(long)]
+        state_dir: Option<PathBuf>,
+        /// The repository this run belongs to. Required unless --socket
+        /// is given.
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Connect directly to this socket instead of resolving one from
+        /// --repo/--state-dir/<run-id> (mainly for tests).
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
     /// Re-record adapter fixtures from a real vendor CLI.
     Capture {
         /// Adapter name: claude, codex, copilot, or ompRpc. No "all" --
@@ -298,6 +314,12 @@ pub async fn run() -> ExitCode {
             output,
         } => run_conformance(adapter, fixture, live, output).await,
         Command::Adapters { json } => run_adapters(json).await,
+        Command::Attach {
+            run_id,
+            state_dir,
+            repo,
+            socket,
+        } => run_attach(run_id, state_dir, repo, socket).await,
         Command::Capture {
             adapter,
             fixture,
@@ -1084,6 +1106,103 @@ async fn run_adapters(json: bool) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// The byte a viewer types to detach from `crewd attach`: Ctrl+], the
+/// same convention `telnet` and several other raw-terminal clients use.
+const ATTACH_DETACH_BYTE: u8 = 0x1D;
+
+/// Runs `crewd attach`: connects to a worker's attach socket, puts this
+/// process's stdin into raw mode, and pumps bytes bidirectionally between
+/// the terminal and the socket until the socket closes or the viewer
+/// types Ctrl+]. Resolves the socket via `RuntimePaths` from `--repo`/
+/// `--state-dir`/`run-id`, unless `--socket` names one directly.
+///
+/// The byte-pumping itself (`batman_runtime::display::attach::pump`) is
+/// unit-tested against in-memory pipes; only the raw-mode terminal setup
+/// below is untested -- it is a thin wrapper with no logic beyond calling
+/// libc through `nix`, restored via an RAII guard on every exit path.
+async fn run_attach(
+    run_id: String,
+    state_dir: Option<PathBuf>,
+    repo: Option<PathBuf>,
+    socket_override: Option<PathBuf>,
+) -> ExitCode {
+    use batman_protocol::RunId;
+    use batman_runtime::display::attach;
+    use batman_runtime::paths::RuntimePaths;
+
+    let socket_path = if let Some(socket) = socket_override {
+        socket
+    } else {
+        let Some(repo) = repo else {
+            return fail(&"crewd attach requires --repo (or an explicit --socket)");
+        };
+        let run_id = match RunId::parse(&run_id) {
+            Ok(id) => id,
+            Err(err) => return fail(&err),
+        };
+        let state_dir = match resolve_state_dir(state_dir) {
+            Ok(dir) => dir,
+            Err(err) => return fail(&err),
+        };
+        let paths = match RuntimePaths::resolve(&state_dir, &repo) {
+            Ok(paths) => paths,
+            Err(err) => return fail(&err),
+        };
+        paths.pane_socket(&run_id)
+    };
+
+    let socket = match attach::connect(&socket_path).await {
+        Ok(socket) => socket,
+        Err(err) => return fail(&err),
+    };
+
+    println!("crewd attach: connected. Press Ctrl+] to detach.");
+
+    let guard = match RawModeGuard::enable() {
+        Ok(guard) => guard,
+        Err(err) => return fail(&format!("failed to enable raw terminal mode: {err}")),
+    };
+    let outcome = attach::pump(
+        socket,
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+        ATTACH_DETACH_BYTE,
+    )
+    .await;
+    drop(guard);
+
+    match outcome {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(err) => fail(&err),
+    }
+}
+
+/// Puts this process's stdin into raw mode (no line buffering, no echo,
+/// no signal-generating control characters) for the duration of `crewd
+/// attach`, restoring the original terminal settings on drop -- on
+/// every exit path, including an early return or a panic unwind.
+struct RawModeGuard {
+    original: nix::sys::termios::Termios,
+}
+
+impl RawModeGuard {
+    fn enable() -> nix::Result<Self> {
+        use nix::sys::termios::{SetArg, cfmakeraw, tcgetattr, tcsetattr};
+        let original = tcgetattr(std::io::stdin())?;
+        let mut raw = original.clone();
+        cfmakeraw(&mut raw);
+        tcsetattr(std::io::stdin(), SetArg::TCSANOW, &raw)?;
+        Ok(Self { original })
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        use nix::sys::termios::{SetArg, tcsetattr};
+        let _ = tcsetattr(std::io::stdin(), SetArg::TCSANOW, &self.original);
+    }
 }
 
 /// Runs `crewd capture`: re-records adapter fixtures from a real vendor CLI,
