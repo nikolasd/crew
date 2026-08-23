@@ -10,10 +10,10 @@
 //! variants this adapter does not yet map to a canonical `AdapterEvent`)
 //! normalizes to no events rather than a guessed shape.
 
-use batman_protocol::{Classified, ContentClass};
+use crew_protocol::{Classified, ContentClass};
 use serde_json::Value;
 
-use batman_runtime::adapter::AdapterEventPayload;
+use crew_runtime::adapter::AdapterEventPayload;
 
 /// Normalizes one ACP `session/update` `update` object into the
 /// canonical `AdapterEvent` payloads it represents.

@@ -6,7 +6,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@o
 
 import { z as zod } from "zod/v4";
 
-import { validateRuntimeStatus } from "@nikolasd/batman-protocol/validate";
+import { validateRuntimeStatus } from "@nikolasd/crew-protocol/validate";
 
 import extension from "./index";
 import { getRuntimeStatus, type RuntimeStatusResult } from "./status";
@@ -143,7 +143,7 @@ async function waitForSocket(state: string): Promise<void> {
 }
 
 beforeAll(async () => {
-  const build = Bun.spawnSync(["cargo", "build", "-p", "batman-runtime"], { cwd: REPO_ROOT });
+  const build = Bun.spawnSync(["cargo", "build", "-p", "crew-runtime"], { cwd: REPO_ROOT });
   if (build.exitCode !== 0) {
     throw new Error(`cargo build failed: ${build.stderr.toString()}`);
   }

@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use batman_runtime::VERSION;
+use crew_runtime::VERSION;
 /// The committed fixture-mode baseline loaded from
 /// `fixtures/conformance/fixture-mode-baseline.json`. Maps each adapter to
 /// the scenario names that are expected to fail in fixture mode.
@@ -332,8 +332,8 @@ pub async fn run() -> ExitCode {
 /// when it spawns the daemon (`packages/extension/src/runtime.ts`); a
 /// hand-run `crewd` leaves it unset, which is `Unknown` rather than an
 /// error -- the field is diagnostic, never load-bearing.
-fn binary_source_from_env() -> batman_protocol::BinarySource {
-    use batman_protocol::BinarySource;
+fn binary_source_from_env() -> crew_protocol::BinarySource {
+    use crew_protocol::BinarySource;
     match std::env::var("CREW_BINARY_SOURCE").as_deref() {
         Ok("override") => BinarySource::Override,
         Ok("package") => BinarySource::Package,
@@ -350,7 +350,7 @@ async fn run_serve(
     foreground: bool,
     config: Vec<PathBuf>,
 ) -> ExitCode {
-    use batman_runtime::lifecycle::{self, ServeOptions};
+    use crew_runtime::lifecycle::{self, ServeOptions};
 
     let state_dir = match resolve_state_dir(state_dir) {
         Ok(dir) => dir,
@@ -388,7 +388,7 @@ async fn run_status(
     state_dir: Option<PathBuf>,
     repo: PathBuf,
 ) -> ExitCode {
-    use batman_runtime::lifecycle::{self, StatusOptions};
+    use crew_runtime::lifecycle::{self, StatusOptions};
 
     let state_dir = match resolve_state_dir(state_dir) {
         Ok(dir) => dir,
@@ -415,7 +415,7 @@ async fn run_status(
 
 /// Runs `crewd stop`: signals a live runtime and waits for it to shut down.
 async fn run_stop(state_dir: Option<PathBuf>, repo: PathBuf) -> ExitCode {
-    use batman_runtime::lifecycle::{self, StopOptions};
+    use crew_runtime::lifecycle::{self, StopOptions};
 
     let state_dir = match resolve_state_dir(state_dir) {
         Ok(dir) => dir,
@@ -425,11 +425,11 @@ async fn run_stop(state_dir: Option<PathBuf>, repo: PathBuf) -> ExitCode {
     let options = StopOptions { state_dir, repo };
 
     match lifecycle::stop(&options).await {
-        Ok(batman_runtime::lifecycle::StopOutcome::Stopped) => {
+        Ok(crew_runtime::lifecycle::StopOutcome::Stopped) => {
             println!("runtime stopped");
             ExitCode::SUCCESS
         }
-        Ok(batman_runtime::lifecycle::StopOutcome::NotRunning) => {
+        Ok(crew_runtime::lifecycle::StopOutcome::NotRunning) => {
             println!("no runtime running for this repository");
             ExitCode::from(1)
         }
@@ -455,11 +455,11 @@ async fn run_lease_release(
     lease_id: String,
     yes: bool,
 ) -> ExitCode {
-    use batman_protocol::{IsolationKind, OperationId, Timestamp, WorkspaceState};
-    use batman_runtime::domain::DomainRepository;
-    use batman_runtime::paths::RuntimePaths;
-    use batman_runtime::security::redaction::Redactor;
-    use batman_runtime::workspace::{LeaseError, LeaseService, WorkspaceMaterializer};
+    use crew_protocol::{IsolationKind, OperationId, Timestamp, WorkspaceState};
+    use crew_runtime::domain::DomainRepository;
+    use crew_runtime::paths::RuntimePaths;
+    use crew_runtime::security::redaction::Redactor;
+    use crew_runtime::workspace::{LeaseError, LeaseService, WorkspaceMaterializer};
 
     let state_root = match resolve_state_dir(state_dir) {
         Ok(dir) => dir,
@@ -476,7 +476,7 @@ async fn run_lease_release(
     // flock, the same probe `crewd stop` uses -- NOT by the socket
     // file, which an unclean crash (the exact case this command exists
     // for) leaves behind.
-    if batman_runtime::lifecycle::runtime_is_live(&paths.lock) {
+    if crew_runtime::lifecycle::runtime_is_live(&paths.lock) {
         eprintln!(
             "a runtime is serving this repository; release the lease over RPC \
              (workspace/release) or run `crewd stop` first"
@@ -517,7 +517,7 @@ async fn run_lease_release(
 
     // Intent before side effect (invariant 4), into the same audited
     // `operations` table every other out-of-band mutation uses.
-    let db = match batman_runtime::db::DatabaseHandle::start(paths.database.clone()).await {
+    let db = match crew_runtime::db::DatabaseHandle::start(paths.database.clone()).await {
         Ok(handle) => std::sync::Arc::new(handle),
         Err(err) => return fail(&err),
     };
@@ -583,7 +583,7 @@ async fn run_lease_release(
             let mut repo = DomainRepository::new(conn, project_id);
             if let Some(error) = cleanup_error {
                 repo.record_workspace_event(
-                    batman_protocol::WorkspaceEvent::CleanupFailed {
+                    crew_protocol::WorkspaceEvent::CleanupFailed {
                         lease_id: event_lease_id.clone(),
                         error,
                     },
@@ -592,7 +592,7 @@ async fn run_lease_release(
                 )?;
             }
             repo.record_workspace_event(
-                batman_protocol::WorkspaceEvent::LeaseReleased {
+                crew_protocol::WorkspaceEvent::LeaseReleased {
                     lease_id: event_lease_id.clone(),
                     run_id,
                 },
@@ -640,7 +640,7 @@ async fn run_monitor(
     repo: PathBuf,
     run_id: Option<String>,
 ) -> ExitCode {
-    use batman_runtime::lifecycle::{self, MonitorOptions};
+    use crew_runtime::lifecycle::{self, MonitorOptions};
 
     let state_dir = match resolve_state_dir(state_dir) {
         Ok(dir) => dir,
@@ -695,7 +695,7 @@ async fn run_audit_export(
     // subcommand -- `RuntimePaths::resolve` derives the per-repository
     // runtime directory from it plus `--repo`, rather than treating
     // `--state-dir` itself as that directory.
-    let paths = match batman_runtime::paths::RuntimePaths::resolve(&state_root, &repo) {
+    let paths = match crew_runtime::paths::RuntimePaths::resolve(&state_root, &repo) {
         Ok(paths) => paths,
         Err(err) => return fail(&format!("failed to resolve runtime paths: {err}")),
     };
@@ -711,12 +711,12 @@ async fn run_audit_export(
         ));
     }
 
-    let db = match batman_runtime::db::DatabaseHandle::start(paths.database.clone()).await {
+    let db = match crew_runtime::db::DatabaseHandle::start(paths.database.clone()).await {
         Ok(handle) => handle,
         Err(err) => return fail(&format!("failed to open database: {err}")),
     };
 
-    let mut export = batman_runtime::audit::Export::new(
+    let mut export = crew_runtime::audit::Export::new(
         repo.to_string_lossy().to_string(),
         paths.root.to_string_lossy().to_string(),
         output.to_string_lossy().to_string(),
@@ -763,8 +763,8 @@ async fn run_doctor(
     json: bool,
     config: Vec<PathBuf>,
 ) -> ExitCode {
-    use batman_runtime::doctor::Doctor;
-    use batman_runtime::paths::RuntimePaths;
+    use crew_runtime::doctor::Doctor;
+    use crew_runtime::paths::RuntimePaths;
 
     /// Reports a fatal condition in the caller's chosen format. Only
     /// conditions that prevent the catalog from running reach here; an
@@ -791,7 +791,7 @@ async fn run_doctor(
         Err(err) => return abort(json, &format!("failed to resolve runtime paths: {err}")),
     };
 
-    let db = match batman_runtime::db::DatabaseHandle::start(paths.database.clone()).await {
+    let db = match crew_runtime::db::DatabaseHandle::start(paths.database.clone()).await {
         Ok(handle) => Some(std::sync::Arc::new(handle)),
         Err(err) => return abort(json, &format!("failed to open database: {err}")),
     };
@@ -799,7 +799,7 @@ async fn run_doctor(
     // `--repo` names the repository being diagnosed, never a config file.
     // Config layers are explicit flags, exactly as they are for `serve`.
     let path_refs: Vec<&std::path::Path> = config.iter().map(PathBuf::as_path).collect();
-    let policy = match batman_runtime::config::resolve_policy(&path_refs, None) {
+    let policy = match crew_runtime::config::resolve_policy(&path_refs, None) {
         Ok(policy) => Some(policy),
         Err(err) => return abort(json, &format!("failed to load config: {err}")),
     };
@@ -842,15 +842,15 @@ async fn run_doctor(
 /// `tools/call` on stdio to the worker coordination tools over the
 /// runtime socket, authenticated with `CREW_WORKER_SCOPE_TOKEN` read
 /// from (and removed from) this process's own inherited environment. All
-/// protocol/auth behavior lives in `batman_runtime::coordination::mcp`;
+/// protocol/auth behavior lives in `crew_runtime::coordination::mcp`;
 /// this function only resolves CLI arguments into that call.
 async fn run_coordination_mcp(
     state_dir: Option<PathBuf>,
     repo: PathBuf,
     run_id: String,
 ) -> ExitCode {
-    use batman_protocol::RunId;
-    use batman_runtime::coordination::mcp::{self, ProcessEnvironment};
+    use crew_protocol::RunId;
+    use crew_runtime::coordination::mcp::{self, ProcessEnvironment};
 
     let state_dir = match resolve_state_dir(state_dir) {
         Ok(dir) => dir,
@@ -871,10 +871,8 @@ async fn run_coordination_mcp(
 /// prints it as JSON or human-readable text. Never activates the backend;
 /// this only reads availability/version, exactly like `DisplayBackendTrait::status`.
 async fn run_display_probe(backend: String, json: bool) -> ExitCode {
-    use batman_protocol::{DisplayBackend as ProtoBackend, DisplayConfig};
-    use batman_runtime::display::{
-        DisplayBackendTrait, HerdrDisplay, TerminalDisplay, TmuxDisplay,
-    };
+    use crew_protocol::{DisplayBackend as ProtoBackend, DisplayConfig};
+    use crew_runtime::display::{DisplayBackendTrait, HerdrDisplay, TerminalDisplay, TmuxDisplay};
 
     let display: Box<dyn DisplayBackendTrait> = match backend.as_str() {
         "herdr" => Box::new(HerdrDisplay::new(DisplayConfig {
@@ -931,8 +929,8 @@ async fn run_display_probe(backend: String, json: bool) -> ExitCode {
 /// mode:"live", passed:false, error}` entry, never a hard process
 /// failure.
 async fn run_conformance(adapter: String, fixture: bool, live: bool, output: PathBuf) -> ExitCode {
-    use batman_runtime::adapter::AdapterKind;
-    use batman_runtime::conformance::{
+    use crew_runtime::adapter::AdapterKind;
+    use crew_runtime::conformance::{
         ConformanceReport, run_fixture_conformance, run_live_conformance,
     };
 
@@ -1075,8 +1073,8 @@ async fn run_conformance(adapter: String, fixture: bool, live: bool, output: Pat
 /// truth for OMP-facing effective capabilities) as JSON or human-readable
 /// text.
 async fn run_adapters(json: bool) -> ExitCode {
-    use batman_runtime::adapter::AdapterKind;
-    use batman_runtime::conformance::run_fixture_conformance;
+    use crew_runtime::adapter::AdapterKind;
+    use crew_runtime::conformance::run_fixture_conformance;
 
     let kinds = [
         AdapterKind::Claude,
@@ -1118,7 +1116,7 @@ const ATTACH_DETACH_BYTE: u8 = 0x1D;
 /// types Ctrl+]. Resolves the socket via `RuntimePaths` from `--repo`/
 /// `--state-dir`/`run-id`, unless `--socket` names one directly.
 ///
-/// The byte-pumping itself (`batman_runtime::display::attach::pump`) is
+/// The byte-pumping itself (`crew_runtime::display::attach::pump`) is
 /// unit-tested against in-memory pipes; only the raw-mode terminal setup
 /// below is untested -- it is a thin wrapper with no logic beyond calling
 /// libc through `nix`, restored via an RAII guard on every exit path.
@@ -1128,9 +1126,9 @@ async fn run_attach(
     repo: Option<PathBuf>,
     socket_override: Option<PathBuf>,
 ) -> ExitCode {
-    use batman_protocol::RunId;
-    use batman_runtime::display::attach;
-    use batman_runtime::paths::RuntimePaths;
+    use crew_protocol::RunId;
+    use crew_runtime::display::attach;
+    use crew_runtime::paths::RuntimePaths;
 
     let socket_path = if let Some(socket) = socket_override {
         socket
@@ -1209,8 +1207,8 @@ impl Drop for RawModeGuard {
 /// normalizes known nondeterministic values, and rewrites fixture bytes when
 /// the resulting capture differs from the committed artifact.
 async fn run_capture(adapter: String, fixture: Option<String>, dry_run: bool) -> ExitCode {
-    use batman_runtime::adapter::AdapterKind;
-    use batman_runtime::conformance::capture;
+    use crew_runtime::adapter::AdapterKind;
+    use crew_runtime::conformance::capture;
 
     if adapter == "all" {
         return fail(
@@ -1302,22 +1300,22 @@ mod tests {
         // this repo -- the correct per-repository database -- not at
         // `<state-root>/runtime.db`, which is what the old buggy code read.
         let paths =
-            batman_runtime::paths::RuntimePaths::resolve(state_root.path(), repo.path()).unwrap();
+            crew_runtime::paths::RuntimePaths::resolve(state_root.path(), repo.path()).unwrap();
         {
-            let db = batman_runtime::db::DatabaseHandle::start(paths.database.clone())
+            let db = crew_runtime::db::DatabaseHandle::start(paths.database.clone())
                 .await
                 .unwrap();
-            let redactor = batman_runtime::security::redaction::Redactor::new();
+            let redactor = crew_runtime::security::redaction::Redactor::new();
             for text in ["first", "second", "third"] {
-                let event = batman_runtime::security::redaction::RawRuntimeEvent {
-                    timestamp: batman_protocol::Timestamp::now(),
-                    project_id: batman_protocol::ProjectId::new(),
+                let event = crew_runtime::security::redaction::RawRuntimeEvent {
+                    timestamp: crew_protocol::Timestamp::now(),
+                    project_id: crew_protocol::ProjectId::new(),
                     run_id: None,
-                    kind: batman_runtime::security::redaction::RawEventKind::Diagnostic {
-                        level: batman_protocol::DiagnosticLevel::Info,
+                    kind: crew_runtime::security::redaction::RawEventKind::Diagnostic {
+                        level: crew_protocol::DiagnosticLevel::Info,
                         code: "fixture".to_string(),
-                        fragments: vec![batman_protocol::Classified {
-                            class: batman_protocol::ContentClass::Visible,
+                        fragments: vec![crew_protocol::Classified {
+                            class: crew_protocol::ContentClass::Visible,
                             value: text.to_string(),
                         }],
                     },
@@ -1371,7 +1369,7 @@ mod tests {
             "a refused export must not write an output file"
         );
         let paths =
-            batman_runtime::paths::RuntimePaths::resolve(state_root.path(), repo.path()).unwrap();
+            crew_runtime::paths::RuntimePaths::resolve(state_root.path(), repo.path()).unwrap();
         assert!(
             !paths.database.exists(),
             "a refused export must not have silently created the database either"

@@ -10,7 +10,7 @@
   "peerDependencies": { "@oh-my-pi/pi-coding-agent": ">=17.0.7 <18" },
   "devDependencies": {
     "@oh-my-pi/pi-coding-agent": ">=17.0.7 <18",
-    "@nikolasd/batman-protocol": "workspace:*",
+    "@nikolasd/crew-protocol": "workspace:*",
     "@types/bun": "1.3.14",
     "ajv": "8.17.1",
     "zod": "^4"

@@ -1,5 +1,5 @@
 //! Integration tests for the per-worker attach server
-//! (`batman_runtime::display::attach`): the socket/ring-buffer/fan-out
+//! (`crew_runtime::display::attach`): the socket/ring-buffer/fan-out
 //! logic against a fake [`AttachTarget`] (no real PTY needed), plus one
 //! test running the whole composed path against a real `PtyProcess`
 //! running `cat`.
@@ -10,8 +10,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use batman_runtime::display::attach::{self, AttachError, AttachServer, AttachTarget, PumpOutcome};
-use batman_runtime::supervisor::{EscalationTimings, PtyProcess, SpawnSpec};
+use crew_runtime::display::attach::{self, AttachError, AttachServer, AttachTarget, PumpOutcome};
+use crew_runtime::supervisor::{EscalationTimings, PtyProcess, SpawnSpec};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 use tokio::net::UnixStream;
 use tokio::sync::broadcast;

@@ -9,7 +9,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use batman_protocol::{EventEnvelope, ProjectId, RunId, RunState, TaskId, WorkerId};
+use crew_protocol::{EventEnvelope, ProjectId, RunId, RunState, TaskId, WorkerId};
 use tokio::sync::broadcast;
 
 use crate::adapter::{Adapter, CancelScope};
@@ -47,7 +47,7 @@ pub struct RunDriverContext {
     /// completion path can emit `DisplayPaneDetached` for the same pane it
     /// attached without probing the registry a second time. `None` when no
     /// backend was available (headless) or the run never reached selection.
-    pub display: Option<batman_protocol::DisplaySelection>,
+    pub display: Option<crew_protocol::DisplaySelection>,
 }
 
 /// The typed success of [`RunDriver::cancel_run`]: an absent adapter is

@@ -3,8 +3,8 @@
 //! keys ON, busy_timeout, synchronous=FULL, and versioned migrations --
 //! plus one held connection instead of an open-per-call pattern.
 
-use batman_protocol::{IsolationKind, LeaseMode, ProjectId, RunId};
-use batman_runtime::workspace::LeaseService;
+use crew_protocol::{IsolationKind, LeaseMode, ProjectId, RunId};
+use crew_runtime::workspace::LeaseService;
 
 #[test]
 fn lease_db_enables_wal_foreign_keys_busy_timeout_and_full_sync() {

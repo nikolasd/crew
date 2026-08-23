@@ -44,7 +44,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use batman_protocol::{EventEnvelope, ProjectId, RunId, RunState};
+use crew_protocol::{EventEnvelope, ProjectId, RunId, RunState};
 use serde_json::json;
 use tokio::sync::broadcast;
 
@@ -320,7 +320,7 @@ fn state(name: &str) -> RunState {
 }
 #[cfg(test)]
 mod tests {
-    use batman_protocol::{
+    use crew_protocol::{
         Classified, ContentClass, ProjectId, Run, RunFlags, RunId, RuntimeEvent, RuntimeEventKind,
         TaskId, TaskRef, Timestamp, Worker, WorkerId, WorkerProfileRef,
     };

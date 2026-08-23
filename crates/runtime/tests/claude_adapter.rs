@@ -17,19 +17,19 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
-use batman_protocol::{ProjectId, RunId, TaskId, WorkerId};
-use batman_runtime::adapter::mcp_config::AdapterMcpConfig;
-use batman_runtime::adapter::{
+use crew_protocol::{ProjectId, RunId, TaskId, WorkerId};
+use crew_runtime::adapter::mcp_config::AdapterMcpConfig;
+use crew_runtime::adapter::{
     Adapter, AdapterMessage, ApprovalsCapability, CancelScope, ClaudeStartupOptions,
     DurabilityCapability, NativeViewCapability, NestedCapability, ProtocolKind, ResumeCapability,
     StartSpec, SteeringCapability, UsageCapability, VendorSessionRef, WorkspaceControlCapability,
 };
-use batman_runtime::coordination::{ScopeBinding, ScopeTokenStore, VendorProcessIdentity};
+use crew_runtime::coordination::{ScopeBinding, ScopeTokenStore, VendorProcessIdentity};
 
-use batman_runtime::adapter::claude::ClaudeAdapter;
-use batman_runtime::adapter::claude::command;
-use batman_runtime::adapter::claude::normalize::{ClaudeEvent, ClaudeNormalizer};
-use batman_runtime::adapter::claude::{McpInjection, build_mcp_injection};
+use crew_runtime::adapter::claude::ClaudeAdapter;
+use crew_runtime::adapter::claude::command;
+use crew_runtime::adapter::claude::normalize::{ClaudeEvent, ClaudeNormalizer};
+use crew_runtime::adapter::claude::{McpInjection, build_mcp_injection};
 
 fn new_adapter() -> ClaudeAdapter {
     ClaudeAdapter::new(
@@ -98,9 +98,9 @@ fn kind_is_claude() {
 fn new_session_preserves_native_discovery_and_generates_a_session_id() {
     let options = ClaudeStartupOptions::default();
     let spec = StartSpec {
-        run_id: batman_protocol::RunId::new(),
-        task_id: batman_protocol::TaskId::new(),
-        worker_id: batman_protocol::WorkerId::new(),
+        run_id: crew_protocol::RunId::new(),
+        task_id: crew_protocol::TaskId::new(),
+        worker_id: crew_protocol::WorkerId::new(),
         prompt: "do the thing".to_string(),
         resume: None,
     };
@@ -141,9 +141,9 @@ fn new_session_preserves_native_discovery_and_generates_a_session_id() {
 fn resume_uses_the_provided_vendor_session_and_skips_session_id() {
     let options = ClaudeStartupOptions::default();
     let spec = StartSpec {
-        run_id: batman_protocol::RunId::new(),
-        task_id: batman_protocol::TaskId::new(),
-        worker_id: batman_protocol::WorkerId::new(),
+        run_id: crew_protocol::RunId::new(),
+        task_id: crew_protocol::TaskId::new(),
+        worker_id: crew_protocol::WorkerId::new(),
         prompt: "continue".to_string(),
         resume: Some(VendorSessionRef("abc-123-session".to_string())),
     };
@@ -174,9 +174,9 @@ fn startup_options_pass_through_supported_cli_flags_and_omit_unsupported_max_tur
         ..Default::default()
     };
     let spec = StartSpec {
-        run_id: batman_protocol::RunId::new(),
-        task_id: batman_protocol::TaskId::new(),
-        worker_id: batman_protocol::WorkerId::new(),
+        run_id: crew_protocol::RunId::new(),
+        task_id: crew_protocol::TaskId::new(),
+        worker_id: crew_protocol::WorkerId::new(),
         prompt: "go".to_string(),
         resume: None,
     };
@@ -378,7 +378,7 @@ fn constructing_with_mcp_none_behaves_identically_to_every_pre_existing_test() {
 
 // ------------------------------------------------------------- normalize
 
-fn emitted_payloads(events: &[ClaudeEvent]) -> Vec<&batman_runtime::adapter::AdapterEventPayload> {
+fn emitted_payloads(events: &[ClaudeEvent]) -> Vec<&crew_runtime::adapter::AdapterEventPayload> {
     events
         .iter()
         .filter_map(|event| match event {
@@ -390,7 +390,7 @@ fn emitted_payloads(events: &[ClaudeEvent]) -> Vec<&batman_runtime::adapter::Ada
 
 #[test]
 fn initialize_fixture_normalizes_session_id_text_tools_and_final_result() {
-    use batman_runtime::adapter::AdapterEventPayload::*;
+    use crew_runtime::adapter::AdapterEventPayload::*;
 
     let mut normalizer = ClaudeNormalizer::new();
     let mut all_events = Vec::new();
@@ -522,7 +522,7 @@ fn initialize_fixture_normalizes_session_id_text_tools_and_final_result() {
 
 #[test]
 fn subagent_fixture_correlates_parent_tool_use_id_and_reports_nested_worker_once() {
-    use batman_runtime::adapter::AdapterEventPayload::*;
+    use crew_runtime::adapter::AdapterEventPayload::*;
 
     let mut normalizer = ClaudeNormalizer::new();
     let mut all_events = Vec::new();
@@ -635,7 +635,7 @@ fn approval_fixture_normalizes_hook_lifecycle_without_ever_touching_the_sink() {
 
 #[test]
 fn result_fixture_error_arm_reports_usage_and_an_explicit_terminal_failure() {
-    use batman_runtime::adapter::AdapterEventPayload::*;
+    use crew_runtime::adapter::AdapterEventPayload::*;
 
     let mut normalizer = ClaudeNormalizer::new();
     let mut all_events = Vec::new();
@@ -739,7 +739,7 @@ fn capabilities_round_trip_and_declare_only_what_is_proven() {
     let value = serde_json::to_value(caps).unwrap();
     assert_eq!(value["protocol"], "structured");
     assert_eq!(value["nested"], "none");
-    let round_tripped: batman_runtime::adapter::AdapterCapabilities =
+    let round_tripped: crew_runtime::adapter::AdapterCapabilities =
         serde_json::from_value(value).unwrap();
     assert_eq!(round_tripped, caps);
 }
@@ -835,20 +835,20 @@ async fn send_without_an_active_session_returns_invalid_vendor_state() {
 /// fixtures).
 #[derive(Default)]
 struct CollectingSink {
-    events: tokio::sync::Mutex<Vec<batman_runtime::adapter::AdapterEvent>>,
+    events: tokio::sync::Mutex<Vec<crew_runtime::adapter::AdapterEvent>>,
 }
 
 impl CollectingSink {
     /// Polls (bounded by the caller's own `tokio::time::timeout`) until
     /// a `UsageReported` event has been collected, then returns it.
-    async fn wait_for_usage(&self) -> batman_runtime::adapter::AdapterEvent {
+    async fn wait_for_usage(&self) -> crew_runtime::adapter::AdapterEvent {
         loop {
             {
                 let events = self.events.lock().await;
                 if let Some(event) = events.iter().find(|event| {
                     matches!(
                         event.payload,
-                        batman_runtime::adapter::AdapterEventPayload::UsageReported { .. }
+                        crew_runtime::adapter::AdapterEventPayload::UsageReported { .. }
                     )
                 }) {
                     return event.clone();
@@ -859,11 +859,11 @@ impl CollectingSink {
     }
 }
 
-impl batman_runtime::adapter::AdapterEventSink for CollectingSink {
+impl crew_runtime::adapter::AdapterEventSink for CollectingSink {
     fn emit(
         &self,
-        event: batman_runtime::adapter::AdapterEvent,
-    ) -> batman_runtime::adapter::AdapterFuture<'_, u64> {
+        event: crew_runtime::adapter::AdapterEvent,
+    ) -> crew_runtime::adapter::AdapterFuture<'_, u64> {
         Box::pin(async move {
             let mut events = self.events.lock().await;
             events.push(event);
@@ -1004,7 +1004,7 @@ async fn resume_with_worker_mcp_configured_activates_a_token_and_cleans_up_on_ex
 
 #[tokio::test]
 async fn conformance_fixture_report_covers_every_canonical_scenario_and_all_pass() {
-    use batman_runtime::conformance::{
+    use crew_runtime::conformance::{
         DISABLE_VENDOR_CLI_ENV, scenario, vendor_cli_invocation_disabled,
     };
 
@@ -1018,7 +1018,7 @@ async fn conformance_fixture_report_covers_every_canonical_scenario_and_all_pass
         return;
     }
 
-    let report = batman_runtime::adapter::claude::conformance::fixture_report().await;
+    let report = crew_runtime::adapter::claude::conformance::fixture_report().await;
 
     assert_eq!(
         report.scenarios.len(),

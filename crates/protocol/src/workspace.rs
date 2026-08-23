@@ -126,7 +126,7 @@ pub struct InspectResult {
 /// Parameters for applying a workspace change.
 ///
 /// This is a mechanical operation only: OMP must explicitly select the
-/// artifact, the strategy, and the expected target revision. Batman
+/// artifact, the strategy, and the expected target revision. Crew
 /// never auto-selects a patch or resolves conflicts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

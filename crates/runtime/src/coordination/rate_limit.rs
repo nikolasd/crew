@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use batman_protocol::WorkerId;
+use crew_protocol::WorkerId;
 
 /// The sliding window width: one minute.
 const WINDOW: Duration = Duration::from_secs(60);
@@ -75,7 +75,7 @@ impl RateLimiter {
 
 impl Default for RateLimiter {
     fn default() -> Self {
-        Self::new(batman_protocol::COORDINATION_RATE_LIMIT_PER_MINUTE)
+        Self::new(crew_protocol::COORDINATION_RATE_LIMIT_PER_MINUTE)
     }
 }
 

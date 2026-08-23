@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use batman_protocol::{RunId, TaskId, WorkerId};
+use crew_protocol::{RunId, TaskId, WorkerId};
 
 use super::AdapterFuture;
 use super::capability::AdapterCapabilities;

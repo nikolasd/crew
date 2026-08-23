@@ -1,7 +1,7 @@
 //! Tmux display backend tests using injected command executors.
 
-use batman_protocol::{DisplayBackend, DisplayConfig, DisplayPlacement};
-use batman_runtime::display::{CommandExecutor, CommandResult, DisplayBackendTrait, TmuxDisplay};
+use crew_protocol::{DisplayBackend, DisplayConfig, DisplayPlacement};
+use crew_runtime::display::{CommandExecutor, CommandResult, DisplayBackendTrait, TmuxDisplay};
 use std::io;
 use std::sync::{Arc, Mutex};
 

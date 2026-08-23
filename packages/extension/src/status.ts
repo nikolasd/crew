@@ -6,7 +6,7 @@
 import { BinarySelectionError, ensureRuntime, type EnsureRuntimeOptions } from "./runtime";
 import { BinaryIntegrityError, UnsupportedPlatformError } from "./platform";
 import type { CrewClient } from "./client";
-import type { RuntimeStatus } from "@nikolasd/batman-protocol";
+import type { RuntimeStatus } from "@nikolasd/crew-protocol";
 
 /** A text content block, structurally compatible with OMP's `TextContent`. */
 export interface StatusTextContent {

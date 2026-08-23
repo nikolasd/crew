@@ -1,12 +1,12 @@
-//! The canonical JSON Schema document for the BATMAN wire protocol.
+//! The canonical JSON Schema document for the Crew wire protocol.
 //!
 //! [`ProtocolDocument`] exists solely to give `schemars` a single root that
 //! transitively references every exported request, result, and event type,
 //! so one invocation produces a schema with everything reachable from the
 //! wire protocol in `$defs`.
 //!
-//! [`render_schema`] is the sole renderer. `batman-xtask generate` writes
-//! its output to `packages/protocol-ts/schema/batman.schema.json`, and
+//! [`render_schema`] is the sole renderer. `crew-xtask generate` writes
+//! its output to `packages/protocol-ts/schema/crew.schema.json`, and
 //! `crewd doctor`'s `schema_compatibility` check compares the committed
 //! file against it -- both must derive the schema the same way or the check
 //! would report drift that does not exist.

@@ -9,8 +9,8 @@
 
 use std::sync::Arc;
 
-use batman_protocol::{
-    ApprovalId, ApprovalRequest, BatmanMethod, DeliveryState, EventEnvelope, IsolationKind,
+use crew_protocol::{
+    ApprovalId, ApprovalRequest, CrewMethod, DeliveryState, EventEnvelope, IsolationKind,
     LeaseMode, MessageId, MessageKind, ProjectId, Run, RunFlags, RunId, RunMessage, RunSpec,
     RunState, TaskId, TaskRef, Timestamp, Worker, WorkerId, WorkerProfileRef, error_code,
 };
@@ -252,7 +252,7 @@ impl OrchestrationService {
             policy: None,
             config_paths: None,
             display: Arc::new(crate::display::DisplayRegistry::with_default_backends(
-                batman_protocol::DisplayConfig::default(),
+                crew_protocol::DisplayConfig::default(),
             )),
         }
     }
@@ -271,9 +271,9 @@ impl OrchestrationService {
         policy: Arc<crate::config::RuntimePolicy>,
     ) -> Self {
         self.display = Arc::new(crate::display::DisplayRegistry::with_default_backends(
-            batman_protocol::DisplayConfig {
+            crew_protocol::DisplayConfig {
                 backend: crate::config::protocol_display_backend(policy.display_backend)
-                    .unwrap_or(batman_protocol::DisplayBackend::Terminal),
+                    .unwrap_or(crew_protocol::DisplayBackend::Terminal),
                 width: None,
                 height: None,
             },
@@ -308,54 +308,54 @@ impl OrchestrationService {
     /// a scoped `workerMcp` caller.
     pub async fn dispatch(
         &self,
-        method: BatmanMethod,
+        method: CrewMethod,
         principal: &ClientPrincipal,
         params: &Value,
     ) -> Result<Value, ServiceError> {
         match method {
-            BatmanMethod::TaskUpsert => self.task_upsert(principal, params).await,
-            BatmanMethod::TaskGet => self.task_get(params).await,
-            BatmanMethod::WorkerCreate => self.worker_create(params).await,
-            BatmanMethod::WorkerList => self.worker_list().await,
-            BatmanMethod::WorkerGet => self.worker_get(params).await,
-            BatmanMethod::RunSubmit => self.run_submit(principal, params).await,
-            BatmanMethod::RunList => self.run_list(params).await,
-            BatmanMethod::RunGet => self.run_get(params).await,
-            BatmanMethod::RunResult => self.run_result(params).await,
-            BatmanMethod::RunRetry => self.run_retry(principal, params).await,
-            BatmanMethod::RunCancel => self.run_cancel(principal, params).await,
-            BatmanMethod::MessageSend => self.message_send(principal, params).await,
-            BatmanMethod::MessageList => self.message_list(params).await,
-            BatmanMethod::ApprovalList => self.approval_list(params).await,
-            BatmanMethod::ApprovalDecide => self.approval_decide(principal, params).await,
-            BatmanMethod::ReconcileOmp => self.reconcile_omp(principal, params).await,
-            BatmanMethod::CoordinationChildList => {
+            CrewMethod::TaskUpsert => self.task_upsert(principal, params).await,
+            CrewMethod::TaskGet => self.task_get(params).await,
+            CrewMethod::WorkerCreate => self.worker_create(params).await,
+            CrewMethod::WorkerList => self.worker_list().await,
+            CrewMethod::WorkerGet => self.worker_get(params).await,
+            CrewMethod::RunSubmit => self.run_submit(principal, params).await,
+            CrewMethod::RunList => self.run_list(params).await,
+            CrewMethod::RunGet => self.run_get(params).await,
+            CrewMethod::RunResult => self.run_result(params).await,
+            CrewMethod::RunRetry => self.run_retry(principal, params).await,
+            CrewMethod::RunCancel => self.run_cancel(principal, params).await,
+            CrewMethod::MessageSend => self.message_send(principal, params).await,
+            CrewMethod::MessageList => self.message_list(params).await,
+            CrewMethod::ApprovalList => self.approval_list(params).await,
+            CrewMethod::ApprovalDecide => self.approval_decide(principal, params).await,
+            CrewMethod::ReconcileOmp => self.reconcile_omp(principal, params).await,
+            CrewMethod::CoordinationChildList => {
                 self.coordination_child_list(principal, params).await
             }
-            BatmanMethod::CoordinationChildDecide => {
+            CrewMethod::CoordinationChildDecide => {
                 self.coordination_child_decide(principal, params).await
             }
-            BatmanMethod::ProfileRegister => self.profile_register(params).await,
-            BatmanMethod::PolicyViolationDecide => {
+            CrewMethod::ProfileRegister => self.profile_register(params).await,
+            CrewMethod::PolicyViolationDecide => {
                 self.policy_violation_decide(principal, params).await
             }
-            BatmanMethod::PolicyViolationList => self.policy_violation_list(params).await,
-            BatmanMethod::WorkspaceAcquire => self.workspace_acquire(principal, params).await,
-            BatmanMethod::WorkspaceGet => self.workspace_get(principal, params).await,
-            BatmanMethod::WorkspaceRelease => self.workspace_release(principal, params).await,
-            BatmanMethod::WorkspaceInspect => self.workspace_inspect(principal, params).await,
-            BatmanMethod::WorkspaceApply => self.workspace_apply(principal, params).await,
-            BatmanMethod::ArtifactList => self.artifact_list(principal, params).await,
-            BatmanMethod::ArtifactFetch => self.artifact_fetch(principal, params).await,
+            CrewMethod::PolicyViolationList => self.policy_violation_list(params).await,
+            CrewMethod::WorkspaceAcquire => self.workspace_acquire(principal, params).await,
+            CrewMethod::WorkspaceGet => self.workspace_get(principal, params).await,
+            CrewMethod::WorkspaceRelease => self.workspace_release(principal, params).await,
+            CrewMethod::WorkspaceInspect => self.workspace_inspect(principal, params).await,
+            CrewMethod::WorkspaceApply => self.workspace_apply(principal, params).await,
+            CrewMethod::ArtifactList => self.artifact_list(principal, params).await,
+            CrewMethod::ArtifactFetch => self.artifact_fetch(principal, params).await,
             // Stubs: the daemon accepts these `ompExtension`-only methods
             // (they are in the role table -- see
             // `crate::ipc::ClientPrincipal::allowed_methods`) but refuses
             // every one of them until a later work package (crew v2
             // gap-closure WP17/WP21) lands its real handler.
-            BatmanMethod::PlanPropose => Err(ServiceError::not_yet_implemented("plan/propose")),
-            BatmanMethod::PlanDecide => Err(ServiceError::not_yet_implemented("plan/decide")),
-            BatmanMethod::PlanGet => Err(ServiceError::not_yet_implemented("plan/get")),
-            BatmanMethod::RunTimeoutAck => Err(ServiceError::not_yet_implemented("run/timeoutAck")),
+            CrewMethod::PlanPropose => Err(ServiceError::not_yet_implemented("plan/propose")),
+            CrewMethod::PlanDecide => Err(ServiceError::not_yet_implemented("plan/decide")),
+            CrewMethod::PlanGet => Err(ServiceError::not_yet_implemented("plan/get")),
+            CrewMethod::RunTimeoutAck => Err(ServiceError::not_yet_implemented("run/timeoutAck")),
             _ => Err(ServiceError::internal(
                 "method is not routed through OrchestrationService",
             )),
@@ -612,8 +612,8 @@ impl OrchestrationService {
         prompt: Option<String>,
         workspace_mode: Option<&str>,
         policy: Option<Arc<crate::config::RuntimePolicy>>,
-        display: Option<batman_protocol::DisplaySelection>,
-        display_placement: batman_protocol::DisplayPlacement,
+        display: Option<crew_protocol::DisplaySelection>,
+        display_placement: crew_protocol::DisplayPlacement,
     ) -> Result<Option<(std::path::PathBuf, IsolationKind)>, ServiceError> {
         // A pane is journaled only once the run row exists, so a replayer
         // never sees a pane attach to a run it has not seen created. No
@@ -627,7 +627,7 @@ impl OrchestrationService {
                 .run_domain_op(Box::new(move |conn| {
                     let mut repo = DomainRepository::new(conn, project_id);
                     repo.record_display_event(
-                        batman_protocol::RuntimeEventKind::DisplayPaneAttached,
+                        crew_protocol::RuntimeEventKind::DisplayPaneAttached,
                         run_id,
                         backend,
                         placement,
@@ -690,7 +690,7 @@ impl OrchestrationService {
                 // answer.
                 if let Err(err) = self
                     .emit_workspace_event(
-                        batman_protocol::WorkspaceEvent::LeaseRequested {
+                        crew_protocol::WorkspaceEvent::LeaseRequested {
                             lease_id: lease.lease_id.clone(),
                             run_id,
                             mode: LeaseMode::Write,
@@ -727,7 +727,7 @@ impl OrchestrationService {
                 }
                 if let Err(err) = self
                     .emit_workspace_event(
-                        batman_protocol::WorkspaceEvent::LeaseAcquired {
+                        crew_protocol::WorkspaceEvent::LeaseAcquired {
                             lease_id: lease.lease_id.clone(),
                             run_id,
                             path: real_path.to_string_lossy().to_string(),
@@ -844,16 +844,16 @@ impl OrchestrationService {
         // re-probing. An absent preference means "any available backend,
         // embedded"; an unresolvable one yields `selected: None`, which is
         // headless, not an error.
-        let display_preference: batman_protocol::DisplayPreference = params
+        let display_preference: crew_protocol::DisplayPreference = params
             .get("displayPreference")
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()
             .map_err(|e| {
                 ServiceError::invalid_params(format!("displayPreference is malformed: {e}"))
             })?
-            .unwrap_or(batman_protocol::DisplayPreference {
+            .unwrap_or(crew_protocol::DisplayPreference {
                 ordered: Vec::new(),
-                placement: batman_protocol::DisplayPlacement::Embedded,
+                placement: crew_protocol::DisplayPlacement::Embedded,
             });
         let display = Some(self.display.resolve(&display_preference));
 
@@ -1026,16 +1026,16 @@ impl OrchestrationService {
             .get("workspaceMode")
             .and_then(Value::as_str)
             .map(str::to_string);
-        let display_preference: batman_protocol::DisplayPreference = params
+        let display_preference: crew_protocol::DisplayPreference = params
             .get("displayPreference")
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()
             .map_err(|e| {
                 ServiceError::invalid_params(format!("displayPreference is malformed: {e}"))
             })?
-            .unwrap_or(batman_protocol::DisplayPreference {
+            .unwrap_or(crew_protocol::DisplayPreference {
                 ordered: Vec::new(),
-                placement: batman_protocol::DisplayPlacement::Embedded,
+                placement: crew_protocol::DisplayPlacement::Embedded,
             });
         let display = Some(self.display.resolve(&display_preference));
 
@@ -1306,7 +1306,7 @@ impl OrchestrationService {
         match self.abandon_lease(lease, materialized) {
             AbandonOutcome::Released => {
                 self.emit_workspace_event(
-                    batman_protocol::WorkspaceEvent::LeaseReleased {
+                    crew_protocol::WorkspaceEvent::LeaseReleased {
                         lease_id: lease.lease_id.clone(),
                         run_id,
                     },
@@ -1317,7 +1317,7 @@ impl OrchestrationService {
             }
             AbandonOutcome::ReleasedWithCleanupFailure { message } => {
                 self.emit_workspace_event(
-                    batman_protocol::WorkspaceEvent::CleanupFailed {
+                    crew_protocol::WorkspaceEvent::CleanupFailed {
                         lease_id: lease.lease_id.clone(),
                         error: message,
                     },
@@ -1326,7 +1326,7 @@ impl OrchestrationService {
                 )
                 .await?;
                 self.emit_workspace_event(
-                    batman_protocol::WorkspaceEvent::LeaseReleased {
+                    crew_protocol::WorkspaceEvent::LeaseReleased {
                         lease_id: lease.lease_id.clone(),
                         run_id,
                     },
@@ -1337,7 +1337,7 @@ impl OrchestrationService {
             }
             AbandonOutcome::ReleaseFailed { message } => {
                 self.emit_workspace_event(
-                    batman_protocol::WorkspaceEvent::CleanupFailed {
+                    crew_protocol::WorkspaceEvent::CleanupFailed {
                         lease_id: lease.lease_id.clone(),
                         error: message,
                     },
@@ -1349,13 +1349,13 @@ impl OrchestrationService {
         }
     }
 
-    /// Journals a [`batman_protocol::WorkspaceEvent`] and broadcasts it to
+    /// Journals a [`crew_protocol::WorkspaceEvent`] and broadcasts it to
     /// live subscribers, exactly as every domain mutation does. Workspace
     /// state itself lives in the lease database, so this is the only way a
     /// monitor learns a lease was taken, inspected, applied, or released.
     async fn emit_workspace_event(
         &self,
-        kind: batman_protocol::WorkspaceEvent,
+        kind: crew_protocol::WorkspaceEvent,
         run_id: RunId,
         lease_id: String,
     ) -> Result<(), ServiceError> {
@@ -1379,7 +1379,7 @@ impl OrchestrationService {
     /// record an apply start for a run quarantined at that instant.
     async fn emit_workspace_event_unless_quarantined(
         &self,
-        kind: batman_protocol::WorkspaceEvent,
+        kind: crew_protocol::WorkspaceEvent,
         run_id: RunId,
         lease_id: String,
     ) -> Result<(), ServiceError> {
@@ -1418,7 +1418,7 @@ impl OrchestrationService {
         principal: &ClientPrincipal,
         params: &Value,
     ) -> Result<Value, ServiceError> {
-        use batman_protocol::LeaseRequest;
+        use crew_protocol::LeaseRequest;
         let request: LeaseRequest = serde_json::from_value(params.clone())
             .map_err(|e| ServiceError::invalid_params(e.to_string()))?;
         let run_id = request.run_id;
@@ -1443,7 +1443,7 @@ impl OrchestrationService {
         // `LeaseRequested` for a compensating `LeaseReleased` to answer.
         if let Err(err) = self
             .emit_workspace_event(
-                batman_protocol::WorkspaceEvent::LeaseRequested {
+                crew_protocol::WorkspaceEvent::LeaseRequested {
                     lease_id: lease.lease_id.clone(),
                     run_id,
                     mode,
@@ -1487,7 +1487,7 @@ impl OrchestrationService {
         }
         if let Err(err) = self
             .emit_workspace_event(
-                batman_protocol::WorkspaceEvent::LeaseAcquired {
+                crew_protocol::WorkspaceEvent::LeaseAcquired {
                     lease_id: lease.lease_id.clone(),
                     run_id,
                     path: real_path.to_string_lossy().to_string(),
@@ -1507,8 +1507,8 @@ impl OrchestrationService {
         Ok(json!({
             "leaseId": lease.lease_id,
             "runId": lease.run_id.to_string(),
-            "mode": match lease.mode { batman_protocol::LeaseMode::ReadOnly => "readOnly", batman_protocol::LeaseMode::Write => "write" },
-            "isolationKind": match lease.isolation_kind { batman_protocol::IsolationKind::Shared => "shared", batman_protocol::IsolationKind::GitWorktree => "gitWorktree", batman_protocol::IsolationKind::Copy => "copy" },
+            "mode": match lease.mode { crew_protocol::LeaseMode::ReadOnly => "readOnly", crew_protocol::LeaseMode::Write => "write" },
+            "isolationKind": match lease.isolation_kind { crew_protocol::IsolationKind::Shared => "shared", crew_protocol::IsolationKind::GitWorktree => "gitWorktree", crew_protocol::IsolationKind::Copy => "copy" },
             "path": real_path.to_string_lossy().to_string(),
             "state": "active",
             "baseRevision": lease.base_revision,
@@ -1532,7 +1532,7 @@ impl OrchestrationService {
         principal: &ClientPrincipal,
         lease_id: String,
         enforce_quarantine: bool,
-    ) -> Result<batman_protocol::WorkspaceInfo, ServiceError> {
+    ) -> Result<crew_protocol::WorkspaceInfo, ServiceError> {
         // One refusal string for every caller-distinguishable failure of
         // this gate: unknown leaseId, unowned lease, and a lease whose run
         // row is missing all answer identically, so neither the error code
@@ -1606,7 +1606,7 @@ impl OrchestrationService {
         principal: &ClientPrincipal,
         params: &Value,
     ) -> Result<Value, ServiceError> {
-        let request: batman_protocol::ReleaseRequest = serde_json::from_value(params.clone())
+        let request: crew_protocol::ReleaseRequest = serde_json::from_value(params.clone())
             .map_err(|e| ServiceError::invalid_params(e.to_string()))?;
         // Read the lease before releasing it: after release the row is
         // gone, and the event must carry the run it belonged to.
@@ -1643,7 +1643,7 @@ impl OrchestrationService {
                 .lease_service
                 .mark_cleanup_failed(request.lease_id.clone());
             self.emit_workspace_event(
-                batman_protocol::WorkspaceEvent::CleanupFailed {
+                crew_protocol::WorkspaceEvent::CleanupFailed {
                     lease_id: request.lease_id.clone(),
                     error: err.message.clone(),
                 },
@@ -1654,7 +1654,7 @@ impl OrchestrationService {
         }
 
         self.emit_workspace_event(
-            batman_protocol::WorkspaceEvent::LeaseReleased {
+            crew_protocol::WorkspaceEvent::LeaseReleased {
                 lease_id: request.lease_id.clone(),
                 run_id: lease.run_id,
             },
@@ -1689,7 +1689,7 @@ impl OrchestrationService {
         principal: &ClientPrincipal,
         params: &Value,
     ) -> Result<Value, ServiceError> {
-        use batman_protocol::InspectRequest;
+        use crew_protocol::InspectRequest;
         let request: InspectRequest = serde_json::from_value(params.clone())
             .map_err(|e| ServiceError::invalid_params(e.to_string()))?;
         let lease = self
@@ -1706,7 +1706,7 @@ impl OrchestrationService {
             .await
             .map_err(|e| ServiceError::internal(e.to_string()))?;
         self.emit_workspace_event(
-            batman_protocol::WorkspaceEvent::WorkspaceInspected {
+            crew_protocol::WorkspaceEvent::WorkspaceInspected {
                 lease_id: result.lease_id.clone(),
                 patch_artifact_id: result.patch_artifact_id,
                 commit_count: result.commit_count,
@@ -1721,7 +1721,7 @@ impl OrchestrationService {
         // its own event -- a monitor listing artifacts must not have to
         // infer their existence from an inspect result it may have missed.
         self.emit_workspace_event(
-            batman_protocol::WorkspaceEvent::ArtifactPublished {
+            crew_protocol::WorkspaceEvent::ArtifactPublished {
                 lease_id: result.lease_id.clone(),
                 artifact_id: result.patch_artifact_id,
                 kind: "patch".to_string(),
@@ -1759,7 +1759,7 @@ impl OrchestrationService {
         principal: &ClientPrincipal,
         params: &Value,
     ) -> Result<Value, ServiceError> {
-        use batman_protocol::ApplyRequest;
+        use crew_protocol::ApplyRequest;
         let request: ApplyRequest = serde_json::from_value(params.clone())
             .map_err(|e| ServiceError::invalid_params(e.to_string()))?;
         let lease = self
@@ -1778,7 +1778,7 @@ impl OrchestrationService {
         // applier.apply's working-tree mutation below, which no
         // cross-database transaction can close.
         self.emit_workspace_event_unless_quarantined(
-            batman_protocol::WorkspaceEvent::ApplyStarted {
+            crew_protocol::WorkspaceEvent::ApplyStarted {
                 lease_id: request.lease_id.clone(),
                 strategy: request.strategy,
                 artifact_id: request.artifact_id,
@@ -1793,7 +1793,7 @@ impl OrchestrationService {
             .await
             .map_err(|e| ServiceError::internal(e.to_string()))?;
         self.emit_workspace_event(
-            batman_protocol::WorkspaceEvent::ApplyCompleted {
+            crew_protocol::WorkspaceEvent::ApplyCompleted {
                 lease_id: result.lease_id.clone(),
                 success: result.success,
                 conflict_artifact_id: result.conflict_artifact_id,
@@ -1808,7 +1808,7 @@ impl OrchestrationService {
         // `success: false`.
         if let Some(conflict_artifact_id) = result.conflict_artifact_id {
             self.emit_workspace_event(
-                batman_protocol::WorkspaceEvent::ApplyConflict {
+                crew_protocol::WorkspaceEvent::ApplyConflict {
                     lease_id: result.lease_id.clone(),
                     conflict_artifact_id,
                     strategy: request.strategy,
@@ -1819,7 +1819,7 @@ impl OrchestrationService {
             )
             .await?;
             self.emit_workspace_event(
-                batman_protocol::WorkspaceEvent::ArtifactPublished {
+                crew_protocol::WorkspaceEvent::ArtifactPublished {
                     lease_id: result.lease_id.clone(),
                     artifact_id: conflict_artifact_id,
                     kind: "conflictReport".to_string(),
@@ -1843,10 +1843,10 @@ impl OrchestrationService {
     ) -> Result<Value, ServiceError> {
         let kind_str = str_field(params, "kind").ok();
         let kind = kind_str.as_ref().and_then(|k| match k.as_str() {
-            "patch" => Some(batman_protocol::ArtifactKind::Patch),
-            "commitList" => Some(batman_protocol::ArtifactKind::CommitList),
-            "conflictReport" => Some(batman_protocol::ArtifactKind::ConflictReport),
-            "workspaceManifest" => Some(batman_protocol::ArtifactKind::WorkspaceManifest),
+            "patch" => Some(crew_protocol::ArtifactKind::Patch),
+            "commitList" => Some(crew_protocol::ArtifactKind::CommitList),
+            "conflictReport" => Some(crew_protocol::ArtifactKind::ConflictReport),
+            "workspaceManifest" => Some(crew_protocol::ArtifactKind::WorkspaceManifest),
             _ => None,
         });
         let task_id = params
@@ -1892,7 +1892,7 @@ impl OrchestrationService {
         principal: &crate::ipc::ClientPrincipal,
         params: &Value,
     ) -> Result<Value, ServiceError> {
-        use batman_protocol::ArtifactId;
+        use crew_protocol::ArtifactId;
         let artifact_id: ArtifactId = serde_json::from_value(
             params
                 .get("artifactId")
@@ -2063,7 +2063,7 @@ impl OrchestrationService {
                             let mut repo = DomainRepository::new(conn, project_id);
                             repo.record_diagnostic(
                                 run_id,
-                                batman_protocol::DiagnosticLevel::Warning,
+                                crew_protocol::DiagnosticLevel::Warning,
                                 "follow_up_delivery_failed",
                                 format!("run {run_id}: {err}"),
                             )
@@ -2136,8 +2136,8 @@ impl OrchestrationService {
         // hand-rolled string match, so `DecidedBy`'s rename attributes stay
         // the single authority (R34 review S-3). Absent defaults to Model.
         let decided_by = match params.get("decidedBy") {
-            None | Some(Value::Null) => batman_protocol::DecidedBy::Model,
-            Some(value) => serde_json::from_value::<batman_protocol::DecidedBy>(value.clone())
+            None | Some(Value::Null) => crew_protocol::DecidedBy::Model,
+            Some(value) => serde_json::from_value::<crew_protocol::DecidedBy>(value.clone())
                 .map_err(|_| {
                     ServiceError::invalid_params(format!(
                         "decidedBy must be \"human\" or \"model\"; got {value}"
@@ -2193,7 +2193,7 @@ impl OrchestrationService {
             .and_then(Value::as_str)
             .ok_or_else(|| ServiceError::invalid_params("violationId is required"))
             .and_then(|s| {
-                batman_protocol::PolicyViolationId::parse(s)
+                crew_protocol::PolicyViolationId::parse(s)
                     .map_err(|_| ServiceError::invalid_params("violationId is not a valid id"))
             })?;
         let resolution = str_field(params, "resolution")?;

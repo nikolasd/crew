@@ -8,7 +8,7 @@
 //! `nested` capability is `NestedCapability::None`.
 //!
 //! On [`ViolationService::record_nested_worker`]: atomically persists a
-//! [`batman_protocol::RuntimeEvent::PolicyViolationRecorded`], then applies
+//! [`crew_protocol::RuntimeEvent::PolicyViolationRecorded`], then applies
 //! the configured [`NestedViolationAction`] -- `Quarantine` sets
 //! `Run.flags.policyQuarantined` (blocking `message/send`,
 //! `workspace/apply`, and `coordination/publishArtifact` -- see
@@ -63,7 +63,7 @@
 
 use std::sync::Arc;
 
-use batman_protocol::{
+use crew_protocol::{
     EventEnvelope, PolicyViolationId, ProjectId, RunId, RunState, TaskId, WorkerId,
 };
 use serde_json::{Value, json};
@@ -372,8 +372,8 @@ impl ViolationService {
         worker_id: WorkerId,
         vendor_child_id: Option<&str>,
         vendor_parent_ref: Option<&str>,
-    ) -> Result<batman_protocol::OperationId, ViolationError> {
-        use batman_protocol::{OperationId, Timestamp};
+    ) -> Result<crew_protocol::OperationId, ViolationError> {
+        use crew_protocol::{OperationId, Timestamp};
 
         let reason = if vendor_child_id.is_some() {
             "nested-worker policy violation"
@@ -425,7 +425,7 @@ impl ViolationService {
     async fn cancel_and_transition(
         &self,
         run_id: RunId,
-        operation_id: Option<batman_protocol::OperationId>,
+        operation_id: Option<crew_protocol::OperationId>,
     ) -> Result<(), ViolationError> {
         // Transition first, mirroring `OrchestrationService::run_cancel`:
         // the adapter's own exit event now terminalizes runs

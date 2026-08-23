@@ -1,7 +1,7 @@
 //! Display backend contracts.
 //!
 //! Defines the display backend types and configuration for rendering
-//! Batman output in different environments (Herdr, Tmux, Terminal).
+//! Crew output in different environments (Herdr, Tmux, Terminal).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

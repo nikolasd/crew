@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use batman_protocol::{
+use crew_protocol::{
     BinarySource, Classified, ContentClass, DiagnosticLevel, EventEnvelope, RuntimeEvent,
 };
 use nix::errno::Errno;
@@ -204,7 +204,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     })?;
 
     let started = redactor.sanitize(RawRuntimeEvent {
-        timestamp: batman_protocol::Timestamp::now(),
+        timestamp: crew_protocol::Timestamp::now(),
         project_id: paths.project_id,
         run_id: None,
         kind: RawEventKind::RuntimeStarted,
@@ -235,7 +235,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         }),
         Err(err) => {
             let unavailable = redactor.sanitize(RawRuntimeEvent {
-                timestamp: batman_protocol::Timestamp::now(),
+                timestamp: crew_protocol::Timestamp::now(),
                 project_id: paths.project_id,
                 run_id: None,
                 kind: RawEventKind::Diagnostic {
@@ -386,7 +386,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     // database, and only then remove the socket and release the lock. The
     // socket's disappearance is therefore proof the journal shut down first.
     let stopping = redactor.sanitize(RawRuntimeEvent {
-        timestamp: batman_protocol::Timestamp::now(),
+        timestamp: crew_protocol::Timestamp::now(),
         project_id: paths.project_id,
         run_id: None,
         kind: RawEventKind::RuntimeStopping,
@@ -743,7 +743,7 @@ fn apply_and_render(
         RuntimeEvent::ApprovalEvent { kind, action, .. } => (
             None,
             Some(
-                if matches!(kind, batman_protocol::RuntimeEventKind::ApprovalRequested) {
+                if matches!(kind, crew_protocol::RuntimeEventKind::ApprovalRequested) {
                     format!("approval requested: {action}")
                 } else {
                     "approval decided".to_string()
@@ -754,12 +754,10 @@ fn apply_and_render(
             None,
             Some(
                 match kind {
-                    batman_protocol::RuntimeEventKind::ChildWorkerRequested => {
+                    crew_protocol::RuntimeEventKind::ChildWorkerRequested => {
                         "child worker requested"
                     }
-                    batman_protocol::RuntimeEventKind::ChildWorkerAccepted => {
-                        "child worker accepted"
-                    }
+                    crew_protocol::RuntimeEventKind::ChildWorkerAccepted => "child worker accepted",
                     _ => "child worker request denied",
                 }
                 .to_string(),
@@ -1144,9 +1142,7 @@ fn init_logging(foreground: bool, log_path: &Path) -> Result<(), ServeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use batman_protocol::{
-        EventSource, ProjectId, RunId, RuntimeEvent, TaskId, Timestamp, WorkerId,
-    };
+    use crew_protocol::{EventSource, ProjectId, RunId, RuntimeEvent, TaskId, Timestamp, WorkerId};
 
     fn health_envelope(healthy: bool, detail: Option<&str>) -> EventEnvelope {
         let run_id = RunId::new();

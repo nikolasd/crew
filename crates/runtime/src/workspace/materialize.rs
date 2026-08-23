@@ -5,7 +5,7 @@
 
 use crate::workspace::copy::CopyIsolation;
 use crate::workspace::git::GitWorktree;
-use batman_protocol::{IsolationKind, ProjectId, RunId};
+use crew_protocol::{IsolationKind, ProjectId, RunId};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;

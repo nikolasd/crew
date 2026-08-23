@@ -16,7 +16,7 @@ import { dirname, isAbsolute, join } from "node:path";
 
 import { CrewClient } from "./client";
 import { envFlag } from "./env-flag";
-import type { InitializeParams } from "@nikolasd/batman-protocol";
+import type { InitializeParams } from "@nikolasd/crew-protocol";
 
 import pkg from "../package.json" with { type: "json" };
 /** The bootstrap frame size the launcher's own connections negotiate. */

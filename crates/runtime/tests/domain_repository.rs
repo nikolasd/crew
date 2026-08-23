@@ -4,7 +4,7 @@
 //! projection-update in a single SQLite transaction, enforcing all
 //! invariants (foreign keys, lifecycle transitions, rollback on failure).
 
-use batman_protocol::{
+use crew_protocol::{
     EventEnvelope, RuntimeEvent, RuntimeEventKind, TaskRef, Timestamp, WorkerProfileRef,
 };
 use rusqlite::Connection;
@@ -139,7 +139,7 @@ fn make_task_ref(owner: &str, revision: u64) -> TaskRef {
 
 fn make_profile(id: &str, adapter: &str, model: &str) -> WorkerProfileRef {
     WorkerProfileRef {
-        id: batman_protocol::WorkerId::parse(id).unwrap(),
+        id: crew_protocol::WorkerId::parse(id).unwrap(),
         fingerprint: format!("sha256:{adapter}"),
         adapter: adapter.to_string(),
         model: model.to_string(),
@@ -227,10 +227,10 @@ fn run_submission_requires_task_and_worker() {
 #[test]
 fn illegal_transition_appends_no_event() {
     let conn = open_test_db();
-    let project_id = batman_protocol::ProjectId::new();
-    let task_id = batman_protocol::TaskId::new();
-    let worker_id = batman_protocol::WorkerId::new();
-    let run_id = batman_protocol::RunId::new();
+    let project_id = crew_protocol::ProjectId::new();
+    let task_id = crew_protocol::TaskId::new();
+    let worker_id = crew_protocol::WorkerId::new();
+    let run_id = crew_protocol::RunId::new();
 
     // Insert a task and worker, then a run in "working" state.
     conn.execute(
@@ -323,9 +323,9 @@ fn illegal_transition_appends_no_event() {
 #[test]
 fn projection_failure_rolls_back_event() {
     let conn = open_test_db();
-    let project_id = batman_protocol::ProjectId::new();
-    let task_id = batman_protocol::TaskId::new();
-    let run_id = batman_protocol::RunId::new();
+    let project_id = crew_protocol::ProjectId::new();
+    let task_id = crew_protocol::TaskId::new();
+    let run_id = crew_protocol::RunId::new();
 
     // Insert a task.
     conn.execute(
@@ -353,7 +353,7 @@ fn projection_failure_rolls_back_event() {
         worker_id: None,
         run_id: Some(run_id),
         parent_worker_id: None,
-        source: batman_protocol::EventSource::Runtime,
+        source: crew_protocol::EventSource::Runtime,
         event: RuntimeEvent::RuntimeStarted,
         vendor_event_ref: None,
     };
@@ -414,10 +414,10 @@ fn projection_failure_rolls_back_event() {
 #[test]
 fn rebuild_run_from_events_matches_projection() {
     let conn = open_test_db();
-    let project_id = batman_protocol::ProjectId::new();
-    let task_id = batman_protocol::TaskId::new();
-    let worker_id = batman_protocol::WorkerId::new();
-    let run_id = batman_protocol::RunId::new();
+    let project_id = crew_protocol::ProjectId::new();
+    let task_id = crew_protocol::TaskId::new();
+    let worker_id = crew_protocol::WorkerId::new();
+    let run_id = crew_protocol::RunId::new();
 
     // Insert task and worker.
     conn.execute(
@@ -516,7 +516,7 @@ fn rebuild_run_from_events_matches_projection() {
             worker_id: Some(worker_id),
             run_id: Some(run_id),
             parent_worker_id: None,
-            source: batman_protocol::EventSource::Runtime,
+            source: crew_protocol::EventSource::Runtime,
             event: event.clone(),
             vendor_event_ref: None,
         };
@@ -595,10 +595,10 @@ fn rebuild_run_from_events_matches_projection() {
 #[test]
 fn transactional_append_and_projection() {
     let mut conn = open_test_db();
-    let project_id = batman_protocol::ProjectId::new();
-    let task_id = batman_protocol::TaskId::new();
-    let worker_id = batman_protocol::WorkerId::new();
-    let run_id = batman_protocol::RunId::new();
+    let project_id = crew_protocol::ProjectId::new();
+    let task_id = crew_protocol::TaskId::new();
+    let worker_id = crew_protocol::WorkerId::new();
+    let run_id = crew_protocol::RunId::new();
 
     // Insert task and worker (prerequisites).
     conn.execute(
@@ -662,7 +662,7 @@ fn transactional_append_and_projection() {
         worker_id: Some(worker_id),
         run_id: Some(run_id),
         parent_worker_id: None,
-        source: batman_protocol::EventSource::Runtime,
+        source: crew_protocol::EventSource::Runtime,
         event: RuntimeEvent::RunEvent {
             kind: RuntimeEventKind::RunQueued,
             run_id,

@@ -1,6 +1,6 @@
 //! Raw terminal display backend (degraded capabilities).
 
-use batman_protocol::{DisplayBackend, DisplayConfig, DisplayStatus};
+use crew_protocol::{DisplayBackend, DisplayConfig, DisplayStatus};
 
 use super::DisplayBackendTrait;
 

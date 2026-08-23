@@ -11,17 +11,17 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use batman_protocol::{ProjectId, RunId, TaskId, WorkerId};
-use batman_runtime::adapter::{
+use crew_protocol::{ProjectId, RunId, TaskId, WorkerId};
+use crew_runtime::adapter::{
     AdapterAuthorization, AdapterCapabilities, AdapterRegistry, ApprovalsCapability,
     DurabilityCapability, FixtureAuthorization, NativeViewCapability, NestedCapability,
     OmpRpcStartupOptions, ProtocolKind, ResumeCapability, StartupOptions, SteeringCapability,
     UsageCapability, WorkerProfile, WorkspaceControlCapability,
 };
-use batman_runtime::config::{NestedViolationAction, RuntimePolicy, crew::DisplayBackend};
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::policy::{PolicyEvaluator, ViolationService};
-use batman_runtime::service::{RunDriver, RunDriverContext};
+use crew_runtime::config::{NestedViolationAction, RuntimePolicy, crew::DisplayBackend};
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::policy::{PolicyEvaluator, ViolationService};
+use crew_runtime::service::{RunDriver, RunDriverContext};
 
 async fn harness() -> (Arc<DatabaseHandle>, tempfile::TempDir, ProjectId) {
     let dir = tempfile::Builder::new()
@@ -84,7 +84,7 @@ async fn seed_worker_and_run(
 
 fn terminal_profile() -> WorkerProfile {
     WorkerProfile {
-        id: batman_runtime::adapter::ProfileId::new(),
+        id: crew_runtime::adapter::ProfileId::new(),
         adapter: "claude".to_string(),
         model: String::new(),
         permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
@@ -96,7 +96,7 @@ fn terminal_profile() -> WorkerProfile {
 
 fn terminal_degraded_profile() -> WorkerProfile {
     WorkerProfile {
-        id: batman_runtime::adapter::ProfileId::new(),
+        id: crew_runtime::adapter::ProfileId::new(),
         adapter: "codex".to_string(),
         model: String::new(),
         permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
@@ -108,7 +108,7 @@ fn terminal_degraded_profile() -> WorkerProfile {
 
 fn omp_rpc_profile() -> WorkerProfile {
     WorkerProfile {
-        id: batman_runtime::adapter::ProfileId::new(),
+        id: crew_runtime::adapter::ProfileId::new(),
         adapter: "ompRpc".to_string(),
         model: String::new(),
         permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
@@ -131,7 +131,7 @@ fn ctx(
         project_id,
         events_tx.clone(),
         None,
-        batman_runtime::config::NestedViolationAction::default(),
+        crew_runtime::config::NestedViolationAction::default(),
     ));
     RunDriverContext {
         db,
@@ -172,7 +172,7 @@ impl AdapterAuthorization for BlockingAuthorization {
         &self,
         _profile: &WorkerProfile,
         _effective_capabilities: &AdapterCapabilities,
-        _policy: Option<&batman_runtime::config::RuntimePolicy>,
+        _policy: Option<&crew_runtime::config::RuntimePolicy>,
     ) -> Result<(), String> {
         let _ = self.entered_tx.send(());
         let _ = self.release_rx.lock().unwrap().recv();
@@ -367,8 +367,8 @@ fn ceiling_one_policy() -> RuntimePolicy {
         retention: "30d".to_string(),
         concurrency_ceiling: 1,
         org_security_patterns: vec![],
-        copy_max_bytes: batman_runtime::workspace::DEFAULT_COPY_MAX_BYTES,
-        copy_max_files: batman_runtime::workspace::DEFAULT_COPY_MAX_FILES,
+        copy_max_bytes: crew_runtime::workspace::DEFAULT_COPY_MAX_BYTES,
+        copy_max_files: crew_runtime::workspace::DEFAULT_COPY_MAX_FILES,
         nested_violation_action: NestedViolationAction::QuarantineAndCancel,
     }
 }

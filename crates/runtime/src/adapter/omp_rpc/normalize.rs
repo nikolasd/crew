@@ -20,10 +20,10 @@
 //! matching -- the marker text exists only for this adapter's own tests
 //! and diagnostics, never as the sole distinguishing signal.
 
-use batman_protocol::{ArtifactId, Classified, ContentClass};
+use crew_protocol::{ArtifactId, Classified, ContentClass};
 use serde_json::Value;
 
-use batman_runtime::adapter::AdapterEventPayload;
+use crew_runtime::adapter::AdapterEventPayload;
 
 /// The visible marker text for a prompt-acceptance event.
 pub const PROMPT_ACCEPTED_MARKER: &str = "omp-rpc:prompt-accepted";

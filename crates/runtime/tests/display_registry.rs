@@ -1,7 +1,7 @@
 //! Display registry integration tests.
 
-use batman_protocol::{DisplayBackend, DisplayStatus};
-use batman_runtime::display::{DisplayBackendTrait, DisplayRegistry};
+use crew_protocol::{DisplayBackend, DisplayStatus};
+use crew_runtime::display::{DisplayBackendTrait, DisplayRegistry};
 
 #[test]
 fn display_registry_basic() {

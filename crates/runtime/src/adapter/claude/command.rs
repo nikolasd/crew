@@ -12,7 +12,7 @@
 
 use uuid::Uuid;
 
-use batman_runtime::adapter::{ClaudeStartupOptions, StartSpec, VendorSessionRef};
+use crew_runtime::adapter::{ClaudeStartupOptions, StartSpec, VendorSessionRef};
 
 /// Builds the full argv (excluding the `claude` program name itself) for
 /// one `start`/`resume` invocation.

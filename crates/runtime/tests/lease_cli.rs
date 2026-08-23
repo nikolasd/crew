@@ -14,9 +14,9 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use batman_protocol::{IsolationKind, LeaseMode, RunId};
-use batman_runtime::paths::RuntimePaths;
-use batman_runtime::workspace::LeaseService;
+use crew_protocol::{IsolationKind, LeaseMode, RunId};
+use crew_runtime::paths::RuntimePaths;
+use crew_runtime::workspace::LeaseService;
 
 /// Creates a state root plus a git repository, resolves the runtime
 /// paths exactly as the CLI does, and seeds one active lease nobody's

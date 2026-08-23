@@ -1,5 +1,5 @@
 [package]
-name = "batman-protocol"
+name = "crew-protocol"
 version = "0.4.1"
 edition.workspace = true
 rust-version.workspace = true

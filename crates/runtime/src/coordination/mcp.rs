@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use batman_protocol::{
+use crew_protocol::{
     ClientAuth, ClientCapabilities, ClientInfo, InitializeParams, InitializeResult,
     RepositoryIdentity, RunId, TaskId, WorkerId, error_code,
 };
@@ -228,7 +228,7 @@ async fn connect_and_authenticate(
 }
 
 /// Whether an `initialize` rejection message matches
-/// `batman_runtime::ipc::VerifyError::InvalidToken`'s exact `Display`
+/// `crew_runtime::ipc::VerifyError::InvalidToken`'s exact `Display`
 /// text -- the *only* rejection reason this proxy ever retries. A
 /// reserved-but-not-yet-bound token (see `ScopeTokenStore::reserve_token`)
 /// is indistinguishable, from the client's side, from a genuinely wrong
@@ -261,9 +261,9 @@ async fn try_connect_and_authenticate(
             name: "@nikolasd/crew-coordination-mcp".to_string(),
             version: crate::VERSION.to_string(),
         },
-        supported: batman_protocol::VersionRange {
-            min: batman_protocol::ProtocolVersion::new(1, 0),
-            max: batman_protocol::ProtocolVersion::new(1, 0),
+        supported: crew_protocol::VersionRange {
+            min: crew_protocol::ProtocolVersion::new(1, 0),
+            max: crew_protocol::ProtocolVersion::new(1, 0),
         },
         repository: repository.clone(),
         auth: ClientAuth::WorkerMcp {

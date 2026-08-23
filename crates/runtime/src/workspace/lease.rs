@@ -1,6 +1,6 @@
 //! Workspace lease arbitration.
 
-use batman_protocol::{IsolationKind, LeaseMode, ProjectId, RunId, WorkspaceInfo, WorkspaceState};
+use crew_protocol::{IsolationKind, LeaseMode, ProjectId, RunId, WorkspaceInfo, WorkspaceState};
 use rusqlite::params;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;

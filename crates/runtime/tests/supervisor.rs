@@ -12,18 +12,18 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use batman_runtime::supervisor::{
+use crew_runtime::supervisor::{
     EnvironmentPolicy, EscalationTimings, SpawnSpec, Supervisor, TerminationOutcome,
 };
 
 /// Locates the `fake-worker` binary, building it if necessary.
 ///
 /// `fake-worker` is a genuinely separate workspace crate (not a `[[bin]]`
-/// of `batman-runtime` itself), so `CARGO_BIN_EXE_fake-worker` is not
+/// of `crew-runtime` itself), so `CARGO_BIN_EXE_fake-worker` is not
 /// available at compile time on stable Cargo -- that mechanism only
 /// covers a package's own binary targets (or a dependency built via the
 /// `-Z bindeps` artifact-dependency feature, which requires nightly).
-/// Building it explicitly here keeps `cargo test -p batman-runtime --test
+/// Building it explicitly here keeps `cargo test -p crew-runtime --test
 /// supervisor` runnable standalone, on stable, with no prior build step.
 fn fake_worker_path() -> std::path::PathBuf {
     static PATH: std::sync::LazyLock<std::path::PathBuf> =
@@ -221,7 +221,7 @@ async fn flood_cannot_exceed_the_stdout_frame_or_stderr_capture_bounds() {
     let read_deadline = tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(frame) = process.next_stdout_frame().await {
             assert!(
-                frame.len() <= batman_runtime::supervisor::MAX_STDOUT_FRAME_BYTES,
+                frame.len() <= crew_runtime::supervisor::MAX_STDOUT_FRAME_BYTES,
                 "a single stdout frame must never exceed the configured bound"
             );
         }
@@ -237,7 +237,7 @@ async fn flood_cannot_exceed_the_stdout_frame_or_stderr_capture_bounds() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     let stderr_snapshot = process.stderr_snapshot();
     assert!(
-        stderr_snapshot.len() <= batman_runtime::supervisor::MAX_STDERR_CAPTURE_BYTES,
+        stderr_snapshot.len() <= crew_runtime::supervisor::MAX_STDERR_CAPTURE_BYTES,
         "rotating stderr capture must never exceed its cap, got {} bytes",
         stderr_snapshot.len()
     );
@@ -339,7 +339,7 @@ async fn any_logged_environment_snapshot_redacts_every_value() {
         "sk-should-not-leak".to_string(),
     );
 
-    let redacted = batman_runtime::supervisor::redacted_env_snapshot(&env);
+    let redacted = crew_runtime::supervisor::redacted_env_snapshot(&env);
     assert_eq!(redacted.get("HOME"), Some(&"[REDACTED]".to_string()));
     assert_eq!(
         redacted.get("ANTHROPIC_API_KEY"),

@@ -1,7 +1,7 @@
 //! Display selector tests.
 
-use batman_protocol::{DisplayBackend, DisplayStatus};
-use batman_runtime::display::{DisplayBackendTrait, DisplayRegistry, DisplaySelector};
+use crew_protocol::{DisplayBackend, DisplayStatus};
+use crew_runtime::display::{DisplayBackendTrait, DisplayRegistry, DisplaySelector};
 
 /// Fake backend for display selector tests.
 struct FakeBackend {

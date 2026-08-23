@@ -201,7 +201,7 @@ impl Default for WorkspaceConfig {
     }
 }
 
-/// The embedded `/batman`-style monitor's own listener.
+/// The embedded `/crew`-style monitor's own listener.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DashboardConfig {

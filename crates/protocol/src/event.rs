@@ -20,7 +20,7 @@ use crate::workspace::WorkspaceEvent;
 /// Canonical UTC RFC 3339 timestamp text, as carried on the wire.
 ///
 /// Rather than expose [`time::OffsetDateTime`] across generated bindings,
-/// BATMAN normalizes every timestamp to a UTC RFC 3339 string at
+/// Crew normalizes every timestamp to a UTC RFC 3339 string at
 /// construction time; downstream consumers (including schemars/ts-rs) only
 /// ever see a plain string.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, JsonSchema, TS)]
@@ -344,10 +344,10 @@ pub enum RuntimeEventKind {
     /// declared `nested` capability.
     #[serde(rename = "adapterNestedWorkerObserved")]
     AdapterNestedWorkerObserved,
-    /// A display backend attached a Batman-owned pane to a run.
+    /// A display backend attached a Crew-owned pane to a run.
     #[serde(rename = "displayPaneAttached")]
     DisplayPaneAttached,
-    /// A display backend detached (closed) a Batman-owned pane.
+    /// A display backend detached (closed) a Crew-owned pane.
     #[serde(rename = "displayPaneDetached")]
     DisplayPaneDetached,
     /// A policy violation was recorded (model not allowed, concurrency
@@ -584,7 +584,7 @@ pub enum RuntimeEvent {
         task_id: TaskId,
         worker_id: WorkerId,
     },
-    /// A display backend attached or detached a Batman-owned pane.
+    /// A display backend attached or detached a Crew-owned pane.
     DisplayEvent {
         kind: RuntimeEventKind,
         run_id: RunId,

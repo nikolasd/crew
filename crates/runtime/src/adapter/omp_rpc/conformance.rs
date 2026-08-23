@@ -1,5 +1,5 @@
 //! The OMP-RPC adapter's fixture/live conformance scenario suite. See
-//! `batman_runtime::conformance` for the shared report/scenario contract
+//! `crew_runtime::conformance` for the shared report/scenario contract
 //! this module fills in.
 //!
 //! `fixture_report()` is reachable from a real, deployed `crewd` binary
@@ -19,17 +19,17 @@ use std::process::Stdio;
 
 use serde_json::Value;
 
-use batman_protocol::{RunId, TaskId, WorkerId};
-use batman_runtime::adapter::{
+use crew_protocol::{RunId, TaskId, WorkerId};
+use crew_runtime::adapter::{
     Adapter, AdapterCapabilities, AdapterEventPayload, AdapterKind, NestedCapability,
     OmpRpcStartupOptions, ProfileId, StartupOptions, WorkerProfile,
 };
-use batman_runtime::conformance::report::AdapterKindLabel;
-use batman_runtime::conformance::{
+use crew_runtime::conformance::report::AdapterKindLabel;
+use crew_runtime::conformance::{
     ConformanceMode, ConformanceReport, ScenarioResult, VendorUnavailable, scenario,
 };
-use batman_runtime::coordination::mcp_protocol::BoundScope;
-use batman_runtime::supervisor::{EnvironmentPolicy, SpawnSpec, Supervisor};
+use crew_runtime::coordination::mcp_protocol::BoundScope;
+use crew_runtime::supervisor::{EnvironmentPolicy, SpawnSpec, Supervisor};
 
 use super::client::{self, OmpRpcClient};
 use super::normalize::{
@@ -88,7 +88,7 @@ fn normalize_fixture_lines(lines: &[String]) -> Vec<AdapterEventPayload> {
 
 // -------------------------------------------------------- local selector
 
-/// The availability probe `batman_runtime::conformance::probe_availability`
+/// The availability probe `crew_runtime::conformance::probe_availability`
 /// calls for this adapter kind: does the installed `omp` binary answer a
 /// `--version` handshake? Never a model call.
 ///
@@ -162,10 +162,10 @@ pub async fn probe() -> (ScenarioResult, Option<String>, AdapterCapabilities) {
 /// Returns `None` (never invents a selector) when `omp` itself is
 /// unreachable, reports an empty catalog, or --- since resolving a selector
 /// is itself a real `omp models --json` spawn --- when
-/// `batman_runtime::conformance::vendor_cli_invocation_disabled` forbids
+/// `crew_runtime::conformance::vendor_cli_invocation_disabled` forbids
 /// observing the CLI at all.
 async fn resolve_conformance_selector() -> Option<String> {
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
         return None;
     }
     let output = tokio::process::Command::new("omp")
@@ -199,9 +199,9 @@ async fn probe_scenario(
     // itself, so a `None` selector alone is not enough to keep this
     // scenario off the real binary -- and a skipped probe must report the
     // skip, never a fabricated catalog complaint.
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
         return (
-            batman_runtime::conformance::vendor_cli_skipped_probe(),
+            crew_runtime::conformance::vendor_cli_skipped_probe(),
             None,
             declared_capabilities,
         );
@@ -528,8 +528,8 @@ async fn cancellation_scope_and_follow_up_scenarios(
     // A `None` selector already short-circuits the spawn below, but its
     // detail would blame an empty catalog; when the kill switch is what
     // forbade the spawn, say so instead.
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
-        use batman_runtime::conformance::vendor_cli_required_scenario;
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
+        use crew_runtime::conformance::vendor_cli_required_scenario;
         return (
             vendor_cli_required_scenario(scenario::CANCELLATION_SCOPE),
             vendor_cli_required_scenario(scenario::FOLLOW_UP),
@@ -717,7 +717,7 @@ async fn resume_flag_probe() -> Result<(), VendorUnavailable> {
     // Spawns the real `omp` binary regardless of any selector, so this is
     // the only place that can keep `SESSION_RESUME`/`RUNTIME_RESTART` off
     // the vendor CLI when the kill switch is set.
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
         return Err(VendorUnavailable::disabled(
             "the `omp --resume <id>` flag probe",
         ));
@@ -1122,10 +1122,10 @@ pub async fn fixture_report() -> ConformanceReport {
 /// # Errors
 /// Returns a message if `CREW_DISABLE_VENDOR_CLI=1` is set.
 pub async fn live_report() -> Result<ConformanceReport, String> {
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
         return Err(format!(
             "live OMP-RPC conformance is disabled by {}=1",
-            batman_runtime::conformance::DISABLE_VENDOR_CLI_ENV
+            crew_runtime::conformance::DISABLE_VENDOR_CLI_ENV
         ));
     }
     let selector = resolve_conformance_selector().await;

@@ -11,7 +11,7 @@
 // reasoning and secret-marked fields structurally cannot enter this view
 // model.
 
-import type { EventEnvelope, RuntimeEvent } from "@nikolasd/batman-protocol";
+import type { EventEnvelope, RuntimeEvent } from "@nikolasd/crew-protocol";
 
 /** Independent lifecycle flags, mirrored from the runtime's `RunFlags`. */
 export interface MonitorFlags {

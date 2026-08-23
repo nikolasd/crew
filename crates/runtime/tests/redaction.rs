@@ -1,6 +1,6 @@
 //! Integration tests for redaction boundary.
 
-use batman_runtime::security::redaction::Redactor;
+use crew_runtime::security::redaction::Redactor;
 
 #[tokio::test]
 async fn redactor_removes_api_keys() {
@@ -51,16 +51,16 @@ async fn an_uncompilable_org_pattern_refuses_to_serve() {
     std::fs::write(&org_config, r#"{"security":{"patterns":["secret-["]}}"#).unwrap();
 
     let state_dir = temp.path().join("state");
-    let opts = batman_runtime::lifecycle::ServeOptions {
+    let opts = crew_runtime::lifecycle::ServeOptions {
         state_dir: state_dir.clone(),
         repo: repo.clone(),
         idle_seconds: Some(1),
         foreground: true,
-        binary_source: batman_protocol::BinarySource::Unknown,
+        binary_source: crew_protocol::BinarySource::Unknown,
         config_paths: vec![org_config],
     };
 
-    let err = batman_runtime::lifecycle::serve(&opts)
+    let err = crew_runtime::lifecycle::serve(&opts)
         .await
         .expect_err("an uncompilable org pattern must refuse to serve");
     let message = err.to_string();
@@ -70,7 +70,7 @@ async fn an_uncompilable_org_pattern_refuses_to_serve() {
     );
 
     // The observable proof it failed *before* serving: no socket was bound.
-    let paths = batman_runtime::paths::RuntimePaths::resolve(&state_dir, &repo).unwrap();
+    let paths = crew_runtime::paths::RuntimePaths::resolve(&state_dir, &repo).unwrap();
     assert!(
         !paths.socket.exists(),
         "no socket may exist when startup refused"

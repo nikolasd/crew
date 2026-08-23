@@ -177,7 +177,7 @@
       ]
     },
     "ProtocolVersion": {
-      "description": "A BATMAN protocol version, expressed as `major.minor` with no patch\ncomponent (patch-level changes must be backward compatible).",
+      "description": "A Crew protocol version, expressed as `major.minor` with no patch\ncomponent (patch-level changes must be backward compatible).",
       "type": "object",
       "properties": {
         "major": {
@@ -318,7 +318,7 @@
         "allowedMethods": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/BatmanMethod"
+            "$ref": "#/$defs/CrewMethod"
           }
         },
         "capabilities": {
@@ -359,7 +359,7 @@
       ]
     },
     "ProjectId": {
-      "description": "Identifies a repository/project managed by the BATMAN runtime.",
+      "description": "Identifies a repository/project managed by the Crew runtime.",
       "type": "string"
     },
     "ClientPrincipalSummary": {
@@ -433,8 +433,8 @@
       "description": "Identifies a worker process spawned by the runtime.",
       "type": "string"
     },
-    "BatmanMethod": {
-      "description": "All JSON-RPC methods implemented by the BATMAN runtime, including\norchestration extension methods.\n\nSerialized as the literal method name string used on the wire.",
+    "CrewMethod": {
+      "description": "All JSON-RPC methods implemented by the Crew runtime, including\norchestration extension methods.\n\nSerialized as the literal method name string used on the wire.",
       "oneOf": [
         {
           "type": "string",
@@ -613,7 +613,7 @@
       ]
     },
     "Timestamp": {
-      "description": "Canonical UTC RFC 3339 timestamp text, as carried on the wire.\n\nRather than expose [`time::OffsetDateTime`] across generated bindings,\nBATMAN normalizes every timestamp to a UTC RFC 3339 string at\nconstruction time; downstream consumers (including schemars/ts-rs) only\never see a plain string.",
+      "description": "Canonical UTC RFC 3339 timestamp text, as carried on the wire.\n\nRather than expose [`time::OffsetDateTime`] across generated bindings,\nCrew normalizes every timestamp to a UTC RFC 3339 string at\nconstruction time; downstream consumers (including schemars/ts-rs) only\never see a plain string.",
       "type": "string"
     },
     "EventSource": {
@@ -1551,7 +1551,7 @@
           "additionalProperties": false
         },
         {
-          "description": "A display backend attached or detached a Batman-owned pane.",
+          "description": "A display backend attached or detached a Crew-owned pane.",
           "type": "object",
           "properties": {
             "type": {
@@ -2045,12 +2045,12 @@
           "const": "adapterNestedWorkerObserved"
         },
         {
-          "description": "A display backend attached a Batman-owned pane to a run.",
+          "description": "A display backend attached a Crew-owned pane to a run.",
           "type": "string",
           "const": "displayPaneAttached"
         },
         {
-          "description": "A display backend detached (closed) a Batman-owned pane.",
+          "description": "A display backend detached (closed) a Crew-owned pane.",
           "type": "string",
           "const": "displayPaneDetached"
         },
@@ -2955,7 +2955,7 @@
       ]
     },
     "JsonRpcNotification": {
-      "description": "A JSON-RPC 2.0 notification envelope: a method call with no `id`, for\nwhich no response is expected. BATMAN uses these to push runtime events to\nsubscribed clients via the `events/event` method.",
+      "description": "A JSON-RPC 2.0 notification envelope: a method call with no `id`, for\nwhich no response is expected. Crew uses these to push runtime events to\nsubscribed clients via the `events/event` method.",
       "type": "object",
       "properties": {
         "jsonrpc": {

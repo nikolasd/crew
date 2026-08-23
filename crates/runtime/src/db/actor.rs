@@ -11,7 +11,7 @@ use std::thread;
 use rusqlite::Connection;
 use tokio::sync::{mpsc, oneshot};
 
-use batman_protocol::{OperationId, ProjectId, RunId, TaskId, Timestamp, WorkerId};
+use crew_protocol::{OperationId, ProjectId, RunId, TaskId, Timestamp, WorkerId};
 
 use crate::security::redaction::{PersistableEvent, SanitizedJson};
 

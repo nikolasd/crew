@@ -183,7 +183,7 @@ impl StartupOptions {
 /// Whether a supervised adapter process runs attached to a terminal UI or
 /// fully headless. Defaults to `Headless` so a profile serialized before
 /// this field existed still deserializes -- the same wire-compat pattern
-/// `ApprovalEvent.reason` uses in `batman_protocol::event`.
+/// `ApprovalEvent.reason` uses in `crew_protocol::event`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AdapterMode {

@@ -3,7 +3,7 @@
 //! well-established `-P -F` print-format convention to recover created
 //! pane/window identifiers without parsing free-form terminal output.
 
-use batman_protocol::{DisplayBackend, DisplayConfig, DisplayPlacement, DisplayStatus};
+use crew_protocol::{DisplayBackend, DisplayConfig, DisplayPlacement, DisplayStatus};
 use parking_lot::Mutex;
 use std::sync::Arc;
 

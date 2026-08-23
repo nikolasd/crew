@@ -2,8 +2,8 @@
 //!
 //! Tests for git worktree and copy isolation strategies with fixture repositories.
 
-use batman_protocol::{IsolationKind, ProjectId, RunId};
-use batman_runtime::workspace::{
+use crew_protocol::{IsolationKind, ProjectId, RunId};
+use crew_runtime::workspace::{
     DEFAULT_COPY_MAX_BYTES, DEFAULT_COPY_MAX_FILES, WorkspaceMaterializer,
 };
 use std::path::PathBuf;

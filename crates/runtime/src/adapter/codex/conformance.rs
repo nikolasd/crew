@@ -1,21 +1,21 @@
 //! The Codex adapter's fixture/live conformance scenario suite. See
-//! `batman_runtime::conformance` for the shared report/scenario contract
+//! `crew_runtime::conformance` for the shared report/scenario contract
 //! this module fills in.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use batman_protocol::{RunId, TaskId, WorkerId};
+use crew_protocol::{RunId, TaskId, WorkerId};
 use serde_json::Value;
 
-use batman_runtime::adapter::{
+use crew_runtime::adapter::{
     Adapter, AdapterCapabilities, AdapterEvent, AdapterEventPayload, AdapterEventSink,
     AdapterFuture, AdapterKind, AdapterMessage, CancelScope, CodexStartupOptions, NestedCapability,
     StartSpec, VendorSessionRef,
 };
-use batman_runtime::conformance::report::AdapterKindLabel;
-use batman_runtime::conformance::{ConformanceMode, ConformanceReport, ScenarioResult, scenario};
-use batman_runtime::supervisor::{EnvironmentPolicy, SpawnSpec, Supervisor};
+use crew_runtime::conformance::report::AdapterKindLabel;
+use crew_runtime::conformance::{ConformanceMode, ConformanceReport, ScenarioResult, scenario};
+use crew_runtime::supervisor::{EnvironmentPolicy, SpawnSpec, Supervisor};
 
 use super::client::CodexRpcClient;
 use super::normalize;
@@ -82,13 +82,13 @@ impl AdapterEventSink for RecordingSink {
 pub async fn probe_scenario() -> (
     ScenarioResult,
     Option<String>,
-    batman_runtime::adapter::AdapterCapabilities,
+    crew_runtime::adapter::AdapterCapabilities,
 ) {
     let adapter = new_adapter();
     let declared_capabilities = adapter.capabilities();
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
         return (
-            batman_runtime::conformance::vendor_cli_skipped_probe(),
+            crew_runtime::conformance::vendor_cli_skipped_probe(),
             None,
             declared_capabilities,
         );
@@ -328,7 +328,7 @@ fn transcript_scenarios() -> (ScenarioResult, ScenarioResult) {
     for event in &events {
         if let AdapterEventPayload::MessageChunk { text, .. }
         | AdapterEventPayload::MessageFinal { text, .. } = &event.payload
-            && (text.class != batman_protocol::ContentClass::Visible
+            && (text.class != crew_protocol::ContentClass::Visible
                 || text.value.contains("chain of thought"))
         {
             leaked = true;
@@ -563,8 +563,8 @@ async fn read_only_start_and_progress_scenario_inner() -> Result<ScenarioResult,
 }
 
 async fn read_only_start_and_progress_scenario() -> ScenarioResult {
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
-        return batman_runtime::conformance::vendor_cli_required_scenario(
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
+        return crew_runtime::conformance::vendor_cli_required_scenario(
             scenario::READ_ONLY_START_AND_PROGRESS,
         );
     }
@@ -879,10 +879,10 @@ async fn live_lifecycle_scenarios() -> Vec<ScenarioResult> {
 /// # Errors
 /// Returns a message if `CREW_DISABLE_VENDOR_CLI=1` is set.
 pub async fn live_report() -> Result<ConformanceReport, String> {
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
         return Err(format!(
             "live Codex conformance is disabled by {}=1",
-            batman_runtime::conformance::DISABLE_VENDOR_CLI_ENV
+            crew_runtime::conformance::DISABLE_VENDOR_CLI_ENV
         ));
     }
     let (_probe_result, version, declared_capabilities) = probe_scenario().await;

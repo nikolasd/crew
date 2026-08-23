@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use batman_protocol::ProjectId;
+use crew_protocol::ProjectId;
 use serde::Serialize;
 use thiserror::Error;
 
@@ -153,8 +153,8 @@ impl Doctor {
     ///
     /// ```no_run
     /// # use std::sync::Arc;
-    /// # use batman_runtime::db::DatabaseHandle;
-    /// # use batman_runtime::doctor::Doctor;
+    /// # use crew_runtime::db::DatabaseHandle;
+    /// # use crew_runtime::doctor::Doctor;
     /// # async fn example(db: Arc<DatabaseHandle>) -> Result<(), Box<dyn std::error::Error>> {
     /// let doctor = Doctor::new(Some(db), None, None);
     /// let result = doctor.check().await?;
@@ -347,7 +347,7 @@ impl Doctor {
     }
 
     /// Asserts the committed schema document matches what this binary's
-    /// linked `batman-protocol` generates -- the same comparison
+    /// linked `crew-protocol` generates -- the same comparison
     /// `xtask generate --check` performs. This only applies when `--repo`
     /// happens to be a checkout of the Crew source tree itself (the only
     /// place this file is ever committed); `--repo` is ordinarily an
@@ -371,7 +371,7 @@ impl Doctor {
                 )));
             }
         };
-        let generated = batman_protocol::render_schema()
+        let generated = crew_protocol::render_schema()
             .map_err(|e| DoctorError::ConfigError(format!("rendering schema: {e}")))?;
         if committed != generated {
             return Err(DoctorError::ConfigError(format!(
@@ -409,7 +409,7 @@ impl Doctor {
     /// check on its own, or the check could never fail.
     fn check_display(&self) -> Result<(), DoctorError> {
         use crate::display::{DisplayBackendTrait, HerdrDisplay, TerminalDisplay, TmuxDisplay};
-        use batman_protocol::{DisplayBackend, DisplayConfig};
+        use crew_protocol::{DisplayBackend, DisplayConfig};
 
         let availability: [(DisplayBackend, bool); 3] = [
             (

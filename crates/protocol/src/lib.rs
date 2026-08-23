@@ -1,6 +1,6 @@
-//! `batman-protocol` is the canonical owner of every BATMAN wire type.
+//! `crew-protocol` is the canonical owner of every Crew wire type.
 //!
-//! BATMAN is an OMP extension backed by a Rust daemon speaking JSON-RPC 2.0
+//! Crew is an OMP extension backed by a Rust daemon speaking JSON-RPC 2.0
 //! over NDJSON. Every type in this crate that crosses the wire derives
 //! `Serialize`, `Deserialize`, `JsonSchema`, and `TS` so that a later build
 //! step can generate a JSON Schema document and TypeScript bindings directly
@@ -45,7 +45,7 @@ pub use ids::{
     WorkerId,
 };
 pub use message::{DeliveryState, MessageKind, RunMessage};
-pub use method::BatmanMethod;
+pub use method::CrewMethod;
 pub use plan::{PlanDecideResult, PlanGetResult, PlanProposeResult, RunTimeoutAckResult};
 pub use rpc::{
     BinarySource, ClientAuth, ClientCapabilities, ClientInfo, ClientPrincipalSummary, ClientRole,
@@ -77,6 +77,6 @@ pub use schema::{ProtocolDocument, render_schema};
 mod tests {
     #[test]
     fn crate_is_wired() {
-        assert_eq!(env!("CARGO_PKG_NAME"), "batman-protocol");
+        assert_eq!(env!("CARGO_PKG_NAME"), "crew-protocol");
     }
 }

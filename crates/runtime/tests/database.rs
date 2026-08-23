@@ -2,11 +2,9 @@
 //! append + replay across a reopen, and operation-intent recovery across a
 //! reopen.
 
-use batman_protocol::{
-    Classified, ContentClass, DiagnosticLevel, OperationId, ProjectId, Timestamp,
-};
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::security::redaction::{RawEventKind, RawRuntimeEvent, Redactor};
+use crew_protocol::{Classified, ContentClass, DiagnosticLevel, OperationId, ProjectId, Timestamp};
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::security::redaction::{RawEventKind, RawRuntimeEvent, Redactor};
 
 fn diagnostic_fixture(text: &str) -> RawRuntimeEvent {
     RawRuntimeEvent {

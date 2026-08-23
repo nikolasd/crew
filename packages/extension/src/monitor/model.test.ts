@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import type { EventEnvelope } from "@nikolasd/batman-protocol";
+import type { EventEnvelope } from "@nikolasd/crew-protocol";
 
 import { EMPTY_MONITOR_STATE, hasVisibleRows, reduceEvent, reduceEvents } from "./model";
 

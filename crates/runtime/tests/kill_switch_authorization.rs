@@ -1,7 +1,7 @@
 //! The R68 regression proof: with `CREW_DISABLE_VENDOR_CLI=1` set, a
 //! development-only kill switch must never shrink the *effective*
 //! capabilities a conformance report proves. An unattempted scenario is
-//! reported [`batman_runtime::conformance::ScenarioOutcome::Skipped`] --
+//! reported [`crew_runtime::conformance::ScenarioOutcome::Skipped`] --
 //! neither proof nor disproof -- so `effective_capabilities` equals
 //! `declared_capabilities`. Before the fix (REVIEW.md R68), an unattempted
 //! scenario was reported `Fail`, which a capability gate read as a
@@ -30,8 +30,8 @@
 //! Never invokes a model: `run_fixture_conformance` is the zero-model-call
 //! fixture suite.
 
-use batman_runtime::adapter::AdapterKind;
-use batman_runtime::conformance::{DISABLE_VENDOR_CLI_ENV, run_fixture_conformance, scenario};
+use crew_runtime::adapter::AdapterKind;
+use crew_runtime::conformance::{DISABLE_VENDOR_CLI_ENV, run_fixture_conformance, scenario};
 
 #[tokio::test(flavor = "current_thread")]
 async fn the_kill_switch_never_shrinks_effective_capabilities() {

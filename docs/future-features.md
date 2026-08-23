@@ -29,7 +29,7 @@ Four RPC methods for display client lifecycle management:
 | `display/unregister` | Client tears down cleanly |
 | `display/list` | List all registered, live displays |
 
-None of these exist in `BatmanMethod` today. The built-in monitor works without them, subscribing to `events/replay` + `events/subscribe`.
+None of these exist in `CrewMethod` today. The built-in monitor works without them, subscribing to `events/replay` + `events/subscribe`.
 
 ### Scenarios that would justify implementation
 

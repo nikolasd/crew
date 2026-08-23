@@ -13,7 +13,7 @@
 mod discovery;
 mod tailer;
 
-use batman_protocol::Classified;
+use crew_protocol::Classified;
 use serde::{Deserialize, Serialize};
 
 pub use discovery::{DiscoveryError, find_transcript_by_nonce};

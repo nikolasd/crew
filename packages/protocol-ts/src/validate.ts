@@ -1,12 +1,12 @@
-// Ajv 2020 validators compiled once from the canonical BATMAN JSON Schema.
+// Ajv 2020 validators compiled once from the canonical Crew JSON Schema.
 //
-// The schema is generated from `batman-protocol` (see `bun run generate`);
+// The schema is generated from `crew-protocol` (see `bun run generate`);
 // every `$def` uses `additionalProperties: false`, so validating an inbound
 // payload against its `$def` rejects any unknown field. Validators are
 // compiled a single time at module load and reused for every message.
 
 import Ajv2020, { type ValidateFunction } from "ajv/dist/2020";
-import schema from "../schema/batman.schema.json" with { type: "json" };
+import schema from "../schema/crew.schema.json" with { type: "json" };
 
 /** The Ajv validate-function type every exported validator conforms to;
  *  re-exported so consumers can type validator tables without importing
@@ -15,7 +15,7 @@ export type { ValidateFunction };
 
 /** The `$id` under which the whole schema document is registered, so
  * individual `$def`s can be retrieved (and cross-referenced) by JSON pointer. */
-const SCHEMA_ID = "https://schema.batman.satorianalytics.com/batman.schema.json";
+const SCHEMA_ID = "https://schema.crew.satorianalytics.com/crew.schema.json";
 
 const ajv = new Ajv2020({
   strict: true,
@@ -83,7 +83,7 @@ export const validateRunTimeoutAckResult = def("RunTimeoutAckResult");
 
 /** Validates the array of event envelopes returned by `events/replay`. */
 export const validateEventEnvelopeArray = ajv.compile({
-  $id: "https://schema.batman.satorianalytics.com/event-envelope-array.json",
+  $id: "https://schema.crew.satorianalytics.com/event-envelope-array.json",
   type: "array",
   items: { $ref: `${SCHEMA_ID}#/$defs/EventEnvelope` },
 });

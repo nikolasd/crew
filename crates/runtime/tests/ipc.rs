@@ -1,6 +1,6 @@
 //! Integration tests for the initialized JSON-RPC runtime socket protocol.
 //!
-//! These drive the real [`batman_runtime::ipc::Server`] over a Unix domain
+//! These drive the real [`crew_runtime::ipc::Server`] over a Unix domain
 //! socket, exercising every foundation requirement: peer-credential
 //! enforcement before parsing, bounded framing and negotiation, version
 //! negotiation, role-scoped method tables, the injectable worker-credential
@@ -9,15 +9,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use batman_protocol::Timestamp;
-use batman_protocol::{ProjectId, RunId, TaskId, WorkerId, error_code};
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::ipc::{
+use crew_protocol::Timestamp;
+use crew_protocol::{ProjectId, RunId, TaskId, WorkerId, error_code};
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::ipc::{
     PeerCredentialReader, PeerCredentials, ScopedRun, Server, ServerConfig, VerifyError,
     WorkerCredentialVerifier,
 };
-use batman_runtime::paths::RuntimePaths;
-use batman_runtime::security::redaction::{RawEventKind, RawRuntimeEvent, Redactor};
+use crew_runtime::paths::RuntimePaths;
+use crew_runtime::security::redaction::{RawEventKind, RawRuntimeEvent, Redactor};
 use nix::unistd::Uid;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -71,18 +71,18 @@ impl WorkerCredentialVerifier for FakeVerifier {
     }
 }
 
-/// A [`batman_runtime::service::RunDriver`] stub reporting a fixed live-run
+/// A [`crew_runtime::service::RunDriver`] stub reporting a fixed live-run
 /// count, for R87/R82 tests: `runtime/status` must report the driver's
 /// count and `runtime/shutdown` must refuse while it is nonzero.
 struct FixedCountDriver {
     count: usize,
 }
 
-impl batman_runtime::service::RunDriver for FixedCountDriver {
+impl crew_runtime::service::RunDriver for FixedCountDriver {
     fn start(
         &self,
-        _ctx: batman_runtime::service::RunDriverContext,
-    ) -> batman_runtime::service::AdapterFuture<'static, Result<(), String>> {
+        _ctx: crew_runtime::service::RunDriverContext,
+    ) -> crew_runtime::service::AdapterFuture<'static, Result<(), String>> {
         Box::pin(async { Ok(()) })
     }
 
@@ -92,23 +92,23 @@ impl batman_runtime::service::RunDriver for FixedCountDriver {
         _task_id: TaskId,
         _worker_id: WorkerId,
         _prompt: String,
-    ) -> batman_runtime::service::AdapterFuture<'static, Result<(), String>> {
+    ) -> crew_runtime::service::AdapterFuture<'static, Result<(), String>> {
         Box::pin(async { Ok(()) })
     }
 
-    fn running_adapter(&self, _run_id: RunId) -> Option<Arc<dyn batman_runtime::adapter::Adapter>> {
+    fn running_adapter(&self, _run_id: RunId) -> Option<Arc<dyn crew_runtime::adapter::Adapter>> {
         None
     }
 
     fn cancel_run(
         &self,
         _run_id: RunId,
-        _scope: batman_runtime::adapter::CancelScope,
-    ) -> batman_runtime::service::AdapterFuture<
+        _scope: crew_runtime::adapter::CancelScope,
+    ) -> crew_runtime::service::AdapterFuture<
         'static,
-        Result<batman_runtime::service::CancelOutcome, String>,
+        Result<crew_runtime::service::CancelOutcome, String>,
     > {
-        Box::pin(async { Ok(batman_runtime::service::CancelOutcome::NoRunningAdapter) })
+        Box::pin(async { Ok(crew_runtime::service::CancelOutcome::NoRunningAdapter) })
     }
 
     fn active_run_count(&self) -> usize {

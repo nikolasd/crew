@@ -1,4 +1,4 @@
-//! Integration tests for `batman-xtask package-set`: the together-checks no
+//! Integration tests for `crew-xtask package-set`: the together-checks no
 //! single `package` invocation can make.
 //!
 //! Every test asserts on the *specific* error text, so a test cannot pass by
@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const XTASK: &str = env!("CARGO_BIN_EXE_batman-xtask");
+const XTASK: &str = env!("CARGO_BIN_EXE_crew-xtask");
 
 /// The real workspace root, so fixtures reuse the shipped `targets.json`.
 fn workspace_root() -> PathBuf {

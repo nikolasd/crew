@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use batman_protocol::ContentClass;
-use batman_runtime::adapter::tui::{
+use crew_protocol::ContentClass;
+use crew_runtime::adapter::tui::{
     Cursor, TranscriptFormat, TranscriptTailer, TuiEvent, find_transcript_by_nonce,
     parse_jsonl_chunk,
 };
@@ -29,7 +29,7 @@ impl TranscriptFormat for TestFormat {
                 .map(ToString::to_string);
             let event = match value.get("type").and_then(|v| v.as_str()) {
                 Some("text") => TuiEvent::AssistantText {
-                    text: batman_protocol::Classified {
+                    text: crew_protocol::Classified {
                         class: ContentClass::Visible,
                         value: value
                             .get("text")

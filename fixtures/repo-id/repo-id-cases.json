@@ -5,9 +5,9 @@
     "repositoryId": "9c2098df26004b2420961b6cdeafe0a9"
   },
   {
-    "name": "var_lib_batman_repo",
-    "canonicalRoot": "/var/lib/batman/repo",
-    "repositoryId": "e6cfcaf00443359c91150af99932acc7"
+    "name": "var_lib_crew_repo",
+    "canonicalRoot": "/var/lib/crew/repo",
+    "repositoryId": "60ebcfa918f38b494d899f7a2aa2be92"
   },
   {
     "name": "tmp_example_checkout",
@@ -16,8 +16,8 @@
   },
   {
     "name": "macos_style_root",
-    "canonicalRoot": "/Users/nikolas/dev/batman",
-    "repositoryId": "b5e32692efc1833e765eece53ea0fa54"
+    "canonicalRoot": "/Users/nikolas/dev/crew",
+    "repositoryId": "580ae14d93a3e2e95fb51ae59a02dfd6"
   },
   {
     "name": "filesystem_root",

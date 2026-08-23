@@ -1,4 +1,4 @@
-use batman_protocol::{
+use crew_protocol::{
     ClientAuth, ClientCapabilities, ClientInfo, InitializeParams, ProtocolVersion,
     RepositoryIdentity, VersionRange,
 };
@@ -7,7 +7,7 @@ use batman_protocol::{
 fn initialize_params_are_camel_case_and_strict() {
     let value = serde_json::to_value(InitializeParams {
         client: ClientInfo {
-            name: "@nikolasd/batman".into(),
+            name: "@nikolasd/crew".into(),
             version: "0.1.0".into(),
         },
         supported: VersionRange {

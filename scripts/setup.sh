@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# BATMAN contributor setup.
+# Crew contributor setup.
 # Bootstraps both halves of the workspace: JS (bun workspaces) and Rust
 # (batcave runtime). Safe to re-run. Does not assume rustup -- Rust may be
 # installed via rustup, Homebrew, or a system package manager.
@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 
 REQUIRED_RUST_VERSION=$(grep '^channel' rust-toolchain.toml | sed -E 's/.*"([^"]+)".*/\1/')
 
-echo "== BATMAN contributor setup =="
+echo "== Crew contributor setup =="
 
 if ! command -v cargo &> /dev/null; then
   echo "Error: cargo not found on PATH." >&2
@@ -42,7 +42,7 @@ echo "Installing JS workspace dependencies..."
 bun install
 
 echo "Building batcave runtime..."
-cargo build -p batman-runtime
+cargo build -p crew-runtime
 
 echo ""
 echo "Setup complete."

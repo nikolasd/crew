@@ -1,5 +1,5 @@
-// Re-exports every type generated from `batman-protocol` by
-// `cargo run -p batman-xtask -- generate`. `src/generated/` is fully owned
+// Re-exports every type generated from `crew-protocol` by
+// `cargo run -p crew-xtask -- generate`. `src/generated/` is fully owned
 // by that generator; do not hand-edit anything under it.
 //
 // This list is the complete contents of `src/generated/` (R17): every
@@ -18,7 +18,7 @@ export type * from "./generated/ArtifactId";
 export type * from "./generated/ArtifactKind";
 export type * from "./generated/ArtifactListRequest";
 export type * from "./generated/ArtifactListResult";
-export type * from "./generated/BatmanMethod";
+export type * from "./generated/CrewMethod";
 export type * from "./generated/BinarySource";
 export type * from "./generated/Classified";
 export type * from "./generated/ClientAuth";

@@ -1,5 +1,5 @@
 //! The Copilot adapter's fixture/live conformance scenario suite. See
-//! `batman_runtime::conformance` for the shared report/scenario contract
+//! `crew_runtime::conformance` for the shared report/scenario contract
 //! this module fills in.
 
 use std::collections::HashMap;
@@ -9,18 +9,18 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
-use batman_protocol::{RunId, TaskId, WorkerId};
+use crew_protocol::{RunId, TaskId, WorkerId};
 use serde_json::Value;
 use tokio::time::timeout;
 
-use batman_runtime::ScopeTokenStore;
-use batman_runtime::adapter::mcp_config::AdapterMcpConfig;
-use batman_runtime::adapter::{
+use crew_runtime::ScopeTokenStore;
+use crew_runtime::adapter::mcp_config::AdapterMcpConfig;
+use crew_runtime::adapter::{
     Adapter, AdapterCapabilities, AdapterError, AdapterEventPayload, AdapterKind,
     CopilotStartupOptions, NestedCapability,
 };
-use batman_runtime::conformance::report::AdapterKindLabel;
-use batman_runtime::conformance::{
+use crew_runtime::conformance::report::AdapterKindLabel;
+use crew_runtime::conformance::{
     ConformanceMode, ConformanceReport, ScenarioResult, VendorUnavailable, scenario,
 };
 
@@ -77,7 +77,7 @@ fn real_copilot_binary() -> Option<PathBuf> {
 /// `session/prompt` -- callers only ever drive `initialize`/`session/new`/
 /// `session/load`/`session/list`, none of which invoke a model.
 async fn real_client(cwd: &Path) -> Result<CopilotAcpClient, VendorUnavailable> {
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
         return Err(VendorUnavailable::disabled(
             "driving a real copilot --acp process",
         ));
@@ -106,13 +106,13 @@ async fn call_named<T>(
 pub async fn probe_scenario() -> (
     ScenarioResult,
     Option<String>,
-    batman_runtime::adapter::AdapterCapabilities,
+    crew_runtime::adapter::AdapterCapabilities,
 ) {
     let adapter = new_adapter();
     let declared_capabilities = adapter.capabilities();
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
         return (
-            batman_runtime::conformance::vendor_cli_skipped_probe(),
+            crew_runtime::conformance::vendor_cli_skipped_probe(),
             None,
             declared_capabilities,
         );
@@ -572,7 +572,7 @@ fn native_discovery_scenario() -> ScenarioResult {
 fn mcp_config_for_conformance() -> AdapterMcpConfig {
     AdapterMcpConfig {
         scope_tokens: Arc::new(ScopeTokenStore::new()),
-        project_id: batman_protocol::ProjectId::new(),
+        project_id: crew_protocol::ProjectId::new(),
         crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
         state_dir: PathBuf::from("/tmp/crew-state"),
         repository: PathBuf::from("/tmp/my-repo"),
@@ -667,7 +667,7 @@ fn managed_nesting_rejection_scenario() -> ScenarioResult {
 fn unexpected_child_observation_scenario(
     declared_capabilities: AdapterCapabilities,
 ) -> ScenarioResult {
-    use batman_runtime::adapter::AdapterEventPayload::NestedWorkerObserved;
+    use crew_runtime::adapter::AdapterEventPayload::NestedWorkerObserved;
 
     let updates: Vec<Value> = load_jsonl_fixture("subagent.jsonl")
         .into_iter()
@@ -799,10 +799,10 @@ async fn session_resume_probe_live() -> Result<String, VendorUnavailable> {
 /// # Errors
 /// Returns a message if `CREW_DISABLE_VENDOR_CLI=1` is set.
 pub async fn live_report() -> Result<ConformanceReport, String> {
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
         return Err(format!(
             "live Copilot conformance is disabled by {}=1",
-            batman_runtime::conformance::DISABLE_VENDOR_CLI_ENV
+            crew_runtime::conformance::DISABLE_VENDOR_CLI_ENV
         ));
     }
     let (probe_result, version, declared_capabilities) = probe_scenario().await;

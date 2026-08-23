@@ -37,19 +37,19 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use batman_protocol::{Classified, ContentClass, RunId, TaskId, WorkerId};
-use batman_runtime::adapter::mcp_config::{
+use crew_protocol::{Classified, ContentClass, RunId, TaskId, WorkerId};
+use crew_runtime::adapter::mcp_config::{
     AdapterMcpConfig, coordination_mcp_config_document, coordination_mcp_env,
 };
-use batman_runtime::adapter::{
+use crew_runtime::adapter::{
     Adapter, AdapterCapabilities, AdapterError, AdapterEvent, AdapterEventPayload,
     AdapterEventSink, AdapterFuture, AdapterMessage, AdapterSnapshot, ApprovalsCapability,
     CancelScope, ClaudeStartupOptions, DurabilityCapability, NativeViewCapability,
     NestedCapability, ProbeResult, ProtocolKind, ResumeCapability, StartSpec, SteeringCapability,
     UsageCapability, VendorSessionRef, WorkspaceControlCapability,
 };
-use batman_runtime::coordination::ScopeTokenStore;
-use batman_runtime::supervisor::{EnvironmentPolicy, ManagedProcess, SpawnSpec, Supervisor};
+use crew_runtime::coordination::ScopeTokenStore;
+use crew_runtime::supervisor::{EnvironmentPolicy, ManagedProcess, SpawnSpec, Supervisor};
 use tokio::sync::{Mutex as TokioMutex, mpsc, oneshot};
 use uuid::Uuid;
 
@@ -747,11 +747,11 @@ impl Adapter for ClaudeAdapter {
 mod session_exit_tests {
     use std::sync::Mutex;
 
-    use batman_protocol::{RunId, TaskId, WorkerId};
-    use batman_runtime::adapter::{
+    use crew_protocol::{RunId, TaskId, WorkerId};
+    use crew_runtime::adapter::{
         AdapterEvent, AdapterEventPayload, AdapterEventSink, AdapterFuture,
     };
-    use batman_runtime::supervisor::{EscalationTimings, SpawnSpec, Supervisor};
+    use crew_runtime::supervisor::{EscalationTimings, SpawnSpec, Supervisor};
     use tokio::sync::mpsc;
 
     use super::*;
@@ -972,16 +972,16 @@ mod run_state_tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    use batman_protocol::{
+    use crew_protocol::{
         EventEnvelope, ProjectId, Run, RunFlags, RunId, RunState, RuntimeEvent, TaskId, TaskRef,
         Timestamp, Worker, WorkerId, WorkerProfileRef,
     };
-    use batman_runtime::adapter::{AdapterEventSink, DomainAdapterEventSink, RunLifecycleSink};
-    use batman_runtime::config::NestedViolationAction;
-    use batman_runtime::db::DatabaseHandle;
-    use batman_runtime::domain::DomainRepository;
-    use batman_runtime::policy::ViolationService;
-    use batman_runtime::supervisor::{EscalationTimings, SpawnSpec, Supervisor};
+    use crew_runtime::adapter::{AdapterEventSink, DomainAdapterEventSink, RunLifecycleSink};
+    use crew_runtime::config::NestedViolationAction;
+    use crew_runtime::db::DatabaseHandle;
+    use crew_runtime::domain::DomainRepository;
+    use crew_runtime::policy::ViolationService;
+    use crew_runtime::supervisor::{EscalationTimings, SpawnSpec, Supervisor};
     use tempfile::TempDir;
     use tokio::sync::broadcast;
 

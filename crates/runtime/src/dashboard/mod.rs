@@ -16,7 +16,7 @@ mod page;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use batman_protocol::{EventEnvelope, ProjectId};
+use crew_protocol::{EventEnvelope, ProjectId};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, broadcast};

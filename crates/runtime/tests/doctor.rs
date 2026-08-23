@@ -158,17 +158,17 @@ fn doctor_with_nonexistent_repo() {
 // for one check has to be forced in isolation, and the CLI only exposes
 // the aggregate.
 
-use batman_protocol::ProjectId;
-use batman_runtime::config::RuntimePolicy;
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::doctor::{Doctor, DoctorResult};
+use crew_protocol::ProjectId;
+use crew_runtime::config::RuntimePolicy;
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::doctor::{Doctor, DoctorResult};
 use std::sync::Arc;
 
 /// The default merged policy: no config layers, so this is the built-in
 /// `CrewConfig` defaults adapted to a `RuntimePolicy`. This is the common
 /// case the doctor must never treat as an error.
 fn default_policy() -> RuntimePolicy {
-    batman_runtime::config::resolve_policy(&[], None).expect("no layers always resolves")
+    crew_runtime::config::resolve_policy(&[], None).expect("no layers always resolves")
 }
 
 fn repo_root() -> std::path::PathBuf {
@@ -245,8 +245,8 @@ async fn configuration_valid_fails_on_a_zero_concurrency_ceiling() {
 
 #[tokio::test]
 async fn stale_workspaces_fails_when_an_active_lease_path_is_gone() {
-    use batman_protocol::{IsolationKind, LeaseMode, RunId};
-    use batman_runtime::workspace::LeaseService;
+    use crew_protocol::{IsolationKind, LeaseMode, RunId};
+    use crew_runtime::workspace::LeaseService;
 
     let state = tempfile::tempdir().unwrap();
     let leases = LeaseService::open(ProjectId::new(), &state.path().join("workspace-leases.db"))
@@ -279,8 +279,8 @@ async fn stale_workspaces_fails_when_an_active_lease_path_is_gone() {
 
 #[tokio::test]
 async fn stale_workspaces_fails_when_an_allocating_lease_outlives_the_grace_period() {
-    use batman_protocol::{IsolationKind, LeaseMode, RunId};
-    use batman_runtime::workspace::{ALLOCATING_LEASE_GRACE, LeaseService};
+    use crew_protocol::{IsolationKind, LeaseMode, RunId};
+    use crew_runtime::workspace::{ALLOCATING_LEASE_GRACE, LeaseService};
 
     let state = tempfile::tempdir().unwrap();
     let db_path = state.path().join("workspace-leases.db");
@@ -490,7 +490,7 @@ async fn schema_compatibility_passes_against_the_committed_schema() {
 async fn display_available_fails_when_the_forced_backend_is_unavailable() {
     let state = tempfile::tempdir().unwrap();
     let mut policy = default_policy();
-    policy.display_backend = batman_runtime::config::crew::DisplayBackend::Tmux;
+    policy.display_backend = crew_runtime::config::crew::DisplayBackend::Tmux;
     let (doctor, _db) = doctor_over(state.path(), policy).await;
 
     let result = doctor.check().await.expect("catalog runs");

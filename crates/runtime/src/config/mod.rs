@@ -137,12 +137,12 @@ pub fn resolve_policy(
 #[must_use]
 pub fn protocol_display_backend(
     backend: crew::DisplayBackend,
-) -> Option<batman_protocol::DisplayBackend> {
+) -> Option<crew_protocol::DisplayBackend> {
     match backend {
         crew::DisplayBackend::Auto
         | crew::DisplayBackend::OsWindow
         | crew::DisplayBackend::Hidden => None,
-        crew::DisplayBackend::Herdr => Some(batman_protocol::DisplayBackend::Herdr),
-        crew::DisplayBackend::Tmux => Some(batman_protocol::DisplayBackend::Tmux),
+        crew::DisplayBackend::Herdr => Some(crew_protocol::DisplayBackend::Herdr),
+        crew::DisplayBackend::Tmux => Some(crew_protocol::DisplayBackend::Tmux),
     }
 }

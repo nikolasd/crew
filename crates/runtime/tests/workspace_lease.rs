@@ -1,7 +1,7 @@
 //! Workspace lease arbitration tests.
 
-use batman_protocol::{IsolationKind, LeaseMode, ProjectId, RunId, WorkspaceState};
-use batman_runtime::workspace::{ALLOCATING_LEASE_GRACE, LeaseError, LeaseService};
+use crew_protocol::{IsolationKind, LeaseMode, ProjectId, RunId, WorkspaceState};
+use crew_runtime::workspace::{ALLOCATING_LEASE_GRACE, LeaseError, LeaseService};
 
 fn test_project_id() -> ProjectId {
     ProjectId::parse("01900000-0000-0000-0000-000000000001").unwrap()

@@ -1,8 +1,8 @@
 //! Workspace apply integration tests.
 
-use batman_protocol::RunId;
-use batman_protocol::{ApplyRequest, ApplyStrategy, Artifact, ArtifactId, ArtifactKind, ProjectId};
-use batman_runtime::workspace::{
+use crew_protocol::RunId;
+use crew_protocol::{ApplyRequest, ApplyStrategy, Artifact, ArtifactId, ArtifactKind, ProjectId};
+use crew_runtime::workspace::{
     ARTIFACT_FETCH_MAX_BYTES, ArtifactStore, ArtifactStoreError, WorkspaceApplier,
     WorkspaceInspector,
 };
@@ -489,7 +489,7 @@ async fn workspace_inspect_captures_real_evidence() {
         RunId::new(),
     );
 
-    let request = batman_protocol::InspectRequest {
+    let request = crew_protocol::InspectRequest {
         lease_id: "test-lease".to_string(),
     };
 
@@ -534,7 +534,7 @@ async fn inspector_stamps_the_producing_run_id_on_its_patch_artifact() {
     let inspector =
         WorkspaceInspector::with_store(repo.clone(), std::sync::Arc::new(store.clone()), run_id);
     let result = inspector
-        .inspect(&batman_protocol::InspectRequest {
+        .inspect(&crew_protocol::InspectRequest {
             lease_id: "lease-r36".to_string(),
         })
         .await

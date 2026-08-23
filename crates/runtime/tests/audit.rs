@@ -1,10 +1,10 @@
 //! Integration tests for the audit module: retention pruning and JSONL
 //! export, both against a real `DatabaseHandle`.
 
-use batman_protocol::{Classified, ContentClass, DiagnosticLevel, ProjectId, Timestamp};
-use batman_runtime::audit::{Export, Retention};
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::security::redaction::{RawEventKind, RawRuntimeEvent, Redactor};
+use crew_protocol::{Classified, ContentClass, DiagnosticLevel, ProjectId, Timestamp};
+use crew_runtime::audit::{Export, Retention};
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::security::redaction::{RawEventKind, RawRuntimeEvent, Redactor};
 use serde_json::Value;
 
 /// A diagnostic event dated `timestamp`, carrying `text` as visible

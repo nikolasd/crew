@@ -25,12 +25,10 @@ use std::fs::{self, File};
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use batman_protocol::{
-    Classified, ContentClass, DiagnosticLevel, OperationId, ProjectId, Timestamp,
-};
-use batman_runtime::RuntimePaths;
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::security::redaction::{RawEventKind, RawRuntimeEvent, Redactor};
+use crew_protocol::{Classified, ContentClass, DiagnosticLevel, OperationId, ProjectId, Timestamp};
+use crew_runtime::RuntimePaths;
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::security::redaction::{RawEventKind, RawRuntimeEvent, Redactor};
 
 const VISIBLE_PLAIN: &str = "worker requested deployment approval for the prod cluster";
 const SECRET_TOKEN: &str = "SECRET_TOKEN_ABC123XYZ";

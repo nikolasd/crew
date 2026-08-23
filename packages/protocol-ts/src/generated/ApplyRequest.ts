@@ -6,7 +6,7 @@ import type { ArtifactId } from "./ArtifactId";
  * Parameters for applying a workspace change.
  *
  * This is a mechanical operation only: OMP must explicitly select the
- * artifact, the strategy, and the expected target revision. Batman
+ * artifact, the strategy, and the expected target revision. Crew
  * never auto-selects a patch or resolves conflicts.
  */
 export type ApplyRequest = { leaseId: string, strategy: ApplyStrategy, artifactId: ArtifactId, expectedTargetRevision: string, approvalCorrelationId: string | null, };

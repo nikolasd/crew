@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use batman_protocol::{RunId, TaskId, WorkerId};
+use crew_protocol::{RunId, TaskId, WorkerId};
 
 use super::AdapterFuture;
 use super::capability::{
@@ -355,9 +355,9 @@ mod tests {
     async fn test_terminal_adapter_start_returns_error() {
         let adapter = TerminalAdapter::new("nonexistent-harness".to_string());
         let spec = StartSpec {
-            run_id: batman_protocol::RunId::new(),
-            task_id: batman_protocol::TaskId::new(),
-            worker_id: batman_protocol::WorkerId::new(),
+            run_id: crew_protocol::RunId::new(),
+            task_id: crew_protocol::TaskId::new(),
+            worker_id: crew_protocol::WorkerId::new(),
             prompt: "test prompt".to_string(),
             resume: None,
         };

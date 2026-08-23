@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use batman_protocol::{
+use crew_protocol::{
     COORDINATION_PAYLOAD_MAX_BYTES, DeliveryState, EventEnvelope, MessageId, MessageKind,
     ProjectId, RunId, RunMessage, RunState, TaskId, Timestamp, WorkerId, error_code,
 };
@@ -423,20 +423,20 @@ impl CoordinationBroker {
         Ok(json!({
             "path": info.path,
             "mode": match info.mode {
-                batman_protocol::LeaseMode::ReadOnly => "readOnly",
-                batman_protocol::LeaseMode::Write => "write",
+                crew_protocol::LeaseMode::ReadOnly => "readOnly",
+                crew_protocol::LeaseMode::Write => "write",
             },
             "isolationKind": match info.isolation_kind {
-                batman_protocol::IsolationKind::Shared => "shared",
-                batman_protocol::IsolationKind::GitWorktree => "gitWorktree",
-                batman_protocol::IsolationKind::Copy => "copy",
+                crew_protocol::IsolationKind::Shared => "shared",
+                crew_protocol::IsolationKind::GitWorktree => "gitWorktree",
+                crew_protocol::IsolationKind::Copy => "copy",
             },
             "state": match info.state {
-                batman_protocol::WorkspaceState::Allocating => "allocating",
-                batman_protocol::WorkspaceState::Active => "active",
-                batman_protocol::WorkspaceState::Dirty => "dirty",
-                batman_protocol::WorkspaceState::Released => "released",
-                batman_protocol::WorkspaceState::CleanupFailed => "cleanupFailed",
+                crew_protocol::WorkspaceState::Allocating => "allocating",
+                crew_protocol::WorkspaceState::Active => "active",
+                crew_protocol::WorkspaceState::Dirty => "dirty",
+                crew_protocol::WorkspaceState::Released => "released",
+                crew_protocol::WorkspaceState::CleanupFailed => "cleanupFailed",
             },
         }))
     }
@@ -479,7 +479,7 @@ impl CoordinationBroker {
     pub async fn artifact_list(
         &self,
         run_id: RunId,
-        kind: Option<batman_protocol::ArtifactKind>,
+        kind: Option<crew_protocol::ArtifactKind>,
     ) -> Result<Value, CoordinationError> {
         self.require_live_run(run_id).await?;
         let scope = self.task_run_ids(run_id).await?;
@@ -505,7 +505,7 @@ impl CoordinationBroker {
     pub async fn artifact_fetch(
         &self,
         run_id: RunId,
-        artifact_id: batman_protocol::ArtifactId,
+        artifact_id: crew_protocol::ArtifactId,
         offset: u64,
     ) -> Result<Value, CoordinationError> {
         self.require_live_run(run_id).await?;

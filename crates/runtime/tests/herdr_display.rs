@@ -5,8 +5,8 @@
 //! binary (mismatch fixture's server side edited to the previously
 //! observed protocol-16 workstation state).
 
-use batman_protocol::{DisplayConfig, DisplayPlacement};
-use batman_runtime::display::{CommandExecutor, CommandResult, DisplayBackendTrait, HerdrDisplay};
+use crew_protocol::{DisplayConfig, DisplayPlacement};
+use crew_runtime::display::{CommandExecutor, CommandResult, DisplayBackendTrait, HerdrDisplay};
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;

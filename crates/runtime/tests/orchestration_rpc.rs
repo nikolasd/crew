@@ -1,6 +1,6 @@
 //! Integration tests for the orchestration JSON-RPC methods.
 //!
-//! Drives the real [`batman_runtime::ipc::Server`] over a Unix domain
+//! Drives the real [`crew_runtime::ipc::Server`] over a Unix domain
 //! socket, exercising `task/upsert|get`, `worker/create|list|get`,
 //! `run/submit|list|get|retry|cancel`, `message/send|list`,
 //! `approval/list|decide`, and `reconcile/omp`.
@@ -9,18 +9,18 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use batman_protocol::{ProjectId, RunId, TaskId, WorkerId};
-use batman_runtime::adapter::{
+use crew_protocol::{ProjectId, RunId, TaskId, WorkerId};
+use crew_runtime::adapter::{
     Adapter, AdapterEvent, AdapterEventPayload, AdapterEventSink, CancelScope, OmpRpcAdapter,
     OmpRpcAdapterOptions, OmpRpcStartupOptions, ProfileId, StartSpec, StartupOptions,
     WorkerProfile,
 };
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::domain::DomainRepository;
-use batman_runtime::ipc::{PeerCredentialReader, PeerCredentials, Server, ServerConfig};
-use batman_runtime::paths::RuntimePaths;
-use batman_runtime::service::{AdapterFuture, FakeRunDriver, RunDriver, RunDriverContext};
-use batman_runtime::workspace::ArtifactStore;
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::domain::DomainRepository;
+use crew_runtime::ipc::{PeerCredentialReader, PeerCredentials, Server, ServerConfig};
+use crew_runtime::paths::RuntimePaths;
+use crew_runtime::service::{AdapterFuture, FakeRunDriver, RunDriver, RunDriverContext};
+use crew_runtime::workspace::ArtifactStore;
 use nix::unistd::Uid;
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -95,8 +95,8 @@ impl RunDriver for RecordingRunDriver {
         &self,
         _run_id: RunId,
         _scope: CancelScope,
-    ) -> AdapterFuture<'static, Result<batman_runtime::service::CancelOutcome, String>> {
-        Box::pin(async { Ok(batman_runtime::service::CancelOutcome::Cancelled) })
+    ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
+        Box::pin(async { Ok(crew_runtime::service::CancelOutcome::Cancelled) })
     }
 }
 
@@ -134,8 +134,8 @@ impl RunDriver for FailingRunDriver {
         &self,
         _run_id: RunId,
         _scope: CancelScope,
-    ) -> AdapterFuture<'static, Result<batman_runtime::service::CancelOutcome, String>> {
-        Box::pin(async { Ok(batman_runtime::service::CancelOutcome::Cancelled) })
+    ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
+        Box::pin(async { Ok(crew_runtime::service::CancelOutcome::Cancelled) })
     }
 }
 
@@ -213,9 +213,9 @@ impl RunDriver for CancelTrackingRunDriver {
         &self,
         run_id: RunId,
         scope: CancelScope,
-    ) -> AdapterFuture<'static, Result<batman_runtime::service::CancelOutcome, String>> {
+    ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
         self.cancel_calls.lock().push((run_id, scope));
-        Box::pin(async { Ok(batman_runtime::service::CancelOutcome::Cancelled) })
+        Box::pin(async { Ok(crew_runtime::service::CancelOutcome::Cancelled) })
     }
 }
 
@@ -292,7 +292,7 @@ async fn run_cancel_calls_adapter_cancel_run_with_worker_scope() {
 /// Simulates what a real adapter/`AdapterRegistry` does when its
 /// effective `nested` capability is not `Managed`: emits a
 /// `NestedWorkerObserved` event through a real
-/// [`batman_runtime::adapter::DomainAdapterEventSink`] constructed with
+/// [`crew_runtime::adapter::DomainAdapterEventSink`] constructed with
 /// `nested_not_managed: true`, exercising the full
 /// `ViolationService::record` pipeline (Hardening plan Task 1) without
 /// spawning any vendor process. Captures its own `RunDriverContext` so a
@@ -320,7 +320,7 @@ impl ViolationTriggeringRunDriver {
             .lock()
             .clone()
             .expect("start() must run before emit_nested_worker_observed");
-        let sink = batman_runtime::adapter::DomainAdapterEventSink::new(
+        let sink = crew_runtime::adapter::DomainAdapterEventSink::new(
             ctx.db.clone(),
             ctx.project_id,
             ctx.events_tx.clone(),
@@ -351,7 +351,7 @@ impl RunDriver for ViolationTriggeringRunDriver {
     fn start(&self, ctx: RunDriverContext) -> AdapterFuture<'static, Result<(), String>> {
         *self.captured.lock() = Some(ctx.clone());
         Box::pin(async move {
-            let sink = batman_runtime::adapter::DomainAdapterEventSink::new(
+            let sink = crew_runtime::adapter::DomainAdapterEventSink::new(
                 ctx.db.clone(),
                 ctx.project_id,
                 ctx.events_tx.clone(),
@@ -393,9 +393,9 @@ impl RunDriver for ViolationTriggeringRunDriver {
         &self,
         run_id: RunId,
         scope: CancelScope,
-    ) -> AdapterFuture<'static, Result<batman_runtime::service::CancelOutcome, String>> {
+    ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
         self.cancel_calls.lock().push((run_id, scope));
-        Box::pin(async { Ok(batman_runtime::service::CancelOutcome::Cancelled) })
+        Box::pin(async { Ok(crew_runtime::service::CancelOutcome::Cancelled) })
     }
 }
 
@@ -403,7 +403,7 @@ impl RunDriver for ViolationTriggeringRunDriver {
 /// configurable: `Err` simulates a real kill failure, `Ok(NoRunningAdapter)`
 /// simulates a run whose adapter already exited (R13).
 struct ConfigurableCancelViolationDriver {
-    outcome: Result<batman_runtime::service::CancelOutcome, String>,
+    outcome: Result<crew_runtime::service::CancelOutcome, String>,
 }
 
 impl RunDriver for ConfigurableCancelViolationDriver {
@@ -413,7 +413,7 @@ impl RunDriver for ConfigurableCancelViolationDriver {
 
     fn start(&self, ctx: RunDriverContext) -> AdapterFuture<'static, Result<(), String>> {
         Box::pin(async move {
-            let sink = batman_runtime::adapter::DomainAdapterEventSink::new(
+            let sink = crew_runtime::adapter::DomainAdapterEventSink::new(
                 ctx.db.clone(),
                 ctx.project_id,
                 ctx.events_tx.clone(),
@@ -455,7 +455,7 @@ impl RunDriver for ConfigurableCancelViolationDriver {
         &self,
         _run_id: RunId,
         _scope: CancelScope,
-    ) -> AdapterFuture<'static, Result<batman_runtime::service::CancelOutcome, String>> {
+    ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
         let outcome = self.outcome.clone();
         Box::pin(async move { outcome })
     }
@@ -491,7 +491,7 @@ async fn a_failed_policy_kill_raises_degraded_control() {
 async fn a_policy_cancel_with_no_running_adapter_is_clean() {
     let harness = Harness::start(|c| {
         c.run_driver = Some(Arc::new(ConfigurableCancelViolationDriver {
-            outcome: Ok(batman_runtime::service::CancelOutcome::NoRunningAdapter),
+            outcome: Ok(crew_runtime::service::CancelOutcome::NoRunningAdapter),
         }) as Arc<dyn RunDriver>);
     })
     .await;
@@ -546,7 +546,7 @@ async fn nested_worker_observed_quarantines_run_and_blocks_message_send_until_re
     let driver = Arc::new(ViolationTriggeringRunDriver::default());
     let harness = Harness::start(|c| {
         c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
-        c.nested_violation_action = batman_runtime::config::NestedViolationAction::Quarantine;
+        c.nested_violation_action = crew_runtime::config::NestedViolationAction::Quarantine;
     })
     .await;
     let mut client = omp_client(&harness, "omp-1").await;
@@ -644,7 +644,7 @@ async fn policy_violation_decide_is_forbidden_for_a_non_owning_client() {
     let driver = Arc::new(ViolationTriggeringRunDriver::default());
     let harness = Harness::start(|c| {
         c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
-        c.nested_violation_action = batman_runtime::config::NestedViolationAction::Quarantine;
+        c.nested_violation_action = crew_runtime::config::NestedViolationAction::Quarantine;
     })
     .await;
     let mut owner_client = omp_client(&harness, "omp-owner").await;
@@ -755,7 +755,7 @@ async fn workspace_copy_max_files_from_config_reaches_the_live_materializer() {
     let config = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(config.path(), r#"{"workspace":{"copyMaxFiles":0}}"#).unwrap();
     let config_paths = vec![config.path().to_path_buf()];
-    let policy = Arc::new(batman_runtime::config::resolve_policy(&[config.path()], None).unwrap());
+    let policy = Arc::new(crew_runtime::config::resolve_policy(&[config.path()], None).unwrap());
     assert_eq!(
         policy.copy_max_files, 0,
         "sanity: the layer must actually override the default ceiling"
@@ -812,7 +812,7 @@ async fn per_run_policy_overrides_snapshot_only_their_own_run() {
     let org = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(org.path(), r#"{"limits":{"maxConcurrentWorkers":8}}"#).unwrap();
     let config_paths = vec![org.path().to_path_buf()];
-    let startup = Arc::new(batman_runtime::config::resolve_policy(&[org.path()], None).unwrap());
+    let startup = Arc::new(crew_runtime::config::resolve_policy(&[org.path()], None).unwrap());
     let startup_fingerprint = startup.fingerprint.clone();
 
     let harness = Harness::start({
@@ -1108,7 +1108,7 @@ async fn policy_violation_list_reports_decision_state_for_every_violation() {
     let driver = Arc::new(ViolationTriggeringRunDriver::default());
     let harness = Harness::start(|c| {
         c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
-        c.nested_violation_action = batman_runtime::config::NestedViolationAction::Quarantine;
+        c.nested_violation_action = crew_runtime::config::NestedViolationAction::Quarantine;
     })
     .await;
     let mut client = omp_client(&harness, "omp-1").await;
@@ -1134,7 +1134,7 @@ async fn policy_violation_list_reports_decision_state_for_every_violation() {
     // round-trip through the canonical deny_unknown_fields type the
     // extension Ajv-validates against -- a renamed PolicyViolationSummary
     // field fails here at test time, not as a live ValidationError.
-    serde_json::from_value::<batman_protocol::PolicyViolationListResult>(list["result"].clone())
+    serde_json::from_value::<crew_protocol::PolicyViolationListResult>(list["result"].clone())
         .expect("the wire shape must deserialize as the canonical PolicyViolationListResult");
     // Pin the exact wire key set: the query op's hand-built rows must stay
     // byte-compatible with the canonical PolicyViolationSummary the
@@ -1208,7 +1208,7 @@ async fn workspace_apply_on_a_quarantined_run_is_refused_and_journals_no_apply_s
     let driver = Arc::new(ViolationTriggeringRunDriver::default());
     let harness = Harness::start(|c| {
         c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
-        c.nested_violation_action = batman_runtime::config::NestedViolationAction::Quarantine;
+        c.nested_violation_action = crew_runtime::config::NestedViolationAction::Quarantine;
     })
     .await;
     let mut client = omp_client(&harness, "omp-1").await;
@@ -1241,7 +1241,7 @@ async fn workspace_apply_on_a_quarantined_run_is_refused_and_journals_no_apply_s
             json!({
                 "leaseId": lease_id,
                 "strategy": "applyPatch",
-                "artifactId": batman_protocol::ArtifactId::new().to_string(),
+                "artifactId": crew_protocol::ArtifactId::new().to_string(),
                 "expectedTargetRevision": base_revision,
             }),
         )
@@ -1323,10 +1323,9 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
             &self,
             _run_id: RunId,
             _scope: CancelScope,
-        ) -> AdapterFuture<'static, Result<batman_runtime::service::CancelOutcome, String>>
-        {
+        ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
             *self.cancel_calls.lock() += 1;
-            Box::pin(async { Ok(batman_runtime::service::CancelOutcome::Cancelled) })
+            Box::pin(async { Ok(crew_runtime::service::CancelOutcome::Cancelled) })
         }
     }
 
@@ -1347,7 +1346,7 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
     let emit = |child: &'static str, parent: &'static str| {
         let ctx = ctx.clone();
         async move {
-            let sink = batman_runtime::adapter::DomainAdapterEventSink::new(
+            let sink = crew_runtime::adapter::DomainAdapterEventSink::new(
                 ctx.db.clone(),
                 ctx.project_id,
                 ctx.events_tx.clone(),
@@ -1925,7 +1924,7 @@ impl RunDriver for StartCapturingRunDriver {
         &self,
         run_id: RunId,
         scope: CancelScope,
-    ) -> AdapterFuture<'static, Result<batman_runtime::service::CancelOutcome, String>> {
+    ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
         self.inner.cancel_run(run_id, scope)
     }
 }
@@ -1966,7 +1965,7 @@ impl RunDriver for KillFailingRunDriver {
         &self,
         _run_id: RunId,
         _scope: CancelScope,
-    ) -> AdapterFuture<'static, Result<batman_runtime::service::CancelOutcome, String>> {
+    ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
         Box::pin(async { Err("SIGKILL delivery failed".to_string()) })
     }
 }
@@ -2993,7 +2992,7 @@ async fn run_submit_rejects_an_unrecognized_workspace_mode() {
     );
     assert_eq!(
         submit["error"]["code"].as_i64(),
-        Some(i64::from(batman_protocol::error_code::INVALID_PARAMS)),
+        Some(i64::from(crew_protocol::error_code::INVALID_PARAMS)),
         "an unrecognized mode is the caller's error: {submit:?}"
     );
 
@@ -3337,7 +3336,7 @@ impl TestSink {
 }
 
 impl AdapterEventSink for TestSink {
-    fn emit(&self, event: AdapterEvent) -> batman_runtime::adapter::AdapterFuture<'_, u64> {
+    fn emit(&self, event: AdapterEvent) -> crew_runtime::adapter::AdapterFuture<'_, u64> {
         Box::pin(async move {
             let mut events = self.events.lock().await;
             events.push(event);
@@ -3438,13 +3437,13 @@ impl RunDriver for RealAdapterRunDriver {
         &self,
         _run_id: RunId,
         scope: CancelScope,
-    ) -> AdapterFuture<'static, Result<batman_runtime::service::CancelOutcome, String>> {
+    ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
         let adapter = Arc::clone(self.adapter.lock().as_ref().unwrap());
         Box::pin(async move {
             adapter
                 .cancel(scope)
                 .await
-                .map(|()| batman_runtime::service::CancelOutcome::Cancelled)
+                .map(|()| crew_runtime::service::CancelOutcome::Cancelled)
                 .map_err(|e| e.to_string())
         })
     }
@@ -3734,13 +3733,13 @@ async fn seed_artifact(
     store: &ArtifactStore,
     body: &str,
     run_id: Option<String>,
-) -> batman_protocol::ArtifactId {
+) -> crew_protocol::ArtifactId {
     let content = body.as_bytes().to_vec();
     let mut hasher = Sha256::new();
     hasher.update(&content);
-    let artifact = batman_protocol::Artifact {
-        artifact_id: batman_protocol::ArtifactId::new(),
-        kind: batman_protocol::ArtifactKind::Patch,
+    let artifact = crew_protocol::Artifact {
+        artifact_id: crew_protocol::ArtifactId::new(),
+        kind: crew_protocol::ArtifactKind::Patch,
         sha256: format!("{:x}", hasher.finalize()),
         byte_length: content.len() as u64,
         media_type: "application/x-git-diff".to_string(),
@@ -4760,7 +4759,7 @@ async fn workspace_apply_against_another_instances_lease_is_refused() {
         .to_string();
 
     let mut attacker = omp_client(&harness, "omp-2").await;
-    let bogus_artifact_id = batman_protocol::ArtifactId::new().to_string();
+    let bogus_artifact_id = crew_protocol::ArtifactId::new().to_string();
     let apply = attacker
         .call(
             2,
@@ -4827,7 +4826,7 @@ async fn workspace_apply_by_the_owning_instance_reaches_artifact_resolution() {
         .unwrap()
         .to_string();
 
-    let bogus_artifact_id = batman_protocol::ArtifactId::new().to_string();
+    let bogus_artifact_id = crew_protocol::ArtifactId::new().to_string();
     let apply = owner
         .call(
             6,

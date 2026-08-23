@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use batman_runtime::config::crew::{
+use crew_runtime::config::crew::{
     self, AdapterConfig, AdapterMode, ApprovalMode, CloseOnExit, ConfigError, CrewConfig,
     DashboardConfig, DisplayBackend, DisplayConfig, Limits, PermissionMode, RetentionConfig,
     SecurityConfig, WorkspaceConfig, WorkspaceMode,

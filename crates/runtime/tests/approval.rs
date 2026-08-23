@@ -6,16 +6,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use batman_protocol::{
+use crew_protocol::{
     ApprovalId, ApprovalRequest, DecidedBy, ProjectId, RunId, TaskId, Timestamp, WorkerId,
 };
-use batman_runtime::approval::{
+use crew_runtime::approval::{
     ApprovalCallback, ApprovalService, CallbackFuture, NoopApprovalCallback,
 };
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::ipc::{PeerCredentialReader, PeerCredentials, Server, ServerConfig};
-use batman_runtime::paths::RuntimePaths;
-use batman_runtime::service::FakeRunDriver;
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::ipc::{PeerCredentialReader, PeerCredentials, Server, ServerConfig};
+use crew_runtime::paths::RuntimePaths;
+use crew_runtime::service::FakeRunDriver;
 use nix::unistd::Uid;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -412,10 +412,10 @@ async fn a_decision_cannot_target_a_settled_run() {
             .unwrap(),
     );
     {
-        use batman_runtime::domain::DomainRepository;
+        use crew_runtime::domain::DomainRepository;
         let mut conn = rusqlite::Connection::open(&harness.database).unwrap();
         let mut repo = DomainRepository::new(&mut conn, harness.project_id);
-        let failed = batman_protocol::RunState::try_from("failed").unwrap();
+        let failed = crew_protocol::RunState::try_from("failed").unwrap();
         repo.transition_run(run_id, &failed, None)
             .expect("force-fail the run for this test");
     }
@@ -527,7 +527,7 @@ async fn identical_repeat_decision_never_re_invokes_the_adapter_callback() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(matches!(
         first,
-        batman_runtime::approval::DecideOutcome::Decided
+        crew_runtime::approval::DecideOutcome::Decided
     ));
 
     let second = service
@@ -541,7 +541,7 @@ async fn identical_repeat_decision_never_re_invokes_the_adapter_callback() {
     );
     assert!(matches!(
         second,
-        batman_runtime::approval::DecideOutcome::AlreadyDecided
+        crew_runtime::approval::DecideOutcome::AlreadyDecided
     ));
 }
 
@@ -712,7 +712,7 @@ async fn approval_list_projects_decision_provenance() {
     );
     // The wire row round-trips through the canonical deny_unknown_fields
     // type, so a renamed field fails here at test time.
-    serde_json::from_value::<batman_protocol::ApprovalRequest>(row.clone())
+    serde_json::from_value::<crew_protocol::ApprovalRequest>(row.clone())
         .expect("the list row must deserialize as the canonical ApprovalRequest");
 }
 

@@ -18,7 +18,7 @@ mod server;
 
 use std::sync::Arc;
 
-use batman_protocol::{BatmanMethod, ClientRole, RunId, TaskId, VersionRange, WorkerId};
+use crew_protocol::{ClientRole, CrewMethod, RunId, TaskId, VersionRange, WorkerId};
 use tokio::net::UnixStream;
 
 pub use server::{Server, should_idle_shutdown, socket_path_within_limit};
@@ -33,10 +33,10 @@ pub const PROTOCOL_MIN_FRAME_BYTES: u32 = 64 * 1024;
 pub const DEFAULT_MAX_FRAME_BYTES: u32 = 4 * 1024 * 1024;
 
 /// The single protocol version this runtime implements. Re-exported from
-/// `batman-protocol`, which owns it: `batman-xtask` records the same value
+/// `crew-protocol`, which owns it: `crew-xtask` records the same value
 /// as release provenance, and a second definition here could ship a
 /// manifest claiming a version the runtime does not speak.
-pub use batman_protocol::PROTOCOL_VERSION as RUNTIME_PROTOCOL_VERSION;
+pub use crew_protocol::PROTOCOL_VERSION as RUNTIME_PROTOCOL_VERSION;
 
 /// The durable database schema version reported by `runtime/status`.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -44,7 +44,7 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// The inclusive range of protocol versions the runtime supports.
 #[must_use]
 pub const fn runtime_supported_versions() -> VersionRange {
-    batman_protocol::supported_versions()
+    crew_protocol::supported_versions()
 }
 
 /// The peer's operating-system credentials for an accepted connection, as
@@ -153,7 +153,7 @@ pub struct ServerConfig {
     /// result instead of computing it at bind time. `None` computes it.
     pub owner_only_override: Option<bool>,
     /// Where the running binary was loaded from, reported by `runtime/status`.
-    pub binary_source: batman_protocol::BinarySource,
+    pub binary_source: crew_protocol::BinarySource,
     /// The injected adapter-start seam for `run/submit`. `None` means no
     /// adapter registry is wired up; `run/submit` then preserves the queued
     /// run and reports `adapter_unavailable` rather than pretending the run
@@ -195,7 +195,7 @@ impl Default for ServerConfig {
             run_driver: None,
             repository: std::path::PathBuf::new(),
             owner_only_override: None,
-            binary_source: batman_protocol::BinarySource::Unknown,
+            binary_source: crew_protocol::BinarySource::Unknown,
             approval_callback: Arc::new(crate::approval::NoopApprovalCallback),
             nested_violation_action: crate::config::NestedViolationAction::default(),
             policy: None,
@@ -205,7 +205,7 @@ impl Default for ServerConfig {
 }
 
 /// The authenticated identity of a connected client, derived solely from its
-/// [`batman_protocol::ClientAuth`] and the same-user socket boundary -- never
+/// [`crew_protocol::ClientAuth`] and the same-user socket boundary -- never
 /// from client-supplied method or tool names.
 #[derive(Debug, Clone)]
 pub struct ClientPrincipal {
@@ -229,8 +229,8 @@ impl ClientPrincipal {
     /// Least-privilege within the same-user boundary; later protocol tasks
     /// extend these tables explicitly.
     #[must_use]
-    pub fn allowed_methods(&self) -> Vec<BatmanMethod> {
-        use BatmanMethod::{
+    pub fn allowed_methods(&self) -> Vec<CrewMethod> {
+        use CrewMethod::{
             ApprovalDecide, ApprovalList, ArtifactFetch, ArtifactList, CoordinationArtifactFetch,
             CoordinationArtifactList, CoordinationAskPolicy, CoordinationChildDecide,
             CoordinationChildList, CoordinationPeerWorkspace, CoordinationPeers,

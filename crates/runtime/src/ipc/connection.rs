@@ -11,8 +11,8 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::Arc;
 
-use batman_protocol::{
-    BatmanMethod, ClientAuth, ClientPrincipalSummary, EVENTS_EVENT_METHOD, EventEnvelope,
+use crew_protocol::{
+    ClientAuth, ClientPrincipalSummary, CrewMethod, EVENTS_EVENT_METHOD, EventEnvelope,
     EventSource, InitializeParams, InitializeResult, JsonRpcNotification, MessageId, MessageKind,
     ProtocolVersion, RunId, RuntimeCapabilities, RuntimeEvent, RuntimeInfo, RuntimeStatus, TaskId,
     WorkerId, error_code,
@@ -277,7 +277,7 @@ fn authenticate(
         } => {
             validate_agent_directory(agent_directory, shared.config.euid)?;
             Ok(ClientPrincipal {
-                role: batman_protocol::ClientRole::OmpExtension,
+                role: crew_protocol::ClientRole::OmpExtension,
                 instance_id: instance_id.clone(),
                 scoped_run_id: None,
                 scoped_task_id: None,
@@ -285,7 +285,7 @@ fn authenticate(
             })
         }
         ClientAuth::Display { instance_id } => Ok(ClientPrincipal {
-            role: batman_protocol::ClientRole::Display,
+            role: crew_protocol::ClientRole::Display,
             instance_id: instance_id.clone(),
             scoped_run_id: None,
             scoped_task_id: None,
@@ -301,7 +301,7 @@ fn authenticate(
                 .verify(scope_token, ctx.peer_pid)
                 .map_err(|err| format!("worker credential rejected: {err}"))?;
             Ok(ClientPrincipal {
-                role: batman_protocol::ClientRole::WorkerMcp,
+                role: crew_protocol::ClientRole::WorkerMcp,
                 instance_id: instance_id.clone(),
                 scoped_run_id: Some(scoped.run_id),
                 scoped_task_id: Some(scoped.task_id),
@@ -356,7 +356,7 @@ async fn dispatch(
 
     // Resolve the method from the authenticated principal's table only.
     // Unknown or out-of-role methods are hidden as METHOD_NOT_FOUND.
-    let method: Option<BatmanMethod> = serde_json::from_value(json!(method_name)).ok();
+    let method: Option<CrewMethod> = serde_json::from_value(json!(method_name)).ok();
     let allowed = method.is_some_and(|m| principal.allowed_methods().contains(&m));
     if !allowed {
         return error(
@@ -367,7 +367,7 @@ async fn dispatch(
     }
 
     match method.expect("allowed implies a known method") {
-        BatmanMethod::RuntimeStatus => {
+        CrewMethod::RuntimeStatus => {
             let status = RuntimeStatus {
                 running: true,
                 protocol: negotiated_version,
@@ -386,7 +386,7 @@ async fn dispatch(
                 .expect("RuntimeStatus is a plain, serializable wire type");
             success(&id, value)
         }
-        BatmanMethod::EventsReplay => {
+        CrewMethod::EventsReplay => {
             let after = message
                 .get("params")
                 .and_then(|p| p.get("afterSequence"))
@@ -397,11 +397,11 @@ async fn dispatch(
                 Err(message) => error(&id, error_code::INTERNAL_ERROR, &message),
             }
         }
-        BatmanMethod::EventsSubscribe => {
+        CrewMethod::EventsSubscribe => {
             spawn_subscription(shared, writer_tx.clone());
             success(&id, json!({ "active": true }))
         }
-        BatmanMethod::RuntimeShutdown => {
+        CrewMethod::RuntimeShutdown => {
             // Role-gated to ompExtension (see `ClientPrincipal::allowed_methods`).
             // Arbitrated (R82): stopping the daemon stops it for every
             // connected instance, so refuse while other work is live unless
@@ -441,33 +441,33 @@ async fn dispatch(
             shared.shutdown.notify_one();
             success(&id, json!({ "stopping": true }))
         }
-        BatmanMethod::Initialize => error(
+        CrewMethod::Initialize => error(
             &id,
             error_code::METHOD_NOT_FOUND,
             "the connection is already initialized",
         ),
         // Orchestration methods: routed through OrchestrationService.
-        BatmanMethod::TaskUpsert
-        | BatmanMethod::TaskGet
-        | BatmanMethod::WorkerCreate
-        | BatmanMethod::WorkerList
-        | BatmanMethod::WorkerGet
-        | BatmanMethod::RunSubmit
-        | BatmanMethod::RunList
-        | BatmanMethod::RunGet
-        | BatmanMethod::RunResult
-        | BatmanMethod::RunRetry
-        | BatmanMethod::RunCancel
-        | BatmanMethod::MessageSend
-        | BatmanMethod::MessageList
-        | BatmanMethod::ApprovalList
-        | BatmanMethod::ApprovalDecide
-        | BatmanMethod::CoordinationChildList
-        | BatmanMethod::CoordinationChildDecide
-        | BatmanMethod::ProfileRegister
-        | BatmanMethod::ReconcileOmp
-        | BatmanMethod::PolicyViolationDecide
-        | BatmanMethod::PolicyViolationList => {
+        CrewMethod::TaskUpsert
+        | CrewMethod::TaskGet
+        | CrewMethod::WorkerCreate
+        | CrewMethod::WorkerList
+        | CrewMethod::WorkerGet
+        | CrewMethod::RunSubmit
+        | CrewMethod::RunList
+        | CrewMethod::RunGet
+        | CrewMethod::RunResult
+        | CrewMethod::RunRetry
+        | CrewMethod::RunCancel
+        | CrewMethod::MessageSend
+        | CrewMethod::MessageList
+        | CrewMethod::ApprovalList
+        | CrewMethod::ApprovalDecide
+        | CrewMethod::CoordinationChildList
+        | CrewMethod::CoordinationChildDecide
+        | CrewMethod::ProfileRegister
+        | CrewMethod::ReconcileOmp
+        | CrewMethod::PolicyViolationDecide
+        | CrewMethod::PolicyViolationList => {
             let resolved = method.expect("allowed implies a known method");
             let params = message.get("params").cloned().unwrap_or(Value::Null);
             match shared
@@ -481,16 +481,16 @@ async fn dispatch(
         }
         // Coordination methods: routed through CoordinationBroker, scoped
         // to the connection's bound run when the principal carries one.
-        BatmanMethod::CoordinationTask
-        | BatmanMethod::CoordinationPeers
-        | BatmanMethod::CoordinationSend
-        | BatmanMethod::CoordinationRequestChild
-        | BatmanMethod::CoordinationPublishArtifact
-        | BatmanMethod::CoordinationReportBlocked
-        | BatmanMethod::CoordinationAskPolicy
-        | BatmanMethod::CoordinationPeerWorkspace
-        | BatmanMethod::CoordinationArtifactList
-        | BatmanMethod::CoordinationArtifactFetch => {
+        CrewMethod::CoordinationTask
+        | CrewMethod::CoordinationPeers
+        | CrewMethod::CoordinationSend
+        | CrewMethod::CoordinationRequestChild
+        | CrewMethod::CoordinationPublishArtifact
+        | CrewMethod::CoordinationReportBlocked
+        | CrewMethod::CoordinationAskPolicy
+        | CrewMethod::CoordinationPeerWorkspace
+        | CrewMethod::CoordinationArtifactList
+        | CrewMethod::CoordinationArtifactFetch => {
             let resolved = method.expect("allowed implies a known method");
             let params = message.get("params").cloned().unwrap_or(Value::Null);
             match dispatch_coordination(resolved, principal, &params, shared).await {
@@ -499,13 +499,13 @@ async fn dispatch(
             }
         }
         // Workspace and artifact methods: routed through OrchestrationService.
-        BatmanMethod::WorkspaceAcquire
-        | BatmanMethod::WorkspaceGet
-        | BatmanMethod::WorkspaceRelease
-        | BatmanMethod::WorkspaceInspect
-        | BatmanMethod::WorkspaceApply
-        | BatmanMethod::ArtifactList
-        | BatmanMethod::ArtifactFetch => {
+        CrewMethod::WorkspaceAcquire
+        | CrewMethod::WorkspaceGet
+        | CrewMethod::WorkspaceRelease
+        | CrewMethod::WorkspaceInspect
+        | CrewMethod::WorkspaceApply
+        | CrewMethod::ArtifactList
+        | CrewMethod::ArtifactFetch => {
             let resolved = method.expect("allowed implies a known method");
             let params = message.get("params").cloned().unwrap_or(Value::Null);
             match shared
@@ -521,10 +521,10 @@ async fn dispatch(
         // OrchestrationService, which currently refuses every one of these
         // with a "not yet implemented" error (crew v2 gap-closure WP6);
         // WP17/WP21 replace the stub with real handlers.
-        BatmanMethod::PlanPropose
-        | BatmanMethod::PlanDecide
-        | BatmanMethod::PlanGet
-        | BatmanMethod::RunTimeoutAck => {
+        CrewMethod::PlanPropose
+        | CrewMethod::PlanDecide
+        | CrewMethod::PlanGet
+        | CrewMethod::RunTimeoutAck => {
             let resolved = method.expect("allowed implies a known method");
             let params = message.get("params").cloned().unwrap_or(Value::Null);
             match shared
@@ -544,7 +544,7 @@ async fn dispatch(
 /// bound scope (`principal.scoped_run_id`) as the trusted run identity --
 /// never a client-supplied one.
 async fn dispatch_coordination(
-    method: BatmanMethod,
+    method: CrewMethod,
     principal: &ClientPrincipal,
     params: &Value,
     shared: &Arc<Shared>,
@@ -556,9 +556,9 @@ async fn dispatch_coordination(
             message: "this connection has no bound scope".to_string(),
         })?;
     match method {
-        BatmanMethod::CoordinationTask => shared.coordination.task(run_id).await,
-        BatmanMethod::CoordinationPeers => shared.coordination.peers(run_id).await,
-        BatmanMethod::CoordinationSend => {
+        CrewMethod::CoordinationTask => shared.coordination.task(run_id).await,
+        CrewMethod::CoordinationPeers => shared.coordination.peers(run_id).await,
+        CrewMethod::CoordinationSend => {
             let sender_worker_id = parse_worker_field(params, "senderWorkerId")?;
             let task_id = parse_task_field(params, "taskId")?;
             if principal.scoped_worker_id != Some(sender_worker_id) {
@@ -602,7 +602,7 @@ async fn dispatch_coordination(
                 )
                 .await
         }
-        BatmanMethod::CoordinationRequestChild => {
+        CrewMethod::CoordinationRequestChild => {
             let reason = params
                 .get("reason")
                 .and_then(Value::as_str)
@@ -610,7 +610,7 @@ async fn dispatch_coordination(
                 .to_string();
             shared.coordination.request_child(run_id, reason).await
         }
-        BatmanMethod::CoordinationPublishArtifact => {
+        CrewMethod::CoordinationPublishArtifact => {
             let artifact_ref = params
                 .get("artifactRef")
                 .and_then(Value::as_str)
@@ -625,7 +625,7 @@ async fn dispatch_coordination(
                 .publish_artifact(run_id, artifact_ref, description)
                 .await
         }
-        BatmanMethod::CoordinationReportBlocked => {
+        CrewMethod::CoordinationReportBlocked => {
             let reason = params
                 .get("reason")
                 .and_then(Value::as_str)
@@ -633,7 +633,7 @@ async fn dispatch_coordination(
                 .to_string();
             shared.coordination.report_blocked(run_id, reason).await
         }
-        BatmanMethod::CoordinationAskPolicy => {
+        CrewMethod::CoordinationAskPolicy => {
             let question = params
                 .get("question")
                 .and_then(Value::as_str)
@@ -641,7 +641,7 @@ async fn dispatch_coordination(
                 .to_string();
             shared.coordination.ask_policy(run_id, question).await
         }
-        BatmanMethod::CoordinationPeerWorkspace => {
+        CrewMethod::CoordinationPeerWorkspace => {
             let peer_run_id = params
                 .get("peerRunId")
                 .and_then(Value::as_str)
@@ -653,7 +653,7 @@ async fn dispatch_coordination(
                 .peer_workspace(run_id, peer_run_id)
                 .await
         }
-        BatmanMethod::CoordinationArtifactList => {
+        CrewMethod::CoordinationArtifactList => {
             let kind = match params.get("kind").and_then(Value::as_str) {
                 Some(raw) => Some(
                     serde_json::from_value(Value::String(raw.to_string()))
@@ -663,7 +663,7 @@ async fn dispatch_coordination(
             };
             shared.coordination.artifact_list(run_id, kind).await
         }
-        BatmanMethod::CoordinationArtifactFetch => {
+        CrewMethod::CoordinationArtifactFetch => {
             let artifact_id = params
                 .get("artifactId")
                 .cloned()
@@ -863,7 +863,7 @@ mod tests {
 
     use std::time::Duration;
 
-    use batman_protocol::{EventSource, ProjectId, RuntimeEvent, Timestamp};
+    use crew_protocol::{EventSource, ProjectId, RuntimeEvent, Timestamp};
 
     fn envelope() -> EventEnvelope {
         EventEnvelope {

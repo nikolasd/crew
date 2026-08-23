@@ -1,7 +1,7 @@
 //! `crewd`: the Crew runtime daemon and its lifecycle CLI.
 //!
 //! The entry point is deliberately thin: it parses arguments and dispatches
-//! into [`cli::run`], which drives the `batman_runtime::lifecycle` library.
+//! into [`cli::run`], which drives the `crew_runtime::lifecycle` library.
 //! Commands: `serve`, `status`, `stop`, `version`, `schema`, `monitor`,
 //! `audit`, `doctor`, and `coordination-mcp`.
 

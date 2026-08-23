@@ -54,6 +54,6 @@ jobs:
 
       - name: Assemble leaf package
         run: |
-          cargo run -p batman-xtask -- package \
+          cargo run -p crew-xtask -- package \
             --target ${{ matrix.leaf_target }} \
             --binary target/${{ matrix.rust_target }}/release/crewd

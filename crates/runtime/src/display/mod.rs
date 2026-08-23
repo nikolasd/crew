@@ -19,7 +19,7 @@ pub use herdr::{HerdrDisplay, HerdrStatus};
 pub use terminal::TerminalDisplay;
 pub use tmux::TmuxDisplay;
 
-use batman_protocol::{
+use crew_protocol::{
     DisplayBackend, DisplayConfig, DisplayPreference, DisplaySelection, DisplayStatus,
 };
 use std::io;
@@ -258,7 +258,7 @@ pub(crate) fn version_gte(current: &str, minimum: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use batman_protocol::{DisplayBackend, DisplayConfig, DisplayStatus};
+    use crew_protocol::{DisplayBackend, DisplayConfig, DisplayStatus};
 
     /// Fake backend for testing.
     struct FakeBackend {

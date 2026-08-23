@@ -3,9 +3,7 @@
 //! Stores artifacts with full metadata (kind, SHA-256, length, media type,
 //! storage path, run_id) and supports bounded base64 chunked fetch.
 
-use batman_protocol::{
-    Artifact, ArtifactFetchResult, ArtifactId, ArtifactKind, ArtifactListResult,
-};
+use crew_protocol::{Artifact, ArtifactFetchResult, ArtifactId, ArtifactKind, ArtifactListResult};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;

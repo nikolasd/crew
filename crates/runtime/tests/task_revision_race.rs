@@ -47,9 +47,9 @@
 //! repo/db layers directly, exactly as the production service methods now
 //! do -- one guarded write round trip each.)
 
-use batman_protocol::{ProjectId, TaskId, TaskRef};
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::domain::DomainRepository;
+use crew_protocol::{ProjectId, TaskId, TaskRef};
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::domain::DomainRepository;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 

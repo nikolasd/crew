@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use batman_runtime::supervisor::{EscalationTimings, PtyProcess, SpawnSpec, TerminationOutcome};
+use crew_runtime::supervisor::{EscalationTimings, PtyProcess, SpawnSpec, TerminationOutcome};
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
 

@@ -6,13 +6,13 @@
 
 use std::sync::Arc;
 
-use batman_protocol::{
+use crew_protocol::{
     EventEnvelope, EventSource, ProjectId, Run, RunFlags, RunState, RuntimeEvent, TaskId, TaskRef,
     Timestamp, WorkerId, WorkerProfileRef,
 };
-use batman_runtime::dashboard::{DashboardDeps, DashboardServer};
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::domain::DomainRepository;
+use crew_runtime::dashboard::{DashboardDeps, DashboardServer};
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::domain::DomainRepository;
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -20,10 +20,10 @@ use tokio::sync::broadcast;
 
 /// Seeds one task + one worker + one run through the real
 /// `DomainRepository`, mirroring `tests/recovery.rs`'s helper.
-async fn seed_run(db: &DatabaseHandle, project_id: ProjectId) -> batman_protocol::RunId {
+async fn seed_run(db: &DatabaseHandle, project_id: ProjectId) -> crew_protocol::RunId {
     let task_id = TaskId::new();
     let worker_id = WorkerId::new();
-    let run_id = batman_protocol::RunId::new();
+    let run_id = crew_protocol::RunId::new();
 
     db.run_domain_op(Box::new(move |conn| {
         let mut repo = DomainRepository::new(conn, project_id);
@@ -34,7 +34,7 @@ async fn seed_run(db: &DatabaseHandle, project_id: ProjectId) -> batman_protocol
                 revision: 1,
             },
         )?;
-        let worker = batman_protocol::Worker {
+        let worker = crew_protocol::Worker {
             worker_id,
             profile_ref: WorkerProfileRef {
                 id: worker_id,
@@ -125,7 +125,7 @@ fn body_of(response: &str) -> &str {
 
 #[test]
 fn dashboard_is_disabled_by_default() {
-    let config = batman_runtime::config::crew::CrewConfig::default();
+    let config = crew_runtime::config::crew::CrewConfig::default();
     assert!(
         !config.dashboard.enabled,
         "the dashboard must be strictly opt-in"
@@ -251,7 +251,7 @@ async fn sse_stream_receives_a_broadcast_envelope() {
 
     // A committed mutation broadcasts its envelope; the SSE viewer must
     // receive exactly that JSON as a data frame.
-    let run_id = batman_protocol::RunId::new();
+    let run_id = crew_protocol::RunId::new();
     let envelope = EventEnvelope {
         sequence: 42,
         timestamp: Timestamp::now(),
@@ -262,7 +262,7 @@ async fn sse_stream_receives_a_broadcast_envelope() {
         parent_worker_id: None,
         source: EventSource::Runtime,
         event: RuntimeEvent::RunEvent {
-            kind: batman_protocol::RuntimeEventKind::RunWorking,
+            kind: crew_protocol::RuntimeEventKind::RunWorking,
             run_id,
             task_id: TaskId::new(),
             worker_id: WorkerId::new(),

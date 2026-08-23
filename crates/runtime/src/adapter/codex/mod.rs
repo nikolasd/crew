@@ -62,7 +62,7 @@ fn declared_capabilities() -> AdapterCapabilities {
 /// Mutable per-run state, guarded by one `tokio::sync::Mutex` so every
 /// `Adapter` method can `await` while holding it.
 struct RunState {
-    run_id: batman_protocol::RunId,
+    run_id: crew_protocol::RunId,
     client: Arc<CodexRpcClient>,
     thread_id: String,
     current_turn_id: Option<String>,
@@ -208,9 +208,9 @@ impl CodexAdapter {
     /// coordination MCP token was bound for this run.
     fn spawn_pump(
         mut inbound_rx: mpsc::UnboundedReceiver<InboundMessage>,
-        run_id: batman_protocol::RunId,
-        task_id: batman_protocol::TaskId,
-        worker_id: batman_protocol::WorkerId,
+        run_id: crew_protocol::RunId,
+        task_id: crew_protocol::TaskId,
+        worker_id: crew_protocol::WorkerId,
         sink: Arc<dyn AdapterEventSink>,
         pending_approvals: Arc<std::sync::Mutex<HashMap<String, PendingApproval>>>,
         scope_tokens: Option<Arc<ScopeTokenStore>>,
@@ -445,9 +445,9 @@ impl Adapter for CodexAdapter {
                 ));
             }
 
-            let placeholder_run = batman_protocol::RunId::new();
-            let placeholder_task = batman_protocol::TaskId::new();
-            let placeholder_worker = batman_protocol::WorkerId::new();
+            let placeholder_run = crew_protocol::RunId::new();
+            let placeholder_task = crew_protocol::TaskId::new();
+            let placeholder_worker = crew_protocol::WorkerId::new();
 
             let mcp_launch = self
                 .mcp
@@ -692,11 +692,11 @@ impl Adapter for CodexAdapter {
 mod pump_exit_tests {
     use std::sync::Mutex;
 
-    use batman_protocol::{RunId, TaskId, WorkerId};
-    use batman_runtime::adapter::{
+    use crew_protocol::{RunId, TaskId, WorkerId};
+    use crew_runtime::adapter::{
         AdapterEvent, AdapterEventPayload, AdapterEventSink, AdapterFuture,
     };
-    use batman_runtime::supervisor::{EscalationTimings, SpawnSpec, Supervisor};
+    use crew_runtime::supervisor::{EscalationTimings, SpawnSpec, Supervisor};
 
     use super::*;
 

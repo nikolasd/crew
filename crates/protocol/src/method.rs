@@ -9,13 +9,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// All JSON-RPC methods implemented by the BATMAN runtime, including
+/// All JSON-RPC methods implemented by the Crew runtime, including
 /// orchestration extension methods.
 ///
 /// Serialized as the literal method name string used on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[ts(export)]
-pub enum BatmanMethod {
+pub enum CrewMethod {
     // Foundation methods
     #[serde(rename = "initialize")]
     Initialize,
@@ -164,15 +164,14 @@ mod tests {
     #[test]
     fn plan_and_timeout_ack_methods_serialize_as_literal_method_names() {
         let cases = [
-            (BatmanMethod::PlanPropose, "plan/propose"),
-            (BatmanMethod::PlanDecide, "plan/decide"),
-            (BatmanMethod::PlanGet, "plan/get"),
-            (BatmanMethod::RunTimeoutAck, "run/timeoutAck"),
+            (CrewMethod::PlanPropose, "plan/propose"),
+            (CrewMethod::PlanDecide, "plan/decide"),
+            (CrewMethod::PlanGet, "plan/get"),
+            (CrewMethod::RunTimeoutAck, "run/timeoutAck"),
         ];
         for (method, wire_name) in cases {
             assert_eq!(serde_json::to_value(method).unwrap(), wire_name);
-            let parsed: BatmanMethod =
-                serde_json::from_value(serde_json::json!(wire_name)).unwrap();
+            let parsed: CrewMethod = serde_json::from_value(serde_json::json!(wire_name)).unwrap();
             assert_eq!(parsed, method);
         }
     }

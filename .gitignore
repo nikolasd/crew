@@ -15,7 +15,7 @@ dist/
 # xtask owns the real export destination and invocation.
 crates/protocol/bindings/
 
-# `batman-xtask package` writes bin/crewd and manifest.json into each
+# `crew-xtask package` writes bin/crewd and manifest.json into each
 # platform leaf directory; they are release build staging, created on
 # demand, and never committed to source control.
 packages/crew-*/

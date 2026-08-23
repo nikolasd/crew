@@ -7,7 +7,7 @@
 // lease.
 
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import type { ApplyStrategy, IsolationKind, LeaseMode } from "@nikolasd/batman-protocol";
+import type { ApplyStrategy, IsolationKind, LeaseMode } from "@nikolasd/crew-protocol";
 
 import type { OrchestrationToolContext } from "./shared";
 import { callOrchestration } from "./shared";

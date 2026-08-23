@@ -11,7 +11,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batman_protocol::ProjectId;
+use crew_protocol::ProjectId;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -146,7 +146,7 @@ impl RuntimePaths {
     /// otherwise touch the filesystem; [`crate::display::attach::AttachServer`]
     /// is what actually creates the socket node here.
     #[must_use]
-    pub fn pane_socket(&self, run_id: &batman_protocol::RunId) -> PathBuf {
+    pub fn pane_socket(&self, run_id: &crew_protocol::RunId) -> PathBuf {
         self.panes.join(format!("{run_id}.sock"))
     }
 }
@@ -245,7 +245,7 @@ mod tests {
         let state_root = tempfile::tempdir().unwrap();
 
         let paths = RuntimePaths::resolve(state_root.path(), repo.path()).unwrap();
-        let run_id = batman_protocol::RunId::new();
+        let run_id = crew_protocol::RunId::new();
 
         assert_eq!(
             paths.pane_socket(&run_id),

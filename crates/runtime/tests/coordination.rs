@@ -1,25 +1,25 @@
 //! Integration tests for the audited coordination broker.
 //!
-//! Drives the real [`batman_runtime::ipc::Server`] over a Unix domain
-//! socket with a real [`batman_runtime::coordination::ScopeTokenStore`]
+//! Drives the real [`crew_runtime::ipc::Server`] over a Unix domain
+//! socket with a real [`crew_runtime::coordination::ScopeTokenStore`]
 //! wired as the worker-MCP credential verifier, exercising bounds, reply
 //! visibility, task-ownership, rate limiting, and scope-token ancestry.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use batman_protocol::{
+use crew_protocol::{
     Artifact, ArtifactId, ArtifactKind, ProjectId, RunId, TaskId, Timestamp, WorkerId,
 };
-use batman_runtime::coordination::{
+use crew_runtime::coordination::{
     CoordinationBroker, ScopeBinding, ScopeTokenStore, ScopeTokenVerifier, VendorProcessIdentity,
     mcp_protocol,
 };
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::ipc::{PeerCredentialReader, PeerCredentials, Server, ServerConfig};
-use batman_runtime::paths::RuntimePaths;
-use batman_runtime::service::FakeRunDriver;
-use batman_runtime::workspace::{ArtifactStore, LeaseService};
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::ipc::{PeerCredentialReader, PeerCredentials, Server, ServerConfig};
+use crew_runtime::paths::RuntimePaths;
+use crew_runtime::service::FakeRunDriver;
+use crew_runtime::workspace::{ArtifactStore, LeaseService};
 use nix::unistd::Uid;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -32,7 +32,7 @@ use tokio::task::JoinHandle;
 
 /// Reports a fixed uid and the *current test process's own pid* as the
 /// peer -- letting these tests exercise the real
-/// [`batman_runtime::coordination::SystemPidAncestryChecker`] end to end:
+/// [`crew_runtime::coordination::SystemPidAncestryChecker`] end to end:
 /// minting a token bound to this same pid as the "vendor process" makes
 /// every connection trivially its own ancestor.
 struct FakeReader {
@@ -1203,7 +1203,7 @@ async fn sweep_unacknowledged_as_unknown_settles_recorded_and_sent_messages() {
         ProjectId::new(),
         events_tx,
         lease_service,
-        Arc::new(batman_runtime::workspace::ArtifactStore::new()),
+        Arc::new(crew_runtime::workspace::ArtifactStore::new()),
     );
     let swept = broker.sweep_unacknowledged_as_unknown().await.unwrap();
     assert_eq!(swept, 1);

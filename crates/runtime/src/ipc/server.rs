@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use batman_protocol::ProjectId;
+use crew_protocol::ProjectId;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Notify, broadcast};
 
@@ -24,7 +24,7 @@ pub(crate) struct Shared {
     pub(crate) config: ServerConfig,
     pub(crate) project_id: ProjectId,
     pub(crate) started_at: Instant,
-    pub(crate) events_tx: broadcast::Sender<batman_protocol::EventEnvelope>,
+    pub(crate) events_tx: broadcast::Sender<crew_protocol::EventEnvelope>,
     /// Number of connections currently admitted and being served. Used to
     /// decide whether the runtime is idle.
     pub(crate) active_connections: Arc<AtomicUsize>,
@@ -256,7 +256,7 @@ impl Server {
     /// exactly this sender, so it sees the same envelopes as
     /// `events/subscribe` clients.
     #[must_use]
-    pub fn events_sender(&self) -> broadcast::Sender<batman_protocol::EventEnvelope> {
+    pub fn events_sender(&self) -> broadcast::Sender<crew_protocol::EventEnvelope> {
         self.shared.events_tx.clone()
     }
 

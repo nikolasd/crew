@@ -1,4 +1,4 @@
-title = "batman gitleaks config"
+title = "crew gitleaks config"
 
 [extend]
 useDefault = true

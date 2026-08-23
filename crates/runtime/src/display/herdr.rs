@@ -4,7 +4,7 @@
 //! CLI, grounded against the installed `herdr 0.7.5` binary's real
 //! `--help` output and `status --json` shape.
 
-use batman_protocol::{DisplayBackend, DisplayConfig, DisplayPlacement, DisplayStatus};
+use crew_protocol::{DisplayBackend, DisplayConfig, DisplayPlacement, DisplayStatus};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

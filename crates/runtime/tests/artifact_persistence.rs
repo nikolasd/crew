@@ -4,8 +4,8 @@
 //! its patch from a *new* store handle over the same directory. Also
 //! covers the total-bytes ceiling and on-disk tamper detection.
 
-use batman_protocol::{Artifact, ArtifactId, ArtifactKind};
-use batman_runtime::workspace::{ArtifactStore, ArtifactStoreError};
+use crew_protocol::{Artifact, ArtifactId, ArtifactKind};
+use crew_runtime::workspace::{ArtifactStore, ArtifactStoreError};
 use sha2::{Digest, Sha256};
 
 fn sha256_hex(content: &[u8]) -> String {

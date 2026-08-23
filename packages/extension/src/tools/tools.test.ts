@@ -271,7 +271,7 @@ async function waitForSocket(state: string): Promise<void> {
 }
 
 beforeAll(async () => {
-  const build = Bun.spawnSync(["cargo", "build", "-p", "batman-runtime"], { cwd: REPO_ROOT });
+  const build = Bun.spawnSync(["cargo", "build", "-p", "crew-runtime"], { cwd: REPO_ROOT });
   if (build.exitCode !== 0) {
     throw new Error(`cargo build failed: ${build.stderr.toString()}`);
   }
