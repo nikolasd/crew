@@ -7,7 +7,7 @@ doctor, and testing. Its companions are [`code-walkthrough.md`](code-walkthrough
 and debugging playbook), [`rust-primer.md`](rust-primer.md) (Rust via this codebase), and
 [`manual-testing.md`](manual-testing.md) (QA verification steps).
 
-> **Just want to use Crew, not build it?** See [README.md's Installation section](../README.md#installation) — `/marketplace add nikolasd/crew` then `/marketplace install crew@crew` installs the extension, then a session restart, then `/crew-runtime-install` in the new session downloads the runtime binary; no build step. Note this is a private repository, so both need your own GitHub read access. Then see [`plugin-usage.md`](plugin-usage.md), the user manual. This guide is for developing Crew itself.
+> **Just want to use Crew, not build it?** See [README.md's Installation section](../README.md#installation) — `/marketplace add nikolasd/crew` then `/marketplace install crew@crew` installs the extension, then a session restart, then `/crew-install` in the new session downloads the runtime binary; no build step. Note this is a private repository, so both need your own GitHub read access. Then see [`plugin-usage.md`](plugin-usage.md), the user manual. This guide is for developing Crew itself.
 
 ## Prerequisites
 
@@ -144,7 +144,7 @@ What `crew_health` reports as "Binary source", and what `OMP_CREW_BINARY` is for
    version validation entirely. Otherwise it looks for `<state root>/bin/<version>/crewd`, verifies
    its SHA-256 and version against a sibling `manifest.json` (and rejects a manifest whose `target`
    doesn't match this platform), and only trusts it once that check passes. That cache is populated
-   by `/crew-runtime-install`, which downloads both files from this extension version's GitHub
+   by `/crew-install`, which downloads both files from this extension version's GitHub
    Release. The state root itself resolves as `CREW_STATE_DIR` (env var) →
    `$XDG_STATE_HOME/omp/crew` → `$HOME/${PI_CONFIG_DIR:-.omp}/crew`, except that each of the last
    two falls back to its legacy `batman`-named sibling directory when only that one exists (a

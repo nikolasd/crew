@@ -87,8 +87,8 @@ function fakeCommandContext(cwd: string, hasUI: boolean): { ctx: ExtensionComman
 test("registers crew_health plus every orchestration tool, and every slash command", () => {
   const { api, tools, commands } = createFakeApi();
   extension(api);
-  expect([...tools.keys()]).toEqual(["crew_health", "crew_task", "crew_worker", "crew_profile", "crew_run", "crew_workspace", "crew_artifact", "crew_child", "crew_violation", "crew_message", "crew_approval", "crew_reconcile", "crew_doctor", "crew_runtime_install"]);
-  expect([...commands.keys()]).toEqual(["crew-status", "crew", "crew-doctor", "crew-runtime-install"]);
+  expect([...tools.keys()]).toEqual(["crew_health", "crew_task", "crew_worker", "crew_profile", "crew_run", "crew_workspace", "crew_artifact", "crew_child", "crew_violation", "crew_message", "crew_approval", "crew_reconcile", "crew_doctor", "crew_install"]);
+  expect([...commands.keys()]).toEqual(["crew-status", "crew", "crew-doctor", "crew-install"]);
 });
 
 // ---- Live-daemon path: a real foreground `crewd` the tool must reach. ----

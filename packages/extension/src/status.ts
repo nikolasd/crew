@@ -118,7 +118,7 @@ export async function getRuntimeStatus(ctx: GetRuntimeStatusContext): Promise<Ru
 function failureResult(options: EnsureRuntimeOptions, err: unknown): RuntimeStatusError {
   const code = errorCode(err);
   const doctorCommand = `crewd status --repo ${options.repository}`;
-  const message = code === "runtime-not-installed" ? "The Crew runtime binary is not installed yet. Run /crew-runtime-install to download and verify it." : GENERIC_FAILURE_MESSAGE;
+  const message = code === "runtime-not-installed" ? "The Crew runtime binary is not installed yet. Run /crew-install to download and verify it." : GENERIC_FAILURE_MESSAGE;
   return {
     isError: true,
     content: [{ type: "text", text: message }],

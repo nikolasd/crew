@@ -16,7 +16,7 @@ disagree, trust `--help` and file a bug against this file.
 
 Examples below invoke `crewd` bare. Nothing puts it on your `PATH`: an installed runtime lives
 at `<state-root>/bin/<version>/crewd` (default `~/.omp/crew/bin/<version>/crewd`, fetched by
-`/crew-runtime-install` and invoked by absolute path from the extension) and a local build at
+`/crew-install` and invoked by absolute path from the extension) and a local build at
 `target/debug/crewd` or `target/release/crewd`. Alias or symlink it, or substitute the full
 path in every command.
 

@@ -110,11 +110,11 @@ apt/deb/rpm package, or any other system package** — don't reach for a package
 ```
 
 **Exit and start a new `omp` session** — `/reload-plugins` does not reload extension modules, so
-`/crew-runtime-install` (and every `crew_*` tool) only exists once a fresh session has loaded
+`/crew-install` (and every `crew_*` tool) only exists once a fresh session has loaded
 the newly-installed module. Then, in that session:
 
 ```bash
-/crew-runtime-install              # downloads and verifies the crewd binary
+/crew-install              # downloads and verifies the crewd binary
 ```
 
 Uninstalling works in any session:
@@ -125,13 +125,13 @@ Uninstalling works in any session:
 
 **This repository is private.** `/marketplace add` git-clones it, so it needs your own GitHub read
 access to `nikolasd/crew` (an SSH key registered with GitHub, or a `gh auth login` session backed
-by a git credential helper). `/crew-runtime-install` additionally needs a `GITHUB_TOKEN` or
+by a git credential helper). `/crew-install` additionally needs a `GITHUB_TOKEN` or
 `GH_TOKEN` environment variable, or that same `gh auth login` session, to download the asset — see
 the README's [Installation](../README.md#installation) section. The `crewd` binary itself resolves
 in two tiers (see
 [`plugin-usage.md`](getting-started.md#how-the-extension-finds-and-starts-crewd)): `OMP_CREW_BINARY`
 (a local-development override) if set, otherwise the SHA-256-verified binary
-`/crew-runtime-install` cached under the Crew state root — there's no separate binary install
+`/crew-install` cached under the Crew state root — there's no separate binary install
 step beyond that command.
 
 After uninstalling, confirm no `crewd` process is still running: `ps aux | grep crewd`, and
@@ -149,7 +149,7 @@ if you want to keep other repositories' history.
 
 The extension and the `crewd` binary are no longer one atomic install — upgrading each is a
 separate step. `/marketplace upgrade crew@crew` refreshes the extension + skills from this
-repository; if that bumps the extension's version, re-run `/crew-runtime-install` to download the
+repository; if that bumps the extension's version, re-run `/crew-install` to download the
 matching binary (a version-mismatched cached binary is rejected rather than silently reused). If
 you're testing an unreleased build instead, use the `OMP_CREW_BINARY` override described in
 [`plugin-usage.md`](getting-started.md#how-the-extension-finds-and-starts-crewd) instead of
@@ -159,7 +159,7 @@ installing anything.
    (or just let the next `ensureRuntime()` call reconnect after the update — a stale old binary
    still running won't be replaced automatically, so stop it first if you want the new version
    active immediately).
-2. **Update**: `/marketplace upgrade crew@crew`, then `/crew-runtime-install` if the version
+2. **Update**: `/marketplace upgrade crew@crew`, then `/crew-install` if the version
    changed. Confirm with `crewd version` (should report the new version) and `crewd doctor --json`
    (should report `healthy: true`, or only expected, pre-existing failures).
 

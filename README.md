@@ -35,17 +35,17 @@ Crew consists of two components, installed in two steps:
 ```
 
 **Exit and start a new `omp` session.** `/reload-plugins` does not reload extension modules,
-so `/crew-runtime-install` (and every `crew_*` tool) only exists once a fresh session has
+so `/crew-install` (and every `crew_*` tool) only exists once a fresh session has
 loaded the installed module. Then:
 
 ```
-/crew-runtime-install
+/crew-install
 /crew-status
 ```
 
 **This repository is private.** The marketplace step git-clones it, so you need your own GitHub
 read access to `nikolasd/crew` — an SSH key registered with GitHub, or a `gh auth login` session
-backed by a git credential helper. `/crew-runtime-install` additionally needs a `GITHUB_TOKEN` or
+backed by a git credential helper. `/crew-install` additionally needs a `GITHUB_TOKEN` or
 `GH_TOKEN` environment variable set, or that same `gh auth login` session, to download and verify
 the release asset. The binary is cached under your Crew state root.
 

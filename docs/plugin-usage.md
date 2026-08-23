@@ -19,17 +19,17 @@ contributor concern, not a usage one), see [`architecture.md`](architecture.md).
 ```
 
 **Exit and start a new `omp` session** — `/reload-plugins` only refreshes skills and slash
-commands, not extension modules or tools, so `/crew-runtime-install` (and every `crew_*`
+commands, not extension modules or tools, so `/crew-install` (and every `crew_*`
 tool) only exists once a fresh session has loaded the installed module. Then:
 
 ```
-/crew-runtime-install
+/crew-install
 /crew-status
 ```
 
 **This repository is private** — the marketplace step git-clones it, so it needs your own GitHub
 read access to `nikolasd/crew` (an SSH key registered with GitHub, or a `gh auth login` session
-backed by a git credential helper). `/crew-runtime-install` additionally needs a `GITHUB_TOKEN` or
+backed by a git credential helper). `/crew-install` additionally needs a `GITHUB_TOKEN` or
 `GH_TOKEN` environment variable, or that same `gh auth login` session, to download and verify the
 release asset.
 
@@ -127,7 +127,7 @@ Some actions require an explicit human decision, and Crew never fabricates one o
 Work through this ladder:
 
 1. **`/crew-status`** — connects to (or spawns) the daemon and reports whether it's healthy.
-2. **`/crew-runtime-install`** — downloads and verifies the `crewd` binary, if it's missing.
+2. **`/crew-install`** — downloads and verifies the `crewd` binary, if it's missing.
 3. **`/crew-doctor`** — works even with no live daemon; runs the full check catalog (database,
    state directory permissions, platform support, schema compatibility, adapter availability, disk
    space, stale runs/workspaces, and more — see
@@ -138,13 +138,13 @@ Every Crew tool failure has the same shape: text `"<method> failed: <message>"`,
 
 | `details.code` | Fix |
 |---|---|
-| `runtime-not-installed` | Run `/crew-runtime-install` to download the binary. |
-| `checksum-mismatch` | Re-run `/crew-runtime-install`. The cached binary doesn't match its manifest. |
-| `version-mismatch` | Re-run `/crew-runtime-install`. The cached binary is for a different extension version. |
-| `manifest-invalid` | Re-run `/crew-runtime-install`. The cached manifest is corrupt or for another platform. |
+| `runtime-not-installed` | Run `/crew-install` to download the binary. |
+| `checksum-mismatch` | Re-run `/crew-install`. The cached binary doesn't match its manifest. |
+| `version-mismatch` | Re-run `/crew-install`. The cached binary is for a different extension version. |
+| `manifest-invalid` | Re-run `/crew-install`. The cached manifest is corrupt or for another platform. |
 | `unsupported-platform` | Crew only supports macOS and glibc Linux, arm64/x64. |
 | `connection-failed` | Run `/crew-doctor` for a detailed check without needing a live daemon. |
-| `http-error` (from `/crew-runtime-install`) | **This repository is private.** Set `GITHUB_TOKEN`/`GH_TOKEN`, or run `gh auth login`, then retry the install. |
+| `http-error` (from `/crew-install`) | **This repository is private.** Set `GITHUB_TOKEN`/`GH_TOKEN`, or run `gh auth login`, then retry the install. |
 
 ## 7. Run three workers end to end
 
@@ -244,8 +244,8 @@ git merge would ask you to decide anyway.
 
 For advanced users, and for the model's own use: the extension registers **11 orchestration
 tools** (the deterministic `crew_*` tools below), plus three health/install helpers —
-`crew_health`, `crew_doctor`, and `crew_runtime_install` — each also available as a slash
-command (`/crew-status`, `/crew-doctor`, `/crew-runtime-install`). Every tool shares one
+`crew_health`, `crew_doctor`, and `crew_install` — each also available as a slash
+command (`/crew-status`, `/crew-doctor`, `/crew-install`). Every tool shares one
 runtime connection per OMP session — the first call connects to (or spawns) the repository's
 `crewd` daemon; every later call in the same session reuses that connection.
 
@@ -646,7 +646,7 @@ the quarantine -- decide exactly that `violationId` to lift it.
 { "taskId": "5f0b6b3e-6b1a-4b8e-9c2d-1a2b3c4d5e6f", "newOwnerClientInstanceId": "client-b2c3d4e5", "sequence": 50 }
 ```
 
-### `crew_runtime_install`
+### `crew_install`
 
 Success (text, then `details`):
 

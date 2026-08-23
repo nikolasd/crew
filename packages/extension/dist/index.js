@@ -10969,7 +10969,7 @@ function resolveCrewd(platform, arch, libc, env, stateRoot) {
   const binPath = join3(dir, "crewd");
   const manifestPath = join3(dir, "manifest.json");
   if (!existsSync3(binPath) || !existsSync3(manifestPath)) {
-    throw new BinarySelectionError("runtime-not-installed", `no crewd binary installed for version ${EXTENSION_VERSION}; run /crew-runtime-install to download it, or set OMP_CREW_BINARY to a local build`);
+    throw new BinarySelectionError("runtime-not-installed", `no crewd binary installed for version ${EXTENSION_VERSION}; run /crew-install to download it, or set OMP_CREW_BINARY to a local build`);
   }
   const manifest = readManifest(manifestPath);
   if (manifest.target !== target) {
@@ -11317,7 +11317,7 @@ async function getRuntimeStatus(ctx) {
 function failureResult(options, err) {
   const code = errorCode(err);
   const doctorCommand = `crewd status --repo ${options.repository}`;
-  const message = code === "runtime-not-installed" ? "The Crew runtime binary is not installed yet. Run /crew-runtime-install to download and verify it." : GENERIC_FAILURE_MESSAGE;
+  const message = code === "runtime-not-installed" ? "The Crew runtime binary is not installed yet. Run /crew-install to download and verify it." : GENERIC_FAILURE_MESSAGE;
   return {
     isError: true,
     content: [{ type: "text", text: message }],
@@ -12603,7 +12603,7 @@ function registerMonitor(pi, ctx) {
 var TOOL_NAME = "crew_health";
 var COMMAND_NAME = "crew-status";
 var STATUS_DESCRIPTION = "Use to verify the Crew runtime is reachable and healthy before orchestration operations. Returns connection status, runtime identity, and binary source. Call this if you're unsure the daemon is running, or after a connection failure.";
-var RUNTIME_INSTALL_TOOL_NAME = "crew_runtime_install";
+var INSTALL_TOOL_NAME = "crew_install";
 function crewExtension(pi) {
   let cachedClient;
   function statusContextFor(extCtx) {
@@ -12671,8 +12671,8 @@ function crewExtension(pi) {
     }
   });
   pi.registerTool({
-    name: RUNTIME_INSTALL_TOOL_NAME,
-    label: "Crew Runtime Install",
+    name: INSTALL_TOOL_NAME,
+    label: "Crew Install",
     description: "Use to download and verify the crewd runtime binary for this platform. Call this when crew_health or any orchestration tool fails with code 'runtime-not-installed'. Downloads the GitHub release asset matching this extension's version, verifies its SHA-256 against the published manifest, and caches it under the Crew state root. nikolasd/crew is a private repository, so this needs read access to it: set GITHUB_TOKEN or GH_TOKEN, or run `gh auth login` locally.",
     parameters: pi.zod.object({}),
     approval: "exec",
@@ -12680,7 +12680,7 @@ function crewExtension(pi) {
       return installRuntimeForEnv(process.env);
     }
   });
-  pi.registerCommand("crew-runtime-install", {
+  pi.registerCommand("crew-install", {
     description: "Download and verify the crewd runtime binary for this platform.",
     handler: async (_args, ctx) => {
       const result = await installRuntimeForEnv(process.env);

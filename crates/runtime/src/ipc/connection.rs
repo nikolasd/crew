@@ -230,7 +230,7 @@ async fn handle_bootstrap(line: &str, ctx: &ConnContext, shared: &Arc<Shared>) -
 
     let result = InitializeResult {
         runtime: RuntimeInfo {
-            name: "crew-runtime".to_string(),
+            name: "crewd".to_string(),
             version: crate::VERSION.to_string(),
         },
         negotiated: runtime,

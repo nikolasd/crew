@@ -1,7 +1,7 @@
 // The `@nikolasd/crew` OMP extension entry point. Registers `crew_health`
 // (an LLM-callable tool), `/crew-status` (a slash command),
-// `crew_doctor`/`/crew-doctor`, `crew_runtime_install`/
-// `/crew-runtime-install`, the `/crew` monitor, and every deterministic
+// `crew_doctor`/`/crew-doctor`, `crew_install`/
+// `/crew-install`, the `/crew` monitor, and every deterministic
 // orchestration tool (`crew_task`, `crew_worker`, `crew_profile`,
 // `crew_run`, `crew_workspace`, `crew_artifact`, `crew_child`,
 // `crew_violation`, `crew_message`, `crew_approval`,
@@ -26,7 +26,7 @@ import { registerMonitor } from "./monitor/controller";
 const TOOL_NAME = "crew_health";
 const COMMAND_NAME = "crew-status";
 const STATUS_DESCRIPTION = "Use to verify the Crew runtime is reachable and healthy before orchestration operations. Returns connection status, runtime identity, and binary source. Call this if you're unsure the daemon is running, or after a connection failure.";
-const RUNTIME_INSTALL_TOOL_NAME = "crew_runtime_install";
+const INSTALL_TOOL_NAME = "crew_install";
 
 export default function crewExtension(pi: ExtensionAPI): void {
   // Cached per extension instance (one per OMP session), closed on shutdown.
@@ -117,8 +117,8 @@ export default function crewExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
-    name: RUNTIME_INSTALL_TOOL_NAME,
-    label: "Crew Runtime Install",
+    name: INSTALL_TOOL_NAME,
+    label: "Crew Install",
     description:
       "Use to download and verify the crewd runtime binary for this platform. Call this when crew_health or any orchestration tool fails with code 'runtime-not-installed'. Downloads the GitHub release asset matching this extension's version, verifies its SHA-256 against the published manifest, and caches it under the Crew state root. nikolasd/crew is a private repository, so this needs read access to it: set GITHUB_TOKEN or GH_TOKEN, or run `gh auth login` locally.",
     parameters: pi.zod.object({}),
@@ -128,7 +128,7 @@ export default function crewExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("crew-runtime-install", {
+  pi.registerCommand("crew-install", {
     description: "Download and verify the crewd runtime binary for this platform.",
     handler: async (_args, ctx) => {
       const result = await installRuntimeForEnv(process.env);

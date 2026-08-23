@@ -69,7 +69,7 @@ export class BinaryIntegrityError extends Error {
 
 /**
  * The deterministic checksum/provenance payload written alongside every
- * cached `crewd` binary -- both the one `/crew-runtime-install` downloads
+ * cached `crewd` binary -- both the one `/crew-install` downloads
  * (`download.ts`) and the one a manual `cp` into the cache directory
  * provides for local testing.
  */
@@ -127,7 +127,7 @@ export function resolveCrewd(platform: string, arch: string, libc: string | unde
   const manifestPath = join(dir, "manifest.json");
 
   if (!existsSync(binPath) || !existsSync(manifestPath)) {
-    throw new BinarySelectionError("runtime-not-installed", `no crewd binary installed for version ${EXTENSION_VERSION}; run /crew-runtime-install to download it, or set OMP_CREW_BINARY to a local build`);
+    throw new BinarySelectionError("runtime-not-installed", `no crewd binary installed for version ${EXTENSION_VERSION}; run /crew-install to download it, or set OMP_CREW_BINARY to a local build`);
   }
 
   const manifest = readManifest(manifestPath);

@@ -174,7 +174,7 @@ crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/aud
 - **Exact install mode:** `bunfig.toml` sets `exact = true` — lockfile is strict.
 - **Rust toolchain:** 1.97.1 via `rust-toolchain.toml`. Use `rustup` for automatic version pinning.
 - **Formatter:** Biome for TS/JS (`bun run format`), `cargo fmt` for Rust. Linting disabled in Biome; use `cargo clippy` for Rust.
-- **Distribution:** Extension + skills install via the OMP marketplace (`.claude-plugin/marketplace.json`, git clone of this repo — private, so needs GitHub read access via SSH key or `gh auth login`). The `crewd` binary downloads on demand as a GitHub Release asset via `/crew-runtime-install`, verified by SHA-256; that download needs `GITHUB_TOKEN`/`GH_TOKEN` set, or a local `gh auth login` session.
+- **Distribution:** Extension + skills install via the OMP marketplace (`.claude-plugin/marketplace.json`, git clone of this repo — private, so needs GitHub read access via SSH key or `gh auth login`). The `crewd` binary downloads on demand as a GitHub Release asset via `/crew-install`, verified by SHA-256; that download needs `GITHUB_TOKEN`/`GH_TOKEN` set, or a local `gh auth login` session.
 - **Test environment:** Set `CREW_DISABLE_VENDOR_CLI=1` to skip live vendor CLI calls (required in CI to avoid billed model calls).
 - **Cross-platform:** macOS (arm64/x64) and glibc Linux (arm64/x64). Everything else rejected with typed error.
 
