@@ -348,3 +348,16 @@ async fn discovery_sees_a_transcript_that_appears_while_waiting() {
     assert_eq!(found, root.join("late-session.jsonl"));
     writer.await.unwrap();
 }
+
+#[tokio::test]
+async fn discovery_rejects_empty_nonce() {
+    let dir = tempfile::tempdir().unwrap();
+    let result =
+        find_transcript_by_nonce(dir.path(), SystemTime::now(), "", Duration::from_secs(1)).await;
+    assert!(result.is_err(), "empty nonce must result in an error");
+    let error_msg = result.unwrap_err().to_string();
+    assert!(
+        error_msg.contains("non-empty"),
+        "error must indicate invalid nonce: {error_msg}"
+    );
+}

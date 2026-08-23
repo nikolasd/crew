@@ -17,6 +17,8 @@ const MAX_DEPTH: usize = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DiscoveryError {
+    #[error("nonce must be non-empty")]
+    InvalidNonce,
     #[error(
         "no transcript containing nonce {nonce:?} appeared under {root} within {timeout:?} \
          (vendor CLI may not have created its session file)"
@@ -32,6 +34,7 @@ pub enum DiscoveryError {
 /// mtime is at/after `started_at` and whose content contains `nonce`.
 ///
 /// # Errors
+/// [`DiscoveryError::InvalidNonce`] when `nonce` is empty.
 /// [`DiscoveryError::Timeout`] when no such file appears within
 /// `timeout`. An unreadable root or entry is treated as "no match yet",
 /// never as an error -- the vendor may still be creating it.
@@ -41,19 +44,32 @@ pub async fn find_transcript_by_nonce(
     nonce: &str,
     timeout: Duration,
 ) -> Result<PathBuf, DiscoveryError> {
+    if nonce.is_empty() {
+        return Err(DiscoveryError::InvalidNonce);
+    }
+
+    let root_dir = root_dir.to_path_buf();
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        // The scan is synchronous filesystem I/O over a small vendor
-        // session directory; at this size, offloading to a blocking
-        // thread would cost more than it saves.
-        if let Some(found) = scan(root_dir, started_at, nonce, MAX_DEPTH) {
+        // Filesystem I/O is moved to a blocking thread pool to avoid
+        // blocking the tokio runtime. The scan itself is synchronous
+        // std::fs operations, invoked via spawn_blocking and awaited.
+        let root_for_scan = root_dir.clone();
+        let nonce_for_scan = nonce.to_string();
+        let scan_result = tokio::task::spawn_blocking(move || {
+            scan(&root_for_scan, started_at, &nonce_for_scan, MAX_DEPTH)
+        })
+        .await;
+
+        if let Ok(Some(found)) = scan_result {
             return Ok(found);
         }
+
         let now = tokio::time::Instant::now();
         if now >= deadline {
             return Err(DiscoveryError::Timeout {
                 nonce: nonce.to_string(),
-                root: root_dir.to_path_buf(),
+                root: root_dir,
                 timeout,
             });
         }

@@ -68,11 +68,27 @@ struct WriteJob {
     ack: oneshot::Sender<std::io::Result<()>>,
 }
 
+/// Wrapper asserting that a MasterPty is safe to share across threads.
+/// The underlying PTY file descriptor is thread-safe at the OS level.
+struct SyncMasterPty(Box<dyn MasterPty + Send>);
+
+// SAFETY: PTY file descriptors are managed by the OS kernel which
+// serializes concurrent access, making them inherently thread-safe.
+unsafe impl Sync for SyncMasterPty {}
+
+impl std::ops::Deref for SyncMasterPty {
+    type Target = dyn MasterPty + Send;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
 /// A supervised child process running on a pseudo-terminal: raw output
 /// fan-out for attach viewers, input injection, resize, and the same
 /// group-wide escalating termination as the pipe-based supervisor.
 pub struct PtyProcess {
-    master: Box<dyn MasterPty + Send>,
+    master: SyncMasterPty,
     input_tx: mpsc::Sender<WriteJob>,
     pid: i32,
     out_tx: broadcast::Sender<Vec<u8>>,
@@ -215,7 +231,7 @@ impl PtyProcess {
             })?;
 
         Ok(Self {
-            master: pair.master,
+            master: SyncMasterPty(pair.master),
             input_tx,
             pid,
             out_tx,
