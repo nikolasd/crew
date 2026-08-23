@@ -107,6 +107,22 @@ pub enum AdapterEventPayload {
         vendor_child_id: String,
         vendor_parent_ref: String,
     },
+    /// A TUI adapter's transcript tailer classified an assistant message
+    /// as a question awaiting a human answer (`TuiEvent::AssistantText {
+    /// is_question: true, .. }`), rather than a completed message.
+    QuestionDetected {
+        text: Classified<String>,
+    },
+    /// A human typed directly into a TUI adapter's attached pane,
+    /// bypassing the adapter's own input path. Carries no free text (the
+    /// keystrokes themselves are never journaled) -- only that it
+    /// happened, on which pane. Maps to [`RuntimeEvent::OutOfBandInput`]
+    /// and additionally sets the run's `needsReconciliation` flag (see
+    /// [`DomainAdapterEventSink::emit`]).
+    OutOfBandInput {
+        backend: crew_protocol::DisplayBackend,
+        pane_ref: String,
+    },
 }
 
 /// Adapters push ordered normalized events into the runtime journal
@@ -315,6 +331,21 @@ impl DomainAdapterEventSink {
                 vendor_child_id: self.label(vendor_child_id),
                 vendor_parent_ref: self.label(vendor_parent_ref),
             },
+            AdapterEventPayload::QuestionDetected { text } => RuntimeEvent::AdapterMessageEvent {
+                kind: RuntimeEventKind::AdapterQuestionDetected,
+                run_id,
+                task_id,
+                worker_id,
+                role: "assistant".to_string(),
+                text: self.sanitize(text),
+            },
+            AdapterEventPayload::OutOfBandInput { backend, pane_ref } => {
+                RuntimeEvent::OutOfBandInput {
+                    run_id,
+                    backend,
+                    pane_ref,
+                }
+            }
         }
     }
 }
@@ -345,6 +376,13 @@ impl AdapterEventSink for DomainAdapterEventSink {
         } else {
             None
         };
+        // A human bypassed the adapter and typed directly into the pane:
+        // the run needs OMP's attention to reconcile whatever state that
+        // produced. Set as a second, separate commit (mirroring the
+        // nested-violation special-case below) rather than inside the
+        // same `record_adapter_event` transaction, since flag mutation
+        // is not itself evidence for `RunLifecycleSink`'s edges.
+        let out_of_band = matches!(&runtime_event, RuntimeEvent::OutOfBandInput { .. });
         let violation_service = Arc::clone(&self.violation_service);
         Box::pin(async move {
             let mut result = db
@@ -375,6 +413,28 @@ impl AdapterEventSink for DomainAdapterEventSink {
                     run_id = %run_id,
                     "failed to record mid-run nested-worker policy violation"
                 );
+            }
+
+            if out_of_band {
+                let mut flag_result = db
+                    .run_domain_op(Box::new(move |conn| {
+                        let mut repo = DomainRepository::new(conn, project_id);
+                        repo.set_run_flag(run_id, crate::domain::RunFlag::NeedsReconciliation, true)
+                            .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                    }))
+                    .await;
+                match &mut flag_result {
+                    Ok(value) => {
+                        let _ = crate::domain::broadcast_committed(&events_tx, value);
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            run_id = %run_id,
+                            "failed to set needsReconciliation after out-of-band input"
+                        );
+                    }
+                }
             }
 
             Ok(sequence)
@@ -529,5 +589,218 @@ mod settlement_sink_tests {
             ),
             "second emit must not fire receiver again (channel already consumed)"
         );
+    }
+}
+
+#[cfg(test)]
+mod out_of_band_input_tests {
+    //! `AdapterEventPayload::OutOfBandInput` carries no free text at all
+    //! (structurally -- the variant has no text field), so "redacted"
+    //! here means the durable `RuntimeEvent` it produces never carries
+    //! anything but the backend/pane_ref, and that emitting it also sets
+    //! `needsReconciliation` -- both proved against a real database
+    //! rather than the payload shape alone.
+
+    use std::sync::Arc;
+
+    use crew_protocol::{
+        DisplayBackend, ProjectId, RunId, RunState, TaskId, Timestamp, Worker, WorkerId,
+        WorkerProfileRef,
+    };
+    use tempfile::TempDir;
+    use tokio::sync::broadcast;
+
+    use crate::config::NestedViolationAction;
+    use crate::db::DatabaseHandle;
+    use crate::domain::DomainRepository;
+    use crate::policy::ViolationService;
+
+    use super::*;
+
+    async fn open_db() -> (TempDir, Arc<DatabaseHandle>) {
+        let dir = tempfile::Builder::new()
+            .prefix("bat-oob-sink-")
+            .tempdir_in("/tmp")
+            .expect("create temp dir");
+        let db_path = dir.path().join("state.db");
+        let db = Arc::new(
+            DatabaseHandle::start(db_path)
+                .await
+                .expect("start database"),
+        );
+        (dir, db)
+    }
+
+    /// Seeds one task + worker + `working` run (mirrors
+    /// `super::super::run_lifecycle::tests::seed_run`, duplicated here
+    /// since that helper is private to its own module).
+    async fn seed_working_run(
+        db: &DatabaseHandle,
+        project_id: ProjectId,
+    ) -> (TaskId, WorkerId, RunId) {
+        let task_id = TaskId::new();
+        let worker_id = WorkerId::new();
+        let run_id = RunId::new();
+        db.run_domain_op(Box::new(move |conn| {
+            let mut repo = DomainRepository::new(conn, project_id);
+            repo.upsert_task(
+                task_id,
+                &crew_protocol::TaskRef {
+                    owner_client_instance_id: "omp-1".to_string(),
+                    revision: 1,
+                },
+            )?;
+            let worker = Worker {
+                worker_id,
+                profile_ref: WorkerProfileRef {
+                    id: worker_id,
+                    fingerprint: "sha256:fake".to_string(),
+                    adapter: "fake".to_string(),
+                    model: "test".to_string(),
+                    permission_envelope: serde_json::json!({}),
+                },
+                parent_worker_id: None,
+                created_at: Timestamp::now(),
+            };
+            repo.create_worker(&worker)?;
+            let run = crew_protocol::Run {
+                run_id,
+                task_id,
+                worker_id,
+                state: RunState::try_from("queued").expect("queued is a valid state"),
+                flags: crew_protocol::RunFlags::default(),
+                vendor_session_id: None,
+                started_at: None,
+                completed_at: None,
+            };
+            repo.submit_run(&run, None, None)?;
+            for state in ["starting", "working"] {
+                repo.transition_run(
+                    run_id,
+                    &RunState::try_from(state).expect("valid state"),
+                    None,
+                )?;
+            }
+            Ok(serde_json::json!({}))
+        }))
+        .await
+        .expect("seed working run");
+        (task_id, worker_id, run_id)
+    }
+
+    fn sink(
+        db: Arc<DatabaseHandle>,
+        project_id: ProjectId,
+        events_tx: broadcast::Sender<EventEnvelope>,
+    ) -> DomainAdapterEventSink {
+        let violation_service = Arc::new(ViolationService::new(
+            Arc::clone(&db),
+            project_id,
+            events_tx.clone(),
+            None,
+            NestedViolationAction::QuarantineAndCancel,
+        ));
+        DomainAdapterEventSink::new(
+            db,
+            project_id,
+            events_tx,
+            Vec::new(),
+            false,
+            violation_service,
+        )
+        .expect("built-in redaction rules always compile")
+    }
+
+    #[tokio::test]
+    async fn out_of_band_input_journals_no_free_text_and_sets_needs_reconciliation() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_working_run(&db, project_id).await;
+        let (events_tx, mut events_rx) = broadcast::channel(16);
+        let sink = sink(Arc::clone(&db), project_id, events_tx);
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::OutOfBandInput {
+                backend: DisplayBackend::Tmux,
+                pane_ref: "%3".to_string(),
+            },
+        })
+        .await
+        .expect("emit");
+
+        let first = events_rx.try_recv().expect("OutOfBandInput must broadcast");
+        match &first.event {
+            RuntimeEvent::OutOfBandInput {
+                run_id: got_run_id,
+                backend,
+                pane_ref,
+            } => {
+                assert_eq!(*got_run_id, run_id);
+                assert_eq!(*backend, DisplayBackend::Tmux);
+                assert_eq!(pane_ref, "%3");
+            }
+            other => panic!("expected OutOfBandInput, got {other:?}"),
+        }
+        // Structurally impossible to fail (the variant has no text
+        // field), but pinned explicitly: nothing a human typed ever
+        // appears in the durable event.
+        let serialized = serde_json::to_string(&first.event).expect("serialize");
+        assert!(
+            !serialized.to_lowercase().contains("keystroke"),
+            "no keystroke content may ever appear in an OutOfBandInput event: {serialized}"
+        );
+
+        let second = events_rx
+            .try_recv()
+            .expect("needsReconciliation must also broadcast");
+        match &second.event {
+            RuntimeEvent::RunFlagsEvent { run_id: got, flags } => {
+                assert_eq!(*got, run_id);
+                assert!(flags.needs_reconciliation, "flags: {flags:?}");
+            }
+            other => panic!("expected RunFlagsEvent, got {other:?}"),
+        }
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    #[tokio::test]
+    async fn a_failed_flag_write_is_logged_not_propagated_since_the_event_already_committed() {
+        // A run that was never seeded has no row for `set_run_flag` to
+        // update; the OutOfBandInput event itself must still succeed and
+        // broadcast -- the flag side-effect is best-effort, never a
+        // reason to fail an emit whose own journal write already
+        // committed.
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (events_tx, mut events_rx) = broadcast::channel(16);
+        let sink = sink(Arc::clone(&db), project_id, events_tx);
+        let run_id = RunId::new();
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id: TaskId::new(),
+            worker_id: WorkerId::new(),
+            payload: AdapterEventPayload::OutOfBandInput {
+                backend: DisplayBackend::Hidden,
+                pane_ref: String::new(),
+            },
+        })
+        .await
+        .expect("emit succeeds even though the flag write will fail");
+
+        let first = events_rx
+            .try_recv()
+            .expect("OutOfBandInput must still broadcast");
+        assert!(matches!(first.event, RuntimeEvent::OutOfBandInput { .. }));
+        assert!(
+            events_rx.try_recv().is_err(),
+            "no RunFlagsEvent may broadcast when the run row does not exist"
+        );
+
+        db.shutdown().await.expect("shutdown database");
     }
 }

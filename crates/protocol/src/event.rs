@@ -344,6 +344,13 @@ pub enum RuntimeEventKind {
     /// declared `nested` capability.
     #[serde(rename = "adapterNestedWorkerObserved")]
     AdapterNestedWorkerObserved,
+    /// A TUI-mode worker adapter's transcript classified an assistant
+    /// message as a question awaiting a human answer, rather than a
+    /// completed message. Carried on the same [`RuntimeEvent::AdapterMessageEvent`]
+    /// shape as [`Self::AdapterMessageFinal`] (role/text), distinguished
+    /// only by this `kind`.
+    #[serde(rename = "adapterQuestionDetected")]
+    AdapterQuestionDetected,
     /// A display backend attached a Crew-owned pane to a run.
     #[serde(rename = "displayPaneAttached")]
     DisplayPaneAttached,
