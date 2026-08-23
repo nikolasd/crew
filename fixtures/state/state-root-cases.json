@@ -30,21 +30,62 @@
     "expected": "/var/lib/crew"
   },
   {
-    "name": "xdg_state_home_appends_omp_batman",
+    "name": "xdg_state_home_appends_omp_crew_when_nothing_exists",
     "env": { "XDG_STATE_HOME": "/home/alice/.local/state" },
     "home": "/home/alice",
+    "existingDirs": [],
+    "expected": "/home/alice/.local/state/omp/crew"
+  },
+  {
+    "name": "xdg_state_home_falls_back_to_legacy_omp_batman_when_only_it_exists",
+    "env": { "XDG_STATE_HOME": "/home/alice/.local/state" },
+    "home": "/home/alice",
+    "existingDirs": ["/home/alice/.local/state/omp/batman"],
     "expected": "/home/alice/.local/state/omp/batman"
   },
   {
-    "name": "default_fallback_uses_home_and_default_pi_config_dir",
+    "name": "xdg_state_home_prefers_new_omp_crew_when_both_exist",
+    "env": { "XDG_STATE_HOME": "/home/alice/.local/state" },
+    "home": "/home/alice",
+    "existingDirs": [
+      "/home/alice/.local/state/omp/crew",
+      "/home/alice/.local/state/omp/batman"
+    ],
+    "expected": "/home/alice/.local/state/omp/crew"
+  },
+  {
+    "name": "default_fallback_uses_home_and_default_pi_config_dir_when_nothing_exists",
     "env": {},
     "home": "/home/alice",
+    "existingDirs": [],
+    "expected": "/home/alice/.omp/crew"
+  },
+  {
+    "name": "default_fallback_uses_legacy_omp_batman_when_only_it_exists",
+    "env": {},
+    "home": "/home/alice",
+    "existingDirs": ["/home/alice/.omp/batman"],
     "expected": "/home/alice/.omp/batman"
   },
   {
-    "name": "default_fallback_honors_pi_config_dir_override",
+    "name": "default_fallback_prefers_new_omp_crew_when_both_exist",
+    "env": {},
+    "home": "/home/alice",
+    "existingDirs": ["/home/alice/.omp/crew", "/home/alice/.omp/batman"],
+    "expected": "/home/alice/.omp/crew"
+  },
+  {
+    "name": "default_fallback_honors_pi_config_dir_override_when_nothing_exists",
     "env": { "PI_CONFIG_DIR": ".config/omp" },
     "home": "/home/alice",
+    "existingDirs": [],
+    "expected": "/home/alice/.config/omp/crew"
+  },
+  {
+    "name": "default_fallback_honors_pi_config_dir_override_falls_back_to_legacy_when_only_it_exists",
+    "env": { "PI_CONFIG_DIR": ".config/omp" },
+    "home": "/home/alice",
+    "existingDirs": ["/home/alice/.config/omp/batman"],
     "expected": "/home/alice/.config/omp/batman"
   },
   {

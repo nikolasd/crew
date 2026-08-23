@@ -4,11 +4,11 @@
 
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "linux")]
-use batman_runtime::PathError;
-use batman_runtime::{RuntimePaths, SecurityError, StateRoot, repository_id_from_canonical_root};
+use crew_runtime::PathError;
+use crew_runtime::{RuntimePaths, SecurityError, StateRoot, repository_id_from_canonical_root};
 
 const STATE_ROOT_CASES_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -50,6 +50,8 @@ struct StateRootCase {
     name: String,
     env: HashMap<String, String>,
     home: String,
+    #[serde(default, rename = "existingDirs")]
+    existing_dirs: Vec<String>,
     #[serde(default)]
     expected: Option<String>,
     #[serde(default)]
@@ -64,7 +66,10 @@ fn state_root_precedence_matches_shared_fixture() {
 
     for case in cases {
         let home = PathBuf::from(&case.home);
-        let resolved = StateRoot::resolve(&case.env, &home);
+        let existing_dirs = case.existing_dirs.clone();
+        let resolved = StateRoot::resolve_with(&case.env, &home, |path| {
+            existing_dirs.iter().any(|dir| Path::new(dir) == path)
+        });
 
         match (&case.expected, &case.error) {
             (Some(expected), None) => {

@@ -15,7 +15,7 @@ was written from ([`crates/runtime/src/cli.rs`](../crates/runtime/src/cli.rs)) â
 disagree, trust `--help` and file a bug against this file.
 
 Examples below invoke `crewd` bare. Nothing puts it on your `PATH`: an installed runtime lives
-at `<state-root>/bin/<version>/crewd` (default `~/.omp/batman/bin/<version>/crewd`, fetched by
+at `<state-root>/bin/<version>/crewd` (default `~/.omp/crew/bin/<version>/crewd`, fetched by
 `/crew-runtime-install` and invoked by absolute path from the extension) and a local build at
 `target/debug/crewd` or `target/release/crewd`. Alias or symlink it, or substitute the full
 path in every command.
@@ -30,8 +30,10 @@ differently depending on how you invoke it:**
   [`resolveStateRoot`](../packages/extension/src/state.ts), which mirrors the Rust
   `StateRoot::resolve` precedence exactly:
   1. `CREW_STATE_DIR` (must be absolute)
-  2. `$XDG_STATE_HOME/omp/batman` when `XDG_STATE_HOME` is set (must be absolute)
-  3. `$HOME/${PI_CONFIG_DIR:-.omp}/batman`
+  2. `$XDG_STATE_HOME/omp/crew` when `XDG_STATE_HOME` is set (must be absolute) -- or its legacy
+     `$XDG_STATE_HOME/omp/batman` sibling, if only that one exists
+  3. `$HOME/${PI_CONFIG_DIR:-.omp}/crew` -- or its legacy `$HOME/${PI_CONFIG_DIR:-.omp}/batman`
+     sibling, if only that one exists
 - **When you run `crewd` by hand and omit `--state-dir`**, the CLI does *not* apply that
   precedence at all â€” `serve`/`status`/`stop`/`monitor`/`doctor` each fall back to the bare
   relative path `.crew` in your current directory, erroring out immediately if it doesn't exist.
@@ -45,7 +47,7 @@ just read it off `crew_health`'s output, which reports the runtime's identity) a
 explicitly:
 
 ```bash
-crewd status --state-dir "$HOME/.omp/batman" --repo "$PWD"
+crewd status --state-dir "$HOME/.omp/crew" --repo "$PWD"
 ```
 
 For `serve`/`status`/`stop`/`monitor`/`doctor`, `--state-dir` is a **state root**: `crewd` hashes

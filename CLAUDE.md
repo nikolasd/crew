@@ -62,7 +62,7 @@ OMP_CREW_BINARY="$PWD/target/debug/crewd" \
 crewd serve --repo /path/to/repo [--config /path/to/crew.json]...
 crewd status --repo /path/to/repo
 crewd stop --repo /path/to/repo
-crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/batman" --output /tmp/audit.jsonl
+crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl
 ```
 
 `CREW_DISABLE_VENDOR_CLI=1` skips live vendor CLI calls — set it for any local test run to avoid
@@ -107,7 +107,7 @@ structural choice is accidental.
 | `crates/xtask/` | Codegen (TS bindings + JSON Schema) and platform package assembly |
 | `packages/extension/` | The OMP extension: JSON-RPC client, runtime launcher, tool implementations (`crew_task`, `crew_worker`, `crew_run`, ...), OMP-native reconciler, embedded `/crew` monitor |
 | `packages/protocol-ts/` | Generated TS bindings + JSON Schema + Ajv validators — **never hand-edit `src/generated/`**, run `bun run generate` |
-| `packages/crew-*/` | Per-platform `crewd` binary leaf directories — release build staging, created on demand by `batman-xtask package`, uploaded as GitHub Release assets, never committed |
+| `packages/crew-*/` | Per-platform `crewd` binary leaf directories — release build staging, created on demand by `crew-xtask package`, uploaded as GitHub Release assets, never committed |
 | `fixtures/` | Cross-language golden fixtures (protocol frames, state roots, repo ids, configs) that Rust and TS tests both read |
 | `tests/conformance/` | Golden-frame adapter conformance runner |
 | `release/` | Release build inputs and evidence — `targets.json` (platform build matrix, read by xtask and CI) plus per-version release checklists and live adapter conformance results |
@@ -150,7 +150,7 @@ These are enforced in review, not just style preference:
   root `Cargo.toml`, referenced via `.workspace = true`. `thiserror` for typed errors, `anyhow` at
   the application boundary. `tokio` multi-thread runtime. A single-thread actor owns the one
   `rusqlite::Connection` (`crates/runtime/src/db/actor.rs`) — don't reach for a connection pool.
-  `crates/runtime/src/lib.rs` uses `extern crate self as batman_runtime;` so adapter submodules can
+  `crates/runtime/src/lib.rs` uses `extern crate self as crew_runtime;` so adapter submodules can
   be compiled both inside the library and as standalone test binaries via `#[path = "..."]`.
 - **TypeScript**: strict mode, ESNext, Bundler resolution, runs on **Bun, not Node**. Biome formats
   (2-space indent, double quotes, semicolons, 320-char width); Biome linting is disabled — there is

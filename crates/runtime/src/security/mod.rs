@@ -57,28 +57,66 @@ pub enum SecurityError {
 
 /// The root directory Crew stores all per-repository state under.
 ///
-/// [`StateRoot::resolve`] is a pure function of `env` and `home` --
-/// deliberately no process-global reads -- so callers (and tests) can drive
-/// it from fixtures, and so it mirrors the TypeScript `resolveStateRoot`
-/// exactly. Creating the directory and enforcing private permissions is a
-/// separate, explicit step ([`StateRoot::ensure_private`]) performed on the
-/// Rust side only; the TypeScript side never touches the filesystem.
+/// [`StateRoot::resolve`] is a function of `env` and `home` -- deliberately
+/// no process-global env/home reads -- so callers (and tests) can drive it
+/// from fixtures, and so it mirrors the TypeScript `resolveStateRoot`
+/// exactly. It does consult the real filesystem for the fresh-vs-legacy
+/// directory check (see [`StateRoot::resolve_with`]); [`StateRoot::resolve`]
+/// is the production entry point that probes the real filesystem, while
+/// [`StateRoot::resolve_with`] takes the probe as a parameter so tests stay
+/// deterministic. Creating the directory and enforcing private permissions
+/// is a separate, explicit step ([`StateRoot::ensure_private`]) performed on
+/// the Rust side only; the TypeScript side never touches the filesystem.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateRoot(PathBuf);
 
 impl StateRoot {
     /// Resolves the Crew state root from `env`/`home` using the precedence:
     /// `CREW_STATE_DIR` (or its pre-rename name, `BATMAN_STATE_DIR`) ->
-    /// `$XDG_STATE_HOME/omp/batman` -> `$HOME/${PI_CONFIG_DIR:-.omp}/batman`.
-    /// The on-disk directory name stays `batman` in both fallback tiers:
-    /// moving already-provisioned user state is a separate, careful
-    /// migration this rename does not attempt.
+    /// `$XDG_STATE_HOME/omp/crew` -> `$HOME/${PI_CONFIG_DIR:-.omp}/crew`.
+    ///
+    /// Delegates to [`Self::resolve_with`] using the real filesystem
+    /// (`Path::exists`) as the existence probe -- see that function for the
+    /// fresh-install-vs-legacy-directory rule this applies in the two
+    /// fallback tiers.
     ///
     /// # Errors
     /// Returns [`SecurityError::RelativeOverride`] if `CREW_STATE_DIR`
     /// (or legacy `BATMAN_STATE_DIR`) or `XDG_STATE_HOME` is set but not an
     /// absolute path.
     pub fn resolve(env: &HashMap<String, String>, home: &Path) -> Result<Self, SecurityError> {
+        Self::resolve_with(env, home, |path| path.exists())
+    }
+
+    /// Resolves the Crew state root exactly like [`Self::resolve`], but
+    /// takes the directory-existence probe as a parameter instead of
+    /// touching the real filesystem.
+    ///
+    /// This is what makes the function testable deterministically:
+    /// production always passes the real check through [`Self::resolve`];
+    /// tests inject a closure backed by a fixed set of paths (see
+    /// `fixtures/state/state-root-cases.json`'s `existingDirs` field and the
+    /// TypeScript `resolveStateRoot`'s equivalent `exists` parameter, which
+    /// this must stay in semantic lockstep with).
+    ///
+    /// Precedence: `CREW_STATE_DIR` (or its pre-rename name,
+    /// `BATMAN_STATE_DIR`) wins outright if set. Otherwise, in both the
+    /// `XDG_STATE_HOME` tier and the `$HOME` fallback tier, the *new*
+    /// `crew`-named directory is preferred, but if it does not exist yet
+    /// and the *legacy* `batman`-named directory does, the legacy directory
+    /// is used instead -- so a fresh install lands under `crew` while an
+    /// existing install keeps working against its `batman` directory
+    /// without this function ever moving data itself.
+    ///
+    /// # Errors
+    /// Returns [`SecurityError::RelativeOverride`] if `CREW_STATE_DIR`
+    /// (or legacy `BATMAN_STATE_DIR`) or `XDG_STATE_HOME` is set but not an
+    /// absolute path.
+    pub fn resolve_with(
+        env: &HashMap<String, String>,
+        home: &Path,
+        exists: impl Fn(&Path) -> bool,
+    ) -> Result<Self, SecurityError> {
         if let Some(value) = env_flag_from(env, "CREW_STATE_DIR", "BATMAN_STATE_DIR") {
             let path = PathBuf::from(&value);
             if !path.is_absolute() {
@@ -98,11 +136,34 @@ impl StateRoot {
                     value: value.clone(),
                 });
             }
-            return Ok(Self(path.join("omp").join("batman")));
+            return Ok(Self(Self::preferring_legacy_if_only_it_exists(
+                &path.join("omp"),
+                &exists,
+            )));
         }
 
         let pi_config_dir = env.get("PI_CONFIG_DIR").map_or(".omp", String::as_str);
-        Ok(Self(home.join(pi_config_dir).join("batman")))
+        Ok(Self(Self::preferring_legacy_if_only_it_exists(
+            &home.join(pi_config_dir),
+            &exists,
+        )))
+    }
+
+    /// Given a parent directory (`$XDG_STATE_HOME/omp` or
+    /// `$HOME/${PI_CONFIG_DIR:-.omp}`), returns `parent/crew` unless
+    /// `parent/batman` exists and `parent/crew` does not, in which case it
+    /// returns `parent/batman`.
+    fn preferring_legacy_if_only_it_exists(
+        parent: &Path,
+        exists: &impl Fn(&Path) -> bool,
+    ) -> PathBuf {
+        let crew_dir = parent.join("crew");
+        let legacy_dir = parent.join("batman");
+        if !exists(&crew_dir) && exists(&legacy_dir) {
+            legacy_dir
+        } else {
+            crew_dir
+        }
     }
 
     /// The resolved absolute path. No filesystem access has happened yet.
@@ -338,10 +399,22 @@ mod tests {
     }
 
     #[test]
-    fn xdg_state_home_appends_omp_batman() {
-        let root = StateRoot::resolve(
+    fn xdg_state_home_appends_omp_crew_when_nothing_exists() {
+        let root = StateRoot::resolve_with(
             &env(&[("XDG_STATE_HOME", "/home/alice/.local/state")]),
             Path::new("/home/alice"),
+            |_| false,
+        )
+        .unwrap();
+        assert_eq!(root.path(), Path::new("/home/alice/.local/state/omp/crew"));
+    }
+
+    #[test]
+    fn xdg_state_home_falls_back_to_legacy_omp_batman_when_only_it_exists() {
+        let root = StateRoot::resolve_with(
+            &env(&[("XDG_STATE_HOME", "/home/alice/.local/state")]),
+            Path::new("/home/alice"),
+            |path| path == Path::new("/home/alice/.local/state/omp/batman"),
         )
         .unwrap();
         assert_eq!(
@@ -351,19 +424,61 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_home_omp_batman() {
-        let root = StateRoot::resolve(&HashMap::new(), Path::new("/home/alice")).unwrap();
+    fn xdg_state_home_prefers_new_omp_crew_when_both_exist() {
+        let root = StateRoot::resolve_with(
+            &env(&[("XDG_STATE_HOME", "/home/alice/.local/state")]),
+            Path::new("/home/alice"),
+            |_| true,
+        )
+        .unwrap();
+        assert_eq!(root.path(), Path::new("/home/alice/.local/state/omp/crew"));
+    }
+
+    #[test]
+    fn falls_back_to_home_omp_crew_when_nothing_exists() {
+        let root =
+            StateRoot::resolve_with(&HashMap::new(), Path::new("/home/alice"), |_| false).unwrap();
+        assert_eq!(root.path(), Path::new("/home/alice/.omp/crew"));
+    }
+
+    #[test]
+    fn falls_back_to_legacy_home_omp_batman_when_only_it_exists() {
+        let root = StateRoot::resolve_with(&HashMap::new(), Path::new("/home/alice"), |path| {
+            path == Path::new("/home/alice/.omp/batman")
+        })
+        .unwrap();
         assert_eq!(root.path(), Path::new("/home/alice/.omp/batman"));
     }
 
     #[test]
-    fn pi_config_dir_overrides_default_directory_name() {
-        let root = StateRoot::resolve(
+    fn pi_config_dir_overrides_default_directory_name_when_nothing_exists() {
+        let root = StateRoot::resolve_with(
             &env(&[("PI_CONFIG_DIR", ".config-omp")]),
             Path::new("/home/alice"),
+            |_| false,
+        )
+        .unwrap();
+        assert_eq!(root.path(), Path::new("/home/alice/.config-omp/crew"));
+    }
+
+    #[test]
+    fn pi_config_dir_override_falls_back_to_legacy_when_only_it_exists() {
+        let root = StateRoot::resolve_with(
+            &env(&[("PI_CONFIG_DIR", ".config-omp")]),
+            Path::new("/home/alice"),
+            |path| path == Path::new("/home/alice/.config-omp/batman"),
         )
         .unwrap();
         assert_eq!(root.path(), Path::new("/home/alice/.config-omp/batman"));
+    }
+
+    #[test]
+    fn resolve_uses_the_real_filesystem_for_the_existence_probe() {
+        // `resolve` (unlike `resolve_with`) probes the real filesystem; a
+        // fabricated home directory that does not exist on this machine
+        // must resolve to the fresh `crew` name in both fallback tiers.
+        let root = StateRoot::resolve(&HashMap::new(), Path::new("/home/alice")).unwrap();
+        assert_eq!(root.path(), Path::new("/home/alice/.omp/crew"));
     }
 
     #[test]
