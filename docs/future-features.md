@@ -65,31 +65,31 @@ Implement when any of the above scenarios becomes real (a third-party client is 
 
 ## Real Pane/Window Creation for Worker Visibility
 
-**References:** `crates/runtime/src/display/tmux.rs` (`TmuxDisplay::create_pane`), `crates/runtime/src/display/herdr.rs` (`HerdrDisplay::create_pane`), `crates/runtime/src/display/terminal.rs`, `crates/runtime/src/service/orchestration.rs` (`start_queued_run`), `crates/runtime/src/adapter/registry.rs`
+**References:** `crates/runtime/src/display/tmux.rs`, `crates/runtime/src/display/herdr.rs`, `crates/runtime/src/display/os_window.rs`, `crates/runtime/src/display/hidden.rs`, `crates/runtime/src/display/coordinator.rs` (`PaneCoordinator`), `crates/runtime/src/display/attach.rs` (`AttachServer`), `crates/runtime/src/adapter/tui/adapter.rs` (`TuiAdapter`), `crates/runtime/src/adapter/registry.rs`
 
 ### What it is
 
-Every worker run should be visibly started for the user, in whichever display backend is in play: a new tmux pane/window when the tmux backend is selected, a new Herdr pane when Herdr is selected, a new terminal window when falling back to the plain terminal backend. A worker should never just be a silent background process the user has no window onto.
+Every worker run should be visibly started for the user, in whichever display backend is in play: a new tmux pane/window when the tmux backend is selected, a new Herdr pane when Herdr is selected, a new OS-native terminal window when falling back to that backend. A worker should never just be a silent background process the user has no window onto.
 
-### Current state (verified 2026-08-21)
+### Current state (verified 2026-08-23)
 
-`TmuxDisplay::create_pane` and `HerdrDisplay::create_pane` are fully implemented and unit-tested — they genuinely call `tmux split-window`/`new-window -P -F` and `herdr pane split`/`run`/`report-agent` respectively, and would open a real pane if invoked. But neither is called anywhere in the orchestration path — the only call sites in the whole `crates/runtime/src` tree are inside `HerdrDisplay`'s own `#[cfg(test)]` module.
+The design questions this entry used to leave open are answered, and the pane-lifecycle machinery they blocked is built and has a real (if not yet universally reachable) production call site:
 
-`start_queued_run` (`orchestration.rs`) only calls `DisplayRegistry::resolve`, which checks backend *availability* and picks a name — it explicitly never activates one: "the registry resolves availability without activating a backend, so no vendor pane id exists yet." It then journals a `DisplayPaneAttached` event with an empty pane-id placeholder, for bookkeeping/replay only.
+- **What runs inside the opened pane.** `PaneCoordinator::attach` (`display/coordinator.rs`) opens every Crew-owned pane running `<crewd_path> attach <run-id> --repo <repository> --state-dir <state_dir>` — never the raw vendor CLI directly. `crewd attach` connects to that run's own `AttachServer` Unix socket (`display/attach.rs`) and pumps bytes bidirectionally between the real terminal and the run's PTY, replaying a ring-buffer of recent output to a late-joining viewer.
+- **Backend selection and fallback.** `PaneCoordinator::attach` resolves a backend (the config-forced one first, then Herdr/tmux/OS-window/Hidden by availability), and a `create_pane` failure on the resolved backend is journaled as a diagnostic and falls back to `Hidden` (an empty `pane_ref`) rather than failing the run — never a bare, unexplained silent pane.
+- **Who closes the pane, and when.** `PaneCoordinator::detach`, called once a run settles, honors the `display.closeOnExit` config (`Never`/`OnSuccess`/`Always`) and journals `DisplayPaneDetached` with the real ref either way.
+- **The terminal-window backend exists.** `OsWindowDisplay` (`display/os_window.rs`) opens a real OS-native terminal window (`osascript`/Terminal on macOS, `x-terminal-emulator` on Linux) — the gap `TerminalDisplay` (since retired in favor of `HiddenDisplay`) used to leave open.
 
-`TerminalDisplay` has no pane/window-opening capability at all today — no `create_pane` equivalent exists for it, so there is currently no code path that opens a new terminal window either.
+**What still isn't wired everywhere.** `PaneCoordinator::attach`/`detach`'s first (and, as of this writing, only) production call site is `TuiAdapter` (`adapter/tui/adapter.rs`): a run whose worker profile requests `mode: "tui"` for a vendor with a `TuiVendor` implementation gets a real PTY, a real `AttachServer`, and a real `PaneCoordinator`-resolved pane wired end to end, including settle-time `closeOnExit`. No vendor has a `TuiVendor` implementation yet — those land one per vendor in later work packages (tracked as WP13/WP27/WP28-style items) — so today every reserved adapter kind (`claude`/`codex`/`copilot`/`ompRpc`) still runs in the default `mode: "headless"`, for which `crate::service::orchestration::start_queued_run` still journals the original empty-pane-ref placeholder attach/detach pair, exactly as before this entry's previous revision described. A headless run's process is still spawned by the pipe-based supervisor (`supervisor/process.rs`) with piped stdio, in its own process group, with no real pane at all — the embedded read-only `/crew` monitor tailing the event journal remains the only live view onto it.
 
-The worker process itself is always spawned by the supervisor (`crates/runtime/src/supervisor/process.rs`) with fully piped stdio, in its own process group, regardless of which display backend was selected. The only thing a user can currently see live is the embedded read-only `/crew` monitor inside OMP, which tails the event journal — not a real pane or window running the worker. Checked the TypeScript extension (`packages/extension/src/`) too: nothing there shells out to `tmux`/`herdr` or opens a terminal either.
+### What remains open
 
-### Why this hasn't been wired up
-
-- The event-stream model (`events/replay` + `events/subscribe`, surfaced via the embedded monitor) already gives a working way to watch a run, so nothing forced this further.
-- Wiring `create_pane` into `start_queued_run` requires design decisions that haven't been made yet: what actually runs inside the opened pane/window (the raw vendor CLI directly, or `crewd monitor --run-id <id>` tailing that run's events), who closes the pane/window when the run settles vs. when the daemon restarts mid-run, and what happens if pane creation itself fails partway through a run that's already started.
-- `TerminalDisplay` additionally needs real window-spawning logic added (an OS-specific "open a new terminal emulator running X" command) — it currently does nothing beyond reporting itself as always-available.
+- **Per-vendor `TuiVendor` implementations.** `TuiAdapter<V: TuiVendor>` is vendor-agnostic and fully tested against a mock vendor (`crates/runtime/tests/tui_adapter.rs`); each real vendor (Claude, Codex, Copilot) needs its own small `TuiVendor` impl (interactive-mode argv, its transcript format, its interrupt byte sequence, its version gate) before `mode: "tui"` does anything but return a typed `adapter_unavailable`-style refusal for that vendor.
+- **A headless run's own pane.** Nothing above changes headless-mode behavior: a headless run's `DisplayPaneAttached`/`DisplayPaneDetached` pair is still the bookkeeping placeholder from `start_queued_run`, not a `PaneCoordinator`-resolved real pane. Whether a headless run should *also* get a real (but non-interactive, tailing-only) pane is an open product question, not a known implementation gap — revisit once the first TUI-mode vendor ships and it's clear whether "worker visibility" for headless runs is still felt as missing once TUI-mode ones have it.
 
 ### Decision trigger
 
-This is the maintainer's stated expectation for how Crew should behave — every worker visibly started in a pane (tmux/Herdr) or a new terminal window (plain-terminal fallback) — so treat this entry as scoping outstanding wiring work, not as an indefinitely-deferred nice-to-have. Revisit as soon as the pane-lifecycle questions above are settled.
+This is the maintainer's stated expectation for how Crew should behave — every worker visibly started in a pane (tmux/Herdr/OS window) the user can both watch and type into. The pane-lifecycle machinery itself is no longer the blocker; the remaining work is one `TuiVendor` implementation per vendor. Revisit the headless-pane question above once at least one vendor's TUI mode has shipped and real usage shows whether it's still missed.
 
 ---
 
