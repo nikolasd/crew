@@ -1,16 +1,17 @@
 //! The `crewd` command-line interface: `serve`, `status`, `stop`,
 //! `version`, `schema`, `monitor`, `audit`, `doctor`, and
 //! `coordination-mcp`. This layer only
-//! parses arguments, resolves the state root when `--state-dir` is omitted,
-//! and maps [`crate::lifecycle`] outcomes to process exit codes; all
-//! behaviour lives in the library.
+//! parses arguments, resolves the state root (via [`StateRoot::resolve`],
+//! the same precedence the OMP extension applies) when `--state-dir` is
+//! omitted, and maps [`crate::lifecycle`] outcomes to process exit codes;
+//! all behaviour lives in the library.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use crew_runtime::VERSION;
+use crew_runtime::{StateRoot, VERSION};
 /// The committed fixture-mode baseline loaded from
 /// `fixtures/conformance/fixture-mode-baseline.json`. Maps each adapter to
 /// the scenario names that are expected to fail in fixture mode.
@@ -683,9 +684,9 @@ async fn run_audit_export(
     to: Option<String>,
     output: PathBuf,
 ) -> ExitCode {
-    // A failed resolve must not silently fall back to `.crew`: the
-    // export would then report success against a directory that may not
-    // exist.
+    // A failed resolve must not silently fall back to some default
+    // directory: the export would then report success against a state
+    // root that may not exist, or isn't the one actually served.
     let state_root = match resolve_state_dir(state_dir) {
         Ok(dir) => dir,
         Err(err) => return fail(&err),
@@ -736,22 +737,46 @@ async fn run_audit_export(
     }
 }
 
-/// Resolves the state directory, defaulting to `.crew` if `None`.
+/// Resolves the state directory when `--state-dir` is omitted, using the
+/// real process environment and `$HOME`. Delegates to
+/// [`resolve_state_dir_with`] -- see that function for the actual
+/// precedence; this wrapper only exists to keep the process-global env
+/// read out of the (deterministically testable) resolution logic itself,
+/// the same split [`StateRoot::resolve`]/`resolve_with` already applies.
 fn resolve_state_dir(state_dir: Option<PathBuf>) -> Result<PathBuf, String> {
-    match state_dir {
-        Some(dir) => Ok(dir),
-        None => {
-            let default = PathBuf::from(".crew");
-            if default.exists() {
-                Ok(default)
-            } else {
-                Err(
-                    "state directory `.crew` does not exist; use --state-dir to specify it"
-                        .to_string(),
-                )
-            }
-        }
+    let env: std::collections::HashMap<String, String> = std::env::vars().collect();
+    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    resolve_state_dir_with(state_dir, &env, home.as_deref())
+}
+
+/// Resolves the state directory when `--state-dir` is omitted, via
+/// [`StateRoot::resolve`] -- the same `CREW_STATE_DIR` ->
+/// `$XDG_STATE_HOME/omp/crew` -> `$HOME/.omp/crew` precedence the OMP
+/// extension's `resolveStateRoot` applies when it spawns `crewd serve`. A
+/// bare `crewd status`/`stop`/`serve`/... with no flag therefore resolves
+/// to the exact directory the extension would have used, instead of a
+/// separate, easy-to-forget default -- CLI and extension now share one
+/// resolution algorithm rather than two.
+fn resolve_state_dir_with(
+    state_dir: Option<PathBuf>,
+    env: &std::collections::HashMap<String, String>,
+    home: Option<&std::path::Path>,
+) -> Result<PathBuf, String> {
+    if let Some(dir) = state_dir {
+        return Ok(dir);
     }
+
+    let home = home.ok_or_else(|| {
+        "cannot resolve a default state directory: $HOME is not set; use --state-dir to specify one".to_string()
+    })?;
+
+    StateRoot::resolve(env, home)
+        .map(|root| root.path().to_path_buf())
+        .map_err(|err| {
+            format!(
+                "failed to resolve a default state directory: {err}; use --state-dir to specify one"
+            )
+        })
 }
 
 /// Runs `crewd doctor`: runs the diagnostic check catalog against the
@@ -1285,6 +1310,62 @@ mod tests {
         assert_eq!(capture_status(true, false), "unchanged");
         assert_eq!(capture_status(false, false), "rewritten");
         assert_eq!(capture_status(false, true), "would rewrite");
+    }
+
+    /// An explicit `--state-dir` always wins outright, before `env`/`home`
+    /// are even consulted.
+    #[test]
+    fn resolve_state_dir_prefers_an_explicit_flag() {
+        let env = std::collections::HashMap::new();
+        let explicit = PathBuf::from("/explicit/state");
+        assert_eq!(
+            resolve_state_dir_with(
+                Some(explicit.clone()),
+                &env,
+                Some(std::path::Path::new("/home/alice"))
+            ),
+            Ok(explicit)
+        );
+    }
+
+    /// A bare invocation with no `--state-dir` must resolve to exactly the
+    /// same directory the OMP extension's `resolveStateRoot` would have
+    /// used -- this is the whole point of routing through
+    /// [`StateRoot::resolve`] instead of a separate CLI-only default.
+    #[test]
+    fn resolve_state_dir_with_no_flag_matches_the_extensions_default() {
+        let env = std::collections::HashMap::new();
+        let home = std::path::Path::new("/home/alice");
+        assert_eq!(
+            resolve_state_dir_with(None, &env, Some(home)),
+            Ok(PathBuf::from("/home/alice/.omp/crew"))
+        );
+    }
+
+    /// `CREW_STATE_DIR` still wins outright over the `$HOME`-derived
+    /// default, exactly as [`StateRoot::resolve`] documents.
+    #[test]
+    fn resolve_state_dir_with_no_flag_honors_crew_state_dir() {
+        let mut env = std::collections::HashMap::new();
+        env.insert("CREW_STATE_DIR".to_string(), "/var/lib/crew".to_string());
+        let home = std::path::Path::new("/home/alice");
+        assert_eq!(
+            resolve_state_dir_with(None, &env, Some(home)),
+            Ok(PathBuf::from("/var/lib/crew"))
+        );
+    }
+
+    /// No flag and no `$HOME` must fail closed with a clear message, not
+    /// panic or guess a directory.
+    #[test]
+    fn resolve_state_dir_with_no_flag_and_no_home_fails_closed() {
+        let env = std::collections::HashMap::new();
+        let err = resolve_state_dir_with(None, &env, None).unwrap_err();
+        assert!(
+            err.contains("$HOME is not set"),
+            "unexpected message: {err}"
+        );
+        assert!(err.contains("--state-dir"), "unexpected message: {err}");
     }
 
     /// `run_audit_export` must resolve the database the same way every

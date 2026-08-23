@@ -24,9 +24,10 @@ In normal use you don't run this yourself — the OMP extension spawns it on fir
 repository (see [`getting-started.md`](getting-started.md#how-the-extension-finds-and-starts-crewd)).
 Run it by hand for debugging or CI. See [`cli-reference.md`](cli-reference.md#crewd-serve) for
 every flag, and the [state-directory note](cli-reference.md#before-you-start-state-directories)
-before you pick a `--state-dir` — the CLI's own default when it's omitted (`.crew` in the current
-directory) is *not* the same location the extension resolves and uses. Always pass `--state-dir`
-explicitly (as above) unless you specifically want the bare `.crew`-in-cwd fallback.
+before you pick a `--state-dir` — the CLI's own default when it's omitted resolves the same
+precedence the extension uses (`StateRoot::resolve`), but both read it from the *current* process
+environment independently, so they only land in the same place if that environment agrees. Pass
+`--state-dir` explicitly (as above) whenever you're not sure the two shells' environments match.
 
 ### Single-instance enforcement
 

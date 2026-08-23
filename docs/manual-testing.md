@@ -44,7 +44,9 @@ export CREW_DISABLE_VENDOR_CLI=1
 export OMP_CREW_BINARY="$PWD/target/debug/crewd"
 ```
 
-**State directory resolution** (in precedence order):
+**State directory resolution** (in precedence order) — applied identically whether the extension
+resolves `--state-dir` before spawning `crewd`, or you omit `--state-dir` on a bare `crewd`
+invocation (`StateRoot::resolve`, `crates/runtime/src/security/mod.rs`):
 1. `CREW_STATE_DIR` (must be absolute)
 2. `$XDG_STATE_HOME/omp/crew` when `XDG_STATE_HOME` is set (must be absolute) -- or its legacy
    `$XDG_STATE_HOME/omp/batman` sibling, if only that one exists
@@ -82,6 +84,57 @@ depth, failing closed with the exact JSON path that named the unknown key. Examp
   compile as a regex refuses the daemon's startup rather than degrading to built-in rules only.
 - Vendor CLIs are ordinary installed dependencies; live conformance and the availability probe run by default. `CREW_DISABLE_VENDOR_CLI=1` should always be set in CI jobs or unattended runs — it forbids observation-only vendor invocation and guarantees no billed model call is made.
 
+## Owning what you test
+
+Two things get rebuilt independently — the `crewd` binary and the extension bundle
+(`packages/extension/dist/index.js`) — and it's easy to run a check below while actually still
+exercising the *old* build of either one. Before trusting any result in this document, make sure
+you're exercising the build you just made.
+
+**The extension side has two speeds.** Point `--extension` directly at
+`packages/extension/src/index.ts` for fast iteration — Bun runs TypeScript directly, so an edit
+takes effect on the next `omp` invocation with no build step. Only switch to `bun run build` +
+`packages/extension/dist/index.js` (what every example below uses) when you want to test the exact
+bundle that ships — `dist/index.js` is a separate build output and silently lags your source if you
+edit `src/` and forget to rebuild it.
+
+**The daemon side does not restart itself.** `crewd` runs detached, and OMP connects-or-spawns
+(ADR-0008, §1 below) — if a daemon started from your *previous* build of `crewd` is still alive, a
+fresh `omp` session just reconnects to it over its Unix socket. Rebuilding `crewd` and re-running a
+check without killing the old daemon first tests nothing new. After any Rust change:
+
+```bash
+crewd stop --repo "$PWD"   # or: pkill -f "crewd serve"
+```
+
+before your next `omp` invocation. `--state-dir` can be omitted here — the bare CLI resolves the
+same state root the extension does (see
+[cli-reference.md's state-directory note](cli-reference.md#before-you-start-state-directories))
+— but only pass it explicitly when your current shell's environment might not match the one the
+extension used to spawn the daemon (a different `$CREW_STATE_DIR`/`$XDG_STATE_HOME`, or none set
+in one shell and set in the other).
+
+**Confirm identity, don't assume it.** §1's expected output includes `Binary source: override` —
+that's the extension reporting it resolved `crewd` via `OMP_CREW_BINARY`, not a downloaded release
+(`platform.ts`'s `resolveCrewd`). If you ever see `Binary source: package` when you meant to test a
+local build, `OMP_CREW_BINARY` isn't set, or isn't pointing where you think.
+
+**Cheapest first check, no daemon needed.** `crew_doctor` / `/crew-doctor` (or
+`cargo run -p crew-runtime -- doctor`) verifies config parsing, the state directory, and rollout
+gates without spawning anything — run it before any section below when you just want to know "did
+I break something obvious," without paying for a daemon spawn or a model call.
+
+**Match the section to what you touched** — you don't need to run all six every time:
+
+| You touched | Run |
+|---|---|
+| IPC/lifecycle/journal/daemon startup | §1 |
+| Event model or monitor rendering | §2 |
+| An orchestration RPC method or tool | §3 |
+| Adapter code (claude/codex/copilot/omp-rpc) | §4b first (free); §4c only if the change could affect real vendor-CLI behavior |
+| Workspace lease/apply/isolation | §5 |
+| `run/result` / redaction / read-back | §6 |
+
 ## 1. The daemon through OMP (no model call, no extension CLI needed)
 
 The daemon is tested through the OMP extension, which handles the full lifecycle: connecting to
@@ -114,7 +167,10 @@ omp --extension "$EXT" --print "/crew-status"
 ```
 
 Expect the **same** `Project` id, with a **higher** `Uptime`. That's the connect-or-spawn design
-(ADR-0008) reconnecting to the daemon it just started, not spawning a second one.
+(ADR-0008) reconnecting to the daemon it just started, not spawning a second one. If you rebuilt
+`crewd` between these two invocations and still see the same `Project` id, that's the gotcha in
+["Owning what you test"](#owning-what-you-test) above — you reconnected to the daemon from your
+*old* build, not the new one.
 
 **What this verifies:** The extension's `ensureRuntime()` can derive the per-repo Unix socket
 path (SHA-256 of the canonical VCS root, `<stateDir>/repos/<repoId>/runtime.sock`), spawn

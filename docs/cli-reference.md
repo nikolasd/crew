@@ -22,33 +22,34 @@ path in every command.
 
 ## Before you start: state directories
 
-Almost every subcommand takes `--state-dir` and `--repo`. Getting `--state-dir` wrong is the most
-common way to talk to the wrong runtime (or no runtime at all), because **`crewd` resolves it
-differently depending on how you invoke it:**
+Almost every subcommand takes `--state-dir` and `--repo`. `--state-dir` resolves the same way no
+matter how you invoke `crewd`:
 
 - **When the extension spawns `crewd`**, it always passes an explicit `--state-dir` computed by
-  [`resolveStateRoot`](../packages/extension/src/state.ts), which mirrors the Rust
-  `StateRoot::resolve` precedence exactly:
+  [`resolveStateRoot`](../packages/extension/src/state.ts).
+- **When you run `crewd` by hand and omit `--state-dir`**, the CLI resolves it itself via
+  `StateRoot::resolve` (`crates/runtime/src/cli.rs`'s `resolve_state_dir`) -- the exact same
+  precedence, so a bare `crewd status --repo .` lands on the same directory the extension would
+  have used:
   1. `CREW_STATE_DIR` (must be absolute)
   2. `$XDG_STATE_HOME/omp/crew` when `XDG_STATE_HOME` is set (must be absolute) -- or its legacy
      `$XDG_STATE_HOME/omp/batman` sibling, if only that one exists
   3. `$HOME/${PI_CONFIG_DIR:-.omp}/crew` -- or its legacy `$HOME/${PI_CONFIG_DIR:-.omp}/batman`
      sibling, if only that one exists
-- **When you run `crewd` by hand and omit `--state-dir`**, the CLI does *not* apply that
-  precedence at all — `serve`/`status`/`stop`/`monitor`/`doctor` each fall back to the bare
-  relative path `.crew` in your current directory, erroring out immediately if it doesn't exist.
-  This is a different default from the one the extension uses, on purpose (the extension's launcher
-  and this bare fallback are separate code paths) — so a `crewd status --repo .` run in a random
-  shell will not find the runtime OMP is using unless you pass the same `--state-dir` the extension
-  resolved.
 
-**To talk to the same runtime OMP is using**, compute the state root with the precedence above (or
-just read it off `crew_health`'s output, which reports the runtime's identity) and pass it
-explicitly:
+Both call sites read this precedence from the real process environment independently, so they only
+agree automatically when that environment agrees — if the `omp` session that started the runtime
+had `CREW_STATE_DIR` (or `XDG_STATE_HOME`) set and your current shell doesn't, a bare `crewd
+status --repo .` here resolves somewhere else. Export the same override in both shells, or pass
+`--state-dir` explicitly (or just read the state root off `crew_health`'s output, which reports
+the runtime's identity):
 
 ```bash
 crewd status --state-dir "$HOME/.omp/crew" --repo "$PWD"
 ```
+
+A missing `$HOME` (no flag, no `CREW_STATE_DIR`, no `$HOME` env var) is refused outright rather
+than guessing a directory.
 
 For `serve`/`status`/`stop`/`monitor`/`doctor`, `--state-dir` is a **state root**: `crewd` hashes
 the canonicalized repository path into a `repository-id` and derives the actual per-repository
