@@ -9589,7 +9589,7 @@ operator can correlate the violation to its cause.`,
       ]
     },
     DisplayBackend: {
-      description: "Supported display backends.",
+      description: 'Supported display backends.\n\nReconciled with `crates/runtime`\'s config-facing\n`crew::config::crew::DisplayBackend` (WP9): that enum additionally has\n`Auto`, which means "no forced backend" and has no concrete backend of\nits own here -- every other variant of the config enum maps to exactly\none of these (`crate::config::protocol_display_backend` in the runtime\ncrate does that mapping). `Terminal` (an always-available, capability-\nfree stub) is retired in the same change: [`Self::Hidden`] is now the\none always-available fallback, and it is a real, deliberate "no pane"\nchoice rather than a degraded terminal rendering.',
       oneOf: [
         {
           description: "Herdr terminal multiplexer backend.",
@@ -9602,9 +9602,14 @@ operator can correlate the violation to its cause.`,
           const: "tmux"
         },
         {
-          description: "Raw terminal backend (degraded capabilities).",
+          description: "A new OS-native terminal window (`osascript`/Terminal on macOS,\n`x-terminal-emulator` on Linux).",
           type: "string",
-          const: "terminal"
+          const: "osWindow"
+        },
+        {
+          description: "No pane at all -- the always-available fallback. Not degraded\ncapability like the retired `Terminal`; a deliberate, always-safe\nchoice for headless or opted-out runs.",
+          type: "string",
+          const: "hidden"
         }
       ]
     },
@@ -12218,6 +12223,7 @@ function reduceEvent(state, envelope) {
     latestActivity: patch.latestActivity ?? base.latestActivity,
     pendingApprovalCount: patch.pendingApprovalCountDelta !== undefined ? Math.max(0, base.pendingApprovalCount + patch.pendingApprovalCountDelta) : base.pendingApprovalCount,
     openViolations: applyViolationPatch(base.openViolations, patch),
+    pane: patch.pane ?? base.pane,
     lastEventAt: envelope.timestamp,
     lastAppliedSequence: envelope.sequence
   };
@@ -12344,6 +12350,15 @@ function eventPatch(envelope) {
         latestActivity: `artifact ${event.payload.artifactKind} ${event.payload.artifactId}`
       };
     }
+    case "displayEvent": {
+      const attached = event.payload.kind === "displayPaneAttached";
+      const { backend, placement, paneRef } = event.payload;
+      return {
+        runId: event.payload.runId,
+        latestActivity: attached ? `pane attached: ${backend}${paneRef !== "" ? ` (${paneRef})` : ""}` : `pane detached: ${backend}`,
+        pane: { backend, placement, paneRef, attached }
+      };
+    }
     case "workspaceEvent": {
       const kindLabel = event.payload.kind.type;
       return {
@@ -12466,6 +12481,10 @@ function renderRowDetails(row) {
   const openViolations = Object.entries(row.openViolations);
   if (openViolations.length > 0) {
     lines.push(`Open violations: ${openViolations.map(([id, code]) => `${code} (${id})`).join(", ")} -- decide with crew_violation`);
+  }
+  if (row.pane !== undefined) {
+    const ref = row.pane.paneRef !== "" ? ` ${row.pane.paneRef}` : "";
+    lines.push(`Pane: ${row.pane.backend}${ref} (${row.pane.attached ? "attached" : "detached"})`);
   }
   lines.push(`Pending approvals: ${row.pendingApprovalCount}`);
   if (row.workspaceMode !== undefined) {

@@ -155,6 +155,20 @@ test("renderRowDetails names the decision surface for a run with children active
   expect(renderRowDetails(row({}))).not.toContain("crew_child");
 });
 
+test("renderRowDetails shows an attached pane with its backend and ref", () => {
+  const details = renderRowDetails(row({ pane: { backend: "tmux", placement: "splitRight", paneRef: "%7", attached: true } }));
+  expect(details).toContain("Pane: tmux %7 (attached)");
+});
+
+test("renderRowDetails shows a hidden pane's empty ref without a stray space", () => {
+  const details = renderRowDetails(row({ pane: { backend: "hidden", placement: "embedded", paneRef: "", attached: true } }));
+  expect(details).toContain("Pane: hidden (attached)");
+});
+
+test("renderRowDetails omits the pane line entirely when no displayEvent has arrived", () => {
+  expect(renderRowDetails(row({}))).not.toContain("Pane:");
+});
+
 test("renderWidgetBox embeds the accent-colored header in the top border", () => {
   const lines = renderWidgetBox({ rows: {}, lastSequence: 0 }, fakeTheme());
   expect(lines[0]).toContain("╭─");

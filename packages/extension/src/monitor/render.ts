@@ -197,6 +197,10 @@ export function renderRowDetails(row: MonitorRow): string {
   if (openViolations.length > 0) {
     lines.push(`Open violations: ${openViolations.map(([id, code]) => `${code} (${id})`).join(", ")} -- decide with crew_violation`);
   }
+  if (row.pane !== undefined) {
+    const ref = row.pane.paneRef !== "" ? ` ${row.pane.paneRef}` : "";
+    lines.push(`Pane: ${row.pane.backend}${ref} (${row.pane.attached ? "attached" : "detached"})`);
+  }
   lines.push(`Pending approvals: ${row.pendingApprovalCount}`);
   if (row.workspaceMode !== undefined) {
     lines.push(`Workspace mode: ${row.workspaceMode}`);
