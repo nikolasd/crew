@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use batman_runtime::supervisor::{EscalationTimings, PtyProcess, SpawnSpec, TerminationOutcome};
+use nix::sys::signal::kill;
+use nix::unistd::Pid;
 
 fn fast_escalation() -> EscalationTimings {
     EscalationTimings {
@@ -72,6 +74,7 @@ async fn echo_round_trip_through_write_input_and_subscribe_output() {
     let mut rx = process.subscribe_output();
     process
         .write_input(b"crew-pty-roundtrip\r")
+        .await
         .expect("write to pty master");
 
     let seen = collect_output_until(&mut rx, Duration::from_secs(5), |acc| {
@@ -206,4 +209,103 @@ async fn resize_is_accepted_and_pid_is_observable() {
     process.resize(200, 50);
 
     process.terminate().await;
+}
+
+#[tokio::test]
+async fn resize_changes_observable_pty_geometry() {
+    // `stty size` prints the terminal's own idea of "rows cols"; a short
+    // sleep first gives the resize below time to land before the child
+    // queries it, so this asserts the geometry actually changed rather
+    // than merely that `resize()` didn't error.
+    let mut process = PtyProcess::spawn(
+        &sh_spec("sleep 0.3; stty size", HashMap::new()),
+        fast_escalation(),
+    )
+    .expect("spawn shell on a pty");
+
+    process.resize(97, 41);
+    let mut rx = process.subscribe_output();
+    let seen = collect_output_until(&mut rx, Duration::from_secs(5), |acc| {
+        String::from_utf8_lossy(acc).contains("41 97")
+    })
+    .await;
+
+    assert!(
+        String::from_utf8_lossy(&seen).contains("41 97"),
+        "stty size must report the resized geometry (rows=41 cols=97), got: {:?}",
+        String::from_utf8_lossy(&seen)
+    );
+
+    process.terminate().await;
+}
+
+// ------------------------------------------------------------ reaping + exit_watcher
+
+#[tokio::test]
+async fn drop_without_terminate_still_reaps_the_child() {
+    let process = PtyProcess::spawn(&sh_spec("sleep 30", HashMap::new()), fast_escalation())
+        .expect("spawn sleeping shell on a pty");
+    let pid = process.pid();
+    // Capture an owned exit watcher before dropping: it holds its own
+    // clone of the reaper thread's watch receiver, so it can observe the
+    // reaper thread's result even after `process` itself is gone.
+    let exit_watcher = process.exit_watcher();
+
+    drop(process);
+
+    let status = tokio::time::timeout(Duration::from_secs(5), exit_watcher)
+        .await
+        .expect("the reaper thread must reap the child after drop, not hang forever");
+    assert!(
+        !status.success(),
+        "a SIGKILL'd process must not report success: {status:?}"
+    );
+
+    // Once the reaper thread's blocking `wait()` returns, the kernel has
+    // released the pid; a persisting zombie would still answer a
+    // signal-0 existence probe (zombies remain in the process table
+    // until reaped), so polling until it disappears proves there is no
+    // zombie left behind.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if kill(Pid::from_raw(pid), None).is_err() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "pid {pid} must fully disappear from the process table once reaped, not remain a zombie"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn concurrent_exit_watchers_and_terminate_all_observe_the_same_exit() {
+    let mut process = PtyProcess::spawn(&sh_spec("sleep 30", HashMap::new()), fast_escalation())
+        .expect("spawn sleeping shell on a pty");
+
+    // Two independent watchers taken out before termination, plus
+    // `terminate()` itself observing exit through the same underlying
+    // channel -- all three must agree, proving the exit is shareable
+    // rather than consumed by whichever caller gets there first.
+    let watcher_a = process.exit_watcher();
+    let watcher_b = process.exit_watcher();
+
+    let (status_a, status_b, outcome) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(watcher_a, watcher_b, process.terminate())
+    })
+    .await
+    .expect("watchers and terminate must all resolve promptly");
+
+    assert!(
+        matches!(
+            outcome,
+            TerminationOutcome::Exited { .. } | TerminationOutcome::Killed
+        ),
+        "terminate must yield exit evidence: {outcome:?}"
+    );
+    assert!(
+        !status_a.success() && !status_b.success(),
+        "a signaled `sleep 30` must not report success: a={status_a:?} b={status_b:?}"
+    );
 }

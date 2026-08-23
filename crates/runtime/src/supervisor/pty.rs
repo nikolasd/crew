@@ -9,15 +9,34 @@
 //! Raw PTY output fans out only to an output broadcast channel for viewers
 //! (the attach server); it is never parsed -- observation of TUI workers
 //! happens through vendor transcripts, not scraped terminal frames.
+//!
+//! Two concerns `portable_pty::Child` does not solve for a daemon that
+//! must never block a `tokio` worker thread are handled by dedicated OS
+//! threads, mirroring the output pump thread below:
+//!
+//! - `Child::wait`/`try_wait` are blocking syscalls, and its `unix` impl
+//!   (plain `std::process::Child`) does not reap on drop -- a handle
+//!   dropped without an explicit `wait()` leaves a zombie until some
+//!   *other* `wait()` call on the same pid happens to run, if ever. A
+//!   single reaper thread, spawned at construction and owning the
+//!   `Child` exclusively, blocks on one `wait()` call and republishes the
+//!   result through a [`watch`] channel -- so exactly one `waitpid` ever
+//!   runs, reaping is guaranteed the instant the process dies regardless
+//!   of when (or whether) anything calls `wait`/`terminate`, and the
+//!   channel is freely cloneable for concurrent exit observation.
+//! - PTY writes (`write_all`/`flush` on the master) are blocking and can
+//!   stall under backpressure; a dedicated writer thread owns the writer
+//!   and drains a bounded job queue, so `write_input` only ever awaits
+//!   channel capacity and an ack, never the write itself, on the runtime.
 
+use std::future::Future;
 use std::io::{Read, Write};
-use std::sync::Mutex;
 use std::time::Duration;
 
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
-use portable_pty::{Child, CommandBuilder, ExitStatus, MasterPty, PtySize, native_pty_system};
-use tokio::sync::broadcast;
+use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySize, native_pty_system};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use super::process::{EscalationTimings, SpawnSpec, SupervisorError, TerminationOutcome};
 
@@ -30,21 +49,39 @@ const DEFAULT_ROWS: u16 = 32;
 /// (misses frames) rather than exerting backpressure on the worker.
 const OUTPUT_CHANNEL_CAPACITY: usize = 64;
 
-/// Poll interval for exit observation: `portable_pty`'s `wait()` is
-/// blocking, so exit is observed by polling `try_wait` on the runtime
-/// instead of parking a blocking thread per worker.
+/// Bound on queued-but-unwritten input jobs. A caller awaiting
+/// [`PtyProcess::write_input`] blocks on channel capacity (an async
+/// await, never a blocked OS thread) once this many writes are already
+/// queued ahead of it.
+const INPUT_CHANNEL_CAPACITY: usize = 32;
+
+/// Poll interval for the termination escalation's own liveness probing
+/// (distinct from exit observation, which is now push-based via the
+/// reaper thread's [`watch`] channel).
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// One queued write: the bytes to send to the PTY master and where to
+/// deliver the result, so a write failure is surfaced to the caller
+/// rather than swallowed by the writer thread.
+struct WriteJob {
+    bytes: Vec<u8>,
+    ack: oneshot::Sender<std::io::Result<()>>,
+}
 
 /// A supervised child process running on a pseudo-terminal: raw output
 /// fan-out for attach viewers, input injection, resize, and the same
 /// group-wide escalating termination as the pipe-based supervisor.
 pub struct PtyProcess {
     master: Box<dyn MasterPty + Send>,
-    writer: Mutex<Box<dyn Write + Send>>,
-    child: Box<dyn Child + Send + Sync>,
+    input_tx: mpsc::Sender<WriteJob>,
     pid: i32,
     out_tx: broadcast::Sender<Vec<u8>>,
     escalation: EscalationTimings,
+    /// Fed by the reaper thread spawned in [`Self::spawn`]; `None` until
+    /// the child has exited. Cloneable, so any number of concurrent
+    /// watchers (and `wait`/`terminate` themselves) can observe the same
+    /// exit without racing each other on the underlying `waitpid`.
+    exit_rx: watch::Receiver<Option<ExitStatus>>,
 }
 
 impl PtyProcess {
@@ -98,7 +135,7 @@ impl PtyProcess {
             .map_err(|source| SupervisorError::Pty {
                 message: format!("cloning pty reader failed: {source}"),
             })?;
-        let writer = pair
+        let mut writer = pair
             .master
             .take_writer()
             .map_err(|source| SupervisorError::Pty {
@@ -128,13 +165,62 @@ impl PtyProcess {
                 message: format!("spawning pty output pump thread failed: {source}"),
             })?;
 
+        // Writes are blocking too; a dedicated thread owns the writer
+        // exclusively and drains queued jobs, so `write_input` never
+        // blocks the runtime -- it only awaits queue capacity and an ack.
+        // The thread (and the caller's queued sends) end once every
+        // `input_tx` clone is dropped (the channel closes and
+        // `blocking_recv` returns `None`).
+        let (input_tx, mut input_rx) = mpsc::channel::<WriteJob>(INPUT_CHANNEL_CAPACITY);
+        std::thread::Builder::new()
+            .name(format!("pty-input-{pid}"))
+            .spawn(move || {
+                while let Some(job) = input_rx.blocking_recv() {
+                    let result = writer.write_all(&job.bytes).and_then(|()| writer.flush());
+                    // The caller may have stopped awaiting (e.g. it timed
+                    // out); a dropped ack receiver is not this thread's
+                    // problem.
+                    let _ = job.ack.send(result);
+                }
+            })
+            .map_err(|source| SupervisorError::Pty {
+                message: format!("spawning pty input writer thread failed: {source}"),
+            })?;
+
+        // A single reaper thread is the *only* caller of `Child::wait`
+        // for this process, for its whole lifetime: it owns `child`
+        // exclusively, blocks on the one syscall that both observes and
+        // reaps the exit, and republishes the result. This closes the
+        // double-wait hazard (two callers racing `try_wait`/`wait` on the
+        // same handle) and guarantees reaping happens even if this
+        // `PtyProcess` is dropped without anyone calling `wait` or
+        // `terminate` -- the thread runs independently of the struct's
+        // lifetime and finishes its `wait()` regardless.
+        let (exit_tx, exit_rx) = watch::channel(None::<ExitStatus>);
+        let mut child = child;
+        std::thread::Builder::new()
+            .name(format!("pty-reaper-{pid}"))
+            .spawn(move || {
+                let status = child
+                    .wait()
+                    .unwrap_or_else(|_| ExitStatus::with_exit_code(1));
+                // No receiver left (every `PtyProcess` clone already
+                // observed exit and was dropped) is not an error -- the
+                // reap itself already happened as a side effect of the
+                // `wait()` call above.
+                let _ = exit_tx.send(Some(status));
+            })
+            .map_err(|source| SupervisorError::Pty {
+                message: format!("spawning pty reaper thread failed: {source}"),
+            })?;
+
         Ok(Self {
             master: pair.master,
-            writer: Mutex::new(writer),
-            child,
+            input_tx,
             pid,
             out_tx,
             escalation,
+            exit_rx,
         })
     }
 
@@ -146,19 +232,30 @@ impl PtyProcess {
     }
 
     /// Writes raw bytes (keystrokes) to the PTY master -- what the worker
-    /// reads as terminal input.
+    /// reads as terminal input. The actual blocking write happens on a
+    /// dedicated thread; this only awaits queue capacity and the write's
+    /// result, so it is safe to call from a `tokio` task even while the
+    /// worker is not draining its input (e.g. mid-render).
     ///
     /// # Errors
     /// Returns [`SupervisorError::Pty`] if the write fails (e.g. the
-    /// worker exited and the PTY closed).
-    pub fn write_input(&self, bytes: &[u8]) -> Result<(), SupervisorError> {
-        let mut writer = self
-            .writer
-            .lock()
-            .expect("pty writer mutex is never poisoned");
-        writer
-            .write_all(bytes)
-            .and_then(|()| writer.flush())
+    /// worker exited and the PTY closed) or the writer thread is gone.
+    pub async fn write_input(&self, bytes: &[u8]) -> Result<(), SupervisorError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.input_tx
+            .send(WriteJob {
+                bytes: bytes.to_vec(),
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|_| SupervisorError::Pty {
+                message: "pty input writer thread is no longer running".to_string(),
+            })?;
+        ack_rx
+            .await
+            .map_err(|_| SupervisorError::Pty {
+                message: "pty input writer thread dropped the write without a result".to_string(),
+            })?
             .map_err(|source| SupervisorError::Pty {
                 message: format!("pty input write failed: {source}"),
             })
@@ -183,18 +280,44 @@ impl PtyProcess {
         });
     }
 
+    /// The current exit status if the reaper thread has already observed
+    /// one, without waiting. The `try_wait`-equivalent primitive that
+    /// `terminate`'s escalation steps poll -- reading the channel's
+    /// latest value, never touching the child itself (only the reaper
+    /// thread does that).
+    fn try_exit(&self) -> Option<ExitStatus> {
+        self.exit_rx.borrow().clone()
+    }
+
     /// Waits for the process to exit on its own, without signaling.
-    /// Exit is observed by polling (`portable_pty`'s blocking `wait()`
-    /// would otherwise park a thread per worker).
+    /// Equivalent to `exit_watcher().await` but takes `&mut self` for API
+    /// symmetry with the pipe-based supervisor's `wait`.
     pub async fn wait(&mut self) -> ExitStatus {
-        loop {
-            match self.child.try_wait() {
-                Ok(Some(status)) => return status,
-                Ok(None) => tokio::time::sleep(EXIT_POLL_INTERVAL).await,
-                // `try_wait` failing means the child state is unknowable
-                // through this handle (already reaped); report a failure
-                // status rather than spin forever.
-                Err(_) => return ExitStatus::with_exit_code(1),
+        self.exit_watcher().await
+    }
+
+    /// An owned, independently-pollable future that resolves once this
+    /// process has exited. Unlike `wait`, this takes `&self` and may be
+    /// called any number of times concurrently -- each call clones the
+    /// reaper thread's `watch` receiver, so many observers (e.g. the
+    /// attach server watching for exit alongside the orchestrator calling
+    /// `terminate`) see the same exit without racing a shared handle.
+    pub fn exit_watcher(&self) -> impl Future<Output = ExitStatus> + Send + 'static {
+        let mut exit_rx = self.exit_rx.clone();
+        async move {
+            loop {
+                if let Some(status) = exit_rx.borrow().as_ref() {
+                    return status.clone();
+                }
+                if exit_rx.changed().await.is_err() {
+                    // The reaper thread is gone without ever publishing a
+                    // status -- it must have panicked before `wait()`
+                    // returned. Report a failure status rather than hang
+                    // forever; this should not happen in practice since
+                    // the only fallible step inside the thread already
+                    // falls back to `ExitStatus::with_exit_code(1)`.
+                    return ExitStatus::with_exit_code(1);
+                }
             }
         }
     }
@@ -205,7 +328,7 @@ impl PtyProcess {
     /// leader observed already exited is never signaled at all, and each
     /// later signal is guarded by a fresh group liveness probe.
     pub async fn terminate(&mut self) -> TerminationOutcome {
-        if let Ok(Some(status)) = self.child.try_wait() {
+        if let Some(status) = self.try_exit() {
             return TerminationOutcome::Exited {
                 code: Some(status.exit_code() as i32),
             };
@@ -255,20 +378,14 @@ impl PtyProcess {
         let deadline = tokio::time::Instant::now() + duration;
         let mut leader_outcome = None;
         while tokio::time::Instant::now() < deadline {
-            if leader_outcome.is_none() {
-                match self.child.try_wait() {
-                    Ok(Some(status)) => {
-                        leader_outcome = Some(TerminationOutcome::Exited {
-                            code: Some(status.exit_code() as i32),
-                        });
-                        if !self.group_is_live() {
-                            return leader_outcome;
-                        }
-                    }
-                    Ok(None) => {}
-                    // Unknown leader state: keep escalating (never treat
-                    // as a confirmed graceful exit).
-                    Err(_) => {}
+            if leader_outcome.is_none()
+                && let Some(status) = self.try_exit()
+            {
+                leader_outcome = Some(TerminationOutcome::Exited {
+                    code: Some(status.exit_code() as i32),
+                });
+                if !self.group_is_live() {
+                    return leader_outcome;
                 }
             }
             tokio::time::sleep(EXIT_POLL_INTERVAL.min(duration)).await;
@@ -284,9 +401,16 @@ impl PtyProcess {
 
 impl Drop for PtyProcess {
     /// Parity with the pipe-based supervisor's `kill_on_drop(true)`: a
-    /// dropped handle must never leak a running worker tree.
+    /// dropped handle must never leak a running worker tree. This only
+    /// *signals* -- it never blocks waiting for the signal to take
+    /// effect. Reaping is not this Drop's job and is guaranteed
+    /// regardless: the reaper thread spawned in [`Self::spawn`] runs
+    /// independently of this struct's lifetime and completes its
+    /// `wait()` (reaping the child) the moment the process actually
+    /// dies, whether or not anything ever called `terminate`/`wait`, and
+    /// whether it dies before or after this `drop` runs.
     fn drop(&mut self) {
-        if let Ok(None) = self.child.try_wait() {
+        if self.try_exit().is_none() {
             let _ = kill(Pid::from_raw(-self.pid), Signal::SIGKILL);
         }
     }
