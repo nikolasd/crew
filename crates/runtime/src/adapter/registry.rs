@@ -111,6 +111,13 @@ pub enum RegistryError {
     AuthorizationDenied(String),
     #[error("no adapter is currently running for run {0}")]
     NoRunningAdapter(RunId),
+    /// `mode: "tui"` was requested for an adapter kind with no
+    /// [`crate::adapter::tui::TuiVendor`] implementation yet -- a typed
+    /// refusal, never a silent fallback to the headless adapter (the
+    /// pre-flight ruling this registry follows for every adapter kind
+    /// until its TUI vendor impl lands).
+    #[error("adapter {0} has no TUI-mode implementation yet; mode: \"tui\" is unavailable for it")]
+    TuiModeUnavailable(String),
 }
 
 impl From<RegistryError> for String {
@@ -539,6 +546,20 @@ async fn resolve_profile(ctx: &RunDriverContext) -> Result<WorkerProfile, Regist
     serde_json::from_str(&snapshot).map_err(|err| RegistryError::ProfileUnreadable(err.to_string()))
 }
 
+/// The [`super::profile::AdapterMode`] a startup-options variant
+/// requested, or `None` for [`StartupOptions::TerminalDegraded`] (which
+/// carries no mode field -- it wraps an arbitrary underlying harness
+/// rather than one of the four reserved adapter kinds).
+fn requested_mode(startup_options: &StartupOptions) -> Option<super::profile::AdapterMode> {
+    match startup_options {
+        StartupOptions::Claude(options) => Some(options.mode),
+        StartupOptions::Codex(options) => Some(options.mode),
+        StartupOptions::Copilot(options) => Some(options.mode),
+        StartupOptions::OmpRpc(options) => Some(options.mode),
+        StartupOptions::TerminalDegraded(_) => None,
+    }
+}
+
 fn build_adapter(
     profile: &WorkerProfile,
     repo_root: &std::path::Path,
@@ -548,6 +569,23 @@ fn build_adapter(
     mcp: Option<AdapterMcpConfig>,
     broker: Option<Arc<CoordinationBroker>>,
 ) -> Result<Arc<dyn Adapter>, RegistryError> {
+    // `mode: "tui"` dispatches to a `TuiAdapter<V>` for a vendor with a
+    // `TuiVendor` implementation -- none exists yet (each lands in its
+    // own later work package), so every reserved adapter kind refuses
+    // explicitly here rather than silently starting the headless
+    // adapter a caller who asked for a TUI session did not request.
+    // `Headless` (the default) is completely unaffected: it falls
+    // through to the match below exactly as before.
+    if requested_mode(&profile.startup_options) == Some(super::profile::AdapterMode::Tui) {
+        let kind = profile
+            .startup_options
+            .adapter_kind()
+            .expect("Tui mode only applies to a startup_options variant with an AdapterKind");
+        return Err(RegistryError::TuiModeUnavailable(
+            kind.wire_name().to_string(),
+        ));
+    }
+
     let adapter: Arc<dyn Adapter> = match &profile.startup_options {
         StartupOptions::Claude(options) => Arc::new(super::ClaudeAdapter::new(
             options.clone(),
@@ -687,6 +725,63 @@ mod build_adapter_tests {
             "Copilot branch must accept Some(mcp): {}",
             result.err().map(|e| e.to_string()).unwrap_or_default()
         );
+    }
+
+    /// `mode: "tui"` on a reserved adapter kind with no `TuiVendor`
+    /// implementation yet must be a typed refusal, never a silent
+    /// fallback to the headless adapter.
+    #[test]
+    fn tui_mode_without_a_vendor_impl_is_a_typed_refusal_not_a_silent_headless_fallback() {
+        let options = ClaudeStartupOptions {
+            mode: crate::adapter::profile::AdapterMode::Tui,
+            ..ClaudeStartupOptions::default()
+        };
+        let profile = profile(StartupOptions::Claude(options));
+
+        let result = build_adapter(
+            &profile,
+            std::path::Path::new("/tmp"),
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            None,
+            None,
+        );
+
+        match result {
+            Ok(_) => panic!("mode: tui must be refused while no Claude TuiVendor impl exists"),
+            Err(err) => assert!(
+                matches!(err, RegistryError::TuiModeUnavailable(ref kind) if kind == "claude"),
+                "expected a TuiModeUnavailable(\"claude\") refusal, got: {err}"
+            ),
+        }
+    }
+
+    /// `mode: "headless"` (the default) on every reserved adapter kind
+    /// must be completely unaffected by the `mode: "tui"` guard above.
+    #[test]
+    fn headless_mode_is_unaffected_on_every_reserved_kind() {
+        for options in [
+            StartupOptions::Claude(ClaudeStartupOptions::default()),
+            StartupOptions::Codex(CodexStartupOptions::default()),
+            StartupOptions::Copilot(CopilotStartupOptions::default()),
+        ] {
+            let profile = profile(options);
+            let result = build_adapter(
+                &profile,
+                std::path::Path::new("/tmp"),
+                RunId::new(),
+                TaskId::new(),
+                WorkerId::new(),
+                None,
+                None,
+            );
+            assert!(
+                result.is_ok(),
+                "headless mode must still build normally: {}",
+                result.err().map(|e| e.to_string()).unwrap_or_default()
+            );
+        }
     }
 }
 
