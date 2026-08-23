@@ -43,12 +43,29 @@ pub struct DashboardServer {
 
 impl DashboardServer {
     /// Binds `127.0.0.1:<port>` (never a routable interface; `0` picks an
-    /// ephemeral port, used by tests) and starts serving.
+    /// ephemeral port, used by tests) and starts serving, using the
+    /// production [`HEADER_READ_TIMEOUT`] for every connection's
+    /// request-line/header phase.
     ///
     /// # Errors
     /// Returns the bind error (e.g. the port is taken). Callers treat this
     /// as non-fatal: a daemon without its dashboard still orchestrates.
     pub async fn bind(port: u16, deps: DashboardDeps) -> std::io::Result<Self> {
+        Self::bind_with_header_timeout(port, deps, HEADER_READ_TIMEOUT).await
+    }
+
+    /// Same as [`Self::bind`], but with an explicit header-read timeout --
+    /// exists so tests can exercise the timeout path without waiting out
+    /// the production duration.
+    ///
+    /// # Errors
+    /// Returns the bind error (e.g. the port is taken). Callers treat this
+    /// as non-fatal: a daemon without its dashboard still orchestrates.
+    pub async fn bind_with_header_timeout(
+        port: u16,
+        deps: DashboardDeps,
+        header_read_timeout: std::time::Duration,
+    ) -> std::io::Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
         let local_addr = listener.local_addr()?;
         let shutdown = Arc::new(Notify::new());
@@ -62,7 +79,9 @@ impl DashboardServer {
                         let deps = deps.clone();
                         let shutdown = Arc::clone(&accept_shutdown);
                         tokio::spawn(async move {
-                            let _ = handle_connection(stream, deps, shutdown).await;
+                            let _ =
+                                handle_connection(stream, deps, shutdown, header_read_timeout)
+                                    .await;
                         });
                     }
                 }
@@ -89,40 +108,121 @@ impl DashboardServer {
 }
 
 /// Longest accepted request head line/header; anything larger is not a
-/// dashboard request.
+/// dashboard request. Enforced as the connection is read (never after the
+/// fact): [`read_bounded_line`] refuses to buffer past this many bytes
+/// while waiting for a line's terminator, so a peer cannot grow an
+/// unbounded buffer by never sending `\n`.
 const MAX_LINE_BYTES: usize = 8 * 1024;
 const MAX_HEADER_COUNT: usize = 100;
+
+/// Ceiling on how long a connection may take to finish sending its
+/// request line and headers. A peer that connects and sends nothing, or
+/// trickles bytes without ever completing the head, is disconnected
+/// rather than tying up a task (and a `BufReader`) indefinitely.
+const HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Why [`read_request_head`] did not produce a head.
+enum HeadReadError {
+    /// The underlying connection errored or closed before a full head was
+    /// read; the caller closes without responding.
+    Io,
+    /// A line (the request line or a header) exceeded [`MAX_LINE_BYTES`]
+    /// while still buffering for its terminator.
+    TooLong,
+}
+
+impl From<std::io::Error> for HeadReadError {
+    fn from(_err: std::io::Error) -> Self {
+        HeadReadError::Io
+    }
+}
+
+struct RequestHead {
+    method: String,
+    path: String,
+}
+
+/// Reads one line terminated by `\n`, refusing to buffer more than
+/// [`MAX_LINE_BYTES`] while waiting for the terminator. Uses the reader's
+/// own `fill_buf`/`consume` rather than `read_line`, so bytes belonging to
+/// the *next* line (already buffered by one `read` syscall) are never
+/// discarded, and so the cap is enforced as bytes arrive rather than only
+/// once a full line has been buffered.
+async fn read_bounded_line(reader: &mut BufReader<TcpStream>) -> Result<String, HeadReadError> {
+    let mut collected: Vec<u8> = Vec::new();
+    loop {
+        let buf = reader.fill_buf().await?;
+        if buf.is_empty() {
+            return Err(HeadReadError::Io);
+        }
+        if let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            collected.extend_from_slice(&buf[..=pos]);
+            reader.consume(pos + 1);
+            return if collected.len() > MAX_LINE_BYTES {
+                Err(HeadReadError::TooLong)
+            } else {
+                Ok(String::from_utf8_lossy(&collected).into_owned())
+            };
+        }
+        collected.extend_from_slice(buf);
+        let consumed = buf.len();
+        reader.consume(consumed);
+        if collected.len() > MAX_LINE_BYTES {
+            return Err(HeadReadError::TooLong);
+        }
+    }
+}
+
+/// Reads the request line and drains (and ignores -- the dashboard needs
+/// none) the headers that follow, bounding each line's size. Callers wrap
+/// this in a [`tokio::time::timeout`]; it applies no timeout itself.
+async fn read_request_head(
+    reader: &mut BufReader<TcpStream>,
+) -> Result<RequestHead, HeadReadError> {
+    let request_line = read_bounded_line(reader).await?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_string();
+    let path = parts.next().unwrap_or_default().to_string();
+
+    for _ in 0..MAX_HEADER_COUNT {
+        let header = read_bounded_line(reader).await?;
+        if header == "\r\n" || header == "\n" {
+            break;
+        }
+    }
+
+    Ok(RequestHead { method, path })
+}
 
 async fn handle_connection(
     stream: TcpStream,
     deps: DashboardDeps,
     shutdown: Arc<Notify>,
+    header_read_timeout: std::time::Duration,
 ) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream);
 
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line).await?;
-    if request_line.len() > MAX_LINE_BYTES {
-        return Ok(());
-    }
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or_default().to_string();
-    let path = parts.next().unwrap_or_default().to_string();
-
-    // Drain (and ignore) the request headers; the dashboard needs none.
-    for _ in 0..MAX_HEADER_COUNT {
-        let mut header = String::new();
-        reader.read_line(&mut header).await?;
-        if header.len() > MAX_LINE_BYTES {
-            return Ok(());
+    let head = match tokio::time::timeout(header_read_timeout, read_request_head(&mut reader)).await
+    {
+        Ok(Ok(head)) => head,
+        Ok(Err(HeadReadError::TooLong)) => {
+            let mut stream = reader.into_inner();
+            return write_simple(
+                &mut stream,
+                "431 Request Header Fields Too Large",
+                "text/plain; charset=utf-8",
+                "request line or header exceeded the size limit\n",
+            )
+            .await;
         }
-        if header == "\r\n" || header == "\n" || header.is_empty() {
-            break;
-        }
-    }
+        // Connection errored or closed mid-head, or the peer took too
+        // long: close without responding, same as any other malformed
+        // connection.
+        Ok(Err(HeadReadError::Io)) | Err(_) => return Ok(()),
+    };
 
     let mut stream = reader.into_inner();
-    if method != "GET" {
+    if head.method != "GET" {
         return write_simple(
             &mut stream,
             "405 Method Not Allowed",
@@ -132,7 +232,7 @@ async fn handle_connection(
         .await;
     }
 
-    match path.as_str() {
+    match head.path.as_str() {
         "/" => {
             write_simple(
                 &mut stream,

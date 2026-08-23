@@ -209,6 +209,95 @@ async fn non_get_methods_are_rejected_with_405() {
     harness.server.stop();
 }
 
+/// A request line with no newline, at or past the size cap, must be
+/// refused rather than buffered without bound -- and the connection that
+/// sent it must not affect the server's ability to serve a normal request
+/// afterward.
+#[tokio::test]
+async fn an_oversized_line_with_no_newline_is_refused_and_the_server_stays_healthy() {
+    let harness = start_dashboard().await;
+    let addr = harness.server.local_addr();
+
+    {
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        // One byte past the cap, never terminated: a peer that either
+        // never intends to send `\n` or is trying to grow the server's
+        // buffer without bound.
+        let oversized = vec![b'a'; 8 * 1024 + 1];
+        stream.write_all(&oversized).await.unwrap();
+
+        let mut response = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.read_to_string(&mut response),
+        )
+        .await
+        .expect("the server must respond promptly, not hang reading forever")
+        .unwrap();
+        assert!(
+            response.starts_with("HTTP/1.1 431"),
+            "an oversized, unterminated line must be refused with 431: {response}"
+        );
+    }
+
+    // The server must still serve a normal request on a fresh connection.
+    let response = http_request(
+        addr,
+        "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "the server must stay healthy after an oversized request: {response}"
+    );
+
+    harness.server.stop();
+}
+
+/// A connection that sends nothing at all must be dropped once the
+/// header-read timeout elapses, not held open indefinitely.
+#[tokio::test]
+async fn a_silent_connection_is_disconnected_after_the_header_timeout() {
+    let dir = TempDir::new().unwrap();
+    let db = Arc::new(
+        DatabaseHandle::start(dir.path().join("journal.db"))
+            .await
+            .unwrap(),
+    );
+    let project_id = ProjectId::new();
+    let (events_tx, _) = broadcast::channel(64);
+    let server = crew_runtime::dashboard::DashboardServer::bind_with_header_timeout(
+        0,
+        DashboardDeps {
+            db,
+            project_id,
+            events_tx,
+        },
+        std::time::Duration::from_millis(200),
+    )
+    .await
+    .expect("dashboard binds an ephemeral localhost port");
+    let addr = server.local_addr();
+
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    // Send nothing. The server must close the connection once its
+    // (short, test-configured) header-read timeout elapses.
+    let mut response = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        stream.read_to_end(&mut response),
+    )
+    .await
+    .expect("the silent connection must be closed within the timeout, not held open")
+    .unwrap();
+    assert!(
+        response.is_empty(),
+        "a timed-out connection gets no response, just a close: {response:?}"
+    );
+
+    server.stop();
+}
+
 #[tokio::test]
 async fn unknown_paths_are_404() {
     let harness = start_dashboard().await;
