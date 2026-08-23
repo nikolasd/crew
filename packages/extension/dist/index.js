@@ -10455,7 +10455,7 @@ child at all (a cost ceiling does not).`,
 };
 
 // ../protocol-ts/src/validate.ts
-var SCHEMA_ID = "https://schema.crew.satorianalytics.com/crew.schema.json";
+var SCHEMA_ID = "urn:crew:schema:crew.schema.json";
 var ajv = new import__2020.default({
   strict: true,
   allErrors: true,
@@ -10492,7 +10492,7 @@ var validatePlanDecideResult = def("PlanDecideResult");
 var validatePlanGetResult = def("PlanGetResult");
 var validateRunTimeoutAckResult = def("RunTimeoutAckResult");
 var validateEventEnvelopeArray = ajv.compile({
-  $id: "https://schema.crew.satorianalytics.com/event-envelope-array.json",
+  $id: "urn:crew:schema:event-envelope-array.json",
   type: "array",
   items: { $ref: `${SCHEMA_ID}#/$defs/EventEnvelope` }
 });

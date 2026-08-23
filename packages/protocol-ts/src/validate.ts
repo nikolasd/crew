@@ -14,8 +14,11 @@ import schema from "../schema/crew.schema.json" with { type: "json" };
 export type { ValidateFunction };
 
 /** The `$id` under which the whole schema document is registered, so
- * individual `$def`s can be retrieved (and cross-referenced) by JSON pointer. */
-const SCHEMA_ID = "https://schema.crew.satorianalytics.com/crew.schema.json";
+ * individual `$def`s can be retrieved (and cross-referenced) by JSON pointer.
+ * This is a URN, not a URL: it's never fetched over the network — Ajv only
+ * uses it as an opaque registry key for `$ref` resolution — so there is
+ * nothing to host and no domain to imply ownership of. */
+const SCHEMA_ID = "urn:crew:schema:crew.schema.json";
 
 const ajv = new Ajv2020({
   strict: true,
@@ -83,7 +86,7 @@ export const validateRunTimeoutAckResult = def("RunTimeoutAckResult");
 
 /** Validates the array of event envelopes returned by `events/replay`. */
 export const validateEventEnvelopeArray = ajv.compile({
-  $id: "https://schema.crew.satorianalytics.com/event-envelope-array.json",
+  $id: "urn:crew:schema:event-envelope-array.json",
   type: "array",
   items: { $ref: `${SCHEMA_ID}#/$defs/EventEnvelope` },
 });
