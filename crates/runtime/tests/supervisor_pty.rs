@@ -69,7 +69,7 @@ async fn echo_round_trip_through_write_input_and_subscribe_output() {
         env: HashMap::new(),
         ..SpawnSpec::minimal()
     };
-    let mut process = PtyProcess::spawn(&spec, fast_escalation()).expect("spawn cat on a pty");
+    let process = PtyProcess::spawn(&spec, fast_escalation()).expect("spawn cat on a pty");
 
     let mut rx = process.subscribe_output();
     process
@@ -92,7 +92,7 @@ async fn echo_round_trip_through_write_input_and_subscribe_output() {
 
 #[tokio::test]
 async fn two_viewers_both_receive_the_same_output() {
-    let mut process = PtyProcess::spawn(
+    let process = PtyProcess::spawn(
         &sh_spec("printf 'fanout-marker\\n'; sleep 5", HashMap::new()),
         fast_escalation(),
     )
@@ -120,7 +120,7 @@ async fn two_viewers_both_receive_the_same_output() {
 
 #[tokio::test]
 async fn terminate_yields_exit_evidence_for_a_long_running_process() {
-    let mut process = PtyProcess::spawn(&sh_spec("sleep 30", HashMap::new()), fast_escalation())
+    let process = PtyProcess::spawn(&sh_spec("sleep 30", HashMap::new()), fast_escalation())
         .expect("spawn sleeping shell on a pty");
 
     let outcome = tokio::time::timeout(Duration::from_secs(5), process.terminate())
@@ -137,7 +137,7 @@ async fn terminate_yields_exit_evidence_for_a_long_running_process() {
 
 #[tokio::test]
 async fn exit_watcher_observes_a_self_exit() {
-    let mut process = PtyProcess::spawn(&sh_spec("exit 7", HashMap::new()), fast_escalation())
+    let process = PtyProcess::spawn(&sh_spec("exit 7", HashMap::new()), fast_escalation())
         .expect("spawn self-exiting shell on a pty");
 
     let status = tokio::time::timeout(Duration::from_secs(5), process.wait())
@@ -148,7 +148,7 @@ async fn exit_watcher_observes_a_self_exit() {
 
 #[tokio::test]
 async fn terminate_after_self_exit_reports_exited_not_killed() {
-    let mut process = PtyProcess::spawn(&sh_spec("exit 0", HashMap::new()), fast_escalation())
+    let process = PtyProcess::spawn(&sh_spec("exit 0", HashMap::new()), fast_escalation())
         .expect("spawn self-exiting shell on a pty");
     let _ = tokio::time::timeout(Duration::from_secs(5), process.wait())
         .await
@@ -173,7 +173,7 @@ async fn env_allowlist_is_honored_pty_child_never_inherits_unlisted_vars() {
 
     let mut env = HashMap::new();
     env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
-    let mut process = PtyProcess::spawn(
+    let process = PtyProcess::spawn(
         &sh_spec("echo \"PROBE=[$CREW_PTY_LEAK_PROBE]\"; sleep 5", env),
         fast_escalation(),
     )
@@ -201,7 +201,7 @@ async fn env_allowlist_is_honored_pty_child_never_inherits_unlisted_vars() {
 
 #[tokio::test]
 async fn resize_is_accepted_and_pid_is_observable() {
-    let mut process = PtyProcess::spawn(&sh_spec("sleep 5", HashMap::new()), fast_escalation())
+    let process = PtyProcess::spawn(&sh_spec("sleep 5", HashMap::new()), fast_escalation())
         .expect("spawn shell on a pty");
 
     assert!(process.pid() > 0, "the pty child pid must be observable");
@@ -217,7 +217,7 @@ async fn resize_changes_observable_pty_geometry() {
     // sleep first gives the resize below time to land before the child
     // queries it, so this asserts the geometry actually changed rather
     // than merely that `resize()` didn't error.
-    let mut process = PtyProcess::spawn(
+    let process = PtyProcess::spawn(
         &sh_spec("sleep 0.3; stty size", HashMap::new()),
         fast_escalation(),
     )
@@ -281,7 +281,7 @@ async fn drop_without_terminate_still_reaps_the_child() {
 
 #[tokio::test]
 async fn concurrent_exit_watchers_and_terminate_all_observe_the_same_exit() {
-    let mut process = PtyProcess::spawn(&sh_spec("sleep 30", HashMap::new()), fast_escalation())
+    let process = PtyProcess::spawn(&sh_spec("sleep 30", HashMap::new()), fast_escalation())
         .expect("spawn sleeping shell on a pty");
 
     // Two independent watchers taken out before termination, plus
