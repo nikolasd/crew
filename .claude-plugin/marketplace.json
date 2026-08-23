@@ -12,8 +12,8 @@
       "source": "./packages/extension",
       "version": "0.4.1",
       "author": { "name": "Nikolas Demiridis" },
-      "homepage": "https://github.com/nikolasd/batman",
-      "repository": "https://github.com/nikolasd/batman",
+      "homepage": "https://github.com/nikolasd/crew",
+      "repository": "https://github.com/nikolasd/crew",
       "license": "MIT",
       "category": "development",
       "keywords": ["orchestration", "multiagent", "automation", "subagents"]

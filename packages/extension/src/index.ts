@@ -120,7 +120,7 @@ export default function crewExtension(pi: ExtensionAPI): void {
     name: RUNTIME_INSTALL_TOOL_NAME,
     label: "Crew Runtime Install",
     description:
-      "Use to download and verify the crewd runtime binary for this platform. Call this when crew_health or any orchestration tool fails with code 'runtime-not-installed'. Downloads the GitHub release asset matching this extension's version, verifies its SHA-256 against the published manifest, and caches it under the Crew state root. nikolasd/batman is a private repository, so this needs read access to it: set GITHUB_TOKEN or GH_TOKEN, or run `gh auth login` locally.",
+      "Use to download and verify the crewd runtime binary for this platform. Call this when crew_health or any orchestration tool fails with code 'runtime-not-installed'. Downloads the GitHub release asset matching this extension's version, verifies its SHA-256 against the published manifest, and caches it under the Crew state root. nikolasd/crew is a private repository, so this needs read access to it: set GITHUB_TOKEN or GH_TOKEN, or run `gh auth login` locally.",
     parameters: pi.zod.object({}),
     approval: "exec",
     async execute(_toolCallId, _params, _signal, _onUpdate) {

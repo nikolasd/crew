@@ -14,7 +14,7 @@ contributor concern, not a usage one), see [`architecture.md`](architecture.md).
 ## 1. Install
 
 ```
-/marketplace add nikolasd/batman
+/marketplace add nikolasd/crew
 /marketplace install crew@crew
 ```
 
@@ -28,7 +28,7 @@ tool) only exists once a fresh session has loaded the installed module. Then:
 ```
 
 **This repository is private** — the marketplace step git-clones it, so it needs your own GitHub
-read access to `nikolasd/batman` (an SSH key registered with GitHub, or a `gh auth login` session
+read access to `nikolasd/crew` (an SSH key registered with GitHub, or a `gh auth login` session
 backed by a git credential helper). `/crew-runtime-install` additionally needs a `GITHUB_TOKEN` or
 `GH_TOKEN` environment variable, or that same `gh auth login` session, to download and verify the
 release asset.
@@ -382,7 +382,7 @@ Plus `workspacePath` and `workspaceMode` (`"isolated"` or `"copy"`, matching the
   "runId": "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e",
   "taskId": "5f0b6b3e-6b1a-4b8e-9c2d-1a2b3c4d5e6f",
   "sequence": 44,
-  "workspacePath": "/Users/you/.omp/batman/repos/<repository-id>/worktrees/b2c3d4e5",
+  "workspacePath": "/Users/you/.omp/crew/repos/<repository-id>/worktrees/b2c3d4e5",
   "workspaceMode": "isolated"
 }
 ```
@@ -457,7 +457,7 @@ cost.
   "runId": "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e",
   "mode": "write",
   "isolationKind": "gitWorktree",
-  "path": "/Users/you/.omp/batman/repos/<repository-id>/worktrees/b2c3d4e5",
+  "path": "/Users/you/.omp/crew/repos/<repository-id>/worktrees/b2c3d4e5",
   "state": "active",
   "baseRevision": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
   "acquisitionSequence": 47
@@ -472,7 +472,7 @@ cost.
   "runId": "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e",
   "mode": "write",
   "isolationKind": "gitWorktree",
-  "path": "/Users/you/.omp/batman/repos/<repository-id>/worktrees/b2c3d4e5",
+  "path": "/Users/you/.omp/crew/repos/<repository-id>/worktrees/b2c3d4e5",
   "state": "active",
   "baseRevision": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
 }
@@ -652,21 +652,21 @@ Success (text, then `details`):
 
 ```
 Crew runtime installed: crewd 0.3.0 (darwin-arm64)
-Path: /Users/you/.omp/batman/bin/0.3.0/crewd
+Path: /Users/you/.omp/crew/bin/0.3.0/crewd
 ```
 
 ```json
-{ "version": "0.3.0", "target": "darwin-arm64", "path": "/Users/you/.omp/batman/bin/0.3.0/crewd", "sizeBytes": 41211752 }
+{ "version": "0.3.0", "target": "darwin-arm64", "path": "/Users/you/.omp/crew/bin/0.3.0/crewd", "sizeBytes": 41211752 }
 ```
 
 Failure (private-repo case):
 
 ```
-Runtime install failed: failed to fetch release https://api.github.com/repos/nikolasd/batman/releases/tags/v0.3.0: HTTP 404
+Runtime install failed: failed to fetch release https://api.github.com/repos/nikolasd/crew/releases/tags/v0.3.0: HTTP 404
 ```
 
 ```json
-{ "code": "http-error", "message": "failed to fetch release https://api.github.com/repos/nikolasd/batman/releases/tags/v0.3.0: HTTP 404" }
+{ "code": "http-error", "message": "failed to fetch release https://api.github.com/repos/nikolasd/crew/releases/tags/v0.3.0: HTTP 404" }
 ```
 
 That `404` on a private repo almost always means no `GITHUB_TOKEN`/`GH_TOKEN` was set and no

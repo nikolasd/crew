@@ -17,7 +17,7 @@ full path. Where installed and source-built binaries live is specified once in
 ### Starting the runtime
 
 ```bash
-crewd serve --repo <path> --state-dir "$HOME/.omp/batman" [--idle-seconds <n>]
+crewd serve --repo <path> --state-dir "$HOME/.omp/crew" [--idle-seconds <n>]
 ```
 
 In normal use you don't run this yourself — the OMP extension spawns it on first use per
@@ -38,7 +38,7 @@ released because its owning process died. If a runtime is already running, the n
 ### Graceful shutdown
 
 ```bash
-crewd stop --repo <path> --state-dir "$HOME/.omp/batman"
+crewd stop --repo <path> --state-dir "$HOME/.omp/crew"
 ```
 
 The runtime journals a stop record, closes the database actor, removes the socket, then releases
@@ -50,10 +50,10 @@ no runtime is found holding the lock, it exits **1** immediately rather than sig
 
 ```bash
 # Every run in the project, live-tailed after an initial catch-up replay
-crewd monitor --repo <path> --state-dir "$HOME/.omp/batman"
+crewd monitor --repo <path> --state-dir "$HOME/.omp/crew"
 
 # Filtered to one run
-crewd monitor --repo <path> --state-dir "$HOME/.omp/batman" --run-id <run-id>
+crewd monitor --repo <path> --state-dir "$HOME/.omp/crew" --run-id <run-id>
 ```
 
 There's no separate "replay" vs. "live" mode — `monitor` always replays what's already journaled
@@ -65,7 +65,7 @@ inside OMP, prefer `/crew` (see [`plugin-usage.md`](plugin-usage.md#4-watching-r
 ### Diagnosing a runtime
 
 ```bash
-crewd doctor --repo <path> --state-dir "$HOME/.omp/batman" [--json]
+crewd doctor --repo <path> --state-dir "$HOME/.omp/crew" [--json]
 ```
 
 Runs the full check catalog documented in [`cli-reference.md`](cli-reference.md#crewd-doctor)
@@ -92,7 +92,7 @@ journaled event is older than five minutes, read-only, transitioning nothing.
 
 1. **Check the log** (only present without `--foreground`): `cat <runtime-dir>/runtime.log`
 2. **Check for orphaned processes:** `ps aux | grep crewd`
-3. **Restart:** `crewd serve --repo <path> --state-dir "$HOME/.omp/batman"` — there's nothing to clean up
+3. **Restart:** `crewd serve --repo <path> --state-dir "$HOME/.omp/crew"` — there's nothing to clean up
    by hand first. The lock file doesn't need removing (a crashed process's `flock` is already
    released by the kernel), and the next `serve` runs recovery automatically on startup.
 
@@ -105,7 +105,7 @@ apt/deb/rpm package, or any other system package** — don't reach for a package
 ### Installing / uninstalling
 
 ```bash
-/marketplace add nikolasd/batman     # registers this repo as a marketplace source
+/marketplace add nikolasd/crew     # registers this repo as a marketplace source
 /marketplace install crew@crew   # installs the extension + skills
 ```
 
@@ -124,7 +124,7 @@ Uninstalling works in any session:
 ```
 
 **This repository is private.** `/marketplace add` git-clones it, so it needs your own GitHub read
-access to `nikolasd/batman` (an SSH key registered with GitHub, or a `gh auth login` session backed
+access to `nikolasd/crew` (an SSH key registered with GitHub, or a `gh auth login` session backed
 by a git credential helper). `/crew-runtime-install` additionally needs a `GITHUB_TOKEN` or
 `GH_TOKEN` environment variable, or that same `gh auth login` session, to download the asset — see
 the README's [Installation](../README.md#installation) section. The `crewd` binary itself resolves
@@ -166,7 +166,7 @@ installing anything.
 ## Troubleshooting
 
 **Runtime won't start:**
-- Check whether one's already running: `crewd status --repo <path> --state-dir "$HOME/.omp/batman"` (exit 73 from `serve`
+- Check whether one's already running: `crewd status --repo <path> --state-dir "$HOME/.omp/crew"` (exit 73 from `serve`
   means another instance holds the lock — that's not a bug, connect to it instead of restarting).
 - Check the log: `cat <runtime-dir>/runtime.log`.
 - Run `crewd doctor --json` — it doesn't need a live connection and will usually name the exact

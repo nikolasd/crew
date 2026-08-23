@@ -7,7 +7,7 @@ doctor, and testing. Its companions are [`code-walkthrough.md`](code-walkthrough
 and debugging playbook), [`rust-primer.md`](rust-primer.md) (Rust via this codebase), and
 [`manual-testing.md`](manual-testing.md) (QA verification steps).
 
-> **Just want to use Crew, not build it?** See [README.md's Installation section](../README.md#installation) — `/marketplace add nikolasd/batman` then `/marketplace install crew@crew` installs the extension, then a session restart, then `/crew-runtime-install` in the new session downloads the runtime binary; no build step. Note this is a private repository, so both need your own GitHub read access. Then see [`plugin-usage.md`](plugin-usage.md), the user manual. This guide is for developing Crew itself.
+> **Just want to use Crew, not build it?** See [README.md's Installation section](../README.md#installation) — `/marketplace add nikolasd/crew` then `/marketplace install crew@crew` installs the extension, then a session restart, then `/crew-runtime-install` in the new session downloads the runtime binary; no build step. Note this is a private repository, so both need your own GitHub read access. Then see [`plugin-usage.md`](plugin-usage.md), the user manual. This guide is for developing Crew itself.
 
 ## Prerequisites
 
@@ -24,8 +24,8 @@ Before you begin, ensure you have the following installed:
 ### Clone the Repository
 
 ```bash
-git clone git@github.com:nikolasd/batman.git
-cd batman
+git clone git@github.com:nikolasd/crew.git
+cd crew
 ```
 
 ### Build
@@ -122,13 +122,13 @@ resolve for you (see [`cli-reference.md`](cli-reference.md#before-you-start-stat
 omitting it falls back to a bare `.crew` in the current directory, which is *not* that location):
 
 ```bash
-crewd serve --repo "$PWD" --state-dir "$HOME/.omp/batman"
+crewd serve --repo "$PWD" --state-dir "$HOME/.omp/crew"
 ```
 
 With explicit configuration layers, lowest precedence first:
 
 ```bash
-crewd serve --repo "$PWD" --state-dir "$HOME/.omp/batman" \
+crewd serve --repo "$PWD" --state-dir "$HOME/.omp/crew" \
   --config ~/.omp/crew.json \
   --config .omp/crew.json
 ```
@@ -146,7 +146,9 @@ What `crew_health` reports as "Binary source", and what `OMP_CREW_BINARY` is for
    doesn't match this platform), and only trusts it once that check passes. That cache is populated
    by `/crew-runtime-install`, which downloads both files from this extension version's GitHub
    Release. The state root itself resolves as `CREW_STATE_DIR` (env var) →
-   `$XDG_STATE_HOME/omp/batman` → `$HOME/${PI_CONFIG_DIR:-.omp}/batman`.
+   `$XDG_STATE_HOME/omp/crew` → `$HOME/${PI_CONFIG_DIR:-.omp}/crew`, except that each of the last
+   two falls back to its legacy `batman`-named sibling directory when only that one exists (a
+   pre-rename install), so existing installs keep working without moving any data.
 3. It spawns `crewd serve` detached, with `CREW_BINARY_SOURCE` set to `override` or `package`
    accordingly (the "Binary source" field `crew_health` reports), then retries connecting with
    bounded exponential backoff. If a different concurrent caller won the daemon's single-instance
@@ -157,7 +159,7 @@ What `crew_health` reports as "Binary source", and what `OMP_CREW_BINARY` is for
 `crewd status` requires a live runtime — it queries `runtime/status` over the socket:
 
 ```bash
-crewd status --repo "$PWD" --state-dir "$HOME/.omp/batman"
+crewd status --repo "$PWD" --state-dir "$HOME/.omp/crew"
 ```
 
 For diagnostics that don't require a live runtime, use `doctor` instead — it runs the full check
@@ -166,7 +168,7 @@ compatibility, adapter availability, disk space, stale runs/workspaces, and more
 [`cli-reference.md`](cli-reference.md#crewd-doctor) for the complete list):
 
 ```bash
-crewd doctor --repo "$PWD" --state-dir "$HOME/.omp/batman" --json
+crewd doctor --repo "$PWD" --state-dir "$HOME/.omp/crew" --json
 ```
 
 **Note:** there is no `--recover` flag on `status` or `doctor`. Crash recovery is not something you
@@ -178,7 +180,7 @@ five minutes without acting on it.
 ### Stop the Server
 
 ```bash
-crewd stop --repo "$PWD" --state-dir "$HOME/.omp/batman"
+crewd stop --repo "$PWD" --state-dir "$HOME/.omp/crew"
 ```
 
 ### Audit Export
@@ -189,7 +191,7 @@ subcommand takes — `audit export` derives the per-repository runtime directory
 [`cli-reference.md`](cli-reference.md#crewd-audit-export)):
 
 ```bash
-crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/batman" --output /tmp/audit.jsonl
+crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl
 ```
 
 ## Security Features
@@ -279,7 +281,7 @@ silent while the daemon is up, check `doctor`'s `stale_runs` check, which report
 longer than five minutes, read-only:
 
 ```bash
-crewd doctor --repo "$PWD" --state-dir "$HOME/.omp/batman" --json
+crewd doctor --repo "$PWD" --state-dir "$HOME/.omp/crew" --json
 ```
 
 ### Recovery Configuration
