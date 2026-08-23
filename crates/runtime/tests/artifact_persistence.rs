@@ -4,14 +4,64 @@
 //! its patch from a *new* store handle over the same directory. Also
 //! covers the total-bytes ceiling and on-disk tamper detection.
 
-use crew_protocol::{Artifact, ArtifactId, ArtifactKind};
-use crew_runtime::workspace::{ArtifactStore, ArtifactStoreError};
+use crew_protocol::{ApplyRequest, ApplyStrategy, Artifact, ArtifactId, ArtifactKind, RunId};
+use crew_runtime::workspace::{ArtifactStore, ArtifactStoreError, WorkspaceApplier};
 use sha2::{Digest, Sha256};
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::Arc;
 
 fn sha256_hex(content: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content);
     hex::encode(hasher.finalize())
+}
+
+/// Creates a real git repository with one committed file, for tests that
+/// need `WorkspaceApplier` to run actual `git apply`/`git rev-parse`
+/// against a real working tree -- mirrors `workspace_apply.rs`'s fixture.
+fn create_fixture_repo() -> PathBuf {
+    let repo = tempfile::TempDir::new()
+        .expect("Failed to create temp dir")
+        .keep();
+
+    Command::new("git")
+        .current_dir(&repo)
+        .args(["init"])
+        .output()
+        .expect("Failed to initialize git repo");
+    Command::new("git")
+        .current_dir(&repo)
+        .args(["config", "user.email", "test@test.com"])
+        .output()
+        .expect("Failed to configure git user");
+    Command::new("git")
+        .current_dir(&repo)
+        .args(["config", "user.name", "Test User"])
+        .output()
+        .expect("Failed to configure git user");
+
+    std::fs::write(repo.join("file1.txt"), "initial content\n").unwrap();
+    Command::new("git")
+        .current_dir(&repo)
+        .args(["add", "."])
+        .output()
+        .expect("Failed to add files");
+    Command::new("git")
+        .current_dir(&repo)
+        .args(["commit", "-m", "Initial commit"])
+        .output()
+        .expect("Failed to commit");
+    repo
+}
+
+fn head_of(repo: &PathBuf) -> String {
+    let output = Command::new("git")
+        .current_dir(repo)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("Failed to get HEAD");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
 fn patch_artifact(content: &[u8]) -> Artifact {
@@ -152,4 +202,92 @@ async fn a_purely_in_memory_store_still_works_unbounded() {
     let id = artifact.artifact_id;
     store.store(artifact, content.clone()).await.unwrap();
     assert_eq!(store.fetch_content(&id).await.unwrap(), content);
+}
+
+/// The proof this WP is named for: a `WorkspaceApplier` running against a
+/// store handle that only ever saw the artifact through an on-disk
+/// restart -- never the handle that published it -- can still fetch the
+/// patch and apply it to a real git working tree. Publishing and applying
+/// through two separate `ArtifactStore` instances over the same directory
+/// is what stands in for "the daemon restarted between inspect and run".
+#[tokio::test]
+async fn workspace_applier_finds_its_patch_after_a_store_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = create_fixture_repo();
+
+    // A second clone is the source of the patch, exactly as in
+    // `workspace_apply.rs`'s `workspace_apply_with_real_patch`.
+    let source = tempfile::TempDir::new().unwrap().keep();
+    std::fs::copy(repo.join("file1.txt"), source.join("file1.txt")).unwrap();
+    for args in [
+        vec!["init"],
+        vec!["config", "user.email", "test@test.com"],
+        vec!["config", "user.name", "Test User"],
+        vec!["add", "."],
+        vec!["commit", "-m", "Initial"],
+    ] {
+        Command::new("git")
+            .current_dir(&source)
+            .args(&args)
+            .output()
+            .ok();
+    }
+    std::fs::write(source.join("file1.txt"), "restart-proof content\n").unwrap();
+    let patch_output = Command::new("git")
+        .current_dir(&source)
+        .args(["diff"])
+        .output()
+        .expect("Failed to generate diff");
+    let patch_content = patch_output.stdout;
+    assert!(!patch_content.is_empty(), "patch should be nonempty");
+
+    let artifact_id = ArtifactId::new();
+    let artifact = Artifact {
+        artifact_id,
+        kind: ArtifactKind::Patch,
+        sha256: sha256_hex(&patch_content),
+        byte_length: patch_content.len() as u64,
+        media_type: "application/x-git-diff".to_string(),
+        storage_path: "restart.patch".to_string(),
+        run_id: None,
+    };
+
+    {
+        // The daemon before the restart: publish the patch through a
+        // disk-backed store, then drop this handle entirely.
+        let publishing_store =
+            ArtifactStore::with_storage(dir.path().to_path_buf(), u64::MAX).unwrap();
+        publishing_store
+            .store(artifact, patch_content)
+            .await
+            .unwrap();
+    } // `publishing_store` is gone -- nothing below can reach it.
+
+    let expected_head = head_of(&repo);
+
+    // The daemon after the restart: a brand-new store handle over the
+    // same directory, with no relationship to the one that published.
+    let restarted_store = ArtifactStore::with_storage(dir.path().to_path_buf(), u64::MAX).unwrap();
+    let applier =
+        WorkspaceApplier::from_store(repo.clone(), Arc::new(restarted_store), RunId::new());
+
+    let request = ApplyRequest {
+        lease_id: "restart-lease".to_string(),
+        strategy: ApplyStrategy::ApplyPatch,
+        artifact_id,
+        expected_target_revision: expected_head,
+        approval_correlation_id: None,
+    };
+
+    let result = applier
+        .apply(&request)
+        .await
+        .expect("apply must run, not error, against a restarted store");
+    assert!(
+        result.success,
+        "apply should succeed against the journaled artifact id: {result:?}"
+    );
+
+    let content = std::fs::read_to_string(repo.join("file1.txt")).unwrap();
+    assert_eq!(content, "restart-proof content\n");
 }
