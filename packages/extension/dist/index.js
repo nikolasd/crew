@@ -6961,6 +6961,22 @@ var batman_schema_default = {
     runResultResult: {
       description: "`run/result` result payload.",
       $ref: "#/$defs/RunResultResult"
+    },
+    planProposeResult: {
+      description: "`plan/propose` result payload.",
+      $ref: "#/$defs/PlanProposeResult"
+    },
+    planDecideResult: {
+      description: "`plan/decide` result payload.",
+      $ref: "#/$defs/PlanDecideResult"
+    },
+    planGetResult: {
+      description: "`plan/get` result payload.",
+      $ref: "#/$defs/PlanGetResult"
+    },
+    runTimeoutAckResult: {
+      description: "`run/timeoutAck` result payload.",
+      $ref: "#/$defs/RunTimeoutAckResult"
     }
   },
   required: [
@@ -6982,7 +6998,11 @@ var batman_schema_default = {
     "applyResult",
     "workspaceInfo",
     "policyViolationListResult",
-    "runResultResult"
+    "runResultResult",
+    "planProposeResult",
+    "planDecideResult",
+    "planGetResult",
+    "runTimeoutAckResult"
   ],
   $defs: {
     InitializeParams: {
@@ -7380,6 +7400,27 @@ state, so an operator can find which violation still holds a
 quarantine without diffing the raw event stream (R80).`,
           type: "string",
           const: "policy/violation/list"
+        },
+        {
+          description: "Proposes a decomposition of a run into subtasks, persisting a\n`PlanProposed` event pending `plan/decide`.",
+          type: "string",
+          const: "plan/propose"
+        },
+        {
+          description: "Approves or rejects a previously proposed plan, persisting a\n`PlanDecided` event.",
+          type: "string",
+          const: "plan/decide"
+        },
+        {
+          description: `Fetches the most recently proposed plan for a run and its decision,
+if any.`,
+          type: "string",
+          const: "plan/get"
+        },
+        {
+          description: "The leader acknowledges a `WorkerTimeout` event, resolving how the\nrun proceeds.",
+          type: "string",
+          const: "run/timeoutAck"
         }
       ]
     },
@@ -8508,6 +8549,314 @@ contents, never an absolute socket or filesystem path.`,
             "payload"
           ],
           additionalProperties: false
+        },
+        {
+          description: "A leader proposed a decomposition of a run into subtasks via\n`plan/propose`, pending `plan/decide`.",
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "planProposed"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                plan: {
+                  $ref: "#/$defs/PlanSpec"
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId",
+                "plan"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
+          description: "A previously proposed plan was approved or rejected via\n`plan/decide`.",
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "planDecided"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                approved: {
+                  type: "boolean"
+                },
+                reason: {
+                  description: "`None` when no rationale was given for the decision.",
+                  type: [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId",
+                "approved"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
+          description: "A worker asked a question that blocks its own progress, without\nescalating control (compare [`Self::EscalationRaised`]). `question`\nhas already crossed the redaction boundary; `None` means the\nentire fragment was `Thinking`/`Secret`-classified and was\ndropped, not that the question was empty.",
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "workerQuestion"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                question: {
+                  type: [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
+          description: "A worker escalated a blocking condition to its leader or a human\noperator. `reason` is a plain, machine-assigned code (never raw\nworker content); `question` has already crossed the redaction\nboundary the same way [`Self::WorkerQuestion`]'s field has.",
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "escalationRaised"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                reason: {
+                  type: "string"
+                },
+                question: {
+                  type: [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId",
+                "reason"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
+          description: "An escalation was answered by the leader or a human user.\n`answer` has already crossed the redaction boundary the same way\n[`Self::WorkerQuestion`]'s field has.",
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "escalationAnswered"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                answeredBy: {
+                  $ref: "#/$defs/AnsweredBy"
+                },
+                answer: {
+                  type: [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId",
+                "answeredBy"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
+          description: "A worker exceeded its configured turn budget.",
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "budgetExceeded"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                turnsUsed: {
+                  type: "integer",
+                  format: "uint32",
+                  minimum: 0
+                },
+                turnLimit: {
+                  type: "integer",
+                  format: "uint32",
+                  minimum: 0
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId",
+                "turnsUsed",
+                "turnLimit"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
+          description: "A worker's supervised process missed a liveness deadline.",
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "workerTimeout"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                kind: {
+                  $ref: "#/$defs/TimeoutKind"
+                },
+                sinceMs: {
+                  type: "integer",
+                  format: "uint64",
+                  minimum: 0
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId",
+                "kind",
+                "sinceMs"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
         }
       ]
     },
@@ -9290,6 +9639,75 @@ terminal. Changes presentation only; never run ownership.`,
         }
       ]
     },
+    PlanSpec: {
+      description: "A proposed decomposition of a run into subtasks, carried by\n[`RuntimeEvent::PlanProposed`] and returned by `plan/get`, awaiting\n`plan/decide`.",
+      type: "object",
+      properties: {
+        subtasks: {
+          type: "array",
+          items: {
+            $ref: "#/$defs/SubtaskSpec"
+          }
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "subtasks"
+      ]
+    },
+    SubtaskSpec: {
+      description: "One subtask within a [`PlanSpec`], as proposed by `plan/propose`.",
+      type: "object",
+      properties: {
+        id: {
+          description: "The caller-assigned identifier for this subtask within its plan;\ndistinct from a [`TaskId`], since a proposed subtask is not yet a\nregistered task until (and unless) the plan is approved.",
+          type: "string"
+        },
+        description: {
+          type: "string"
+        },
+        adapter: {
+          description: "The adapter wire name (e.g. `claude`, `codex`) this subtask is\nintended to run under.",
+          type: "string"
+        },
+        writes: {
+          description: "Whether this subtask is expected to write to the workspace.",
+          type: "boolean"
+        },
+        turnBudget: {
+          description: "The maximum number of turns this subtask may take; `None` means no\nexplicit budget was proposed.",
+          type: [
+            "integer",
+            "null"
+          ],
+          format: "uint32",
+          minimum: 0
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "id",
+        "description",
+        "adapter",
+        "writes"
+      ]
+    },
+    AnsweredBy: {
+      description: "Who answered a [`RuntimeEvent::EscalationRaised`] escalation.",
+      type: "string",
+      enum: [
+        "leader",
+        "user"
+      ]
+    },
+    TimeoutKind: {
+      description: "Which liveness deadline a [`RuntimeEvent::WorkerTimeout`] event reports.",
+      type: "string",
+      enum: [
+        "inactivity",
+        "total"
+      ]
+    },
     DisplayConfig: {
       description: "Display configuration.",
       type: "object",
@@ -9946,6 +10364,92 @@ child at all (a cost ceiling does not).`,
         "inputTokens",
         "outputTokens"
       ]
+    },
+    PlanProposeResult: {
+      description: "Result of `plan/propose`: the sequence of the `PlanProposed` event it\npersisted.",
+      type: "object",
+      properties: {
+        runId: {
+          $ref: "#/$defs/RunId"
+        },
+        sequence: {
+          type: "integer",
+          format: "uint64",
+          minimum: 0
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "runId",
+        "sequence"
+      ]
+    },
+    PlanDecideResult: {
+      description: "Result of `plan/decide`: the sequence of the `PlanDecided` event it\npersisted.",
+      type: "object",
+      properties: {
+        runId: {
+          $ref: "#/$defs/RunId"
+        },
+        sequence: {
+          type: "integer",
+          format: "uint64",
+          minimum: 0
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "runId",
+        "sequence"
+      ]
+    },
+    PlanGetResult: {
+      description: "Result of `plan/get`: the most recently proposed plan for a run and its\ndecision, if any. `plan: None` means no plan has been proposed yet;\n`approved: None` means a plan exists but has not yet been decided.",
+      type: "object",
+      properties: {
+        runId: {
+          $ref: "#/$defs/RunId"
+        },
+        plan: {
+          anyOf: [
+            {
+              $ref: "#/$defs/PlanSpec"
+            },
+            {
+              type: "null"
+            }
+          ]
+        },
+        approved: {
+          type: [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "runId"
+      ]
+    },
+    RunTimeoutAckResult: {
+      description: "Result of `run/timeoutAck`: the sequence of the event the leader's\ntimeout acknowledgement persisted.",
+      type: "object",
+      properties: {
+        runId: {
+          $ref: "#/$defs/RunId"
+        },
+        sequence: {
+          type: "integer",
+          format: "uint64",
+          minimum: 0
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "runId",
+        "sequence"
+      ]
     }
   }
 };
@@ -9983,6 +10487,10 @@ var validateJsonRpcResponse = def("JsonRpcResponse");
 var validateJsonRpcErrorResponse = def("JsonRpcErrorResponse");
 var validateJsonRpcNotification = def("JsonRpcNotification");
 var validateRunResultResult = def("RunResultResult");
+var validatePlanProposeResult = def("PlanProposeResult");
+var validatePlanDecideResult = def("PlanDecideResult");
+var validatePlanGetResult = def("PlanGetResult");
+var validateRunTimeoutAckResult = def("RunTimeoutAckResult");
 var validateEventEnvelopeArray = ajv.compile({
   $id: "https://schema.batman.satorianalytics.com/event-envelope-array.json",
   type: "array",
