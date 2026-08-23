@@ -258,6 +258,38 @@ pub fn ensure_private_file(path: &Path) -> Result<(), SecurityError> {
     Ok(())
 }
 
+/// Whether `path`'s parent directory is owned by `euid` and accessible only
+/// by its owner (no group/other permission bits). The fallback admission
+/// signal for [`admit_same_uid`] when peer credentials are unavailable on
+/// this platform -- mirrors `ipc::server`'s own (private) `check_owner_only`
+/// so a second socket (e.g. a per-worker attach socket) can enforce the
+/// identical boundary without depending on that module.
+#[must_use]
+pub fn parent_dir_is_owner_only(path: &Path, euid: u32) -> bool {
+    let dir = path.parent().unwrap_or_else(|| Path::new("/"));
+    match fs::metadata(dir) {
+        Ok(meta) => meta.uid() == euid && (meta.mode() & 0o077) == 0,
+        Err(_) => false,
+    }
+}
+
+/// Decides whether to admit a connection: the same-user peer-credential
+/// boundary every Crew socket enforces before a single byte is read from
+/// it. `peer_uid` is whatever the platform reported (`None` where peer
+/// credentials aren't available); `owner_only_verified` is the fallback
+/// signal (typically [`parent_dir_is_owner_only`]) used only when
+/// `peer_uid` is `None` -- a platform that cannot report credentials fails
+/// closed unless the socket's own directory already proves owner-only
+/// access. Mirrors `ipc::server::Server::admit`'s decision exactly, so the
+/// runtime socket and any per-worker attach socket enforce it identically.
+#[must_use]
+pub fn admit_same_uid(peer_uid: Option<u32>, euid: u32, owner_only_verified: bool) -> bool {
+    match peer_uid {
+        Some(uid) => uid == euid,
+        None => owner_only_verified,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,5 +490,72 @@ mod tests {
         let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
         assert!(target.is_file());
+    }
+
+    #[test]
+    fn admit_same_uid_rejects_a_mismatched_peer_uid_even_with_owner_only_directory() {
+        let euid = Uid::current().as_raw();
+        let foreign_uid = euid.wrapping_add(1);
+
+        assert!(
+            !admit_same_uid(Some(foreign_uid), euid, true),
+            "a reported peer uid that differs from euid must never be admitted, \
+             regardless of the owner-only fallback signal"
+        );
+    }
+
+    #[test]
+    fn admit_same_uid_accepts_a_matching_peer_uid() {
+        let euid = Uid::current().as_raw();
+        assert!(admit_same_uid(Some(euid), euid, false));
+    }
+
+    #[test]
+    fn admit_same_uid_falls_back_to_the_owner_only_signal_when_credentials_are_unavailable() {
+        let euid = Uid::current().as_raw();
+        assert!(
+            admit_same_uid(None, euid, true),
+            "no peer uid reported, but the directory is owner-only: admit"
+        );
+        assert!(
+            !admit_same_uid(None, euid, false),
+            "no peer uid reported and the directory is not owner-only: fail closed"
+        );
+    }
+
+    #[test]
+    fn parent_dir_is_owner_only_reflects_the_real_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let euid = Uid::current().as_raw();
+        let socket_path = dir.path().join("run.sock");
+
+        // `tempdir()` does not itself guarantee `0700` (it is subject to
+        // the process umask, e.g. `022` yields `0755`), so tighten it
+        // explicitly for the true-positive case rather than assuming it.
+        let mut permissions = fs::metadata(dir.path()).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(dir.path(), permissions).unwrap();
+        assert!(parent_dir_is_owner_only(&socket_path, euid));
+
+        // Loosen it back up: group/other-accessible must fail, even
+        // though the owner is still correct.
+        let mut loose = fs::metadata(dir.path()).unwrap().permissions();
+        loose.set_mode(0o755);
+        fs::set_permissions(dir.path(), loose).unwrap();
+        assert!(
+            !parent_dir_is_owner_only(&socket_path, euid),
+            "a group/other-accessible directory must not verify as owner-only"
+        );
+
+        // Restore `0700` before checking the owner mismatch case, so this
+        // assertion is isolated to the uid check alone.
+        let mut tight = fs::metadata(dir.path()).unwrap().permissions();
+        tight.set_mode(0o700);
+        fs::set_permissions(dir.path(), tight).unwrap();
+        let foreign_uid = euid.wrapping_add(1);
+        assert!(
+            !parent_dir_is_owner_only(&socket_path, foreign_uid),
+            "a directory not owned by the checked euid must not verify as owner-only"
+        );
     }
 }

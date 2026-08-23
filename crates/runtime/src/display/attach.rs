@@ -53,7 +53,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast;
 use tokio::task::AbortHandle;
 
-use crate::ipc::socket_path_within_limit;
+use crate::ipc::{PeerCredentialReader, socket_path_within_limit};
 use crate::supervisor::{PtyProcess, SupervisorError};
 
 /// Ring buffer capacity replayed to a newly-connected viewer.
@@ -163,6 +163,16 @@ struct Shared {
     output_tx: broadcast::Sender<Vec<u8>>,
     target: Arc<dyn AttachTarget>,
     on_user_input: Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+    /// This process's effective uid, checked against each connecting
+    /// peer's own uid before a single byte is read from it -- the same
+    /// same-user boundary [`crate::ipc::server::Server::admit`] enforces
+    /// on the main runtime socket.
+    euid: u32,
+    /// Whether the socket's parent directory (`RuntimePaths::panes`) is
+    /// verified owner-only, computed once at [`AttachServer::start`]. The
+    /// fallback admission signal for a peer whose credentials this
+    /// platform cannot report.
+    owner_only_verified: bool,
 }
 
 impl Shared {
@@ -223,6 +233,9 @@ impl AttachServer {
         permissions.set_mode(0o600);
         std::fs::set_permissions(&path, permissions)?;
 
+        let euid = nix::unistd::Uid::effective().as_raw();
+        let owner_only_verified = crate::security::parent_dir_is_owner_only(&path, euid);
+
         let pty_rx = target.subscribe_output();
         let (output_tx, _) = broadcast::channel(VIEWER_CHANNEL_CAPACITY);
 
@@ -231,6 +244,8 @@ impl AttachServer {
             output_tx,
             target,
             on_user_input: Arc::from(on_user_input),
+            euid,
+            owner_only_verified,
         });
 
         let clients: Arc<StdMutex<Vec<AbortHandle>>> = Arc::new(StdMutex::new(Vec::new()));
@@ -306,17 +321,34 @@ async fn run_collector(mut pty_rx: broadcast::Receiver<Vec<u8>>, shared: Arc<Sha
 }
 
 /// Accepts viewer connections until the listener errors (e.g. this task
-/// itself is aborted by [`AttachServer::stop`]), spawning one task per
-/// connection and recording its abort handle so `stop` can close it.
+/// itself is aborted by [`AttachServer::stop`]), applies the same-user
+/// peer-credential boundary [`crate::ipc::server::Server::admit`] enforces
+/// on the main runtime socket, and spawns one task per admitted
+/// connection, recording its abort handle so `stop` can close it. A
+/// rejected connection is dropped here, before a single byte is read from
+/// it, never handed to [`serve_viewer`].
 async fn run_accept_loop(
     listener: UnixListener,
     shared: Arc<Shared>,
     clients: Arc<StdMutex<Vec<AbortHandle>>>,
 ) {
+    let credential_reader = crate::ipc::SystemPeerCredentialReader;
     loop {
         let Ok((stream, _addr)) = listener.accept().await else {
             return;
         };
+
+        let creds = credential_reader.read(&stream);
+        if !crate::security::admit_same_uid(creds.uid, shared.euid, shared.owner_only_verified) {
+            tracing::warn!(
+                peer_uid = creds.uid,
+                expected = shared.euid,
+                "rejecting attach connection from a different uid before reading any bytes"
+            );
+            drop(stream);
+            continue;
+        }
+
         let (snapshot, viewer_rx) = shared.snapshot_and_subscribe();
         let target = Arc::clone(&shared.target);
         let on_user_input = Arc::clone(&shared.on_user_input);
