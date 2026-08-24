@@ -8976,6 +8976,11 @@ session/thread identifier.`,
           const: "adapterNestedWorkerObserved"
         },
         {
+          description: "A TUI-mode worker adapter's transcript classified an assistant\nmessage as a question awaiting a human answer, rather than a\ncompleted message. Carried on the same [`RuntimeEvent::AdapterMessageEvent`]\nshape as [`Self::AdapterMessageFinal`] (role/text), distinguished\nonly by this `kind`.",
+          type: "string",
+          const: "adapterQuestionDetected"
+        },
+        {
           description: "A display backend attached a Crew-owned pane to a run.",
           type: "string",
           const: "displayPaneAttached"
