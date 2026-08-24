@@ -1075,18 +1075,34 @@ async fn resume_journals_under_constructor_ids_with_no_injection_and_no_discover
     let control_log = vendor.control_log.clone();
 
     // A pre-existing transcript, as if from a previously established
-    // session. Resume must find and tail it via `resume_transcript_path`
-    // directly -- the reactive script's own nonce-triggered write logic
-    // is never exercised (nothing is ever injected into a resume), so
-    // discovery finding this file at all would be a coincidence, not a
-    // mechanism this test relies on.
-    let transcript_path = vendor.transcript_path();
+    // session -- seeded *outside* `vendor.transcript_root()` (the mock's
+    // `session_dir`, which discovery would scan) entirely, and
+    // `transcript_root()` itself is left with no matching file at all.
+    // So this is not merely "discovery finding it would be a
+    // coincidence" -- discovery structurally *cannot* find it: were
+    // `resume_transcript_path` ever ignored in favor of discovery, the
+    // scan would come up empty against an untouched `session_dir` and
+    // `resume()` would fail outright (a nonce-discovery timeout) rather
+    // than quietly happening to tail the right file anyway. A passing
+    // test is therefore proof the known path was used directly, not a
+    // behavior that could pass by accident.
+    let transcript_path = work_dir.path().join("resumed-elsewhere.jsonl");
     fs::write(
         &transcript_path,
         "{\"type\":\"session\",\"id\":\"sess-mock\"}\n\
          {\"type\":\"assistant\",\"text\":\"resumed ok\",\"question\":false}\n",
     )
     .expect("seed a pre-existing transcript");
+    assert_eq!(
+        fs::read_dir(vendor.transcript_root(
+            &spec(RunId::new(), TaskId::new(), WorkerId::new(), ""),
+            &adapter_config()
+        ))
+        .expect("session dir must exist")
+        .count(),
+        0,
+        "transcript_root must stay empty -- discovery must have nothing to coincidentally find"
+    );
 
     let run_id = RunId::new();
     let task_id = TaskId::new();
@@ -1219,11 +1235,15 @@ async fn readiness_gate_sees_output_produced_before_a_slow_pane_attach_resolves(
     // Buggy (subscribing only after the slow pane attach): the gate
     // never sees the pre-delay "ready" output and waits out its whole
     // 2s cap before even reaching discovery -- total elapsed would land
-    // near pane_delay + readiness_cap + discovery_timeout (~2.7s).
-    // Fixed: it lands near pane_delay + readiness_quiet + discovery_timeout
-    // (~0.8s). The threshold sits roughly halfway between the two,
-    // leaving both a wide margin so scheduling jitter under a fully
-    // parallel test run never flips this either way.
+    // near pane_delay + readiness_cap + discovery_timeout = 400ms +
+    // 2000ms + 300ms ~= 2.7s. Fixed: it lands near pane_delay +
+    // readiness_quiet + discovery_timeout = 400ms + 100ms + 300ms ~=
+    // 0.8s. The 2200ms threshold is not the midpoint of those two (that
+    // would be ~1.75s) -- it sits deliberately closer to the buggy value,
+    // trading a slimmer 500ms margin on that side for a generous 1.4s
+    // margin on the fixed side, since scheduling jitter under a fully
+    // parallel test run is far more likely to *slow down* the fast path
+    // than to speed up the slow one.
     assert!(
         elapsed < Duration::from_millis(2200),
         "readiness must have seen the pre-delay output rather than waiting out its cap: {elapsed:?}"

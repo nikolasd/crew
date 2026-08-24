@@ -485,22 +485,28 @@ impl<V: TuiVendor> TuiAdapter<V> {
         // `TuiVendor::session_id_from_transcript_path`'s doc comment);
         // the first real `SessionMeta` entry the tailer encounters
         // corrects/confirms it via the identical `VendorSessionEstablished`
-        // mapping in `emit_tui_event`.
-        let initial_session_id = self
+        // mapping in `emit_tui_event`. When the vendor cannot derive one
+        // at all, this deliberately emits nothing rather than a
+        // fabricated placeholder id (a prior "unknown" fallback here was
+        // itself indistinguishable from a real vendor session id once
+        // journaled) -- `runs.vendor_session_id` simply stays unset until
+        // a real `SessionMeta` entry establishes it.
+        if let Some(initial_session_id) = self
             .vendor
             .session_id_from_transcript_path(&transcript_path)
-            .unwrap_or_else(|| "unknown".to_string());
-        emit(
-            &sink,
-            run_id,
-            task_id,
-            worker_id,
-            AdapterEventPayload::VendorSessionEstablished {
-                vendor_session_id: initial_session_id,
-            },
-            None,
-        )
-        .await;
+        {
+            emit(
+                &sink,
+                run_id,
+                task_id,
+                worker_id,
+                AdapterEventPayload::VendorSessionEstablished {
+                    vendor_session_id: initial_session_id,
+                },
+                None,
+            )
+            .await;
+        }
 
         let (batch_tx, mut batch_rx) = mpsc::unbounded_channel::<(Vec<TuiEvent>, Cursor)>();
         let tailer = TranscriptTailer::new(
@@ -805,10 +811,15 @@ async fn wait_for_readiness(
 /// Spawns the single task that owns this run's settlement: races the PTY
 /// exiting naturally against a termination request from
 /// [`TuiAdapter::cancel`]/`dispose` (`terminate_rx`) -- this task is the
-/// *only* caller of [`PtyProcess::terminate`], so there is exactly one
-/// place that ever decides the real `exit_code`/`signal` for an induced
-/// exit (no race between this task reading one outcome and `cancel`
-/// reading a different one for the same termination). Either way, once
+/// *only* caller of [`PtyProcess::terminate`] once a run is tailing;
+/// `fail_start` owns the pre-tail phase (a run that never reached this
+/// watcher at all, because spawn/attach/readiness/injection/discovery
+/// itself failed, terminates the pty itself on that separate,
+/// self-contained path -- see `fail_start`'s own doc comment). So there
+/// is exactly one place that ever decides the real `exit_code`/`signal`
+/// for an induced exit *once a run is being tailed* (no race between
+/// this task reading one outcome and `cancel` reading a different one
+/// for the same termination). Either way, once
 /// the process is down, stops the tailer and attach server, honors
 /// `close_on_exit` through the pane coordinator, and journals
 /// `ProcessExited` -- exactly once, from exactly one place.
