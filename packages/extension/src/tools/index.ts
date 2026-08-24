@@ -10,7 +10,9 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { registerApprovalTool } from "./approvals";
 import { registerArtifactTool } from "./artifacts";
 import { registerChildTool } from "./children";
+import { registerLeaderTools } from "./leader";
 import { registerMessageTool } from "./messages";
+import { registerPlanTool } from "./plan";
 import { registerProfileTool } from "./profiles";
 import { registerReconcileTool } from "./reconcile";
 import { registerRunTool } from "./runs";
@@ -32,12 +34,15 @@ export { CREW_WORKSPACE_TOOL_NAME } from "./workspaces";
 export { CREW_ARTIFACT_TOOL_NAME } from "./artifacts";
 export { CREW_CHILD_TOOL_NAME } from "./children";
 export { CREW_VIOLATION_TOOL_NAME } from "./violations";
+export { CREW_PLAN_TOOL_NAME } from "./plan";
+export { CREW_SPAWN_TOOL_NAME, CREW_SEND_TOOL_NAME, CREW_STATUS_TOOL_NAME, CREW_TRANSCRIPT_TOOL_NAME, CREW_STOP_TOOL_NAME, CREW_FINISH_TOOL_NAME } from "./leader";
 
 /** Registers every orchestration tool against the extension API. */
 export function registerOrchestrationTools(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   // Registration order is the order the model sees these tools in, and is
   // asserted verbatim by `tools.test.ts`: identity, then execution, then
-  // the evidence and decision surfaces, then messaging.
+  // the evidence and decision surfaces, then messaging, then the
+  // team-leader product layer (plan + leader tools).
   registerTaskTool(pi, ctx);
   registerWorkerTool(pi, ctx);
   registerProfileTool(pi, ctx);
@@ -49,4 +54,6 @@ export function registerOrchestrationTools(pi: ExtensionAPI, ctx: OrchestrationT
   registerMessageTool(pi, ctx);
   registerApprovalTool(pi, ctx);
   registerReconcileTool(pi, ctx);
+  registerPlanTool(pi, ctx);
+  registerLeaderTools(pi, ctx);
 }
