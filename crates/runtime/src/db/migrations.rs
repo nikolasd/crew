@@ -220,6 +220,17 @@ UPDATE approvals SET decided_by = SUBSTR(decided_by, 2, LENGTH(decided_by) - 2)
   WHERE decided_by LIKE '\"%\"';
 ";
 
+/// Migration 10: the durable position of a TUI-mode worker's transcript
+/// tailer (`crate::adapter::tui::Cursor`, serialized as JSON), persisted
+/// transactionally alongside each committed adapter-event batch so a
+/// crashed daemon re-tails from its last durable position instead of the
+/// start of the vendor transcript. Nullable -- a run with no TUI-mode
+/// tailer (or one that has not yet committed a batch) has no cursor and
+/// is never backfilled with a fabricated one.
+const MIGRATION_10: &str = "
+ALTER TABLE runs ADD COLUMN transcript_cursor TEXT;
+";
+
 /// Opens `path` as a private (mode `0600`) SQLite database, configures its
 /// PRAGMAs (`journal_mode=WAL`, `foreign_keys=ON`, `busy_timeout=5000`,
 /// `synchronous=FULL`), and migrates it to the latest schema. Migrations
@@ -256,6 +267,7 @@ fn migration_list() -> Migrations<'static> {
         M::up(MIGRATION_7),
         M::up(MIGRATION_8),
         M::up(MIGRATION_9),
+        M::up(MIGRATION_10),
     ])
 }
 
@@ -550,5 +562,84 @@ mod tests {
             )
             .unwrap();
         assert!(decided_by.is_none());
+    }
+
+    /// Exercises migration 10: `runs.transcript_cursor` (the durable TUI
+    /// transcript-tailer position, WP12) does not exist before the
+    /// migration and exists (nullable) after it.
+    #[test]
+    fn migration_10_adds_transcript_cursor_column() {
+        let mut conn = Connection::open_in_memory().expect("in-memory db");
+
+        migration_list()
+            .to_version(&mut conn, 9)
+            .expect("migrate to v9");
+
+        let err = conn.query_row(
+            "SELECT transcript_cursor FROM runs LIMIT 1",
+            [],
+            |r| r.get::<_, Option<String>>(0),
+        );
+        assert!(
+            err.is_err(),
+            "transcript_cursor must not exist before migration 10"
+        );
+
+        migration_list()
+            .to_version(&mut conn, 10)
+            .expect("migrate to v10");
+
+        conn.execute(
+            "INSERT INTO worker_profiles (id, fingerprint, adapter, model, permission_envelope)
+             VALUES ('wp-1', 'sha256:fake', 'fake', 'test', '{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (task_id, project_id, owner_client_instance_id, revision, created_at, updated_at)
+             VALUES ('t-1', 'p-1', 'omp-1', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workers (worker_id, project_id, profile_id, created_at)
+             VALUES ('w-1', 'p-1', 'wp-1', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO runs (run_id, task_id, worker_id, state, flags_degraded_control, flags_needs_reconciliation,
+               flags_protocol_unhealthy, flags_policy_quarantined, flags_workspace_dirty, flags_children_active,
+               vendor_session_id, created_at)
+             VALUES ('r-1', 't-1', 'w-1', 'queued', 0, 0, 0, 0, 0, 0, NULL, '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        // A freshly inserted row has no cursor yet (never backfilled with
+        // a fabricated one).
+        let cursor: Option<String> = conn
+            .query_row(
+                "SELECT transcript_cursor FROM runs WHERE run_id = 'r-1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("column exists after migration 10");
+        assert!(cursor.is_none());
+
+        conn.execute(
+            "UPDATE runs SET transcript_cursor = ?1 WHERE run_id = 'r-1'",
+            rusqlite::params!["{\"offset\":42,\"lastEntryId\":\"abc\"}"],
+        )
+        .expect("transcript_cursor is writable after migration 10");
+
+        let cursor: Option<String> = conn
+            .query_row(
+                "SELECT transcript_cursor FROM runs WHERE run_id = 'r-1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("read back");
+        assert_eq!(cursor.as_deref(), Some("{\"offset\":42,\"lastEntryId\":\"abc\"}"));
     }
 }
