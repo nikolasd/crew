@@ -11,9 +11,9 @@
 //! before its event is appended.
 
 use crew_protocol::{
-    ApprovalRequest, DeliveryState, EventEnvelope, EventSource, PolicyViolationId, ProjectId, Run,
-    RunFlags, RunId, RunMessage, RunState, RuntimeEvent, RuntimeEventKind, TaskId, TaskRef,
-    Timestamp, Worker, WorkerId,
+    ApprovalRequest, DeliveryState, EventEnvelope, EventSource, PlanGetResult, PlanSpec,
+    PolicyViolationId, ProjectId, Run, RunFlags, RunId, RunMessage, RunState, RuntimeEvent,
+    RuntimeEventKind, SubtaskSpec, TaskId, TaskRef, Timestamp, Worker, WorkerId,
 };
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
@@ -1524,6 +1524,275 @@ impl<'c> DomainRepository<'c> {
             }
             Ok(())
         })
+    }
+
+    /// Proposes a leader plan for a run: inserts a `plans` row in the
+    /// `proposed` state and appends a `PlanProposed` event. The plan is
+    /// keyed 1:1 by `run_id` -- at most one plan row may exist per run,
+    /// and re-proposing one that already exists (proposed or decided) is
+    /// refused as [`DomainError::AlreadyResolved`] so a stale second
+    /// proposal cannot clobber a live decision. `task_id`/`worker_id` are
+    /// read from the run row (the daemon does not own routing; it only
+    /// reflects the run it supervises) and carried on the event so a
+    /// monitor replaying the journal can reconstruct the subtask graph.
+    ///
+    /// # Errors
+    /// Returns [`DomainError::NotFound`] if no such run exists, or
+    /// [`DomainError::AlreadyResolved`] if a plan already exists for it.
+    pub fn propose_plan(
+        &mut self,
+        run_id: RunId,
+        owner_client_instance_id: &str,
+        task_text: &str,
+        plan: &PlanSpec,
+    ) -> Result<Committed, DomainError> {
+        let run_id_str = run_id.to_string();
+        // Reflect the run the plan is for; the daemon does not create or
+        // edit OMP's task graph (invariant 6).
+        let (task_id_str, worker_id_str): (String, String) = self
+            .conn
+            .query_row(
+                "SELECT task_id, worker_id FROM runs WHERE run_id = ?1",
+                [run_id_str.clone()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(DomainError::NotFound {
+                kind: "run",
+                id: run_id_str.clone(),
+            })?;
+        let task_id = TaskId::parse(&task_id_str).map_err(|_| DomainError::NotFound {
+            kind: "task",
+            id: task_id_str.clone(),
+        })?;
+        let worker_id = WorkerId::parse(&worker_id_str).map_err(|_| DomainError::NotFound {
+            kind: "worker",
+            id: worker_id_str.clone(),
+        })?;
+
+        // Refuse to overwrite an existing plan for this run (proposed or
+        // already decided) -- see doc above.
+        let existing: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT status FROM plans WHERE run_id = ?1",
+                [run_id_str.clone()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(status) = existing {
+            return Err(DomainError::AlreadyResolved {
+                kind: "plan",
+                id: run_id_str,
+                existing: status,
+            });
+        }
+
+        let subtasks_json = serde_json::to_string(&plan.subtasks).map_err(|err| {
+            DomainError::Sqlite(rusqlite::Error::ToSqlConversionFailure(Box::new(err)))
+        })?;
+        let now = Timestamp::now();
+        let status = "proposed".to_string();
+        let project_id = self.project_id.to_string();
+        let event = RuntimeEvent::PlanProposed {
+            run_id,
+            task_id,
+            worker_id,
+            plan: plan.clone(),
+        };
+        self.append_and_apply(
+            &event,
+            Some(task_id),
+            Some(worker_id),
+            Some(run_id),
+            move |tx| {
+                tx.execute(
+                    "INSERT INTO plans (plan_id, project_id, run_id, task_id, worker_id, \
+                     owner_client_instance_id, task_text, subtasks_json, status, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    rusqlite::params![
+                        run_id_str,
+                        project_id,
+                        run_id_str,
+                        task_id_str,
+                        worker_id_str,
+                        owner_client_instance_id,
+                        task_text,
+                        subtasks_json,
+                        status,
+                        now.as_str(),
+                    ],
+                )?;
+                Ok(())
+            },
+        )
+    }
+
+    /// Decides a previously proposed plan for a run: guards inside the
+    /// writing transaction (re-read `status` and `owner_client_instance_id`
+    /// from `plans`, mirroring [`Self::decide_approval`'s] race-safe owner
+    /// check -- R71), journals a `PlanDecided` event, and writes the
+    /// decision onto the row. The daemon enforces nothing about *routing*;
+    /// it only persists the leader's decision.
+    ///
+    /// # Errors
+    /// Returns [`DomainError::NotFound`] if no plan exists for the run,
+    /// [`DomainError::NotOwner`] if `principal_instance_id` does not own
+    /// the plan's task, or [`DomainError::AlreadyResolved`] if the plan has
+    /// already been decided.
+    pub fn decide_plan(
+        &mut self,
+        run_id: RunId,
+        principal_instance_id: &str,
+        approved: bool,
+        reason: Option<&str>,
+    ) -> Result<Committed, DomainError> {
+        let run_id_str = run_id.to_string();
+        // The run row is stable for a run, so reading task_id/worker_id here
+        // (outside the guarded transaction) is safe; only the `plans` row's
+        // owner/status guard must live inside the writing transaction (R71).
+        let (task_id_str, worker_id_str): (String, String) = self
+            .conn
+            .query_row(
+                "SELECT task_id, worker_id FROM runs WHERE run_id = ?1",
+                [run_id_str.clone()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(DomainError::NotFound {
+                kind: "run",
+                id: run_id_str.clone(),
+            })?;
+        let task_id = TaskId::parse(&task_id_str).map_err(|_| DomainError::NotFound {
+            kind: "task",
+            id: task_id_str.clone(),
+        })?;
+        let worker_id = WorkerId::parse(&worker_id_str).map_err(|_| DomainError::NotFound {
+            kind: "worker",
+            id: worker_id_str.clone(),
+        })?;
+
+        let now = Timestamp::now();
+        let decision = if approved { "approved" } else { "rejected" };
+        let reason_str = reason.map(str::to_string);
+        let principal = principal_instance_id.to_string();
+        let event = RuntimeEvent::PlanDecided {
+            run_id,
+            task_id,
+            worker_id,
+            approved,
+            reason: reason.map(str::to_string),
+        };
+        self.append_and_apply(
+            &event,
+            Some(task_id),
+            Some(worker_id),
+            Some(run_id),
+            move |tx| {
+                // Race-safe owner + status re-read inside the writing
+                // transaction (R71): a `reconcile/omp` rebind cannot land
+                // between a caller snapshot and this write because the
+                // database actor serializes whole `run_domain_op` closures.
+                let row: Option<(String, String)> = tx
+                    .query_row(
+                        "SELECT owner_client_instance_id, status FROM plans WHERE run_id = ?1",
+                        [run_id_str.clone()],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()?;
+                let (owner, status) = match row {
+                    Some(row) => row,
+                    None => {
+                        return Err(DomainError::NotFound {
+                            kind: "plan",
+                            id: run_id_str.clone(),
+                        });
+                    }
+                };
+                if owner != principal {
+                    return Err(DomainError::NotOwner {
+                        task_id: owner,
+                        instance_id: principal.clone(),
+                    });
+                }
+                if status != "proposed" {
+                    return Err(DomainError::AlreadyResolved {
+                        kind: "plan",
+                        id: run_id_str.clone(),
+                        existing: status,
+                    });
+                }
+                tx.execute(
+                    "UPDATE plans SET status = ?1, decided_at = ?2, decided_reason = ?3 \
+                     WHERE run_id = ?4 AND status = 'proposed'",
+                    rusqlite::params![decision, now.as_str(), reason_str, run_id_str,],
+                )?;
+                Ok(())
+            },
+        )
+    }
+
+    /// Returns the most recently proposed plan for a run and its decision,
+    /// if any (`plan/get`, ADR-0024 open read). `plan: None` means no plan
+    /// has been proposed yet; `approved: None` means a plan exists but has
+    /// not yet been decided.
+    ///
+    /// # Errors
+    /// Returns [`DomainError::NotFound`] if no such run exists.
+    pub fn get_plan(&self, run_id: RunId) -> Result<PlanGetResult, DomainError> {
+        let run_id_str = run_id.to_string();
+        let exists: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM runs WHERE run_id = ?1",
+                [run_id_str.clone()],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !exists {
+            return Err(DomainError::NotFound {
+                kind: "run",
+                id: run_id_str,
+            });
+        }
+        let row: Option<(String, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT subtasks_json, status FROM plans WHERE run_id = ?1 \
+                 ORDER BY created_at DESC LIMIT 1",
+                [run_id_str],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        match row {
+            None => Ok(PlanGetResult {
+                run_id,
+                plan: None,
+                approved: None,
+            }),
+            Some((subtasks_json, status)) => {
+                let subtasks: Vec<SubtaskSpec> =
+                    serde_json::from_str(&subtasks_json).map_err(|err| {
+                        DomainError::Sqlite(rusqlite::Error::FromSqlConversionFailure(
+                            0,
+                            rusqlite::types::Type::Text,
+                            Box::new(err),
+                        ))
+                    })?;
+                Ok(PlanGetResult {
+                    run_id,
+                    plan: Some(PlanSpec { subtasks }),
+                    // `None` means a plan exists but has not yet been
+                    // decided; only a decided row yields `Some(..)`.
+                    approved: match status.as_deref() {
+                        Some("approved") => Some(true),
+                        Some("rejected") => Some(false),
+                        _ => None,
+                    },
+                })
+            }
+        }
     }
 
     /// Records a mid-run policy violation: inserts the [`policy_violations`]

@@ -2699,29 +2699,244 @@ async fn display_principal_cannot_call_plan_or_timeout_ack_methods() {
 }
 
 #[tokio::test]
-async fn omp_extension_can_reach_plan_and_timeout_ack_methods_but_they_are_stubbed() {
-    // Role table membership: an `ompExtension` client's call reaches the
-    // service layer (rather than being hidden as METHOD_NOT_FOUND for the
-    // role, the way `display_principal_cannot_call_plan_or_timeout_ack_methods`
-    // proves it is for `display`) and gets a distinct "not yet
-    // implemented" refusal -- the stub this work package wires ahead of
-    // WP17/WP21's real handlers.
+async fn omp_extension_plan_methods_reach_real_handlers_and_timeout_ack_stays_stubbed() {
+    // WP17 landed real `plan/propose|decide|get` handlers; `run/timeoutAck`
+    // remains a stub until WP21. An `ompExtension` client reaches the
+    // service layer for all of them (never METHOD_NOT_FOUND).
     let harness = Harness::start(|_| {}).await;
     let mut client = omp_client(&harness, "omp-1").await;
 
-    for method in ["plan/propose", "plan/decide", "plan/get", "run/timeoutAck"] {
+    // plan/* now reach real handlers: empty params surface a structural
+    // invalid_params error (-32602), not the -32601 "not yet implemented".
+    for method in ["plan/propose", "plan/decide", "plan/get"] {
         let attempt = client.call(2, method, json!({})).await;
         assert_eq!(
-            attempt["error"]["code"], -32601,
-            "{method} should still surface a JSON-RPC error: {attempt:?}"
-        );
-        let message = attempt["error"]["message"].as_str().unwrap_or_default();
-        assert!(
-            message.contains("not yet implemented"),
-            "{method} should be refused as not-yet-implemented, not as an unknown/out-of-role \
-             method: {attempt:?}"
+            attempt["error"]["code"], -32602,
+            "{method} should reach its handler (invalid_params), not be a stub: {attempt:?}"
         );
     }
+
+    // run/timeoutAck is still a stub.
+    let attempt = client.call(2, "run/timeoutAck", json!({})).await;
+    assert_eq!(
+        attempt["error"]["code"], -32601,
+        "run/timeoutAck still stubbed: {attempt:?}"
+    );
+    assert!(
+        attempt["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not yet implemented"),
+        "run/timeoutAck should be refused as not-yet-implemented: {attempt:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_propose_then_get_round_trips() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let (_task_id, _worker_id, run_id) = submit_run_with_driver(&mut client, "omp-1").await;
+
+    let plan = json!({
+        "subtasks": [
+            { "id": "s1", "description": "write tests", "adapter": "claude", "writes": true, "turnBudget": 10 },
+            { "id": "s2", "description": "implement", "adapter": "codex", "writes": false }
+        ]
+    });
+    let propose = client
+        .call(
+            2,
+            "plan/propose",
+            json!({
+                "runId": run_id,
+                "ownerClientInstanceId": "omp-1",
+                "taskText": "build the feature",
+                "plan": plan
+            }),
+        )
+        .await;
+    assert!(
+        propose.get("error").is_none(),
+        "plan/propose failed: {propose:?}"
+    );
+    assert_eq!(propose["result"]["runId"], run_id);
+    assert!(propose["result"]["sequence"].as_u64().is_some());
+
+    let get = client.call(3, "plan/get", json!({ "runId": run_id })).await;
+    assert!(get.get("error").is_none(), "plan/get failed: {get:?}");
+    assert_eq!(get["result"]["runId"], run_id);
+    let subtasks = get["result"]["plan"]["subtasks"].as_array().unwrap();
+    assert_eq!(subtasks.len(), 2);
+    assert_eq!(subtasks[0]["id"], "s1");
+    assert_eq!(subtasks[0]["turnBudget"], 10);
+    assert_eq!(get["result"]["approved"], Value::Null);
+}
+
+#[tokio::test]
+async fn plan_decide_approves_once_then_refuses_repeat() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let (_task_id, _worker_id, run_id) = submit_run_with_driver(&mut client, "omp-1").await;
+    let plan = json!({ "subtasks": [ { "id": "s1", "description": "d", "adapter": "claude", "writes": true } ] });
+    let propose = client
+        .call(
+            2,
+            "plan/propose",
+            json!({ "runId": run_id, "ownerClientInstanceId": "omp-1", "taskText": "t", "plan": plan }),
+        )
+        .await;
+    assert!(
+        propose.get("error").is_none(),
+        "propose failed: {propose:?}"
+    );
+
+    let decide = client
+        .call(
+            3,
+            "plan/decide",
+            json!({ "runId": run_id, "approved": true, "reason": "looks good" }),
+        )
+        .await;
+    assert!(
+        decide.get("error").is_none(),
+        "plan/decide failed: {decide:?}"
+    );
+    assert_eq!(decide["result"]["runId"], run_id);
+
+    // The decision stuck.
+    let get = client.call(4, "plan/get", json!({ "runId": run_id })).await;
+    assert_eq!(get["result"]["approved"], true);
+
+    // A repeat decision is refused and does not flip the stored decision.
+    let again = client
+        .call(
+            5,
+            "plan/decide",
+            json!({ "runId": run_id, "approved": false }),
+        )
+        .await;
+    assert!(
+        again.get("error").is_some(),
+        "repeat decide must be refused: {again:?}"
+    );
+    let get2 = client.call(6, "plan/get", json!({ "runId": run_id })).await;
+    assert_eq!(get2["result"]["approved"], true);
+}
+
+#[tokio::test]
+async fn plan_decide_is_refused_for_a_non_owning_client() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut owner = omp_client(&harness, "omp-owner").await;
+    let (_task_id, _worker_id, run_id) = submit_run_with_driver(&mut owner, "omp-owner").await;
+    let plan = json!({ "subtasks": [ { "id": "s1", "description": "d", "adapter": "claude", "writes": true } ] });
+    let propose = owner
+        .call(
+            2,
+            "plan/propose",
+            json!({ "runId": run_id, "ownerClientInstanceId": "omp-owner", "taskText": "t", "plan": plan }),
+        )
+        .await;
+    assert!(
+        propose.get("error").is_none(),
+        "propose failed: {propose:?}"
+    );
+
+    let mut other = omp_client(&harness, "omp-other").await;
+    let decide = other
+        .call(
+            3,
+            "plan/decide",
+            json!({ "runId": run_id, "approved": true }),
+        )
+        .await;
+    assert!(
+        decide.get("error").is_some(),
+        "non-owner decide must be refused: {decide:?}"
+    );
+
+    // The plan is still pending -- the refused decision did not write.
+    let get = owner.call(4, "plan/get", json!({ "runId": run_id })).await;
+    assert_eq!(get["result"]["approved"], Value::Null);
+}
+
+#[tokio::test]
+async fn plan_propose_and_decide_are_observed_by_events_subscribe() {
+    // Every plan mutation must broadcast its committed envelope to live
+    // `events/subscribe` listeners (invariant 7), reusing the regression
+    // harness from `events_subscribe_delivers_live_notifications_...`.
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut subscriber = omp_client(&harness, "omp-sub").await;
+    let sub = subscriber.call(2, "events/subscribe", json!({})).await;
+    assert!(
+        sub.get("error").is_none(),
+        "events/subscribe failed: {sub:?}"
+    );
+    assert_eq!(sub["result"]["active"], true);
+
+    let mut mutator = omp_client(&harness, "omp-mut").await;
+    let (_task_id, _worker_id, run_id) = submit_run_with_driver(&mut mutator, "omp-mut").await;
+    let plan = json!({ "subtasks": [ { "id": "s1", "description": "d", "adapter": "claude", "writes": true } ] });
+    let propose = mutator
+        .call(
+            3,
+            "plan/propose",
+            json!({ "runId": run_id, "ownerClientInstanceId": "omp-mut", "taskText": "t", "plan": plan }),
+        )
+        .await;
+    assert!(
+        propose.get("error").is_none(),
+        "propose failed: {propose:?}"
+    );
+
+    // The subscriber also sees the task/worker/run events from
+    // `submit_run_with_driver`; drain until the plan events arrive.
+    let mut proposed = None;
+    for _ in 0..8 {
+        let n = subscriber.recv().await;
+        if n["params"]["event"]["type"] == "planProposed" {
+            proposed = Some(n);
+            break;
+        }
+    }
+    let proposed = proposed.expect("planProposed notification not received");
+    assert_eq!(proposed["method"], "events/event");
+    assert_eq!(proposed["params"]["event"]["type"], "planProposed");
+    assert_eq!(proposed["params"]["event"]["payload"]["runId"], run_id);
+
+    let decide = mutator
+        .call(
+            4,
+            "plan/decide",
+            json!({ "runId": run_id, "approved": true, "reason": "go" }),
+        )
+        .await;
+    assert!(decide.get("error").is_none(), "decide failed: {decide:?}");
+
+    let mut decided = None;
+    for _ in 0..8 {
+        let n = subscriber.recv().await;
+        if n["params"]["event"]["type"] == "planDecided" {
+            decided = Some(n);
+            break;
+        }
+    }
+    let decided = decided.expect("planDecided notification not received");
+    assert_eq!(decided["method"], "events/event");
+    assert_eq!(decided["params"]["event"]["type"], "planDecided");
+    assert_eq!(decided["params"]["event"]["payload"]["runId"], run_id);
+    assert_eq!(decided["params"]["event"]["payload"]["approved"], true);
 }
 
 // ------------------------------------------------------------- reconcile

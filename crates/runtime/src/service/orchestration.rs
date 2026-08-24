@@ -11,15 +11,15 @@ use std::sync::Arc;
 
 use crew_protocol::{
     ApprovalId, ApprovalRequest, CrewMethod, DeliveryState, EventEnvelope, IsolationKind,
-    LeaseMode, MessageId, MessageKind, ProjectId, Run, RunFlags, RunId, RunMessage, RunSpec,
-    RunState, TaskId, TaskRef, Timestamp, Worker, WorkerId, WorkerProfileRef, error_code,
+    LeaseMode, MessageId, MessageKind, PlanSpec, ProjectId, Run, RunFlags, RunId, RunMessage,
+    RunSpec, RunState, TaskId, TaskRef, Timestamp, Worker, WorkerId, WorkerProfileRef, error_code,
 };
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
 use crate::db::DatabaseHandle;
 use crate::domain::{
-    DomainError, DomainRepository, TransitionError, embed_envelope, take_envelope,
+    DomainError, DomainRepository, TransitionError, broadcast_committed, embed_envelope,
 };
 use crate::ipc::ClientPrincipal;
 
@@ -282,14 +282,14 @@ impl OrchestrationService {
         self.policy = Some(policy);
         self
     }
-
     /// Broadcasts the envelope embedded by a mutation's `run_domain_op`
     /// closure to live subscribers, if present, then strips it so the
-    /// caller's JSON-RPC response never carries the internal key.
+    /// caller's JSON-RPC response never carries the internal key. Routes
+    /// through the single canonical [`broadcast_committed`] helper so the
+    /// take-then-send behavior lives in exactly one place
+    /// (`docs/architecture.md` §18 item 3).
     fn broadcast(&self, value: &mut Value) {
-        if let Some(envelope) = take_envelope(value) {
-            let _ = self.events_tx.send(envelope);
-        }
+        broadcast_committed(&self.events_tx, value);
     }
 
     /// Dispatches one already role-authorized orchestration method.
@@ -347,14 +347,11 @@ impl OrchestrationService {
             CrewMethod::WorkspaceApply => self.workspace_apply(principal, params).await,
             CrewMethod::ArtifactList => self.artifact_list(principal, params).await,
             CrewMethod::ArtifactFetch => self.artifact_fetch(principal, params).await,
-            // Stubs: the daemon accepts these `ompExtension`-only methods
-            // (they are in the role table -- see
-            // `crate::ipc::ClientPrincipal::allowed_methods`) but refuses
-            // every one of them until a later work package (crew v2
-            // gap-closure WP17/WP21) lands its real handler.
-            CrewMethod::PlanPropose => Err(ServiceError::not_yet_implemented("plan/propose")),
-            CrewMethod::PlanDecide => Err(ServiceError::not_yet_implemented("plan/decide")),
-            CrewMethod::PlanGet => Err(ServiceError::not_yet_implemented("plan/get")),
+            // `plan/*` lands here (WP17); `run/timeoutAck` is still a stub
+            // until WP21.
+            CrewMethod::PlanPropose => self.plan_propose(principal, params).await,
+            CrewMethod::PlanDecide => self.plan_decide(principal, params).await,
+            CrewMethod::PlanGet => self.plan_get(params).await,
             CrewMethod::RunTimeoutAck => Err(ServiceError::not_yet_implemented("run/timeoutAck")),
             _ => Err(ServiceError::internal(
                 "method is not routed through OrchestrationService",
@@ -2250,6 +2247,130 @@ impl OrchestrationService {
             response["quarantineCleared"] = json!(cleared);
         }
         Ok(response)
+    }
+
+    /// `plan/propose`: persists a leader's proposed decomposition of a run
+    /// into subtasks, appending a `PlanProposed` event. The owning
+    /// `ompExtension` instance must present its own `instance_id` as
+    /// `ownerClientInstanceId` (param validation against the authenticated
+    /// connection, not the race-safe ownership guard -- the run's task is
+    /// always owned by the connected extension). The plan is keyed 1:1 by
+    /// `run_id`; re-proposing an existing plan is refused by the domain op.
+    async fn plan_propose(
+        &self,
+        principal: &crate::ipc::ClientPrincipal,
+        params: &Value,
+    ) -> Result<Value, ServiceError> {
+        let run_id = params
+            .get("runId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ServiceError::invalid_params("runId is required"))
+            .and_then(|s| {
+                RunId::parse(s).map_err(|_| ServiceError::invalid_params("runId is not a valid id"))
+            })?;
+        let owner = str_field(params, "ownerClientInstanceId")?;
+        if owner != principal.instance_id {
+            return Err(ServiceError::invalid_params(format!(
+                "ownerClientInstanceId {owner} must match the connected instance {} -- \
+                 plan/propose cannot bind a plan to another instance",
+                principal.instance_id
+            )));
+        }
+        let task_text = str_field(params, "taskText")?;
+        let plan: PlanSpec = serde_json::from_value(
+            params
+                .get("plan")
+                .cloned()
+                .ok_or_else(|| ServiceError::invalid_params("plan is required"))?,
+        )
+        .map_err(|e| ServiceError::invalid_params(format!("plan is invalid: {e}")))?;
+
+        let project_id = self.project_id;
+        let mut result = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                let mut repo = DomainRepository::new(conn, project_id);
+                repo.propose_plan(run_id, &owner, &task_text, &plan)
+                    .map(|c| {
+                        embed_envelope(
+                            json!({ "runId": run_id.to_string(), "sequence": c.sequence }),
+                            &c.envelope,
+                        )
+                    })
+            }))
+            .await
+            .map_err(ServiceError::from)?;
+        self.broadcast(&mut result);
+        Ok(result)
+    }
+
+    /// `plan/decide`: approves or rejects a previously proposed plan for a
+    /// run, appending a `PlanDecided` event. Ownership and the
+    /// already-decided guard both live inside the domain op's guarded write
+    /// (R71) -- this handler only forwards the authenticated principal.
+    async fn plan_decide(
+        &self,
+        principal: &crate::ipc::ClientPrincipal,
+        params: &Value,
+    ) -> Result<Value, ServiceError> {
+        let run_id = params
+            .get("runId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ServiceError::invalid_params("runId is required"))
+            .and_then(|s| {
+                RunId::parse(s).map_err(|_| ServiceError::invalid_params("runId is not a valid id"))
+            })?;
+        let approved = params
+            .get("approved")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| ServiceError::invalid_params("approved (bool) is required"))?;
+        let reason = params
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+
+        let project_id = self.project_id;
+        let principal_id = principal.instance_id.clone();
+        let mut result = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                let mut repo = DomainRepository::new(conn, project_id);
+                repo.decide_plan(run_id, &principal_id, approved, reason.as_deref())
+                    .map(|c| {
+                        embed_envelope(
+                            json!({ "runId": run_id.to_string(), "sequence": c.sequence }),
+                            &c.envelope,
+                        )
+                    })
+            }))
+            .await
+            .map_err(ServiceError::from)?;
+        self.broadcast(&mut result);
+        Ok(result)
+    }
+
+    /// `plan/get`: open read (ADR-0024) of the most recently proposed plan
+    /// for a run and its decision, if any. No event is persisted or
+    /// broadcast -- it is a pure projection read.
+    async fn plan_get(&self, params: &Value) -> Result<Value, ServiceError> {
+        let run_id = params
+            .get("runId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ServiceError::invalid_params("runId is required"))
+            .and_then(|s| {
+                RunId::parse(s).map_err(|_| ServiceError::invalid_params("runId is not a valid id"))
+            })?;
+        let project_id = self.project_id;
+        let result = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                let repo = DomainRepository::new(conn, project_id);
+                repo.get_plan(run_id)
+                    .map(|r| serde_json::to_value(r).expect("PlanGetResult serializes"))
+            }))
+            .await
+            .map_err(ServiceError::from)?;
+        Ok(result)
     }
 
     /// `policy/violation/list`: the discovery surface for which violation

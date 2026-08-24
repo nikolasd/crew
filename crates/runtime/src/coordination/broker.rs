@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
 use crate::db::DatabaseHandle;
-use crate::domain::{DomainRepository, embed_envelope, take_envelope};
+use crate::domain::{DomainRepository, broadcast_committed, embed_envelope};
 
 use super::rate_limit::RateLimiter;
 
@@ -120,9 +120,7 @@ impl CoordinationBroker {
     /// closure to live subscribers, if present, then strips it so the
     /// caller's JSON-RPC response never carries the internal key.
     fn broadcast(&self, value: &mut Value) {
-        if let Some(envelope) = take_envelope(value) {
-            let _ = self.events_tx.send(envelope);
-        }
+        broadcast_committed(&self.events_tx, value);
     }
 
     /// Rejects any worker-safe operation against a run that has already
