@@ -3,10 +3,11 @@
 // continuous widget updates as events arrive, and the `/crew` /
 // `/crew status <runId>` commands.
 
+import type { EventEnvelope } from "@nikolasd/crew-protocol";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-
 import type { CrewClient } from "../client";
-import { EMPTY_MONITOR_STATE, hasVisibleRows, reduceEvent, type MonitorState } from "./model";
+import { attachMilestoneBridge } from "../milestones";
+import { EMPTY_MONITOR_STATE, hasVisibleRows, type MonitorState, reduceEvent } from "./model";
 import { renderRowDetails, renderWidgetBox } from "./render";
 
 /** The custom session-entry type the last-rendered sequence is persisted under. */
@@ -56,6 +57,9 @@ export class MonitorController {
   #state: MonitorState = EMPTY_MONITOR_STATE;
   #unsubscribe: (() => void) | undefined;
   #onUpdate: (() => void) | undefined;
+  /** Extra per-event listeners (e.g. the milestone bridge), fed by the
+   *  single live subscription — never a second one. */
+  #eventListeners = new Set<(event: EventEnvelope) => void>();
 
   /** The current replayable state (read-only view for tests/commands). */
   getState(): MonitorState {
@@ -63,17 +67,34 @@ export class MonitorController {
   }
 
   /**
+   * Registers an extra per-event listener fed by the monitor's single live
+   * subscription. Returns an unsubscribe function. The milestone bridge uses
+   * this so the model is told about milestones without a second subscription
+   * being opened.
+   */
+  subscribeEvents(listener: (event: EventEnvelope) => void): () => void {
+    this.#eventListeners.add(listener);
+    return () => {
+      this.#eventListeners.delete(listener);
+    };
+  }
+
+  /**
    * Subscribes from `fromSequence`, rebuilding state from replay before
    * live notifications arrive (both flow through the same reducer, so
    * there is no separate "replay mode"). Calls `onUpdate` after every
    * applied event so the caller can re-render the widget and persist the
-   * new sequence.
+   * new sequence, then fans the event out to any extra listeners (the
+   * milestone bridge).
    */
   start(client: CrewClient, fromSequence: number, onUpdate: () => void): void {
     this.#onUpdate = onUpdate;
     this.#unsubscribe = client.subscribe(fromSequence, (event) => {
       this.#state = reduceEvent(this.#state, event);
       this.#onUpdate?.();
+      for (const listener of this.#eventListeners) {
+        listener(event);
+      }
     });
   }
 
@@ -92,9 +113,13 @@ export class MonitorController {
   }
 }
 
-/** Registers the `/crew` command and the replay-first monitor lifecycle. */
+/** Registers the `/crew` command and the replay-first monitor lifecycle.
+ *  Wires the milestone bridge (spec §7.2) onto the monitor's single
+ *  subscription so the model is injected with digests on milestones
+ *  instead of having to poll the monitor. */
 export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext): void {
   const controller = new MonitorController();
+  attachMilestoneBridge(pi, controller);
   let subscribedClient: CrewClient | undefined;
 
   /**
