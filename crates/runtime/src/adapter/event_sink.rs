@@ -340,13 +340,19 @@ impl DomainAdapterEventSink {
                 vendor_child_id: self.label(vendor_child_id),
                 vendor_parent_ref: self.label(vendor_parent_ref),
             },
-            AdapterEventPayload::QuestionDetected { text } => RuntimeEvent::AdapterMessageEvent {
-                kind: RuntimeEventKind::AdapterQuestionDetected,
+            // WP12 lifecycle mapping decision: a detected question
+            // journals `RuntimeEvent::WorkerQuestion` (the same event a
+            // headless adapter's own question-detection would use), never
+            // a run-state edge -- `waitingUser` is reserved for the
+            // approval flow (ADR-0012), and idle/busy presentation is
+            // derived by the extension, not tracked as a run state.
+            // Raising an escalation for this (WP20) is deliberately not
+            // done here; this call site only journals the question.
+            AdapterEventPayload::QuestionDetected { text } => RuntimeEvent::WorkerQuestion {
                 run_id,
                 task_id,
                 worker_id,
-                role: "assistant".to_string(),
-                text: self.sanitize(text),
+                question: self.sanitize(text),
             },
             AdapterEventPayload::OutOfBandInput { backend, pane_ref } => {
                 RuntimeEvent::OutOfBandInput {
@@ -832,6 +838,231 @@ mod out_of_band_input_tests {
             events_rx.try_recv().is_err(),
             "no RunFlagsEvent may broadcast when the run row does not exist"
         );
+
+        db.shutdown().await.expect("shutdown database");
+    }
+}
+
+#[cfg(test)]
+mod question_detected_tests {
+    //! WP12 step 3: `AdapterEventPayload::QuestionDetected` journals a
+    //! durable `RuntimeEvent::WorkerQuestion` (not a bespoke
+    //! `AdapterMessageEvent` kind) through the same redacted path every
+    //! other free-text adapter field crosses, and never itself moves the
+    //! run to `waitingUser` -- that state is reserved for the approval
+    //! flow (ADR-0012). Raising an escalation for a detected question is
+    //! WP20's job, out of scope here.
+
+    use std::sync::Arc;
+
+    use crew_protocol::{
+        Classified, ContentClass, ProjectId, RunState, TaskId, Timestamp, Worker, WorkerId,
+        WorkerProfileRef,
+    };
+    use tempfile::TempDir;
+    use tokio::sync::broadcast;
+
+    use crate::config::NestedViolationAction;
+    use crate::db::DatabaseHandle;
+    use crate::domain::DomainRepository;
+    use crate::policy::ViolationService;
+
+    use super::*;
+
+    async fn open_db() -> (TempDir, Arc<DatabaseHandle>) {
+        let dir = tempfile::Builder::new()
+            .prefix("bat-question-sink-")
+            .tempdir_in("/tmp")
+            .expect("create temp dir");
+        let db_path = dir.path().join("state.db");
+        let db = Arc::new(
+            DatabaseHandle::start(db_path)
+                .await
+                .expect("start database"),
+        );
+        (dir, db)
+    }
+
+    /// Seeds one task + worker + `working` run (mirrors
+    /// `out_of_band_input_tests::seed_working_run`, duplicated here since
+    /// that helper is private to its own module).
+    async fn seed_working_run(
+        db: &DatabaseHandle,
+        project_id: ProjectId,
+    ) -> (TaskId, WorkerId, RunId) {
+        let task_id = TaskId::new();
+        let worker_id = WorkerId::new();
+        let run_id = RunId::new();
+        db.run_domain_op(Box::new(move |conn| {
+            let mut repo = DomainRepository::new(conn, project_id);
+            repo.upsert_task(
+                task_id,
+                &crew_protocol::TaskRef {
+                    owner_client_instance_id: "omp-1".to_string(),
+                    revision: 1,
+                },
+            )?;
+            let worker = Worker {
+                worker_id,
+                profile_ref: WorkerProfileRef {
+                    id: worker_id,
+                    fingerprint: "sha256:fake".to_string(),
+                    adapter: "fake".to_string(),
+                    model: "test".to_string(),
+                    permission_envelope: serde_json::json!({}),
+                },
+                parent_worker_id: None,
+                created_at: Timestamp::now(),
+            };
+            repo.create_worker(&worker)?;
+            let run = crew_protocol::Run {
+                run_id,
+                task_id,
+                worker_id,
+                state: RunState::try_from("queued").expect("queued is a valid state"),
+                flags: crew_protocol::RunFlags::default(),
+                vendor_session_id: None,
+                started_at: None,
+                completed_at: None,
+            };
+            repo.submit_run(&run, None, None)?;
+            for state in ["starting", "working"] {
+                repo.transition_run(
+                    run_id,
+                    &RunState::try_from(state).expect("valid state"),
+                    None,
+                )?;
+            }
+            Ok(serde_json::json!({}))
+        }))
+        .await
+        .expect("seed working run");
+        (task_id, worker_id, run_id)
+    }
+
+    fn sink(
+        db: Arc<DatabaseHandle>,
+        project_id: ProjectId,
+        events_tx: broadcast::Sender<EventEnvelope>,
+    ) -> DomainAdapterEventSink {
+        let violation_service = Arc::new(ViolationService::new(
+            Arc::clone(&db),
+            project_id,
+            events_tx.clone(),
+            None,
+            NestedViolationAction::QuarantineAndCancel,
+        ));
+        DomainAdapterEventSink::new(
+            db,
+            project_id,
+            events_tx,
+            Vec::new(),
+            false,
+            violation_service,
+        )
+        .expect("built-in redaction rules always compile")
+    }
+
+    #[tokio::test]
+    async fn question_detected_journals_a_redacted_worker_question_and_leaves_run_state_unchanged()
+    {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_working_run(&db, project_id).await;
+        let (events_tx, mut events_rx) = broadcast::channel(16);
+        let sink = sink(Arc::clone(&db), project_id, events_tx);
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::QuestionDetected {
+                text: Classified {
+                    class: ContentClass::Visible,
+                    value: "which branch should I target?".to_string(),
+                },
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+
+        let envelope = events_rx
+            .try_recv()
+            .expect("QuestionDetected must broadcast a WorkerQuestion");
+        match &envelope.event {
+            RuntimeEvent::WorkerQuestion {
+                run_id: got_run_id,
+                task_id: got_task_id,
+                worker_id: got_worker_id,
+                question,
+            } => {
+                assert_eq!(*got_run_id, run_id);
+                assert_eq!(*got_task_id, task_id);
+                assert_eq!(*got_worker_id, worker_id);
+                assert_eq!(question.as_deref(), Some("which branch should I target?"));
+            }
+            other => panic!("expected WorkerQuestion, got {other:?}"),
+        }
+        assert!(
+            events_rx.try_recv().is_err(),
+            "a detected question must not also emit a run-state transition"
+        );
+
+        let state = db
+            .run_domain_op(Box::new(move |conn| {
+                let state: String = conn.query_row(
+                    "SELECT state FROM runs WHERE run_id = ?1",
+                    [run_id.to_string()],
+                    |r| r.get(0),
+                )?;
+                Ok(serde_json::json!(state))
+            }))
+            .await
+            .expect("read run state");
+        assert_eq!(
+            state.as_str().expect("state is a string"),
+            "working",
+            "QuestionDetected must not move the run toward waitingUser (ADR-0012 reserves \
+             that state for the approval flow)"
+        );
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// A `Thinking`/`Secret`-classified question fragment is dropped to
+    /// `None`, exactly like every other free-text field this sink
+    /// redacts -- never coerced to an empty string.
+    #[tokio::test]
+    async fn a_non_visible_question_fragment_is_dropped_to_none() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_working_run(&db, project_id).await;
+        let (events_tx, mut events_rx) = broadcast::channel(16);
+        let sink = sink(Arc::clone(&db), project_id, events_tx);
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::QuestionDetected {
+                text: Classified {
+                    class: ContentClass::Thinking,
+                    value: "internal deliberation".to_string(),
+                },
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+
+        let envelope = events_rx.try_recv().expect("must still broadcast");
+        match &envelope.event {
+            RuntimeEvent::WorkerQuestion { question, .. } => {
+                assert!(question.is_none(), "Thinking content must never be durable");
+            }
+            other => panic!("expected WorkerQuestion, got {other:?}"),
+        }
 
         db.shutdown().await.expect("shutdown database");
     }
