@@ -745,7 +745,6 @@ async fn resume_run_continues_a_crashed_tui_run_from_its_stored_cursor() {
     // ---- phase 1: the original (pre-crash) run
     registry.start(ctx).await.expect("the fresh run must start");
 
-    // Wait until every fixture turn-one entry is journaled AND the sink
     // Wait until the fixture's greeting is journaled AND the sink
     // has persisted the tailer cursor that covers it.
     let phase1_settled = wait_until(
@@ -1071,10 +1070,7 @@ async fn resume_run_refuses_without_support_for_unknown_runs_and_on_denial() {
         .resume_run(unknown, VendorSessionRef(SESSION_ID.to_string()), None)
         .await
         .expect_err("an unknown run must be refused");
-    assert!(
-        err.contains("unreadable") || err.contains("no row") || !err.is_empty(),
-        "unexpected error shape: {err}"
-    );
+    assert!(err.contains("unreadable"), "unexpected error shape: {err}");
     assert_eq!(registry.running_count(), 0);
 
     // 3. Authorization denial -> refusal, no process spawned, no slot.

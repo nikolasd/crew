@@ -395,11 +395,7 @@ impl AdapterRegistry {
         // own policy was fixed at submit time; the authorizer falls back
         // to its startup policy (its documented behavior for `None`),
         // which is the same policy the boot sweep itself runs under.
-        let effective_capabilities = gate_profile(&self.authorization, &profile, None)
-            .await
-            .inspect_err(|_| {
-                self.authorization.release();
-            })?;
+        let effective_capabilities = gate_profile(&self.authorization, &profile, None).await?;
         // Fresh starts launch at the run's isolated workspace when one was
         // materialized; no such path is stored per-run, so a resumed
         // process lands back at the repository root (disclosed WP14 gap).
@@ -694,6 +690,19 @@ async fn run_one(
     // when available; fall back to the repository root.
     let cwd = ctx.workspace_path.as_deref().unwrap_or(repo_root);
     let pane_lifecycle_owned_by_adapter = pane_lifecycle_owned_by_adapter(&profile.startup_options);
+    // The same DB lookups that decide fresh-start vs continuation also
+    // carry the stored tailer position: a resumed TUI adapter must
+    // re-tail from exactly where the pre-crash incarnation stopped, or
+    // it re-journals events already committed (the failure
+    // `Adapter::resume`'s cursor contract exists to prevent).
+    let (stored_vendor_session_id, stored_cursor) =
+        match stored_resume_state(&ctx.db, ctx.run_id).await {
+            Ok(state) => state,
+            Err(err) => {
+                authorization.release();
+                return Err(err);
+            }
+        };
     let adapter = match build_adapter(
         &profile,
         cwd,
@@ -707,7 +716,7 @@ async fn run_one(
         ctx.project_id,
         ctx.events_tx.clone(),
         ctx.display.clone(),
-        None,
+        stored_cursor,
     ) {
         Ok(adapter) => adapter,
         Err(err) => {
@@ -753,9 +762,7 @@ async fn run_one(
                 // adapter decides what `Some` means for its own protocol;
                 // every headless adapter already implemented this and the
                 // TUI adapter now skips injection and resumes its launch.
-                resume: stored_vendor_session(&ctx.db, ctx.project_id, ctx.run_id)
-                    .await
-                    .map(VendorSessionRef),
+                resume: stored_vendor_session_id.map(VendorSessionRef),
             },
             sink,
         )
@@ -866,33 +873,55 @@ async fn gate_profile(
     Ok(effective_capabilities)
 }
 
-/// The `vendor_session_id` a prior incarnation of this run already
-/// established, if any. `Some` turns what would have been a fresh
-/// `StartSpec` into a continuation (`StartSpec::resume`) -- resuming the
-/// same run through its same vendor session, never a retry that would
-/// fabricate a new one.
-async fn stored_vendor_session(
+/// The resume seam a run row carries: the `vendor_session_id` a prior
+/// incarnation of this run already established (if any), and the
+/// transcript-tailer position that incarnation reached (`None` when the
+/// column is NULL -- nothing was ever durably consumed). A session turns
+/// what would have been a fresh `StartSpec` into a continuation
+/// (`StartSpec::resume`) -- resuming the same run through its same
+/// vendor session, never a retry that would fabricate a new one.
+///
+/// Fails closed: an unreadable row is an error, not a fresh launch -- a
+/// transient DB read failure must never silently turn a continuation of
+/// a live vendor session into a second one.
+async fn stored_resume_state(
     db: &Arc<DatabaseHandle>,
-    project_id: crew_protocol::ProjectId,
     run_id: RunId,
-) -> Option<String> {
-    let _ = project_id;
-    let run_id = run_id.to_string();
-    db.run_domain_op(Box::new(move |conn| {
-        let value: Option<String> = conn
-            .query_row(
-                "SELECT vendor_session_id FROM runs WHERE run_id = ?1",
-                [&run_id],
-                |row| row.get(0),
-            )
-            .ok();
-        Ok(value
-            .map(serde_json::Value::String)
-            .unwrap_or(serde_json::Value::Null))
-    }))
-    .await
-    .ok()
-    .and_then(|value| value.as_str().map(str::to_string))
+) -> Result<(Option<String>, Option<Cursor>), String> {
+    let run_id_string = run_id.to_string();
+    let value = db
+        .run_domain_op(Box::new(move |conn| {
+            let row: (Option<String>, Option<String>) = conn.query_row(
+                "SELECT vendor_session_id, transcript_cursor FROM runs WHERE run_id = ?1",
+                [&run_id_string],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            Ok(serde_json::json!({
+                "vendor_session_id": row.0,
+                "transcript_cursor": row.1,
+            }))
+        }))
+        .await
+        .map_err(|err| format!("run {run_id} resume state is unreadable: {err}"))?;
+    let vendor_session_id = value
+        .get("vendor_session_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    // The cursor column holds opaque JSON of a `Cursor` (migration 10).
+    // A value we cannot parse means the row's resume position is not
+    // honorable -- failing closed beats re-tailing from byte zero and
+    // re-journaling already-committed events.
+    let transcript_cursor =
+        match value
+            .get("transcript_cursor")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(json) => Some(serde_json::from_str::<Cursor>(json).map_err(|err| {
+                format!("run {run_id} has an unreadable transcript cursor: {err}")
+            })?),
+            None => None,
+        };
+    Ok((vendor_session_id, transcript_cursor))
 }
 async fn resolve_profile(ctx: &RunDriverContext) -> Result<WorkerProfile, RegistryError> {
     resolve_worker_profile(&ctx.db, ctx.project_id, ctx.worker_id).await
