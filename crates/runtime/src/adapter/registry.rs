@@ -22,6 +22,14 @@
 //! `CoordinationBroker`, supplied after construction via
 //! [`AdapterRegistry::set_broker`] (see that method's own doc comment
 //! for why it cannot be a constructor argument).
+//!
+//! `mode: "tui"` for `claude` now constructs a real
+//! `TuiAdapter<ClaudeTuiVendor>` (WP13) rather than the typed refusal
+//! every reserved kind still gets otherwise: [`AdapterRegistry::set_tui_support`]
+//! supplies the [`super::tui::TuiSupport`] bundle a `TuiAdapter` needs
+//! beyond its own vendor impl, for exactly the same "only available
+//! after IPC bind" reason `set_broker` exists (see that struct's own doc
+//! comment).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -29,7 +37,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crew_protocol::{RunId, TaskId, WorkerId};
+use crew_protocol::{DisplayPlacement, RunId, TaskId, WorkerId};
 use tokio::sync::oneshot;
 
 use super::capability::{AdapterCapabilities, NestedCapability};
@@ -38,9 +46,13 @@ use super::mcp_config::AdapterMcpConfig;
 use super::profile::{StartupOptions, WorkerProfile};
 use super::run_lifecycle::RunLifecycleSink;
 use super::r#trait::{Adapter, AdapterMessage, StartSpec};
+use super::tui::{ClaudeTuiVendor, TuiAdapter, TuiSupport};
 use crate::adapter::CancelScope;
+use crate::config::crew::{AdapterConfig, AdapterMode as CrewAdapterMode, PermissionMode};
 use crate::conformance;
 use crate::coordination::CoordinationBroker;
+use crate::db::DatabaseHandle;
+use crate::display::PaneCoordinator;
 use crate::domain::DomainRepository;
 use crate::service::{AdapterFuture as RunDriverFuture, RunDriver, RunDriverContext};
 /// adapter, given `effective_capabilities` -- always the conformance-
@@ -156,6 +168,12 @@ pub struct AdapterRegistry {
     /// adapters constructed in that window get no broker, matching their
     /// existing `broker: None` behavior exactly.
     broker: Mutex<Option<Arc<CoordinationBroker>>>,
+    /// TUI-mode support (see this module's own doc comment and
+    /// [`super::tui::TuiSupport`]'s). `None` until [`Self::set_tui_support`]
+    /// is called (or permanently, for callers -- chiefly tests -- that
+    /// never call it): every reserved kind's `mode: "tui"` gets the same
+    /// typed refusal it always has in that window.
+    tui: Mutex<Option<Arc<TuiSupport>>>,
     running: Arc<Mutex<HashMap<RunId, Arc<dyn Adapter>>>>,
     /// Org security patterns for redaction.
     org_security_patterns: Vec<String>,
@@ -175,6 +193,7 @@ impl AdapterRegistry {
             mcp,
             org_security_patterns,
             broker: Mutex::new(None),
+            tui: Mutex::new(None),
             running: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -185,6 +204,21 @@ impl AdapterRegistry {
     /// argument.
     pub fn set_broker(&self, broker: Arc<CoordinationBroker>) {
         *self.broker.lock() = Some(broker);
+    }
+
+    /// Supplies the [`TuiSupport`] bundle every real `TuiVendor`
+    /// dispatch in `build_adapter` needs. A setter rather than a
+    /// constructor argument for the same reason `mcp` is *not* one here
+    /// but `set_broker`'s target is: every field `TuiSupport` wraps
+    /// (display registry, `crewd` path, state dir) is already available
+    /// at `lifecycle::serve()`'s `AdapterRegistry::new` call site, but
+    /// keeping this a post-construction setter -- exactly like
+    /// `set_broker` -- means a caller that never wants `mode: "tui"`
+    /// reachable at all (every test but the ones that opt in) simply
+    /// never calls it, and every reserved kind keeps the typed refusal it
+    /// always had.
+    pub fn set_tui_support(&self, tui: Arc<TuiSupport>) {
+        *self.tui.lock() = Some(tui);
     }
 
     /// The adapter instance currently running for `run_id`, if any --
@@ -213,6 +247,7 @@ impl RunDriver for AdapterRegistry {
         let repo_root = self.repo_root.clone();
         let mcp = self.mcp.clone();
         let broker = self.broker.lock().clone();
+        let tui = self.tui.lock().clone();
         let org_security_patterns = self.org_security_patterns.clone();
         let running = Arc::clone(&self.running);
 
@@ -241,15 +276,27 @@ impl RunDriver for AdapterRegistry {
                 &repo_root,
                 mcp,
                 broker,
+                tui,
                 org_security_patterns,
             )
             .await
             {
-                Ok((adapter, settled)) => {
+                Ok((adapter, settled, pane_lifecycle_owned_by_adapter)) => {
                     running.lock().insert(run_id, adapter);
                     let running_for_watcher = Arc::clone(&running);
                     let authorization_for_watcher = Arc::clone(&authorization);
-                    let display = ctx.display.clone();
+                    // A TUI-mode run's own `TuiAdapter` already attaches
+                    // and detaches its pane for real, through the
+                    // `PaneCoordinator` built in `build_adapter` --
+                    // `watch_settlement` must not *also* journal the
+                    // placeholder-pane `DisplayPaneDetached` below for
+                    // it, or the run would get two (rider: collapse the
+                    // double detach now that a TUI run is reachable).
+                    let display = if pane_lifecycle_owned_by_adapter {
+                        None
+                    } else {
+                        ctx.display.clone()
+                    };
                     let db = Arc::clone(&ctx.db);
                     let project_id = ctx.project_id;
                     tokio::spawn(watch_settlement(
@@ -414,8 +461,9 @@ async fn run_one(
     repo_root: &std::path::Path,
     mcp: Option<AdapterMcpConfig>,
     broker: Option<Arc<CoordinationBroker>>,
+    tui: Option<Arc<TuiSupport>>,
     org_security_patterns: Vec<String>,
-) -> Result<(Arc<dyn Adapter>, oneshot::Receiver<()>), String> {
+) -> Result<(Arc<dyn Adapter>, oneshot::Receiver<()>, bool), String> {
     let profile = resolve_profile(ctx).await.map_err(String::from)?;
 
     // Handle TerminalDegraded specially (it has no adapter kind)
@@ -431,6 +479,20 @@ async fn run_one(
         let Some(kind) = profile.adapter_kind() else {
             return Err("no adapter kind".to_string());
         };
+        // Scope boundary (WP13, documented not silently omitted):
+        // `run_fixture_conformance` dispatches by `AdapterKind` only --
+        // it has no `mode` axis -- so a `mode: "tui"` run is authorized
+        // against its *headless* fixture suite's effective capabilities
+        // (e.g. Claude headless's `ApprovalsCapability::Controllable`),
+        // even though the `TuiAdapter` actually constructed below
+        // declares a materially different profile (`ProtocolKind::Terminal`,
+        // `ApprovalsCapability::None`, `UsageCapability::None`, ...). Giving
+        // this call a `mode` parameter means widening the closed
+        // `AdapterKind`-keyed dispatch `conformance::run_fixture_conformance`/
+        // `run_live_conformance`/`probe_availability` and the `crewd
+        // conformance`/`adapters --json` CLI surfaces all share -- out of
+        // scope for the WP that first makes `mode: "tui"` reachable at
+        // all; flagged for a follow-up rather than fixed here.
         conformance::run_fixture_conformance(kind)
             .await
             .effective_capabilities
@@ -466,6 +528,9 @@ async fn run_one(
     // Use the workspace path from the context (isolated worktree or copy)
     // when available; fall back to the repository root.
     let cwd = ctx.workspace_path.as_deref().unwrap_or(repo_root);
+    let pane_lifecycle_owned_by_adapter = requested_mode(&profile.startup_options)
+        == Some(super::profile::AdapterMode::Tui)
+        && profile.startup_options.adapter_kind() == Some(super::AdapterKind::Claude);
     let adapter = match build_adapter(
         &profile,
         cwd,
@@ -474,6 +539,11 @@ async fn run_one(
         ctx.worker_id,
         mcp,
         broker,
+        tui,
+        Arc::clone(&ctx.db),
+        ctx.project_id,
+        ctx.events_tx.clone(),
+        ctx.display.clone(),
     ) {
         Ok(adapter) => adapter,
         Err(err) => {
@@ -521,7 +591,7 @@ async fn run_one(
         authorization.release();
         return Err(err.to_string());
     }
-    Ok((adapter, settled))
+    Ok((adapter, settled, pane_lifecycle_owned_by_adapter))
 }
 
 async fn resolve_profile(ctx: &RunDriverContext) -> Result<WorkerProfile, RegistryError> {
@@ -560,6 +630,7 @@ fn requested_mode(startup_options: &StartupOptions) -> Option<super::profile::Ad
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_adapter(
     profile: &WorkerProfile,
     repo_root: &std::path::Path,
@@ -568,19 +639,43 @@ fn build_adapter(
     worker_id: WorkerId,
     mcp: Option<AdapterMcpConfig>,
     broker: Option<Arc<CoordinationBroker>>,
+    tui: Option<Arc<TuiSupport>>,
+    db: Arc<DatabaseHandle>,
+    project_id: crew_protocol::ProjectId,
+    events_tx: tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
+    display: Option<crew_protocol::DisplaySelection>,
 ) -> Result<Arc<dyn Adapter>, RegistryError> {
     // `mode: "tui"` dispatches to a `TuiAdapter<V>` for a vendor with a
-    // `TuiVendor` implementation -- none exists yet (each lands in its
-    // own later work package), so every reserved adapter kind refuses
-    // explicitly here rather than silently starting the headless
-    // adapter a caller who asked for a TUI session did not request.
-    // `Headless` (the default) is completely unaffected: it falls
-    // through to the match below exactly as before.
+    // `TuiVendor` implementation. Claude's landed (WP13): given both a
+    // `TuiSupport` bundle (via `AdapterRegistry::set_tui_support`) and
+    // the Claude kind, this constructs a real `TuiAdapter<ClaudeTuiVendor>`.
+    // Every other reserved kind (no vendor impl yet) -- and Claude itself
+    // when no `TuiSupport` was ever supplied -- keeps the typed refusal
+    // rather than silently starting the headless adapter a caller who
+    // asked for a TUI session did not request. `Headless` (the default)
+    // is completely unaffected: it falls through to the match below
+    // exactly as before.
     if requested_mode(&profile.startup_options) == Some(super::profile::AdapterMode::Tui) {
         let kind = profile
             .startup_options
             .adapter_kind()
             .expect("Tui mode only applies to a startup_options variant with an AdapterKind");
+        if kind == super::AdapterKind::Claude
+            && let Some(tui) = tui
+        {
+            return Ok(build_claude_tui_adapter(
+                &tui,
+                repo_root,
+                run_id,
+                task_id,
+                worker_id,
+                db,
+                project_id,
+                events_tx,
+                display,
+                profile.environment_allowlist.clone(),
+            ));
+        }
         return Err(RegistryError::TuiModeUnavailable(
             kind.wire_name().to_string(),
         ));
@@ -625,6 +720,88 @@ fn build_adapter(
     Ok(adapter)
 }
 
+/// Constructs a real `TuiAdapter<ClaudeTuiVendor>` bound to this run's
+/// ids -- the WP11-report plumbing list, filled in: a fresh
+/// [`PaneCoordinator`] built from `tui`'s static fields plus this run's
+/// own `db`/`project_id`/`events_tx` (only available from
+/// [`RunDriverContext`], never at registry-construction time -- see
+/// [`TuiSupport`]'s own doc comment), the placement this run's own
+/// display selection already resolved (or [`DisplayPlacement::SplitRight`]
+/// when none was), and `tui.adapters["claude"]` (or a sane built-in
+/// default if a caller never configured one) for the vendor's own
+/// `AdapterConfig`.
+///
+/// `resume_transcript_path` is always `None` here: `AdapterRegistry`
+/// (via `RunDriver`) never calls `Adapter::resume` itself today -- WP14/
+/// 15's stored-cursor handoff is what will supply a known path for a
+/// real resume.
+#[allow(clippy::too_many_arguments)]
+fn build_claude_tui_adapter(
+    tui: &Arc<TuiSupport>,
+    repo_root: &std::path::Path,
+    run_id: RunId,
+    task_id: TaskId,
+    worker_id: WorkerId,
+    db: Arc<DatabaseHandle>,
+    project_id: crew_protocol::ProjectId,
+    events_tx: tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
+    display: Option<crew_protocol::DisplaySelection>,
+    environment_allowlist: Vec<String>,
+) -> Arc<dyn Adapter> {
+    let cfg = tui
+        .adapters
+        .get("claude")
+        .cloned()
+        .unwrap_or_else(default_claude_tui_config);
+    let pane_coordinator = Arc::new(PaneCoordinator::new(
+        Arc::clone(&tui.display_registry),
+        db,
+        project_id,
+        events_tx,
+        tui.crewd_path.clone(),
+        tui.state_dir.clone(),
+        repo_root.to_path_buf(),
+    ));
+    let placement = display
+        .as_ref()
+        .map(|selection| selection.placement)
+        .unwrap_or(DisplayPlacement::SplitRight);
+    let vendor = ClaudeTuiVendor::new(repo_root.to_path_buf(), environment_allowlist);
+    Arc::new(TuiAdapter::new(
+        vendor,
+        cfg,
+        run_id,
+        task_id,
+        worker_id,
+        pane_coordinator,
+        tui.panes_dir.clone(),
+        placement,
+        tui.forced_backend,
+        tui.close_on_exit,
+        tui.timings.clone(),
+        None,
+    ))
+}
+
+/// The Claude TUI adapter's own built-in defaults, for a `TuiSupport`
+/// whose `adapters` map (`CrewConfig.adapters`, threaded in at
+/// `set_tui_support` time) never carried a `"claude"` entry -- a caller
+/// that supplies TUI support at all is expected to also supply this, but
+/// falling back rather than panicking keeps a misconfigured deployment
+/// merely under-configured, never crashed.
+fn default_claude_tui_config() -> AdapterConfig {
+    AdapterConfig {
+        enabled: true,
+        bin: "claude".to_string(),
+        mode: CrewAdapterMode::Tui,
+        permission_mode: PermissionMode::Max,
+        model: None,
+        profile: "complex analysis, investigation, deep debugging".to_string(),
+        session_dir: None,
+        extra_args: Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod build_adapter_tests {
     //! Unit tests for the private [`build_adapter`] function, reachable
@@ -642,6 +819,8 @@ mod build_adapter_tests {
     //! dedicated test suite (e.g. `tests/claude_adapter.rs`'s
     //! `mcp_injection_appends_mcp_config_after_native_discovery_args...`
     //! and `mcp_injection_env_carries_only_the_scope_token`).
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::adapter::profile::{
         ClaudeStartupOptions, CodexStartupOptions, CopilotStartupOptions,
@@ -658,6 +837,29 @@ mod build_adapter_tests {
         }
     }
 
+    /// A real (but throwaway) `DatabaseHandle` plus a broadcast sender,
+    /// for `build_adapter`'s trailing `db`/`project_id`/`events_tx`
+    /// parameters -- unused by every branch these tests exercise except
+    /// the Claude-TUI one, but still real values rather than a fake,
+    /// exactly like `settlement_tests::harness` below.
+    async fn db_and_events() -> (
+        Arc<DatabaseHandle>,
+        tempfile::TempDir,
+        tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
+    ) {
+        let dir = tempfile::Builder::new()
+            .prefix("bat-build-adapter-")
+            .tempdir_in("/tmp")
+            .expect("create temp dir");
+        let db = Arc::new(
+            DatabaseHandle::start(dir.path().join("state.db"))
+                .await
+                .expect("start database"),
+        );
+        let (events_tx, _rx) = tokio::sync::broadcast::channel(16);
+        (db, dir, events_tx)
+    }
+
     fn profile(startup_options: StartupOptions) -> WorkerProfile {
         WorkerProfile {
             id: super::super::profile::ProfileId::new(),
@@ -670,9 +872,10 @@ mod build_adapter_tests {
         }
     }
 
-    #[test]
-    fn claude_branch_accepts_some_mcp_config() {
+    #[tokio::test]
+    async fn claude_branch_accepts_some_mcp_config() {
         let profile = profile(StartupOptions::Claude(ClaudeStartupOptions::default()));
+        let (db, _dir, events_tx) = db_and_events().await;
         let result = build_adapter(
             &profile,
             std::path::Path::new("/tmp"),
@@ -680,6 +883,11 @@ mod build_adapter_tests {
             TaskId::new(),
             WorkerId::new(),
             Some(mcp_config()),
+            None,
+            None,
+            db,
+            crew_protocol::ProjectId::new(),
+            events_tx,
             None,
         );
         assert!(
@@ -689,9 +897,10 @@ mod build_adapter_tests {
         );
     }
 
-    #[test]
-    fn codex_branch_accepts_some_mcp_config() {
+    #[tokio::test]
+    async fn codex_branch_accepts_some_mcp_config() {
         let profile = profile(StartupOptions::Codex(CodexStartupOptions::default()));
+        let (db, _dir, events_tx) = db_and_events().await;
         let result = build_adapter(
             &profile,
             std::path::Path::new("/tmp"),
@@ -699,6 +908,11 @@ mod build_adapter_tests {
             TaskId::new(),
             WorkerId::new(),
             Some(mcp_config()),
+            None,
+            None,
+            db,
+            crew_protocol::ProjectId::new(),
+            events_tx,
             None,
         );
         assert!(
@@ -708,9 +922,10 @@ mod build_adapter_tests {
         );
     }
 
-    #[test]
-    fn copilot_branch_accepts_some_mcp_config() {
+    #[tokio::test]
+    async fn copilot_branch_accepts_some_mcp_config() {
         let profile = profile(StartupOptions::Copilot(CopilotStartupOptions::default()));
+        let (db, _dir, events_tx) = db_and_events().await;
         let result = build_adapter(
             &profile,
             std::path::Path::new("/tmp"),
@@ -718,6 +933,11 @@ mod build_adapter_tests {
             TaskId::new(),
             WorkerId::new(),
             Some(mcp_config()),
+            None,
+            None,
+            db,
+            crew_protocol::ProjectId::new(),
+            events_tx,
             None,
         );
         assert!(
@@ -728,15 +948,17 @@ mod build_adapter_tests {
     }
 
     /// `mode: "tui"` on a reserved adapter kind with no `TuiVendor`
-    /// implementation yet must be a typed refusal, never a silent
-    /// fallback to the headless adapter.
-    #[test]
-    fn tui_mode_without_a_vendor_impl_is_a_typed_refusal_not_a_silent_headless_fallback() {
+    /// implementation (Codex/Copilot) -- or on Claude when no
+    /// `TuiSupport` was ever supplied -- must be a typed refusal, never a
+    /// silent fallback to the headless adapter.
+    #[tokio::test]
+    async fn tui_mode_without_a_vendor_impl_is_a_typed_refusal_not_a_silent_headless_fallback() {
         let options = ClaudeStartupOptions {
             mode: crate::adapter::profile::AdapterMode::Tui,
             ..ClaudeStartupOptions::default()
         };
         let profile = profile(StartupOptions::Claude(options));
+        let (db, _dir, events_tx) = db_and_events().await;
 
         let result = build_adapter(
             &profile,
@@ -746,10 +968,15 @@ mod build_adapter_tests {
             WorkerId::new(),
             None,
             None,
+            None, // no TuiSupport supplied
+            db,
+            crew_protocol::ProjectId::new(),
+            events_tx,
+            None,
         );
 
         match result {
-            Ok(_) => panic!("mode: tui must be refused while no Claude TuiVendor impl exists"),
+            Ok(_) => panic!("mode: tui must be refused with no TuiSupport supplied"),
             Err(err) => assert!(
                 matches!(err, RegistryError::TuiModeUnavailable(ref kind) if kind == "claude"),
                 "expected a TuiModeUnavailable(\"claude\") refusal, got: {err}"
@@ -757,10 +984,97 @@ mod build_adapter_tests {
         }
     }
 
+    /// `mode: "tui"` on Codex/Copilot still refuses even *with*
+    /// `TuiSupport` supplied -- only Claude has a real `TuiVendor` impl
+    /// (WP13); the other two still have none.
+    #[tokio::test]
+    async fn tui_mode_on_codex_and_copilot_still_refuses_even_with_tui_support_supplied() {
+        let (db, _dir, events_tx) = db_and_events().await;
+        for options in [
+            StartupOptions::Codex(CodexStartupOptions {
+                mode: crate::adapter::profile::AdapterMode::Tui,
+                ..CodexStartupOptions::default()
+            }),
+            StartupOptions::Copilot(CopilotStartupOptions {
+                mode: crate::adapter::profile::AdapterMode::Tui,
+                ..CopilotStartupOptions::default()
+            }),
+        ] {
+            let expected_kind = profile(options.clone())
+                .startup_options
+                .adapter_kind()
+                .expect("reserved kind")
+                .wire_name()
+                .to_string();
+            let profile = profile(options);
+            let result = build_adapter(
+                &profile,
+                std::path::Path::new("/tmp"),
+                RunId::new(),
+                TaskId::new(),
+                WorkerId::new(),
+                None,
+                None,
+                Some(test_tui_support()),
+                Arc::clone(&db),
+                crew_protocol::ProjectId::new(),
+                events_tx.clone(),
+                None,
+            );
+            match result {
+                Ok(_) => panic!("{expected_kind}: mode: tui must still refuse (no TuiVendor impl)"),
+                Err(err) => assert!(
+                    matches!(err, RegistryError::TuiModeUnavailable(ref kind) if *kind == expected_kind),
+                    "{expected_kind}: expected TuiModeUnavailable, got: {err}"
+                ),
+            }
+        }
+    }
+
+    /// `mode: "tui"` on Claude, with `TuiSupport` supplied, constructs a
+    /// real adapter rather than refusing -- the registry threading this
+    /// WP adds. Asserted via `kind()`/`capabilities()` only: `.start()`
+    /// is never called here (see this module's own doc comment on why),
+    /// so this proves construction succeeds and reports the TUI
+    /// capability profile, not full runtime behavior (covered instead by
+    /// `tests/tui_claude_registry.rs`'s real end-to-end run).
+    #[tokio::test]
+    async fn claude_tui_mode_with_tui_support_constructs_a_real_tui_adapter() {
+        let options = ClaudeStartupOptions {
+            mode: crate::adapter::profile::AdapterMode::Tui,
+            ..ClaudeStartupOptions::default()
+        };
+        let profile = profile(StartupOptions::Claude(options));
+        let (db, _dir, events_tx) = db_and_events().await;
+
+        let result = build_adapter(
+            &profile,
+            std::path::Path::new("/tmp"),
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            None,
+            None,
+            Some(test_tui_support()),
+            db,
+            crew_protocol::ProjectId::new(),
+            events_tx,
+            None,
+        );
+
+        let adapter = result.expect("Claude TUI mode must construct with TuiSupport supplied");
+        assert_eq!(adapter.kind(), "claude");
+        assert_eq!(
+            adapter.capabilities().protocol,
+            crate::adapter::capability::ProtocolKind::Terminal
+        );
+    }
+
     /// `mode: "headless"` (the default) on every reserved adapter kind
     /// must be completely unaffected by the `mode: "tui"` guard above.
-    #[test]
-    fn headless_mode_is_unaffected_on_every_reserved_kind() {
+    #[tokio::test]
+    async fn headless_mode_is_unaffected_on_every_reserved_kind() {
+        let (db, _dir, events_tx) = db_and_events().await;
         for options in [
             StartupOptions::Claude(ClaudeStartupOptions::default()),
             StartupOptions::Codex(CodexStartupOptions::default()),
@@ -775,6 +1089,11 @@ mod build_adapter_tests {
                 WorkerId::new(),
                 None,
                 None,
+                None,
+                Arc::clone(&db),
+                crew_protocol::ProjectId::new(),
+                events_tx.clone(),
+                None,
             );
             assert!(
                 result.is_ok(),
@@ -782,6 +1101,26 @@ mod build_adapter_tests {
                 result.err().map(|e| e.to_string()).unwrap_or_default()
             );
         }
+    }
+
+    /// A minimal but real `TuiSupport` for these unit tests: a registry
+    /// with only `HiddenDisplay` registered (never touches a real
+    /// backend since `.start()` is never called here).
+    fn test_tui_support() -> Arc<TuiSupport> {
+        let mut registry = crate::display::DisplayRegistry::new();
+        registry.register(Box::new(crate::display::HiddenDisplay::new(
+            crew_protocol::DisplayConfig::default(),
+        )));
+        Arc::new(TuiSupport {
+            display_registry: Arc::new(registry),
+            panes_dir: std::env::temp_dir(),
+            crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
+            state_dir: std::env::temp_dir(),
+            close_on_exit: crate::config::crew::CloseOnExit::OnSuccess,
+            forced_backend: None,
+            adapters: BTreeMap::new(),
+            timings: crate::adapter::tui::TuiTimings::default(),
+        })
     }
 }
 
