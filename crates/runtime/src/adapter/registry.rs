@@ -979,6 +979,7 @@ mod settlement_tests {
                 exit_code: Some(0),
                 signal: None,
             },
+            cursor: None,
         })
         .await
         .expect("emit exit");

@@ -178,6 +178,7 @@ fn fixture_thread_turn_transcript_normalizes_to_correlated_events() {
             task_id,
             worker_id,
             payload,
+            cursor: None,
         })
         .collect();
 

@@ -276,6 +276,7 @@ impl ClaudeAdapter {
             task_id,
             worker_id,
             payload: AdapterEventPayload::ProcessStarted { pid: pid as u32 },
+            cursor: None,
         })
         .await?;
 
@@ -405,7 +406,7 @@ async fn run_session(
                                                 "costUsd": cost_usd,
                                             }));
                                         }
-                                        let _ = sink.emit(AdapterEvent { run_id, task_id, worker_id, payload }).await;
+                                        let _ = sink.emit(AdapterEvent { run_id, task_id, worker_id, payload, cursor: None }).await;
                                     }
                                     ClaudeEvent::ApprovalRequested { approval_id, hook_name } => {
                                         shared.lock().expect("session info mutex is never poisoned").pending_approvals.insert(approval_id, PendingApproval { hook_name });
@@ -438,7 +439,7 @@ async fn run_session(
                                             class: ContentClass::Visible,
                                             value: format!("stdin write failed: {err}"),
                                         },
-                                    },
+                                    }, cursor: None,
                                 })
                                 .await;
                         }
@@ -484,6 +485,7 @@ async fn run_session(
             task_id,
             worker_id,
             payload: AdapterEventPayload::ProcessExited { exit_code, signal },
+            cursor: None,
         })
         .await;
 }

@@ -531,6 +531,7 @@ mod tests {
             task_id,
             worker_id,
             payload: AdapterEventPayload::ProcessStarted { pid: 1234 },
+            cursor: None,
         })
         .await
         .expect("emit");
@@ -563,6 +564,7 @@ mod tests {
             payload: AdapterEventPayload::VendorSessionEstablished {
                 vendor_session_id: "vs-1".to_string(),
             },
+            cursor: None,
         })
         .await
         .expect("emit");
@@ -616,6 +618,7 @@ mod tests {
                 exit_code: Some(0),
                 signal: None,
             },
+            cursor: None,
         })
         .await
         .expect("emit");
@@ -655,6 +658,7 @@ mod tests {
                 exit_code: Some(7),
                 signal: None,
             },
+            cursor: None,
         })
         .await
         .expect("emit");
@@ -690,6 +694,7 @@ mod tests {
                 exit_code: None,
                 signal: Some("SIGKILL".to_string()),
             },
+            cursor: None,
         })
         .await
         .expect("emit");
@@ -724,6 +729,7 @@ mod tests {
                 exit_code: None,
                 signal: None,
             },
+            cursor: None,
         })
         .await
         .expect("emit");
@@ -761,6 +767,7 @@ mod tests {
                 exit_code: Some(0),
                 signal: None,
             },
+            cursor: None,
         })
         .await
         .expect("emit");
@@ -792,6 +799,7 @@ mod tests {
                 exit_code: Some(0),
                 signal: None,
             },
+            cursor: None,
         })
         .await
         .expect("emit");
@@ -835,6 +843,7 @@ mod tests {
                     value: "all done".to_string(),
                 },
             },
+            cursor: None,
         })
         .await
         .expect("emit");
@@ -872,6 +881,7 @@ mod tests {
                 task_id,
                 worker_id,
                 payload: AdapterEventPayload::ProcessStarted { pid: 1234 },
+                cursor: None,
             })
             .await
             .expect_err("the inner sink's failure must propagate");

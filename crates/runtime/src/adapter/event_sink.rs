@@ -45,6 +45,14 @@ pub struct AdapterEvent {
     pub task_id: TaskId,
     pub worker_id: WorkerId,
     pub payload: AdapterEventPayload,
+    /// A TUI adapter's transcript-tailer position reached by the batch
+    /// this event concludes (WP12), persisted to `runs.transcript_cursor`
+    /// in the same transaction as this event's journal insert. `None` for
+    /// every non-TUI adapter, and for a TUI event that is not the last one
+    /// emitted from its batch -- see
+    /// `crate::adapter::tui::adapter::emit_tui_event`'s own doc comment
+    /// for why only the batch's final emitted event carries it.
+    pub cursor: Option<super::tui::Cursor>,
 }
 
 /// The raw, pre-redaction payload of an [`AdapterEvent`]. Free-text fields
@@ -203,6 +211,7 @@ impl DomainAdapterEventSink {
             task_id,
             worker_id,
             payload,
+            cursor: _,
         } = event;
         match payload {
             AdapterEventPayload::ProcessStarted { pid } => RuntimeEvent::AdapterProcessEvent {
@@ -355,6 +364,15 @@ impl AdapterEventSink for DomainAdapterEventSink {
         let run_id = event.run_id;
         let task_id = event.task_id;
         let worker_id = event.worker_id;
+        // Extracted before `build_runtime_event` consumes `event` --
+        // serialized here (rather than passed through as a typed
+        // `Cursor`) so `DomainRepository::record_adapter_event` stays
+        // oblivious to any specific adapter's cursor shape, storing only
+        // the opaque JSON text `runs.transcript_cursor` was declared to
+        // hold (migration 10). The `Result` is threaded into the async
+        // block below (this function cannot `?` here -- it returns the
+        // future itself, not a `Result`).
+        let cursor_json = event.cursor.as_ref().map(serde_json::to_string).transpose();
         let runtime_event = self.build_runtime_event(event);
         let project_id = self.project_id;
         let events_tx = self.events_tx.clone();
@@ -385,11 +403,19 @@ impl AdapterEventSink for DomainAdapterEventSink {
         let out_of_band = matches!(&runtime_event, RuntimeEvent::OutOfBandInput { .. });
         let violation_service = Arc::clone(&self.violation_service);
         Box::pin(async move {
+            let cursor_json =
+                cursor_json.map_err(|e| AdapterError::process("sink", "emit", e.to_string()))?;
             let mut result = db
                 .run_domain_op(Box::new(move |conn| {
                     let mut repo = DomainRepository::new(conn, project_id);
-                    repo.record_adapter_event(&runtime_event, task_id, worker_id, run_id)
-                        .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                    repo.record_adapter_event(
+                        &runtime_event,
+                        task_id,
+                        worker_id,
+                        run_id,
+                        cursor_json,
+                    )
+                    .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
                 }))
                 .await
                 .map_err(|e| AdapterError::process("sink", "emit", e.to_string()))?;
@@ -521,6 +547,7 @@ mod settlement_sink_tests {
             task_id: TaskId::new(),
             worker_id: WorkerId::new(),
             payload: AdapterEventPayload::ProcessStarted { pid: 1 },
+            cursor: None,
         })
         .await
         .expect("emit");
@@ -544,6 +571,7 @@ mod settlement_sink_tests {
                 exit_code: Some(0),
                 signal: None,
             },
+            cursor: None,
         })
         .await
         .expect("emit");
@@ -565,6 +593,7 @@ mod settlement_sink_tests {
                 exit_code: Some(0),
                 signal: None,
             },
+            cursor: None,
         })
         .await
         .expect("first emit");
@@ -579,6 +608,7 @@ mod settlement_sink_tests {
                 exit_code: Some(1),
                 signal: None,
             },
+            cursor: None,
         })
         .await
         .expect("second emit");
@@ -727,6 +757,7 @@ mod out_of_band_input_tests {
                 backend: DisplayBackend::Tmux,
                 pane_ref: "%3".to_string(),
             },
+            cursor: None,
         })
         .await
         .expect("emit");
@@ -788,6 +819,7 @@ mod out_of_band_input_tests {
                 backend: DisplayBackend::Hidden,
                 pane_ref: String::new(),
             },
+            cursor: None,
         })
         .await
         .expect("emit succeeds even though the flag write will fail");
@@ -799,6 +831,348 @@ mod out_of_band_input_tests {
         assert!(
             events_rx.try_recv().is_err(),
             "no RunFlagsEvent may broadcast when the run row does not exist"
+        );
+
+        db.shutdown().await.expect("shutdown database");
+    }
+}
+
+#[cfg(test)]
+mod crash_resume_tests {
+    //! WP12 step 2's crash-resume proof: a tailer that crashes mid-run and
+    //! restarts from the cursor this sink persisted in `runs.transcript_cursor`
+    //! re-tails with zero duplicate events -- proved against the real
+    //! journal, not just the in-memory `Cursor` math `tui_tailer.rs`
+    //! already covers.
+
+    use std::io::Write;
+    use std::sync::Arc;
+
+    use crew_protocol::{
+        ContentClass, ProjectId, RunFlags, RunState, TaskId, Timestamp, Worker, WorkerId,
+        WorkerProfileRef,
+    };
+    use tempfile::TempDir;
+    use tokio::sync::broadcast;
+
+    use crate::adapter::tui::{Cursor, TranscriptFormat, TranscriptTailer, TuiEvent};
+    use crate::config::NestedViolationAction;
+    use crate::db::DatabaseHandle;
+    use crate::domain::DomainRepository;
+    use crate::policy::ViolationService;
+
+    use super::*;
+
+    /// The same minimal vendor-shaped JSONL format `tui_tailer.rs` tests
+    /// against: `{"type":"text","text":"...","id":"..."}` -> `AssistantText`.
+    struct TestFormat;
+
+    impl TranscriptFormat for TestFormat {
+        fn parse(&self, raw: &[u8], cursor: &Cursor) -> (Vec<TuiEvent>, Cursor) {
+            crate::adapter::tui::parse_jsonl_chunk(raw, cursor, |value| {
+                let entry_id = value
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string);
+                let event = TuiEvent::AssistantText {
+                    text: Classified {
+                        class: ContentClass::Visible,
+                        value: value
+                            .get("text")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                    },
+                    is_question: false,
+                    ts: None,
+                };
+                (vec![event], entry_id)
+            })
+        }
+    }
+
+    fn append_line(path: &std::path::Path, line: &str) {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .expect("open transcript for append");
+        writeln!(file, "{line}").expect("append line");
+    }
+
+    async fn open_db() -> (TempDir, Arc<DatabaseHandle>) {
+        let dir = tempfile::Builder::new()
+            .prefix("bat-crash-resume-")
+            .tempdir_in("/tmp")
+            .expect("create temp dir");
+        let db_path = dir.path().join("state.db");
+        let db = Arc::new(
+            DatabaseHandle::start(db_path)
+                .await
+                .expect("start database"),
+        );
+        (dir, db)
+    }
+
+    /// Mirrors `question_detected_tests::seed_working_run` (duplicated --
+    /// private to its own module).
+    async fn seed_working_run(
+        db: &DatabaseHandle,
+        project_id: ProjectId,
+    ) -> (TaskId, WorkerId, RunId) {
+        let task_id = TaskId::new();
+        let worker_id = WorkerId::new();
+        let run_id = RunId::new();
+        db.run_domain_op(Box::new(move |conn| {
+            let mut repo = DomainRepository::new(conn, project_id);
+            repo.upsert_task(
+                task_id,
+                &crew_protocol::TaskRef {
+                    owner_client_instance_id: "omp-1".to_string(),
+                    revision: 1,
+                },
+            )?;
+            let worker = Worker {
+                worker_id,
+                profile_ref: WorkerProfileRef {
+                    id: worker_id,
+                    fingerprint: "sha256:fake".to_string(),
+                    adapter: "fake".to_string(),
+                    model: "test".to_string(),
+                    permission_envelope: serde_json::json!({}),
+                },
+                parent_worker_id: None,
+                created_at: Timestamp::now(),
+            };
+            repo.create_worker(&worker)?;
+            let run = crew_protocol::Run {
+                run_id,
+                task_id,
+                worker_id,
+                state: RunState::try_from("queued").expect("queued is a valid state"),
+                flags: RunFlags::default(),
+                vendor_session_id: None,
+                started_at: None,
+                completed_at: None,
+            };
+            repo.submit_run(&run, None, None)?;
+            for state in ["starting", "working"] {
+                repo.transition_run(
+                    run_id,
+                    &RunState::try_from(state).expect("valid state"),
+                    None,
+                )?;
+            }
+            Ok(serde_json::json!({}))
+        }))
+        .await
+        .expect("seed working run");
+        (task_id, worker_id, run_id)
+    }
+
+    fn sink(
+        db: Arc<DatabaseHandle>,
+        project_id: ProjectId,
+        events_tx: broadcast::Sender<EventEnvelope>,
+    ) -> DomainAdapterEventSink {
+        let violation_service = Arc::new(ViolationService::new(
+            Arc::clone(&db),
+            project_id,
+            events_tx.clone(),
+            None,
+            NestedViolationAction::QuarantineAndCancel,
+        ));
+        DomainAdapterEventSink::new(
+            db,
+            project_id,
+            events_tx,
+            Vec::new(),
+            false,
+            violation_service,
+        )
+        .expect("built-in redaction rules always compile")
+    }
+
+    /// Emits one batch of `AssistantText` events through `sink`, attaching
+    /// `cursor` (serialized by the sink) to the last emitted event only --
+    /// exactly `crate::adapter::tui::adapter::emit_tui_event`'s own
+    /// batch-cursor placement.
+    async fn emit_batch(
+        sink: &DomainAdapterEventSink,
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        events: Vec<TuiEvent>,
+        cursor: Cursor,
+    ) {
+        let last_index = events.len().saturating_sub(1);
+        for (index, event) in events.into_iter().enumerate() {
+            let TuiEvent::AssistantText { text, .. } = event else {
+                panic!("TestFormat only produces AssistantText");
+            };
+            sink.emit(AdapterEvent {
+                run_id,
+                task_id,
+                worker_id,
+                payload: AdapterEventPayload::MessageFinal {
+                    role: "assistant".to_string(),
+                    text,
+                },
+                cursor: if index == last_index {
+                    Some(cursor.clone())
+                } else {
+                    None
+                },
+            })
+            .await
+            .expect("emit");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tailer_resumed_from_the_stored_cursor_re_tails_with_zero_duplicate_events() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_working_run(&db, project_id).await;
+        let (events_tx, _events_rx) = broadcast::channel(64);
+        let sink = sink(Arc::clone(&db), project_id, events_tx);
+
+        let transcript_dir = tempfile::Builder::new()
+            .prefix("bat-crash-resume-transcript-")
+            .tempdir_in("/tmp")
+            .expect("transcript dir");
+        let transcript_path = transcript_dir.path().join("session.jsonl");
+
+        // First pass: two lines are already on disk when the (first)
+        // tailer starts.
+        append_line(
+            &transcript_path,
+            r#"{"type":"text","text":"first","id":"1"}"#,
+        );
+        append_line(
+            &transcript_path,
+            r#"{"type":"text","text":"second","id":"2"}"#,
+        );
+
+        let mut tailer_one = TranscriptTailer::new(
+            transcript_path.clone(),
+            Arc::new(TestFormat),
+            Cursor::start(),
+            std::time::Duration::from_millis(10),
+        );
+        let (events, cursor_after_first_pass) = tailer_one
+            .poll_once()
+            .await
+            .expect("the two pre-existing lines are consumed");
+        assert_eq!(events.len(), 2);
+        emit_batch(
+            &sink,
+            run_id,
+            task_id,
+            worker_id,
+            events,
+            cursor_after_first_pass.clone(),
+        )
+        .await;
+
+        // The cursor committed in the same transaction as the batch's
+        // last event is now durable.
+        let stored_cursor_json: String = db
+            .run_domain_op(Box::new(move |conn| {
+                let json: String = conn.query_row(
+                    "SELECT transcript_cursor FROM runs WHERE run_id = ?1",
+                    [run_id.to_string()],
+                    |r| r.get(0),
+                )?;
+                Ok(serde_json::json!(json))
+            }))
+            .await
+            .expect("read stored cursor")
+            .as_str()
+            .expect("stored cursor is a string")
+            .to_string();
+        let stored_cursor: Cursor =
+            serde_json::from_str(&stored_cursor_json).expect("stored cursor deserializes");
+        assert_eq!(stored_cursor, cursor_after_first_pass);
+
+        // Simulated crash: the first tailer is dropped (never told to
+        // stop cleanly -- a crash gives no such chance) and the vendor
+        // CLI keeps appending while the daemon is down.
+        drop(tailer_one);
+        append_line(
+            &transcript_path,
+            r#"{"type":"text","text":"third","id":"3"}"#,
+        );
+
+        // A fresh tailer, resumed from the *stored* cursor (not
+        // `Cursor::start()`), re-tails.
+        let mut tailer_two = TranscriptTailer::new(
+            transcript_path.clone(),
+            Arc::new(TestFormat),
+            stored_cursor,
+            std::time::Duration::from_millis(10),
+        );
+        let (events, cursor_after_second_pass) = tailer_two
+            .poll_once()
+            .await
+            .expect("only the newly appended line is unconsumed");
+        assert_eq!(
+            events.len(),
+            1,
+            "resuming from the stored cursor must not re-deliver the first pass's lines"
+        );
+        emit_batch(
+            &sink,
+            run_id,
+            task_id,
+            worker_id,
+            events,
+            cursor_after_second_pass,
+        )
+        .await;
+
+        // The journal holds exactly three `AdapterMessageFinal` events,
+        // each with distinct text -- no duplicate from re-tailing.
+        let texts: Vec<String> = db
+            .run_domain_op(Box::new(move |conn| {
+                let mut stmt = conn
+                    .prepare("SELECT event_json FROM events WHERE run_id = ?1 ORDER BY sequence")?;
+                let rows: Vec<String> = stmt
+                    .query_map([run_id.to_string()], |r| r.get::<_, String>(0))?
+                    .collect::<Result<_, _>>()?;
+                let texts = rows
+                    .into_iter()
+                    .filter_map(|raw| {
+                        let event: RuntimeEvent = serde_json::from_str(&raw).ok()?;
+                        match event {
+                            RuntimeEvent::AdapterMessageEvent {
+                                kind: RuntimeEventKind::AdapterMessageFinal,
+                                text: Some(text),
+                                ..
+                            } => Some(text),
+                            _ => None,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                Ok(serde_json::json!(texts))
+            }))
+            .await
+            .expect("read journal")
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|v| v.as_str().expect("string").to_string())
+            .collect();
+
+        assert_eq!(
+            texts,
+            vec![
+                "first".to_string(),
+                "second".to_string(),
+                "third".to_string()
+            ],
+            "the journal must hold exactly the three distinct lines, in order, with no duplicate \
+             from re-tailing after the simulated crash"
         );
 
         db.shutdown().await.expect("shutdown database");

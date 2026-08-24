@@ -337,6 +337,7 @@ impl ViolationTriggeringRunDriver {
                 vendor_child_id: vendor_child_id.to_string(),
                 vendor_parent_ref: vendor_parent_ref.to_string(),
             },
+            cursor: None,
         })
         .await
         .map_err(|e| e.to_string())
@@ -368,6 +369,7 @@ impl RunDriver for ViolationTriggeringRunDriver {
                     vendor_child_id: "child-vendor-1".to_string(),
                     vendor_parent_ref: "parent-vendor-1".to_string(),
                 },
+                cursor: None,
             })
             .await
             .map_err(|e| e.to_string())?;
@@ -430,6 +432,7 @@ impl RunDriver for ConfigurableCancelViolationDriver {
                     vendor_child_id: "child-vendor-1".to_string(),
                     vendor_parent_ref: "parent-vendor-1".to_string(),
                 },
+                cursor: None,
             })
             .await
             .map_err(|e| e.to_string())?;
@@ -1363,6 +1366,7 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
                     vendor_child_id: child.to_string(),
                     vendor_parent_ref: parent.to_string(),
                 },
+                cursor: None,
             })
             .await
         }

@@ -575,11 +575,9 @@ mod tests {
             .to_version(&mut conn, 9)
             .expect("migrate to v9");
 
-        let err = conn.query_row(
-            "SELECT transcript_cursor FROM runs LIMIT 1",
-            [],
-            |r| r.get::<_, Option<String>>(0),
-        );
+        let err = conn.query_row("SELECT transcript_cursor FROM runs LIMIT 1", [], |r| {
+            r.get::<_, Option<String>>(0)
+        });
         assert!(
             err.is_err(),
             "transcript_cursor must not exist before migration 10"
@@ -640,6 +638,9 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("read back");
-        assert_eq!(cursor.as_deref(), Some("{\"offset\":42,\"lastEntryId\":\"abc\"}"));
+        assert_eq!(
+            cursor.as_deref(),
+            Some("{\"offset\":42,\"lastEntryId\":\"abc\"}")
+        );
     }
 }

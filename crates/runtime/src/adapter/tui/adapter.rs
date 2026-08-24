@@ -210,7 +210,6 @@ struct RunState {
     /// code gets journaled.
     terminate_tx: oneshot::Sender<()>,
     sink: Arc<dyn AdapterEventSink>,
-    cursor: Arc<StdMutex<Cursor>>,
     pane_ref: String,
 }
 
@@ -345,6 +344,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
             AdapterEventPayload::ProcessStarted {
                 pid: pty.pid() as u32,
             },
+            None,
         )
         .await;
 
@@ -370,6 +370,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
                         task_id,
                         worker_id,
                         AdapterEventPayload::OutOfBandInput { backend, pane_ref },
+                        None,
                     )
                     .await;
                 });
@@ -497,10 +498,10 @@ impl<V: TuiVendor> TuiAdapter<V> {
             AdapterEventPayload::VendorSessionEstablished {
                 vendor_session_id: initial_session_id,
             },
+            None,
         )
         .await;
 
-        let cursor = Arc::new(StdMutex::new(Cursor::start()));
         let (batch_tx, mut batch_rx) = mpsc::unbounded_channel::<(Vec<TuiEvent>, Cursor)>();
         let tailer = TranscriptTailer::new(
             transcript_path,
@@ -513,13 +514,26 @@ impl<V: TuiVendor> TuiAdapter<V> {
         }));
 
         let pump_sink = Arc::clone(&sink);
-        let pump_cursor = Arc::clone(&cursor);
         tokio::spawn(async move {
             while let Some((events, new_cursor)) = batch_rx.recv().await {
-                for event in events {
-                    emit_tui_event(&pump_sink, run_id, task_id, worker_id, event).await;
+                // The batch's advanced position is durable: it is handed
+                // to `emit_tui_event` only for the batch's *last* event
+                // (attached there to whichever of that event's own
+                // emitted payloads commits last), so the cursor and every
+                // event that observed everything up to it land in the
+                // same transaction (`DomainRepository::record_adapter_event`).
+                // See `emit_tui_event`'s own doc comment for what happens
+                // when the last event emits nothing.
+                let last_index = events.len().saturating_sub(1);
+                for (index, event) in events.into_iter().enumerate() {
+                    let batch_cursor = if index == last_index {
+                        Some(new_cursor.clone())
+                    } else {
+                        None
+                    };
+                    emit_tui_event(&pump_sink, run_id, task_id, worker_id, event, batch_cursor)
+                        .await;
                 }
-                *pump_cursor.lock().expect("cursor mutex never poisoned") = new_cursor;
             }
         });
 
@@ -546,7 +560,6 @@ impl<V: TuiVendor> TuiAdapter<V> {
             watcher,
             terminate_tx,
             sink,
-            cursor,
             pane_ref: pane_outcome.pane_ref,
         });
         Ok(())
@@ -581,6 +594,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
             task_id,
             worker_id,
             AdapterEventPayload::ProcessExited { exit_code, signal },
+            None,
         )
         .await;
         Err(err)
@@ -590,13 +604,16 @@ impl<V: TuiVendor> TuiAdapter<V> {
 /// Emits one event through `sink`, logging (never panicking) if the
 /// journal write itself failed -- mirrored from every other adapter's
 /// best-effort telemetry emission (a lost telemetry event must never be
-/// fatal to the run).
+/// fatal to the run). `cursor` is `Some` only for the one emitted event
+/// (if any) that concludes a tailed transcript batch -- see
+/// `emit_tui_event`'s own doc comment.
 async fn emit(
     sink: &Arc<dyn AdapterEventSink>,
     run_id: RunId,
     task_id: TaskId,
     worker_id: WorkerId,
     payload: AdapterEventPayload,
+    cursor: Option<Cursor>,
 ) {
     if let Err(err) = sink
         .emit(AdapterEvent {
@@ -604,6 +621,7 @@ async fn emit(
             task_id,
             worker_id,
             payload,
+            cursor,
         })
         .await
     {
@@ -624,12 +642,25 @@ async fn emit(
 /// downstream consumes one yet), `Raw` -> a debug trace only (transcript
 /// format drift is expected, not itself an error worth journaling
 /// durably; see this module's own doc comment).
+///
+/// `cursor` is the tailer's advanced position for the *entire batch* this
+/// `event` came from, passed by the caller only on the batch's last
+/// `TuiEvent` (see `run_pipeline`'s pump loop) -- `None` for every other
+/// `TuiEvent` in the batch. It is attached here to whichever of this
+/// event's own emitted payloads is emitted last (`ToolResult` rather than
+/// `ToolStarted` for `ToolActivity`), so the durable cursor and the
+/// event(s) that observed everything up to it commit together. A
+/// `TurnEnded`/`Raw` (or unrecognized) last event in a batch emits nothing
+/// to attach the cursor to; the batch's advance is then not persisted,
+/// which is safe -- nothing was journaled for it the first time either,
+/// so re-parsing it after a crash produces no duplicate.
 async fn emit_tui_event(
     sink: &Arc<dyn AdapterEventSink>,
     run_id: RunId,
     task_id: TaskId,
     worker_id: WorkerId,
     event: TuiEvent,
+    cursor: Option<Cursor>,
 ) {
     match event {
         TuiEvent::AssistantText {
@@ -645,7 +676,7 @@ async fn emit_tui_event(
                     text,
                 }
             };
-            emit(sink, run_id, task_id, worker_id, payload).await;
+            emit(sink, run_id, task_id, worker_id, payload, cursor).await;
         }
         TuiEvent::ToolActivity {
             tool,
@@ -662,6 +693,7 @@ async fn emit_tui_event(
                     tool_call_id: tool_call_id.clone(),
                     name: tool.clone(),
                 },
+                None,
             )
             .await;
             emit(
@@ -675,6 +707,7 @@ async fn emit_tui_event(
                     ok: true,
                     detail,
                 },
+                cursor,
             )
             .await;
         }
@@ -685,6 +718,7 @@ async fn emit_tui_event(
                 task_id,
                 worker_id,
                 AdapterEventPayload::VendorSessionEstablished { vendor_session_id },
+                cursor,
             )
             .await;
         }
@@ -795,6 +829,7 @@ fn spawn_exit_watcher(
             task_id,
             worker_id,
             AdapterEventPayload::ProcessExited { exit_code, signal },
+            None,
         )
         .await;
     })
@@ -976,6 +1011,7 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                             value: text.clone(),
                         },
                     },
+                    cursor: None,
                 })
                 .await
                 .map_err(|e| AdapterError::process(self.kind(), "send", e.to_string()))?;
@@ -1046,28 +1082,17 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
             let Some(run) = guard.as_ref() else {
                 return Ok(AdapterSnapshot::default());
             };
-            let cursor = run
-                .cursor
-                .lock()
-                .expect("cursor mutex never poisoned")
-                .clone();
             Ok(AdapterSnapshot {
                 state_summary: format!("tui[{}] pane={}", self.kind(), run.pane_ref),
                 children: Vec::new(),
-                // WP12 handoff: cursor persistence into the `runs` table
-                // is a follow-up work package. Until then, the tailer's
-                // durable position is carried here on the adapter side
-                // and surfaced through `snapshot()` rather than lost --
-                // WP12 should read it from here (or from a dedicated
-                // sink-meta parameter, if one lands first) and persist it
-                // transactionally alongside each batch's journaled
-                // events.
-                usage: Some(serde_json::json!({
-                    "cursor": {
-                        "offset": cursor.offset,
-                        "lastEntryId": cursor.last_entry_id,
-                    }
-                })),
+                // The tailer's durable position no longer needs to be
+                // smuggled out here (WP12 handoff, closed): every adapter
+                // event batch now carries its own `Cursor` through the
+                // sink into `runs.transcript_cursor`, transactionally with
+                // the batch's journaled event(s). `usage: None` matches
+                // `capabilities().usage == UsageCapability::None` -- a TUI
+                // adapter has no vendor-reported cost/token usage at all.
+                usage: None,
                 artifacts: Vec::new(),
             })
         })

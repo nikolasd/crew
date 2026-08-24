@@ -226,6 +226,7 @@ impl CodexAdapter {
                                     task_id,
                                     worker_id,
                                     payload,
+                                    cursor: None,
                                 })
                                 .await;
                         }
@@ -247,6 +248,7 @@ impl CodexAdapter {
                                 task_id,
                                 worker_id,
                                 payload: AdapterEventPayload::ProcessExited { exit_code, signal },
+                                cursor: None,
                             })
                             .await;
                         break;
