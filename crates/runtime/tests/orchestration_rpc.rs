@@ -1358,21 +1358,31 @@ async fn workspace_apply_on_a_quarantined_run_is_refused_and_journals_no_apply_s
     );
 }
 
-/// R79: two CONCURRENT cancelling observations -- both journaled before
-/// either transition commits, so both read `already_actioned = false` --
-/// must both report success. The loser's transition fails because the
-/// winner terminalized the run; that is the idempotent success the doc
-/// comment always promised, acknowledged as `superseded` in the audited
-/// `operations` table rather than surfacing as an error.
+/// R79: two CONCURRENT cancelling observations must both report success.
+/// The loser's transition fails because the winner terminalized the run;
+/// that is the idempotent success the doc comment always promised,
+/// acknowledged as `superseded` in the audited `operations` table rather
+/// than surfacing as an error.
 ///
-/// `current_thread` flavor on purpose: `join!` then alternates the two
-/// emit futures at every await, so their database-actor submissions
-/// interleave A-journal, B-journal, A-intent, B-intent, A-transition,
-/// B-transition (FIFO actor queue) -- deterministically producing the
-/// race. On the multi-thread runtime the observations can serialize
-/// (B journals after A's transition), which is the *other*, pre-existing
-/// idempotency path already covered by
-/// `second_nested_worker_observed_on_an_already_actioned_run_never_double_cancels`.
+/// `current_thread` flavor alternates the two emit futures at every await
+/// *within this task*, but each observation's chain (journal read, intent
+/// append, transition) runs over the db actor -- a real thread behind a
+/// bounded mpsc -- so `join!` cannot pin the interleaving across that
+/// boundary. Two outcomes are legal, and this test accepts exactly that
+/// set:
+///
+/// 1. Both observations journal their violation reading
+///    `already_actioned = false` before either transition commits: two
+///    audited intents, one `cancelled`, one `superseded`.
+/// 2. Observation A's full chain completes before B's journal read: B
+///    short-circuits via `already_actioned`/is-terminal and never records
+///    an intent -- one `cancelled` intent, and policy_violations rows for
+///    both observations.
+///
+/// Shape 2 is the pre-existing idempotency path also covered by
+/// `second_nested_worker_observed_on_an_already_actioned_run_never_double_cancels`;
+/// it is not a failure of this test's premise, only of its former
+/// over-tight assertion.
 #[tokio::test(flavor = "current_thread")]
 async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
     /// Captures the driver context in `start` WITHOUT emitting, so the
@@ -1471,8 +1481,10 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
     let get = client.call(6, "run/get", json!({ "runId": run_id })).await;
     assert_eq!(get["result"]["state"], "cancelled");
 
-    // The audited trail is honest: two policyViolationCancel intents, one
-    // acknowledged cancelled, one superseded.
+    // The audited trail is honest under BOTH legal interleavings (see the
+    // doc comment): either two intents (one cancelled, one superseded) or
+    // one cancelled intent plus a short-circuited second observation --
+    // which must still have journaled its violation row.
     let conn = rusqlite::Connection::open(&harness.database).unwrap();
     let acks: Vec<Option<String>> = conn
         .prepare("SELECT acknowledgement_json FROM operations WHERE kind = 'policyViolationCancel' ORDER BY requested_at")
@@ -1481,7 +1493,6 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    assert_eq!(acks.len(), 2, "both observations persist an audited intent");
     let outcomes: Vec<String> = acks
         .iter()
         .map(|a| {
@@ -1492,13 +1503,27 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
                 .to_string()
         })
         .collect();
-    let mut sorted = outcomes.clone();
-    sorted.sort_unstable();
-    assert_eq!(
-        sorted,
-        ["cancelled", "superseded"],
-        "one intent cancelled, one superseded: {outcomes:?}"
-    );
+    let outcomes: Vec<&str> = outcomes.iter().map(String::as_str).collect();
+    match outcomes.as_slice() {
+        ["cancelled", "superseded"] | ["superseded", "cancelled"] => {}
+        ["cancelled"] => {
+            let violations: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM policy_violations WHERE run_id = ?1",
+                    rusqlite::params![run_id.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                violations, 2,
+                "the short-circuited second observation must still have journaled \
+                 its violation: {outcomes:?}"
+            );
+        }
+        other => {
+            panic!("impossible outcome set for two concurrent cancelling observations: {other:?}")
+        }
+    }
 }
 
 // --------------------------------------------------------------- harness
