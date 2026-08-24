@@ -516,21 +516,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
         let pump_sink = Arc::clone(&sink);
         tokio::spawn(async move {
             while let Some((events, new_cursor)) = batch_rx.recv().await {
-                // The batch's advanced position is durable: it is handed
-                // to `emit_tui_event` only for the batch's *last* event
-                // (attached there to whichever of that event's own
-                // emitted payloads commits last), so the cursor and every
-                // event that observed everything up to it land in the
-                // same transaction (`DomainRepository::record_adapter_event`).
-                // See `emit_tui_event`'s own doc comment for what happens
-                // when the last event emits nothing.
-                let last_index = events.len().saturating_sub(1);
-                for (index, event) in events.into_iter().enumerate() {
-                    let batch_cursor = if index == last_index {
-                        Some(new_cursor.clone())
-                    } else {
-                        None
-                    };
+                for (event, batch_cursor) in cursor_placements(events, new_cursor) {
                     emit_tui_event(&pump_sink, run_id, task_id, worker_id, event, batch_cursor)
                         .await;
                 }
@@ -629,6 +615,32 @@ async fn emit(
     }
 }
 
+/// Pairs each event of one tailed batch with the cursor it should carry
+/// when emitted (`emit_tui_event`'s own `cursor` parameter): `Some(new_cursor)`
+/// on the batch's last *emitting* event (`super::last_emitting_index`),
+/// `None` on every other one -- never unconditionally the batch's last
+/// event, which may be a trailing `TurnEnded`/`Raw` that emits nothing at
+/// all. Extracted from the pump loop as its own pure function so the
+/// placement rule is unit-testable without a real tailer/vendor/PTY, and
+/// so a regression in the pump loop's wiring (not just in
+/// `last_emitting_index` itself) has exactly one function standing
+/// between it and this module's own tests.
+fn cursor_placements(events: Vec<TuiEvent>, new_cursor: Cursor) -> Vec<(TuiEvent, Option<Cursor>)> {
+    let last_emitting = super::last_emitting_index(&events);
+    events
+        .into_iter()
+        .enumerate()
+        .map(|(index, event)| {
+            let cursor = if Some(index) == last_emitting {
+                Some(new_cursor.clone())
+            } else {
+                None
+            };
+            (event, cursor)
+        })
+        .collect()
+}
+
 /// Maps one parsed [`TuiEvent`] to the [`AdapterEventPayload`](s) it
 /// produces and emits them, in order:
 /// `AssistantText{is_question:false}` -> `MessageFinal`,
@@ -644,16 +656,20 @@ async fn emit(
 /// durably; see this module's own doc comment).
 ///
 /// `cursor` is the tailer's advanced position for the *entire batch* this
-/// `event` came from, passed by the caller only on the batch's last
-/// `TuiEvent` (see `run_pipeline`'s pump loop) -- `None` for every other
-/// `TuiEvent` in the batch. It is attached here to whichever of this
-/// event's own emitted payloads is emitted last (`ToolResult` rather than
-/// `ToolStarted` for `ToolActivity`), so the durable cursor and the
-/// event(s) that observed everything up to it commit together. A
-/// `TurnEnded`/`Raw` (or unrecognized) last event in a batch emits nothing
-/// to attach the cursor to; the batch's advance is then not persisted,
-/// which is safe -- nothing was journaled for it the first time either,
-/// so re-parsing it after a crash produces no duplicate.
+/// `event` came from, passed by the caller (the pump loop, via
+/// `cursor_placements`) only on the batch's last *emitting* `TuiEvent` --
+/// never unconditionally the batch's last `TuiEvent`, which may be a
+/// trailing `TurnEnded`/`Raw` that emits nothing at all; attaching it
+/// there would leave the stored cursor pointing before an event this call
+/// already journaled -- `None` for every other `TuiEvent` in the batch. It is
+/// attached here to whichever of this event's own emitted payloads is
+/// emitted last (`ToolResult` rather than `ToolStarted` for
+/// `ToolActivity`), so the durable cursor and the event(s) that observed
+/// everything up to it commit together. A batch whose *every* `TuiEvent`
+/// emits nothing (`last_emitting_index` returns `None`) never has its
+/// advance persisted at all, which is safe -- nothing was journaled for
+/// any of it the first time either, so re-parsing the whole batch after a
+/// crash produces no duplicate.
 async fn emit_tui_event(
     sink: &Arc<dyn AdapterEventSink>,
     run_id: RunId,
@@ -1115,5 +1131,96 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
             let _ = run.watcher.await;
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit-tests `cursor_placements` directly -- the exact function the
+    //! pump loop in `run_pipeline` calls, not a reimplementation of it.
+    //! A future edit that reverts the pump loop to placing the cursor by
+    //! bare last-index (the WP12 review's Finding 1 bug) breaks these
+    //! tests immediately, because there would be no other caller for
+    //! `cursor_placements` to keep it alive/correct.
+
+    use crew_protocol::{Classified, ContentClass};
+
+    use super::*;
+
+    fn text(value: &str) -> TuiEvent {
+        TuiEvent::AssistantText {
+            text: Classified {
+                class: ContentClass::Visible,
+                value: value.to_string(),
+            },
+            is_question: false,
+            ts: None,
+        }
+    }
+
+    #[test]
+    fn a_trailing_turn_ended_does_not_take_the_cursor_from_the_message_before_it() {
+        let cursor = Cursor {
+            offset: 10,
+            last_entry_id: Some("e1".to_string()),
+        };
+        let placements =
+            cursor_placements(vec![text("first"), TuiEvent::TurnEnded], cursor.clone());
+
+        assert_eq!(placements.len(), 2);
+        assert_eq!(
+            placements[0].1,
+            Some(cursor),
+            "the AssistantText, the batch's only emitting event, must carry the cursor"
+        );
+        assert_eq!(
+            placements[1].1, None,
+            "TurnEnded emits nothing and must never carry a cursor"
+        );
+    }
+
+    #[test]
+    fn a_trailing_raw_does_not_take_the_cursor_from_the_message_before_it() {
+        let cursor = Cursor::start();
+        let placements = cursor_placements(
+            vec![
+                text("first"),
+                TuiEvent::Raw {
+                    entry_type: "unknown".to_string(),
+                },
+            ],
+            cursor.clone(),
+        );
+
+        assert_eq!(placements[0].1, Some(cursor));
+        assert_eq!(placements[1].1, None);
+    }
+
+    #[test]
+    fn the_cursor_rides_the_last_of_several_emitting_events() {
+        let cursor = Cursor::start();
+        let placements = cursor_placements(
+            vec![text("first"), text("second"), TuiEvent::TurnEnded],
+            cursor.clone(),
+        );
+
+        assert_eq!(placements[0].1, None);
+        assert_eq!(placements[1].1, Some(cursor));
+        assert_eq!(placements[2].1, None);
+    }
+
+    #[test]
+    fn a_batch_where_nothing_emits_persists_no_cursor_at_all() {
+        let placements = cursor_placements(
+            vec![
+                TuiEvent::TurnEnded,
+                TuiEvent::Raw {
+                    entry_type: "unknown".to_string(),
+                },
+            ],
+            Cursor::start(),
+        );
+
+        assert!(placements.iter().all(|(_, cursor)| cursor.is_none()));
     }
 }

@@ -2159,6 +2159,16 @@ impl<'c> DomainRepository<'c> {
     /// that produced no cursor-bearing event) leaves the column exactly as
     /// it was -- never cleared to NULL, which would otherwise force a full
     /// re-tail from the transcript's start on the next resume.
+    ///
+    /// This layer takes the already-serialized JSON text, not
+    /// `crate::adapter::tui::Cursor` itself -- it stores the column's
+    /// declared `TEXT` type verbatim and has no compile-time dependency on
+    /// that adapter-local type. That tolerance is additive-only: `Cursor`
+    /// deliberately stays forward-compatible with a *new field* a future
+    /// version might add (see its own doc comment), but this layer cannot
+    /// paper over a *renamed or removed* field or a changed type -- that
+    /// would still fail whatever later reads the column back as `Cursor`,
+    /// same as any other persisted JSON shape.
     pub fn record_adapter_event(
         &mut self,
         event: &RuntimeEvent,

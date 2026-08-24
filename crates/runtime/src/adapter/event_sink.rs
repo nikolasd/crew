@@ -1095,7 +1095,10 @@ mod crash_resume_tests {
     use super::*;
 
     /// The same minimal vendor-shaped JSONL format `tui_tailer.rs` tests
-    /// against: `{"type":"text","text":"...","id":"..."}` -> `AssistantText`.
+    /// against, extended with a `"turn_end"` type that produces
+    /// `TuiEvent::TurnEnded` -- the shape that exposed the cursor-
+    /// placement bug this test suite guards against: a batch whose last
+    /// entry emits nothing at all.
     struct TestFormat;
 
     impl TranscriptFormat for TestFormat {
@@ -1105,17 +1108,20 @@ mod crash_resume_tests {
                     .get("id")
                     .and_then(|v| v.as_str())
                     .map(ToString::to_string);
-                let event = TuiEvent::AssistantText {
-                    text: Classified {
-                        class: ContentClass::Visible,
-                        value: value
-                            .get("text")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            .to_string(),
+                let event = match value.get("type").and_then(|v| v.as_str()) {
+                    Some("turn_end") => TuiEvent::TurnEnded,
+                    _ => TuiEvent::AssistantText {
+                        text: Classified {
+                            class: ContentClass::Visible,
+                            value: value
+                                .get("text")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                        },
+                        is_question: false,
+                        ts: None,
                     },
-                    is_question: false,
-                    ts: None,
                 };
                 (vec![event], entry_id)
             })
@@ -1224,10 +1230,14 @@ mod crash_resume_tests {
         .expect("built-in redaction rules always compile")
     }
 
-    /// Emits one batch of `AssistantText` events through `sink`, attaching
-    /// `cursor` (serialized by the sink) to the last emitted event only --
-    /// exactly `crate::adapter::tui::adapter::emit_tui_event`'s own
-    /// batch-cursor placement.
+    /// Emits one batch of `TestFormat` events through `sink`, attaching
+    /// `cursor` to the batch's last *emitting* event -- calling the exact
+    /// same `crate::adapter::tui::last_emitting_index` helper
+    /// `crate::adapter::tui::adapter::emit_tui_event`'s production pump
+    /// loop uses, rather than reimplementing the placement rule, so this
+    /// test cannot silently drift from (and therefore cannot fail to
+    /// catch a regression in) production's actual placement.
+    /// `TuiEvent::TurnEnded` emits nothing, matching `emit_tui_event`.
     async fn emit_batch(
         sink: &DomainAdapterEventSink,
         run_id: RunId,
@@ -1236,27 +1246,36 @@ mod crash_resume_tests {
         events: Vec<TuiEvent>,
         cursor: Cursor,
     ) {
-        let last_index = events.len().saturating_sub(1);
+        let last_emitting = crate::adapter::tui::last_emitting_index(&events);
         for (index, event) in events.into_iter().enumerate() {
-            let TuiEvent::AssistantText { text, .. } = event else {
-                panic!("TestFormat only produces AssistantText");
+            let batch_cursor = if Some(index) == last_emitting {
+                Some(cursor.clone())
+            } else {
+                None
             };
-            sink.emit(AdapterEvent {
-                run_id,
-                task_id,
-                worker_id,
-                payload: AdapterEventPayload::MessageFinal {
-                    role: "assistant".to_string(),
-                    text,
-                },
-                cursor: if index == last_index {
-                    Some(cursor.clone())
-                } else {
-                    None
-                },
-            })
-            .await
-            .expect("emit");
+            match event {
+                TuiEvent::AssistantText { text, .. } => {
+                    sink.emit(AdapterEvent {
+                        run_id,
+                        task_id,
+                        worker_id,
+                        payload: AdapterEventPayload::MessageFinal {
+                            role: "assistant".to_string(),
+                            text,
+                        },
+                        cursor: batch_cursor,
+                    })
+                    .await
+                    .expect("emit");
+                }
+                TuiEvent::TurnEnded => {
+                    assert!(
+                        batch_cursor.is_none(),
+                        "TurnEnded emits nothing, so it must never be handed a cursor to lose"
+                    );
+                }
+                other => panic!("TestFormat only produces AssistantText/TurnEnded: {other:?}"),
+            }
         }
     }
 
@@ -1364,36 +1383,7 @@ mod crash_resume_tests {
 
         // The journal holds exactly three `AdapterMessageFinal` events,
         // each with distinct text -- no duplicate from re-tailing.
-        let texts: Vec<String> = db
-            .run_domain_op(Box::new(move |conn| {
-                let mut stmt = conn
-                    .prepare("SELECT event_json FROM events WHERE run_id = ?1 ORDER BY sequence")?;
-                let rows: Vec<String> = stmt
-                    .query_map([run_id.to_string()], |r| r.get::<_, String>(0))?
-                    .collect::<Result<_, _>>()?;
-                let texts = rows
-                    .into_iter()
-                    .filter_map(|raw| {
-                        let event: RuntimeEvent = serde_json::from_str(&raw).ok()?;
-                        match event {
-                            RuntimeEvent::AdapterMessageEvent {
-                                kind: RuntimeEventKind::AdapterMessageFinal,
-                                text: Some(text),
-                                ..
-                            } => Some(text),
-                            _ => None,
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                Ok(serde_json::json!(texts))
-            }))
-            .await
-            .expect("read journal")
-            .as_array()
-            .expect("array")
-            .iter()
-            .map(|v| v.as_str().expect("string").to_string())
-            .collect();
+        let texts = journaled_message_final_texts(&db, run_id).await;
 
         assert_eq!(
             texts,
@@ -1407,5 +1397,167 @@ mod crash_resume_tests {
         );
 
         db.shutdown().await.expect("shutdown database");
+    }
+
+    /// The exact regression this suite guards against: a batch whose
+    /// *last* `TuiEvent` emits nothing (`TurnEnded`, the shape a worker's
+    /// transcript takes right after finishing a turn and going idle --
+    /// the common case, not an edge case). Before the fix, the cursor was
+    /// attached unconditionally to the batch's last *index*, so it was
+    /// dropped here even though `"first"` was already journaled; a crash
+    /// then resumed from the pre-first-line cursor and re-journaled
+    /// `"first"`. With the fix, the cursor rides the batch's last
+    /// *emitting* event (`"first"`'s own commit) and covers the
+    /// `TurnEnded` entry's bytes too, so resuming re-delivers nothing
+    /// already seen.
+    #[tokio::test]
+    async fn a_batch_ending_in_turn_ended_still_persists_its_cursor_on_the_last_emitting_event() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_working_run(&db, project_id).await;
+        let (events_tx, _events_rx) = broadcast::channel(64);
+        let sink = sink(Arc::clone(&db), project_id, events_tx);
+
+        let transcript_dir = tempfile::Builder::new()
+            .prefix("bat-crash-resume-turn-ended-")
+            .tempdir_in("/tmp")
+            .expect("transcript dir");
+        let transcript_path = transcript_dir.path().join("session.jsonl");
+
+        // One assistant message, then the turn ends -- both already on
+        // disk when the tailer first polls, so they land in one batch.
+        append_line(
+            &transcript_path,
+            r#"{"type":"text","text":"first","id":"1"}"#,
+        );
+        append_line(&transcript_path, r#"{"type":"turn_end","id":"end-1"}"#);
+
+        let mut tailer_one = TranscriptTailer::new(
+            transcript_path.clone(),
+            Arc::new(TestFormat),
+            Cursor::start(),
+            std::time::Duration::from_millis(10),
+        );
+        let (events, cursor_after_batch) = tailer_one
+            .poll_once()
+            .await
+            .expect("both lines are consumed in one batch");
+        assert_eq!(events.len(), 2, "AssistantText then TurnEnded");
+        assert_eq!(
+            crate::adapter::tui::last_emitting_index(&events),
+            Some(0),
+            "the AssistantText at index 0 is the batch's only emitting event"
+        );
+        emit_batch(
+            &sink,
+            run_id,
+            task_id,
+            worker_id,
+            events,
+            cursor_after_batch.clone(),
+        )
+        .await;
+
+        // The stored cursor covers the *whole* batch (past the
+        // TurnEnded entry too), even though TurnEnded itself never
+        // carried it -- it rode the AssistantText commit instead.
+        let stored_cursor_json: String = db
+            .run_domain_op(Box::new(move |conn| {
+                let json: String = conn.query_row(
+                    "SELECT transcript_cursor FROM runs WHERE run_id = ?1",
+                    [run_id.to_string()],
+                    |r| r.get(0),
+                )?;
+                Ok(serde_json::json!(json))
+            }))
+            .await
+            .expect("read stored cursor")
+            .as_str()
+            .expect("stored cursor is a string")
+            .to_string();
+        let stored_cursor: Cursor =
+            serde_json::from_str(&stored_cursor_json).expect("stored cursor deserializes");
+        assert_eq!(
+            stored_cursor, cursor_after_batch,
+            "the persisted cursor must cover the entire batch, including the trailing \
+             TurnEnded entry that carried no cursor itself"
+        );
+
+        // Simulated crash + resume: the worker was still idle (no new
+        // turn started) when the daemon came back, then said something
+        // new.
+        drop(tailer_one);
+        append_line(
+            &transcript_path,
+            r#"{"type":"text","text":"second","id":"2"}"#,
+        );
+        let mut tailer_two = TranscriptTailer::new(
+            transcript_path.clone(),
+            Arc::new(TestFormat),
+            stored_cursor,
+            std::time::Duration::from_millis(10),
+        );
+        let (events, cursor_after_resume) = tailer_two
+            .poll_once()
+            .await
+            .expect("only the newly appended line is unconsumed");
+        assert_eq!(
+            events.len(),
+            1,
+            "resuming must not re-deliver \"first\" or the TurnEnded entry"
+        );
+        emit_batch(
+            &sink,
+            run_id,
+            task_id,
+            worker_id,
+            events,
+            cursor_after_resume,
+        )
+        .await;
+
+        let texts = journaled_message_final_texts(&db, run_id).await;
+        assert_eq!(
+            texts,
+            vec!["first".to_string(), "second".to_string()],
+            "\"first\" must be journaled exactly once, not re-journaled after the crash"
+        );
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// Every `AdapterMessageFinal` text journaled for `run_id`, in
+    /// commit order. Shared by every test in this module that asserts
+    /// on the real journal contents rather than the in-memory broadcast.
+    async fn journaled_message_final_texts(db: &DatabaseHandle, run_id: RunId) -> Vec<String> {
+        db.run_domain_op(Box::new(move |conn| {
+            let mut stmt =
+                conn.prepare("SELECT event_json FROM events WHERE run_id = ?1 ORDER BY sequence")?;
+            let rows: Vec<String> = stmt
+                .query_map([run_id.to_string()], |r| r.get::<_, String>(0))?
+                .collect::<Result<_, _>>()?;
+            let texts = rows
+                .into_iter()
+                .filter_map(|raw| {
+                    let event: RuntimeEvent = serde_json::from_str(&raw).ok()?;
+                    match event {
+                        RuntimeEvent::AdapterMessageEvent {
+                            kind: RuntimeEventKind::AdapterMessageFinal,
+                            text: Some(text),
+                            ..
+                        } => Some(text),
+                        _ => None,
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(serde_json::json!(texts))
+        }))
+        .await
+        .expect("read journal")
+        .as_array()
+        .expect("array")
+        .iter()
+        .map(|v| v.as_str().expect("string").to_string())
+        .collect()
     }
 }
