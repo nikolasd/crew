@@ -27,7 +27,7 @@ use crew_runtime::adapter::tui::{
 };
 use crew_runtime::adapter::{
     Adapter, AdapterEvent, AdapterEventPayload, AdapterEventSink, AdapterFuture, AdapterMessage,
-    CancelScope, StartSpec,
+    CancelScope, StartSpec, VendorSessionRef,
 };
 use crew_runtime::config::crew::{AdapterConfig, AdapterMode, CloseOnExit, PermissionMode};
 use crew_runtime::db::DatabaseHandle;
@@ -39,27 +39,32 @@ use crew_runtime::supervisor::EscalationTimings;
 
 // ------------------------------------------------------------- test sink
 
-/// Records every emitted payload, in order, for assertion. Mirrors
+/// Records every emitted event (not just its payload -- resume tests
+/// assert on the ids it was stamped with), in order. Mirrors
 /// `CodexAdapter`'s own `RecordingSink` test fixture.
-struct RecordingSink(StdMutex<Vec<AdapterEventPayload>>);
+struct RecordingSink(StdMutex<Vec<AdapterEvent>>);
 
 impl RecordingSink {
     fn new() -> Arc<Self> {
         Arc::new(Self(StdMutex::new(Vec::new())))
     }
 
-    fn payloads(&self) -> Vec<AdapterEventPayload> {
+    fn events(&self) -> Vec<AdapterEvent> {
         self.0
             .lock()
             .expect("recording sink mutex never poisoned")
             .clone()
+    }
+
+    fn payloads(&self) -> Vec<AdapterEventPayload> {
+        self.events().into_iter().map(|e| e.payload).collect()
     }
 }
 
 impl AdapterEventSink for RecordingSink {
     fn emit(&self, event: AdapterEvent) -> AdapterFuture<'_, u64> {
         let mut guard = self.0.lock().expect("recording sink mutex never poisoned");
-        guard.push(event.payload);
+        guard.push(event);
         let sequence = guard.len() as u64;
         drop(guard);
         Box::pin(async move { Ok(sequence) })
@@ -170,6 +175,11 @@ struct FakeBackendHandle {
 struct ForwardingBackend {
     inner: FakeBackend,
     close_calls: Arc<StdMutex<usize>>,
+    /// Artificial delay before `create_pane` resolves -- used only by
+    /// the readiness-gate-vs-slow-pane-attach regression test, to widen
+    /// the window between the PTY spawning and the readiness gate
+    /// actually starting to read from it.
+    create_pane_delay: Duration,
 }
 
 impl DisplayBackendTrait for ForwardingBackend {
@@ -186,7 +196,14 @@ impl DisplayBackendTrait for ForwardingBackend {
         self.inner.status()
     }
     fn create_pane(&self, req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
-        self.inner.create_pane(req)
+        let delay = self.create_pane_delay;
+        let inner_future = self.inner.create_pane(req);
+        Box::pin(async move {
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            inner_future.await
+        })
     }
     fn close_pane(&self, handle: &PaneHandle) -> DisplayFuture<'_, ()> {
         *self.close_calls.lock().expect("mutex never poisoned") += 1;
@@ -195,6 +212,10 @@ impl DisplayBackendTrait for ForwardingBackend {
 }
 
 async fn harness() -> Harness {
+    harness_with_pane_delay(Duration::ZERO).await
+}
+
+async fn harness_with_pane_delay(create_pane_delay: Duration) -> Harness {
     let dir = tempfile::Builder::new()
         .prefix("bat-tui-adapter-")
         .tempdir_in("/tmp")
@@ -211,6 +232,7 @@ async fn harness() -> Harness {
     registry.register(Box::new(ForwardingBackend {
         inner: FakeBackend::new("fake-pane-1"),
         close_calls: Arc::clone(&close_calls),
+        create_pane_delay,
     }));
     registry.register(Box::new(HiddenDisplay::new(DisplayConfig::default())));
 
@@ -312,6 +334,10 @@ enum MockScript {
     /// Prints several bursts of output before going quiet, to exercise
     /// the readiness gate's quiet-window timing.
     Bursty,
+    /// Traps SIGINT/SIGTERM as no-ops, so `cancel(Worker)` must escalate
+    /// all the way to SIGKILL -- exercises signal-preserving exit
+    /// evidence.
+    Stubborn,
 }
 
 struct MockTuiVendor {
@@ -350,6 +376,7 @@ impl MockTuiVendor {
             MockScript::Reactive => REACTIVE_SCRIPT,
             MockScript::Silent => SILENT_SCRIPT,
             MockScript::Bursty => BURSTY_SCRIPT,
+            MockScript::Stubborn => STUBBORN_SCRIPT,
         };
         let path = self.script_path();
         fs::write(&path, body).expect("write mock vendor script");
@@ -364,6 +391,7 @@ fn script_file_name(script: MockScript) -> &'static str {
         MockScript::Reactive => "reactive.sh",
         MockScript::Silent => "silent.sh",
         MockScript::Bursty => "bursty.sh",
+        MockScript::Stubborn => "stubborn.sh",
     }
 }
 
@@ -408,6 +436,20 @@ while IFS= read -r line; do
 done
 "#;
 
+const STUBBORN_SCRIPT: &str = r#"#!/bin/sh
+trap '' INT TERM
+echo "MOCK VENDOR READY (stubborn)"
+while IFS= read -r line; do
+  printf '%s %s\n' "$(date +%s%N)" "$line" >> "$CONTROL_LOG"
+  case "$line" in
+    *"[crew:"*)
+      printf '%s\n' "{\"type\":\"user\",\"text\":\"$line\"}" >> "$TRANSCRIPT"
+      printf '%s\n' '{"type":"session","id":"sess-mock"}' >> "$TRANSCRIPT"
+      ;;
+  esac
+done
+"#;
+
 impl TuiVendor for MockTuiVendor {
     fn kind(&self) -> &'static str {
         "mock"
@@ -434,7 +476,7 @@ impl TuiVendor for MockTuiVendor {
 
     fn resume_launch(
         &self,
-        _session: &crew_runtime::adapter::VendorSessionRef,
+        _session: &VendorSessionRef,
         spec: &StartSpec,
         cfg: &AdapterConfig,
     ) -> LaunchSpec {
@@ -512,6 +554,36 @@ fn read_control_log(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_default()
 }
 
+/// Builds a `TuiAdapter<MockTuiVendor>` bound to `run_id`/`task_id`/
+/// `worker_id` at construction, exactly like production `build_adapter`
+/// would for a real vendor -- every test constructs its adapter this way
+/// so `resume()`'s ids are never accidentally fresh/fabricated ones.
+#[allow(clippy::too_many_arguments)]
+fn build_adapter(
+    vendor: MockTuiVendor,
+    harness: &Harness,
+    run_id: RunId,
+    task_id: TaskId,
+    worker_id: WorkerId,
+    timings: TuiTimings,
+    resume_transcript_path: Option<PathBuf>,
+) -> TuiAdapter<MockTuiVendor> {
+    TuiAdapter::new(
+        vendor,
+        adapter_config(),
+        run_id,
+        task_id,
+        worker_id,
+        Arc::clone(&harness.pane_coordinator),
+        harness.panes_dir.clone(),
+        DisplayPlacement::SplitRight,
+        None,
+        CloseOnExit::Always,
+        timings,
+        resume_transcript_path,
+    )
+}
+
 // -------------------------------------------------------------------- tests
 
 #[tokio::test]
@@ -522,22 +594,20 @@ async fn full_lifecycle_event_order_question_and_tool_mapping() {
         .tempdir_in("/tmp")
         .expect("mock work dir");
     let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Reactive);
-
-    let adapter = TuiAdapter::new(
-        vendor,
-        adapter_config(),
-        Arc::clone(&harness.pane_coordinator),
-        harness.panes_dir.clone(),
-        DisplayPlacement::SplitRight,
-        None,
-        CloseOnExit::Always,
-        fast_timings(),
-    );
-
-    let sink = RecordingSink::new();
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let worker_id = WorkerId::new();
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        fast_timings(),
+        None,
+    );
+
+    let sink = RecordingSink::new();
 
     adapter
         .start(
@@ -636,21 +706,12 @@ async fn readiness_gate_injects_only_after_the_quiet_window() {
     // discovery runs after injection and this test does not wait for it.
     timings.discovery_timeout = Duration::from_millis(300);
 
-    let adapter = TuiAdapter::new(
-        vendor,
-        adapter_config(),
-        Arc::clone(&harness.pane_coordinator),
-        harness.panes_dir.clone(),
-        DisplayPlacement::SplitRight,
-        None,
-        CloseOnExit::Always,
-        timings,
-    );
-
-    let sink = RecordingSink::new();
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let worker_id = WorkerId::new();
+    let adapter = build_adapter(vendor, &harness, run_id, task_id, worker_id, timings, None);
+
+    let sink = RecordingSink::new();
 
     let start = tokio::time::Instant::now();
     // Discovery will time out (the bursty script never reacts to
@@ -698,21 +759,12 @@ async fn discovery_failure_fails_the_run_tears_down_the_pty_and_closes_the_pane(
     let mut timings = fast_timings();
     timings.discovery_timeout = Duration::from_millis(250);
 
-    let adapter = TuiAdapter::new(
-        vendor,
-        adapter_config(),
-        Arc::clone(&harness.pane_coordinator),
-        harness.panes_dir.clone(),
-        DisplayPlacement::SplitRight,
-        None,
-        CloseOnExit::Always,
-        timings,
-    );
-
-    let sink = RecordingSink::new();
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let worker_id = WorkerId::new();
+    let adapter = build_adapter(vendor, &harness, run_id, task_id, worker_id, timings, None);
+
+    let sink = RecordingSink::new();
 
     let result = adapter
         .start(spec(run_id, task_id, worker_id, "hello"), sink.clone())
@@ -773,22 +825,20 @@ async fn send_writes_the_composed_bytes_to_the_pty() {
         .expect("mock work dir");
     let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Reactive);
     let control_log = vendor.control_log.clone();
-
-    let adapter = TuiAdapter::new(
-        vendor,
-        adapter_config(),
-        Arc::clone(&harness.pane_coordinator),
-        harness.panes_dir.clone(),
-        DisplayPlacement::SplitRight,
-        None,
-        CloseOnExit::Always,
-        fast_timings(),
-    );
-
-    let sink = RecordingSink::new();
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let worker_id = WorkerId::new();
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        fast_timings(),
+        None,
+    );
+
+    let sink = RecordingSink::new();
 
     adapter
         .start(spec(run_id, task_id, worker_id, "hello"), sink.clone())
@@ -834,22 +884,20 @@ async fn cancel_turn_writes_the_interrupt_sequence_to_the_pty() {
         .expect("mock work dir");
     let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Reactive);
     let control_log = vendor.control_log.clone();
-
-    let adapter = TuiAdapter::new(
-        vendor,
-        adapter_config(),
-        Arc::clone(&harness.pane_coordinator),
-        harness.panes_dir.clone(),
-        DisplayPlacement::SplitRight,
-        None,
-        CloseOnExit::Always,
-        fast_timings(),
-    );
-
-    let sink = RecordingSink::new();
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let worker_id = WorkerId::new();
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        fast_timings(),
+        None,
+    );
+
+    let sink = RecordingSink::new();
 
     adapter
         .start(spec(run_id, task_id, worker_id, "hello"), sink.clone())
@@ -880,16 +928,14 @@ async fn cancel_turn_with_no_active_run_is_a_no_op_success() {
         .tempdir_in("/tmp")
         .expect("mock work dir");
     let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Reactive);
-
-    let adapter = TuiAdapter::new(
+    let adapter = build_adapter(
         vendor,
-        adapter_config(),
-        Arc::clone(&harness.pane_coordinator),
-        harness.panes_dir.clone(),
-        DisplayPlacement::SplitRight,
-        None,
-        CloseOnExit::Always,
+        &harness,
+        RunId::new(),
+        TaskId::new(),
+        WorkerId::new(),
         fast_timings(),
+        None,
     );
 
     adapter
@@ -908,22 +954,20 @@ async fn pane_attach_is_journaled_with_the_real_pane_ref_from_the_fake_backend()
         .tempdir_in("/tmp")
         .expect("mock work dir");
     let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Reactive);
-
-    let adapter = TuiAdapter::new(
-        vendor,
-        adapter_config(),
-        Arc::clone(&harness.pane_coordinator),
-        harness.panes_dir.clone(),
-        DisplayPlacement::SplitRight,
-        None,
-        CloseOnExit::Always,
-        fast_timings(),
-    );
-
-    let sink = RecordingSink::new();
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let worker_id = WorkerId::new();
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        fast_timings(),
+        None,
+    );
+
+    let sink = RecordingSink::new();
 
     adapter
         .start(spec(run_id, task_id, worker_id, "hello"), sink.clone())
@@ -964,22 +1008,20 @@ async fn out_of_band_input_is_journaled_when_a_viewer_types_into_the_attached_pa
         .tempdir_in("/tmp")
         .expect("mock work dir");
     let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Reactive);
-
-    let adapter = TuiAdapter::new(
-        vendor,
-        adapter_config(),
-        Arc::clone(&harness.pane_coordinator),
-        harness.panes_dir.clone(),
-        DisplayPlacement::SplitRight,
-        None,
-        CloseOnExit::Always,
-        fast_timings(),
-    );
-
-    let sink = RecordingSink::new();
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let worker_id = WorkerId::new();
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        fast_timings(),
+        None,
+    );
+
+    let sink = RecordingSink::new();
 
     adapter
         .start(spec(run_id, task_id, worker_id, "hello"), sink.clone())
@@ -1018,6 +1060,235 @@ async fn out_of_band_input_is_journaled_when_a_viewer_types_into_the_attached_pa
     assert_eq!(pane_ref, "fake-pane-1");
 
     adapter.dispose().await.expect("dispose");
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn resume_journals_under_constructor_ids_with_no_injection_and_no_discovery_when_a_transcript_path_is_provided()
+ {
+    let mut harness = harness().await;
+    let work_dir = tempfile::Builder::new()
+        .prefix("bat-tui-mock-resume-")
+        .tempdir_in("/tmp")
+        .expect("mock work dir");
+    let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Reactive);
+    let control_log = vendor.control_log.clone();
+
+    // A pre-existing transcript, as if from a previously established
+    // session. Resume must find and tail it via `resume_transcript_path`
+    // directly -- the reactive script's own nonce-triggered write logic
+    // is never exercised (nothing is ever injected into a resume), so
+    // discovery finding this file at all would be a coincidence, not a
+    // mechanism this test relies on.
+    let transcript_path = vendor.transcript_path();
+    fs::write(
+        &transcript_path,
+        "{\"type\":\"session\",\"id\":\"sess-mock\"}\n\
+         {\"type\":\"assistant\",\"text\":\"resumed ok\",\"question\":false}\n",
+    )
+    .expect("seed a pre-existing transcript");
+
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let worker_id = WorkerId::new();
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        fast_timings(),
+        Some(transcript_path),
+    );
+
+    let sink = RecordingSink::new();
+    adapter
+        .resume(VendorSessionRef("sess-mock".to_string()), sink.clone())
+        .await
+        .expect("resume must succeed using the provided transcript path");
+
+    let tailed = wait_until(
+        || {
+            sink.payloads()
+                .iter()
+                .any(|p| matches!(p, AdapterEventPayload::MessageFinal { .. }))
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(tailed, "expected the pre-seeded transcript to be tailed");
+
+    // Every event is stamped with the constructor-bound ids, never a
+    // freshly fabricated run/task/worker -- `resume()` has no
+    // `StartSpec` of its own to read them from.
+    for event in sink.events() {
+        assert_eq!(
+            event.run_id, run_id,
+            "event stamped with a foreign run_id: {event:?}"
+        );
+        assert_eq!(
+            event.task_id, task_id,
+            "event stamped with a foreign task_id: {event:?}"
+        );
+        assert_eq!(
+            event.worker_id, worker_id,
+            "event stamped with a foreign worker_id: {event:?}"
+        );
+    }
+
+    // No prompt injection: resume never writes anything to the pty's
+    // stdin, so the reactive script's own control log (which only ever
+    // logs a line once it has actually been read) must stay empty.
+    assert!(
+        read_control_log(&control_log).is_empty(),
+        "resume must never inject a prompt"
+    );
+
+    // No discovery: the transcript's own SessionMeta id ("sess-mock")
+    // was still tailed correctly even though the vendor process itself
+    // never touched the file -- proof the known path was used directly.
+    let confirmed = sink.payloads().iter().any(|p| {
+        matches!(
+            p,
+            AdapterEventPayload::VendorSessionEstablished { vendor_session_id }
+                if vendor_session_id == "sess-mock"
+        )
+    });
+    assert!(
+        confirmed,
+        "the pre-seeded transcript's own session id must have been tailed"
+    );
+
+    // Pane reopened: a real (fake-backend) pane attach happened for this
+    // resume, exactly like a fresh start.
+    let envelope = tokio::time::timeout(Duration::from_secs(5), harness.pane_events_rx.recv())
+        .await
+        .expect("a pane attach must broadcast promptly for a resume too")
+        .expect("pane events channel must stay open");
+    assert!(
+        matches!(
+            envelope.event,
+            RuntimeEvent::DisplayEvent {
+                kind: RuntimeEventKind::DisplayPaneAttached,
+                ..
+            }
+        ),
+        "expected a DisplayPaneAttached event, got {:?}",
+        envelope.event
+    );
+
+    adapter.dispose().await.expect("dispose");
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn readiness_gate_sees_output_produced_before_a_slow_pane_attach_resolves() {
+    // A pane attach slow enough to expose the bug this guards against:
+    // subscribing to the pty's output only *after* this delay would
+    // miss output the mock CLI already produced the instant it started,
+    // and the readiness gate would then have to wait out its entire cap
+    // before giving up.
+    let pane_delay = Duration::from_millis(400);
+    let harness = harness_with_pane_delay(pane_delay).await;
+    let work_dir = tempfile::Builder::new()
+        .prefix("bat-tui-mock-early-output-")
+        .tempdir_in("/tmp")
+        .expect("mock work dir");
+    // Silent: prints its ready line immediately, then never reacts to
+    // anything again -- discovery is expected to time out too, which
+    // this test uses as part of its own bound on total elapsed time.
+    let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Silent);
+
+    let mut timings = fast_timings();
+    timings.readiness_quiet = Duration::from_millis(100);
+    timings.readiness_cap = Duration::from_secs(2);
+    timings.discovery_timeout = Duration::from_millis(300);
+
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let worker_id = WorkerId::new();
+    let adapter = build_adapter(vendor, &harness, run_id, task_id, worker_id, timings, None);
+
+    let sink = RecordingSink::new();
+    let start = tokio::time::Instant::now();
+    let _ = adapter
+        .start(spec(run_id, task_id, worker_id, "hello"), sink.clone())
+        .await;
+    let elapsed = start.elapsed();
+
+    // Buggy (subscribing only after the slow pane attach): the gate
+    // never sees the pre-delay "ready" output and waits out its whole
+    // 2s cap before even reaching discovery -- total elapsed would land
+    // near pane_delay + readiness_cap + discovery_timeout (~2.7s).
+    // Fixed: it lands near pane_delay + readiness_quiet + discovery_timeout
+    // (~0.8s). The threshold sits roughly halfway between the two,
+    // leaving both a wide margin so scheduling jitter under a fully
+    // parallel test run never flips this either way.
+    assert!(
+        elapsed < Duration::from_millis(2200),
+        "readiness must have seen the pre-delay output rather than waiting out its cap: {elapsed:?}"
+    );
+
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn cancel_worker_preserves_the_real_termination_signal_when_escalated_to_sigkill() {
+    let harness = harness().await;
+    let work_dir = tempfile::Builder::new()
+        .prefix("bat-tui-mock-stubborn-")
+        .tempdir_in("/tmp")
+        .expect("mock work dir");
+    let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Stubborn);
+
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let worker_id = WorkerId::new();
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        fast_timings(),
+        None,
+    );
+
+    let sink = RecordingSink::new();
+    adapter
+        .start(spec(run_id, task_id, worker_id, "hello"), sink.clone())
+        .await
+        .expect("start must succeed even against a signal-trapping mock vendor");
+
+    adapter
+        .cancel(CancelScope::Worker)
+        .await
+        .expect("cancel(Worker)");
+
+    let settled = wait_until(
+        || {
+            sink.payloads()
+                .iter()
+                .any(|p| matches!(p, AdapterEventPayload::ProcessExited { .. }))
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(
+        settled,
+        "expected a ProcessExited after escalating to SIGKILL"
+    );
+
+    let exit = sink.payloads().into_iter().find_map(|p| match p {
+        AdapterEventPayload::ProcessExited { exit_code, signal } => Some((exit_code, signal)),
+        _ => None,
+    });
+    assert_eq!(
+        exit,
+        Some((None, Some("SIGKILL".to_string()))),
+        "a SIGKILL-escalated exit must preserve the real signal, not fall back to exit_code:1/signal:None"
+    );
+
     harness.shutdown().await;
 }
 

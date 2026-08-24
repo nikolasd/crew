@@ -23,11 +23,11 @@
 //! to plug into.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime};
 
-use tokio::sync::{Mutex as AsyncMutex, mpsc};
+use tokio::sync::{Mutex as AsyncMutex, broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -138,6 +138,19 @@ pub trait TuiVendor: Send + Sync + 'static {
     /// fixed assumptions about argv and transcript format were built
     /// against.
     fn version_gate(&self, probed: &str) -> VersionVerdict;
+
+    /// A best-effort vendor session id derived from a transcript's own
+    /// path, used as the *initial* `VendorSessionEstablished` value the
+    /// instant a transcript is found -- before any `SessionMeta` entry
+    /// (which later corrects/confirms it) has actually been tailed.
+    /// Never a full path: the default derives the file stem (which is
+    /// the session id itself for at least one real vendor's on-disk
+    /// layout); a vendor whose layout differs overrides this.
+    fn session_id_from_transcript_path(&self, path: &Path) -> Option<String> {
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(str::to_string)
+    }
 }
 
 /// Timing knobs for [`TuiAdapter`]'s readiness gate, nonce-discovery
@@ -190,6 +203,12 @@ struct RunState {
     worker_id: WorkerId,
     pty: Arc<PtyProcess>,
     watcher: JoinHandle<()>,
+    /// Signals the exit watcher to call [`PtyProcess::terminate`] itself
+    /// and report the real `TerminationOutcome` (see `spawn_exit_watcher`'s
+    /// doc comment) -- `cancel`/`dispose` never call `terminate` directly,
+    /// so there is exactly one caller and no race over which signal/exit
+    /// code gets journaled.
+    terminate_tx: oneshot::Sender<()>,
     sink: Arc<dyn AdapterEventSink>,
     cursor: Arc<StdMutex<Cursor>>,
     pane_ref: String,
@@ -200,12 +219,30 @@ struct RunState {
 pub struct TuiAdapter<V: TuiVendor> {
     vendor: Arc<V>,
     cfg: AdapterConfig,
+    /// Bound to this adapter instance at construction (not read from
+    /// `StartSpec`), so `resume()` -- which carries no `StartSpec` at
+    /// all -- has a correlation to stamp on its `AdapterEvent`s even
+    /// from a *fresh* instance (e.g. after a genuine runtime restart),
+    /// not only when resuming on the same instance that previously
+    /// called `start()`. Mirrors `ClaudeAdapter`'s own `run_id`/`task_id`/
+    /// `worker_id` fields exactly.
+    run_id: RunId,
+    task_id: TaskId,
+    worker_id: WorkerId,
     pane_coordinator: Arc<PaneCoordinator>,
     panes_dir: PathBuf,
     placement: DisplayPlacement,
     forced_backend: Option<DisplayBackend>,
     close_on_exit: CloseOnExit,
     timings: TuiTimings,
+    /// An already-known transcript path for `resume()` to tail directly,
+    /// skipping nonce/session-id discovery entirely. `None` (the only
+    /// option available until a caller can look one up -- see WP14/15)
+    /// falls back to discovering by the resumed `VendorSessionRef`'s own
+    /// id, which only works if the vendor happens to re-touch its
+    /// transcript within the discovery window; a caller that already has
+    /// the path (e.g. from a stored cursor) should always supply it.
+    resume_transcript_path: Option<PathBuf>,
     run: AsyncMutex<Option<RunState>>,
 }
 
@@ -215,22 +252,30 @@ impl<V: TuiVendor> TuiAdapter<V> {
     pub fn new(
         vendor: V,
         cfg: AdapterConfig,
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
         pane_coordinator: Arc<PaneCoordinator>,
         panes_dir: PathBuf,
         placement: DisplayPlacement,
         forced_backend: Option<DisplayBackend>,
         close_on_exit: CloseOnExit,
         timings: TuiTimings,
+        resume_transcript_path: Option<PathBuf>,
     ) -> Self {
         Self {
             vendor: Arc::new(vendor),
             cfg,
+            run_id,
+            task_id,
+            worker_id,
             pane_coordinator,
             panes_dir,
             placement,
             forced_backend,
             close_on_exit,
             timings,
+            resume_transcript_path,
             run: AsyncMutex::new(None),
         }
     }
@@ -274,6 +319,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
         transcript_root: PathBuf,
         discovery_key: String,
         inject: Option<String>,
+        known_transcript_path: Option<PathBuf>,
         sink: Arc<dyn AdapterEventSink>,
     ) -> Result<(), AdapterError> {
         let started_at = SystemTime::now();
@@ -281,6 +327,15 @@ impl<V: TuiVendor> TuiAdapter<V> {
             PtyProcess::spawn(&launch.into_spawn_spec(), self.timings.escalation)
                 .map_err(|err| AdapterError::process(self.kind(), "start", err.to_string()))?,
         );
+        // Captured immediately, before any other `.await` (the
+        // `ProcessStarted` emit, `AttachServer::start`, and
+        // `pane_coordinator.attach()` below all yield): a broadcast
+        // receiver only sees values sent *after* it subscribes, and the
+        // pump thread can start producing output the instant the process
+        // is spawned, so subscribing any later risks missing the very
+        // first output the readiness gate is waiting for -- which would
+        // otherwise only resolve by waiting out the whole cap.
+        let mut readiness_rx = pty.subscribe_output();
 
         emit(
             &sink,
@@ -343,7 +398,8 @@ impl<V: TuiVendor> TuiAdapter<V> {
             (pane_outcome.backend, pane_outcome.pane_ref.clone());
 
         if let Err(err) = wait_for_readiness(
-            &pty,
+            &mut readiness_rx,
+            self.kind(),
             self.timings.readiness_quiet,
             self.timings.readiness_cap,
         )
@@ -381,45 +437,65 @@ impl<V: TuiVendor> TuiAdapter<V> {
             }
         }
 
-        let discovery_started_at = started_at
-            .checked_sub(Duration::from_secs(2))
-            .unwrap_or(started_at);
-        let transcript_path = match find_transcript_by_nonce(
-            &transcript_root,
-            discovery_started_at,
-            &discovery_key,
-            self.timings.discovery_timeout,
-        )
-        .await
-        {
-            Ok(path) => path,
-            Err(err) => {
-                let detail = match err {
-                    DiscoveryError::InvalidNonce => "empty discovery key".to_string(),
-                    DiscoveryError::Timeout { .. } => err.to_string(),
-                };
-                return self
-                    .fail_start(
-                        pty,
-                        attach,
-                        pane_outcome,
-                        sink,
-                        run_id,
-                        task_id,
-                        worker_id,
-                        AdapterError::process(self.kind(), "start", detail),
-                    )
-                    .await;
+        // A resume with an already-known transcript path (e.g. from a
+        // stored cursor -- see `resume_transcript_path`'s doc comment)
+        // skips discovery entirely: nonce-grepping a resumed session's
+        // transcript is unreliable (the vendor may never re-touch it
+        // within the discovery window) and, unlike a fresh start, there
+        // is nothing this adapter itself just injected to search for.
+        let transcript_path = match known_transcript_path {
+            Some(path) => path,
+            None => {
+                let discovery_started_at = started_at
+                    .checked_sub(Duration::from_secs(2))
+                    .unwrap_or(started_at);
+                match find_transcript_by_nonce(
+                    &transcript_root,
+                    discovery_started_at,
+                    &discovery_key,
+                    self.timings.discovery_timeout,
+                )
+                .await
+                {
+                    Ok(path) => path,
+                    Err(err) => {
+                        let detail = match err {
+                            DiscoveryError::InvalidNonce => "empty discovery key".to_string(),
+                            DiscoveryError::Timeout { .. } => err.to_string(),
+                        };
+                        return self
+                            .fail_start(
+                                pty,
+                                attach,
+                                pane_outcome,
+                                sink,
+                                run_id,
+                                task_id,
+                                worker_id,
+                                AdapterError::process(self.kind(), "start", detail),
+                            )
+                            .await;
+                    }
+                }
             }
         };
 
+        // A best-effort initial guess (never a full path -- see
+        // `TuiVendor::session_id_from_transcript_path`'s doc comment);
+        // the first real `SessionMeta` entry the tailer encounters
+        // corrects/confirms it via the identical `VendorSessionEstablished`
+        // mapping in `emit_tui_event`.
+        let initial_session_id = self
+            .vendor
+            .session_id_from_transcript_path(&transcript_path)
+            .unwrap_or_else(|| "unknown".to_string());
         emit(
             &sink,
             run_id,
             task_id,
             worker_id,
             AdapterEventPayload::VendorSessionEstablished {
-                vendor_session_id: transcript_path.display().to_string(),
+                vendor_session_id: initial_session_id,
             },
         )
         .await;
@@ -447,6 +523,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
             }
         });
 
+        let (terminate_tx, terminate_rx) = oneshot::channel();
         let watcher = spawn_exit_watcher(
             Arc::clone(&pty),
             Arc::clone(&attach),
@@ -458,6 +535,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
             run_id,
             task_id,
             worker_id,
+            terminate_rx,
         );
 
         *run_slot = Some(RunState {
@@ -466,6 +544,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
             worker_id,
             pty,
             watcher,
+            terminate_tx,
             sink,
             cursor,
             pane_ref: pane_outcome.pane_ref,
@@ -621,13 +700,15 @@ async fn emit_tui_event(
 /// `cap` elapses, returns `Ok(())` anyway (proceeding on a chatty CLI
 /// rather than failing the run outright); a closed output channel before
 /// any output arrived (the process died immediately) is reported as an
-/// error.
+/// error. `rx` must already be subscribed *before* this is called --
+/// see the caller's own comment on why it is captured immediately after
+/// spawn rather than here.
 async fn wait_for_readiness(
-    pty: &PtyProcess,
+    rx: &mut broadcast::Receiver<Vec<u8>>,
+    kind: &str,
     quiet: Duration,
     cap: Duration,
 ) -> Result<(), AdapterError> {
-    let mut rx = pty.subscribe_output();
     let deadline = tokio::time::Instant::now() + cap;
 
     // Wait for the first output (a single check, not a loop: every
@@ -635,23 +716,23 @@ async fn wait_for_readiness(
     let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
     if remaining.is_zero() {
         return Err(AdapterError::process(
-            "tui",
+            kind,
             "start",
             "no output observed on the pty before the readiness cap elapsed",
         ));
     }
     match tokio::time::timeout(remaining, rx.recv()).await {
-        Ok(Ok(_)) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
-        Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+        Ok(Ok(_)) | Ok(Err(broadcast::error::RecvError::Lagged(_))) => {}
+        Ok(Err(broadcast::error::RecvError::Closed)) => {
             return Err(AdapterError::process(
-                "tui",
+                kind,
                 "start",
                 "the worker process exited before producing any output",
             ));
         }
         Err(_) => {
             return Err(AdapterError::process(
-                "tui",
+                kind,
                 "start",
                 "no output observed on the pty before the readiness cap elapsed",
             ));
@@ -671,12 +752,16 @@ async fn wait_for_readiness(
     }
 }
 
-/// Spawns the single task that owns this run's settlement: waits for the
-/// PTY to exit (naturally, or because [`TuiAdapter::cancel`]/`dispose`
-/// called [`PtyProcess::terminate`]), stops the tailer and attach server,
-/// honors `close_on_exit` through the pane coordinator, and journals
-/// `ProcessExited` -- exactly once, from exactly one place, regardless of
-/// why or how the process died.
+/// Spawns the single task that owns this run's settlement: races the PTY
+/// exiting naturally against a termination request from
+/// [`TuiAdapter::cancel`]/`dispose` (`terminate_rx`) -- this task is the
+/// *only* caller of [`PtyProcess::terminate`], so there is exactly one
+/// place that ever decides the real `exit_code`/`signal` for an induced
+/// exit (no race between this task reading one outcome and `cancel`
+/// reading a different one for the same termination). Either way, once
+/// the process is down, stops the tailer and attach server, honors
+/// `close_on_exit` through the pane coordinator, and journals
+/// `ProcessExited` -- exactly once, from exactly one place.
 #[allow(clippy::too_many_arguments)]
 fn spawn_exit_watcher(
     pty: Arc<PtyProcess>,
@@ -689,12 +774,18 @@ fn spawn_exit_watcher(
     run_id: RunId,
     task_id: TaskId,
     worker_id: WorkerId,
+    terminate_rx: oneshot::Receiver<()>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let status = pty.exit_watcher().await;
+        let (exit_code, signal) = tokio::select! {
+            status = pty.exit_watcher() => (Some(status.exit_code() as i32), None),
+            _ = terminate_rx => {
+                pty.terminate().await.exit_signals()
+            }
+        };
         tailer.stop();
         attach.stop();
-        let succeeded = status.success();
+        let succeeded = exit_code == Some(0) && signal.is_none();
         pane_coordinator
             .detach(&pane_outcome, succeeded, close_on_exit)
             .await;
@@ -703,10 +794,7 @@ fn spawn_exit_watcher(
             run_id,
             task_id,
             worker_id,
-            AdapterEventPayload::ProcessExited {
-                exit_code: Some(status.exit_code() as i32),
-                signal: None,
-            },
+            AdapterEventPayload::ProcessExited { exit_code, signal },
         )
         .await;
     })
@@ -794,6 +882,10 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
             let transcript_root = self.vendor.transcript_root(&spec, &self.cfg);
             let nonce = Uuid::now_v7().to_string();
             let injected = format!("{}\n\n[crew:{nonce}]", spec.prompt);
+            // `start()` uses the (matching) ids on its own `StartSpec`,
+            // exactly like `ClaudeAdapter::start`; `resume()` has no
+            // `StartSpec` to read them from, so it uses `self.run_id`/
+            // `task_id`/`worker_id` instead (bound at construction).
             self.run_pipeline(
                 &mut guard,
                 spec.run_id,
@@ -803,6 +895,7 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                 transcript_root,
                 nonce,
                 Some(injected),
+                None,
                 sink,
             )
             .await
@@ -824,10 +917,16 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                     "adapter already has an active run",
                 ));
             }
+            // No `StartSpec` carries this adapter's real ids across
+            // `Adapter::resume`'s signature; `self.run_id`/`task_id`/
+            // `worker_id` (bound at construction, see `TuiAdapter`'s own
+            // doc comment) are what every emitted event is stamped with
+            // -- never fabricated fresh ids for a run/task/worker this
+            // adapter has no correlation to.
             let placeholder = StartSpec {
-                run_id: RunId::new(),
-                task_id: TaskId::new(),
-                worker_id: WorkerId::new(),
+                run_id: self.run_id,
+                task_id: self.task_id,
+                worker_id: self.worker_id,
                 prompt: String::new(),
                 resume: Some(session.clone()),
             };
@@ -835,13 +934,14 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
             let transcript_root = self.vendor.transcript_root(&placeholder, &self.cfg);
             self.run_pipeline(
                 &mut guard,
-                placeholder.run_id,
-                placeholder.task_id,
-                placeholder.worker_id,
+                self.run_id,
+                self.task_id,
+                self.worker_id,
                 launch,
                 transcript_root,
                 session.0,
                 None,
+                self.resume_transcript_path.clone(),
                 sink,
             )
             .await
@@ -922,13 +1022,18 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                     let Some(run) = run else {
                         return Ok(());
                     };
-                    // The exit watcher spawned in `run_pipeline` observes
-                    // this termination and performs the one-and-only
-                    // teardown + `ProcessExited` emission for this run;
-                    // `cancel` itself never emits or tears down a second
-                    // time (mirrors `CodexAdapter::cancel`'s own
-                    // "the pump must not be aborted here" discipline).
-                    let _ = run.pty.terminate().await;
+                    // Signal the exit watcher (spawned once in
+                    // `run_pipeline`) to call `PtyProcess::terminate`
+                    // itself and perform the one-and-only teardown +
+                    // `ProcessExited` emission for this run; `cancel`
+                    // itself never terminates, emits, or tears down
+                    // directly (mirrors `CodexAdapter::cancel`'s own
+                    // "the pump must not be aborted here" discipline, and
+                    // avoids a race over which caller's `terminate()`
+                    // result gets journaled). A dropped receiver (the
+                    // watcher already finished -- the process had
+                    // already exited naturally) makes this a no-op.
+                    let _ = run.terminate_tx.send(());
                     Ok(())
                 }
             }
@@ -977,7 +1082,11 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
             let Some(run) = run else {
                 return Ok(());
             };
-            let _ = run.pty.terminate().await;
+            // See `cancel`'s own comment: the exit watcher is the only
+            // caller of `terminate()`. Awaiting it (unlike `cancel`)
+            // ensures teardown has actually finished before `dispose`
+            // returns.
+            let _ = run.terminate_tx.send(());
             let _ = run.watcher.await;
             Ok(())
         })
