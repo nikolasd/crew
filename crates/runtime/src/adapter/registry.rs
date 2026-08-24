@@ -528,9 +528,7 @@ async fn run_one(
     // Use the workspace path from the context (isolated worktree or copy)
     // when available; fall back to the repository root.
     let cwd = ctx.workspace_path.as_deref().unwrap_or(repo_root);
-    let pane_lifecycle_owned_by_adapter = requested_mode(&profile.startup_options)
-        == Some(super::profile::AdapterMode::Tui)
-        && profile.startup_options.adapter_kind() == Some(super::AdapterKind::Claude);
+    let pane_lifecycle_owned_by_adapter = pane_lifecycle_owned_by_adapter(&profile.startup_options);
     let adapter = match build_adapter(
         &profile,
         cwd,
@@ -630,6 +628,19 @@ fn requested_mode(startup_options: &StartupOptions) -> Option<super::profile::Ad
     }
 }
 
+/// Whether the startup options select a mode whose owning adapter
+/// journals its own real pane attach/detach pair -- today only Claude's
+/// `mode: "tui"`, whose [`super::tui::TuiAdapter`] attaches through its
+/// `PaneCoordinator`. Such a run must never also receive the submit-time
+/// placeholder pane events `start_queued_run` journals for every other
+/// backend-resolving run: pairing attach/detach consumers would see two
+/// attaches against one detach. Kept beside [`requested_mode`] so
+/// `run_one`'s watcher decision and `start_queued_run`'s placeholder skip
+/// cannot drift apart.
+pub(crate) fn pane_lifecycle_owned_by_adapter(startup_options: &StartupOptions) -> bool {
+    requested_mode(startup_options) == Some(super::profile::AdapterMode::Tui)
+        && startup_options.adapter_kind() == Some(super::AdapterKind::Claude)
+}
 #[allow(clippy::too_many_arguments)]
 fn build_adapter(
     profile: &WorkerProfile,

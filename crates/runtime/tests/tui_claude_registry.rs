@@ -27,6 +27,47 @@ use crew_runtime::policy::ViolationService;
 use crew_runtime::service::{RunDriver, RunDriverContext};
 use crew_runtime::supervisor::EscalationTimings;
 
+use crew_runtime::display::{DisplayBackendTrait, DisplayFuture, PaneHandle, PaneRequest};
+
+/// A pane backend that always succeeds with a non-empty pane ref --
+/// mirrors `tests/tui_adapter.rs`'s own fixture. The pairing test below
+/// registers this ahead of `HiddenDisplay` precisely so the *real*
+/// attach/detach pair carries a non-empty `pane_ref`: that is what makes
+/// an "empty pane_ref" assertion able to catch a placeholder event
+/// leaking into a TUI run's stream at all (a `Hidden` backend's own
+/// legitimate refs are empty and would mask it).
+struct FakePaneBackend;
+
+impl DisplayBackendTrait for FakePaneBackend {
+    fn backend_name(&self) -> &str {
+        "tmux"
+    }
+
+    fn is_available(&self) -> bool {
+        true
+    }
+
+    fn activate(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn status(&self) -> crew_protocol::DisplayStatus {
+        crew_protocol::DisplayStatus::new(crew_protocol::DisplayBackend::Tmux, true, false)
+    }
+
+    fn create_pane(&self, _req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
+        let handle = PaneHandle {
+            backend: crew_protocol::DisplayBackend::Tmux,
+            pane_ref: "fake-pane-1".to_string(),
+        };
+        Box::pin(async move { Ok(handle) })
+    }
+
+    fn close_pane(&self, _handle: &PaneHandle) -> DisplayFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 async fn harness() -> (Arc<DatabaseHandle>, tempfile::TempDir, ProjectId) {
     let dir = tempfile::Builder::new()
         .prefix("bat-tui-registry-")
@@ -329,17 +370,21 @@ async fn submitting_a_tui_mode_claude_run_reaches_the_tui_path_and_emits_lifecyc
     db.shutdown().await.expect("shutdown database");
 }
 
-/// Rider: collapse the double `DisplayPaneDetached`. Before the registry
-/// threading this test file exercises, a TUI run reachable through
-/// `AdapterRegistry` would get *two* `DisplayPaneDetached` events for one
-/// run: `TuiAdapter`'s own exit watcher journals the real one (via
+/// Rider: collapse the double `DisplayPaneDetached`, and assert the full
+/// attach/detach pairing for a TUI run. Before the registry threading
+/// this test file exercises, a TUI run reachable through `AdapterRegistry`
+/// would get *two* `DisplayPaneDetached` events for one run:
+/// `TuiAdapter`'s own exit watcher journals the real one (via
 /// `PaneCoordinator::detach`), and `watch_settlement`'s placeholder-pane
 /// mechanism (driven by `ctx.display`, which `run/submit` populates for
 /// every run whenever a backend resolves at submit time, headless
 /// included) would journal a second, placeholder one for the same run.
-/// This asserts exactly one, with `ctx.display` deliberately set to
-/// `Some` so the placeholder path is actually armed and would fire if
-/// the collapsing fix regressed.
+/// This asserts exactly one real attach, exactly one real detach, and no
+/// empty-`pane_ref` (placeholder) event anywhere in the stream, with
+/// `ctx.display` deliberately set to `Some` so every placeholder path is
+/// actually armed and would fire if either half of the fix regressed --
+/// including `start_queued_run`'s submit-time placeholder attach skip,
+/// whose end state this stream shape pins from the adapter side.
 #[tokio::test]
 async fn exactly_one_display_pane_detached_is_journaled_for_a_tui_run() {
     let (db, dir, project_id) = harness().await;
@@ -366,6 +411,7 @@ async fn exactly_one_display_pane_detached_is_journaled_for_a_tui_run() {
     );
 
     let mut display_registry = DisplayRegistry::new();
+    display_registry.register(Box::new(FakePaneBackend));
     display_registry.register(Box::new(HiddenDisplay::new(
         crew_protocol::DisplayConfig::default(),
     )));
@@ -420,7 +466,9 @@ async fn exactly_one_display_pane_detached_is_journaled_for_a_tui_run() {
     .await;
 
     // Drain every event this run journaled for a bounded window,
-    // counting DisplayPaneDetached occurrences.
+    // counting DisplayPaneAttached/DisplayPaneDetached occurrences and
+    // rejecting any empty-pane_ref (placeholder) event outright.
+    let mut attached_count = 0usize;
     let mut detached_count = 0usize;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     loop {
@@ -430,20 +478,34 @@ async fn exactly_one_display_pane_detached_is_journaled_for_a_tui_run() {
         }
         match tokio::time::timeout(remaining, events_rx.recv()).await {
             Ok(Ok(envelope)) => {
-                if matches!(
-                    envelope.event,
-                    crew_protocol::RuntimeEvent::DisplayEvent {
-                        kind: crew_protocol::RuntimeEventKind::DisplayPaneDetached,
-                        ..
+                if let crew_protocol::RuntimeEvent::DisplayEvent { kind, pane_ref, .. } =
+                    &envelope.event
+                {
+                    match kind {
+                        crew_protocol::RuntimeEventKind::DisplayPaneAttached => {
+                            attached_count += 1;
+                        }
+                        crew_protocol::RuntimeEventKind::DisplayPaneDetached => {
+                            detached_count += 1;
+                        }
+                        _ => {}
                     }
-                ) {
-                    detached_count += 1;
+                    assert!(
+                        !pane_ref.is_empty(),
+                        "a placeholder pane event leaked into this TUI run's stream: \
+                         {kind:?} pane_ref={pane_ref:?}"
+                    );
                 }
             }
             _ => break,
         }
     }
 
+    assert_eq!(
+        attached_count, 1,
+        "expected exactly one DisplayPaneAttached for this TUI run -- the real one, \
+         never a submit-time placeholder plus it"
+    );
     assert_eq!(
         detached_count, 1,
         "expected exactly one DisplayPaneDetached for this TUI run, not a placeholder-plus-real double"

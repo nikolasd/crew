@@ -960,6 +960,91 @@ async fn run_submit_journals_the_display_pane_it_attached() {
     );
 }
 
+/// A `mode: "tui"` run whose owning adapter journals its own real pane
+/// events (the `TuiAdapter`'s `PaneCoordinator`) receives **no**
+/// submit-time placeholder `DisplayPaneAttached` at all -- journaling it
+/// would leave the stream with two attaches against one detach, a pane
+/// consumers see attach but never release. Backend *resolution* still
+/// runs and still echoes on the submit response; only the placeholder
+/// event is skipped. The headless sibling above pins the unchanged
+/// placeholder behavior for every other run.
+#[tokio::test]
+async fn run_submit_skips_the_placeholder_pane_for_a_tui_owned_run() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+
+    let task = client
+        .call(
+            2,
+            "task/upsert",
+            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
+        )
+        .await;
+    let task_id = task["result"]["taskId"].as_str().unwrap().to_string();
+    let register = client
+        .call(
+            3,
+            "profile/register",
+            json!({
+                "adapter": "claude",
+                "model": "claude-sonnet-4-5",
+                "permissionEnvelope": { "fullAuto": false },
+                "startupOptions": { "claude": { "mode": "tui" } },
+                "environmentAllowlist": [],
+                "source": "orchestration-rpc-test"
+            }),
+        )
+        .await;
+    assert!(
+        register.get("error").is_none(),
+        "profile/register failed: {register:?}"
+    );
+    let profile_id = register["result"]["profileId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let worker = client
+        .call(4, "worker/create", json!({ "profileId": profile_id }))
+        .await;
+    assert!(
+        worker.get("error").is_none(),
+        "worker/create failed: {worker:?}"
+    );
+    let worker_id = worker["result"]["workerId"].as_str().unwrap().to_string();
+
+    let submit = client
+        .call(
+            5,
+            "run/submit",
+            json!({
+                "taskId": task_id,
+                "workerId": worker_id,
+                "displayPreference": { "ordered": ["hidden"], "placement": "embedded" },
+            }),
+        )
+        .await;
+    assert!(
+        submit.get("error").is_none(),
+        "run/submit failed: {submit:?}"
+    );
+    assert_eq!(
+        submit["result"]["display"]["selected"], "hidden",
+        "backend resolution itself is untouched for a TUI-owned run"
+    );
+
+    let replay = client
+        .call(6, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    let attached = pane_events(&replay, "displayPaneAttached");
+    assert!(
+        attached.is_empty(),
+        "a TUI-owned run must get no submit-time placeholder attach: {attached:?}"
+    );
+}
+
 /// Every `displayEvent` payload of `kind` in a replay response.
 fn pane_events<'a>(replay: &'a Value, kind: &str) -> Vec<&'a Value> {
     replay["result"]
