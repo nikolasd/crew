@@ -1,4 +1,4 @@
-# Organization-level BATMAN configuration.
+# Organization-level Crew configuration.
 # This is the lowest-precedence layer; fields can be locked so that
 # lower-precedence layers (repo, user) cannot override them.
 

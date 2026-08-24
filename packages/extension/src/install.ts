@@ -1,5 +1,5 @@
-// The shared install action behind both the `crew_runtime_install` tool
-// and the `/crew-runtime-install` command: download and verify the
+// The shared install action behind both the `crew_install` tool
+// and the `/crew-install` command: download and verify the
 // `crewd` binary for this platform, so subsequent `resolveCrewd` calls
 // (`platform.ts`) find a populated cache instead of throwing
 // `runtime-not-installed`.
@@ -101,7 +101,7 @@ export async function runRuntimeInstall(ctx: RuntimeInstallContext): Promise<Run
 /**
  * Builds the install context for the current process and runs the install,
  * in one call that never throws. This is the entry point both the
- * `crew_runtime_install` tool and the `/crew-runtime-install` command
+ * `crew_install` tool and the `/crew-install` command
  * use -- it exists because {@link buildRuntimeInstallContext} itself can
  * throw {@link UnsupportedPlatformError}, before {@link runRuntimeInstall}'s
  * own try/catch would ever run.

@@ -8,17 +8,17 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use batman_protocol::{ProjectId, RunId, TaskId, WorkerId};
-use batman_runtime::adapter::{
+use crew_protocol::{ProjectId, RunId, TaskId, WorkerId};
+use crew_runtime::adapter::{
     Adapter, AdapterCapabilities, AdapterError, AdapterEvent, AdapterEventPayload,
     AdapterEventSink, AdapterFuture, AdapterKind, ApprovalsCapability, DurabilityCapability,
     EffectivePolicy, NativeViewCapability, NestedCapability, ProtocolKind, ResumeCapability,
     StartupOptions, SteeringCapability, UsageCapability, WorkerProfile, WorkspaceControlCapability,
 };
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::ipc::{PeerCredentialReader, PeerCredentials, Server, ServerConfig};
-use batman_runtime::paths::RuntimePaths;
-use batman_runtime::policy::ViolationService;
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::ipc::{PeerCredentialReader, PeerCredentials, Server, ServerConfig};
+use crew_runtime::paths::RuntimePaths;
+use crew_runtime::policy::ViolationService;
 use nix::unistd::Uid;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -229,9 +229,9 @@ impl Adapter for FixtureAdapter {
         })
     }
 
-    fn probe(&self) -> AdapterFuture<'_, batman_runtime::adapter::ProbeResult> {
+    fn probe(&self) -> AdapterFuture<'_, crew_runtime::adapter::ProbeResult> {
         Box::pin(async move {
-            Ok(batman_runtime::adapter::ProbeResult {
+            Ok(crew_runtime::adapter::ProbeResult {
                 version: Some("0.0.0-fixture".to_string()),
                 auth_ready: true,
                 capabilities: self.capabilities,
@@ -242,7 +242,7 @@ impl Adapter for FixtureAdapter {
 
     fn start(
         &self,
-        _spec: batman_runtime::adapter::StartSpec,
+        _spec: crew_runtime::adapter::StartSpec,
         _sink: Arc<dyn AdapterEventSink>,
     ) -> AdapterFuture<'_, ()> {
         Box::pin(async move { Ok(()) })
@@ -250,22 +250,22 @@ impl Adapter for FixtureAdapter {
 
     fn resume(
         &self,
-        _session: batman_runtime::adapter::VendorSessionRef,
+        _session: crew_runtime::adapter::VendorSessionRef,
         _sink: Arc<dyn AdapterEventSink>,
     ) -> AdapterFuture<'_, ()> {
         Box::pin(async move { Err(AdapterError::capability_unsupported(self.kind(), "resume")) })
     }
 
-    fn send(&self, _message: batman_runtime::adapter::AdapterMessage) -> AdapterFuture<'_, ()> {
+    fn send(&self, _message: crew_runtime::adapter::AdapterMessage) -> AdapterFuture<'_, ()> {
         Box::pin(async move { Err(AdapterError::capability_unsupported(self.kind(), "send")) })
     }
 
-    fn cancel(&self, _scope: batman_runtime::adapter::CancelScope) -> AdapterFuture<'_, ()> {
+    fn cancel(&self, _scope: crew_runtime::adapter::CancelScope) -> AdapterFuture<'_, ()> {
         Box::pin(async move { Ok(()) })
     }
 
-    fn snapshot(&self) -> AdapterFuture<'_, batman_runtime::adapter::AdapterSnapshot> {
-        Box::pin(async move { Ok(batman_runtime::adapter::AdapterSnapshot::default()) })
+    fn snapshot(&self) -> AdapterFuture<'_, crew_runtime::adapter::AdapterSnapshot> {
+        Box::pin(async move { Ok(crew_runtime::adapter::AdapterSnapshot::default()) })
     }
 
     fn dispose(&self) -> AdapterFuture<'_, ()> {
@@ -381,9 +381,9 @@ async fn nested_worker_observed_emits_without_upgrading_declared_capability() {
         harness.project_id,
         events_tx.clone(),
         None,
-        batman_runtime::config::NestedViolationAction::default(),
+        crew_runtime::config::NestedViolationAction::default(),
     ));
-    let sink = batman_runtime::adapter::DomainAdapterEventSink::new(
+    let sink = crew_runtime::adapter::DomainAdapterEventSink::new(
         harness.db.clone(),
         harness.project_id,
         events_tx,
@@ -734,9 +734,9 @@ async fn a_sink_with_invalid_org_patterns_fails_closed() {
         harness.project_id,
         events_tx.clone(),
         None,
-        batman_runtime::config::NestedViolationAction::default(),
+        crew_runtime::config::NestedViolationAction::default(),
     ));
-    let result = batman_runtime::adapter::DomainAdapterEventSink::new(
+    let result = crew_runtime::adapter::DomainAdapterEventSink::new(
         harness.db.clone(),
         harness.project_id,
         events_tx,

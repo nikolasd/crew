@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use batman_protocol::{ProjectId, RunId, TaskId, Timestamp, WorkerId};
+use crew_protocol::{ProjectId, RunId, TaskId, Timestamp, WorkerId};
 use serde_json::{Value, json};
 
 use crate::coordination::{BindError, ScopeBinding, ScopeTokenStore, VendorProcessIdentity};

@@ -1,11 +1,11 @@
 {
-  "name": "@nikolasd/batman-workspace",
+  "name": "@nikolasd/crew-workspace",
   "private": true,
   "packageManager": "bun@1.3.14",
   "workspaces": ["packages/*"],
   "scripts": {
     "setup": "bash scripts/setup.sh",
-    "generate": "cargo run -p batman-xtask -- generate",
+    "generate": "cargo run -p crew-xtask -- generate",
     "build": "bun run --cwd packages/extension build",
     "format:check": "biome format .",
     "format:write": "biome format --write .",

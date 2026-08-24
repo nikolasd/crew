@@ -6897,8 +6897,8 @@ import { createConnection } from "net";
 
 // ../protocol-ts/src/validate.ts
 var import__2020 = __toESM(require__2020(), 1);
-// ../protocol-ts/schema/batman.schema.json
-var batman_schema_default = {
+// ../protocol-ts/schema/crew.schema.json
+var crew_schema_default = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   title: "ProtocolDocument",
   description: "Root schema document referencing every exported request/result/event\ntype, so that a single `schemars` invocation produces one JSON Schema\nwith everything reachable from the wire protocol in `$defs`.",
@@ -6961,6 +6961,22 @@ var batman_schema_default = {
     runResultResult: {
       description: "`run/result` result payload.",
       $ref: "#/$defs/RunResultResult"
+    },
+    planProposeResult: {
+      description: "`plan/propose` result payload.",
+      $ref: "#/$defs/PlanProposeResult"
+    },
+    planDecideResult: {
+      description: "`plan/decide` result payload.",
+      $ref: "#/$defs/PlanDecideResult"
+    },
+    planGetResult: {
+      description: "`plan/get` result payload.",
+      $ref: "#/$defs/PlanGetResult"
+    },
+    runTimeoutAckResult: {
+      description: "`run/timeoutAck` result payload.",
+      $ref: "#/$defs/RunTimeoutAckResult"
     }
   },
   required: [
@@ -6982,7 +6998,11 @@ var batman_schema_default = {
     "applyResult",
     "workspaceInfo",
     "policyViolationListResult",
-    "runResultResult"
+    "runResultResult",
+    "planProposeResult",
+    "planDecideResult",
+    "planGetResult",
+    "runTimeoutAckResult"
   ],
   $defs: {
     InitializeParams: {
@@ -7058,7 +7078,7 @@ diagnostics only.`,
       ]
     },
     ProtocolVersion: {
-      description: "A BATMAN protocol version, expressed as `major.minor` with no patch\ncomponent (patch-level changes must be backward compatible).",
+      description: "A Crew protocol version, expressed as `major.minor` with no patch\ncomponent (patch-level changes must be backward compatible).",
       type: "object",
       properties: {
         major: {
@@ -7200,7 +7220,7 @@ instance.`,
         allowedMethods: {
           type: "array",
           items: {
-            $ref: "#/$defs/BatmanMethod"
+            $ref: "#/$defs/CrewMethod"
           }
         },
         capabilities: {
@@ -7242,7 +7262,7 @@ only.`,
       ]
     },
     ProjectId: {
-      description: "Identifies a repository/project managed by the BATMAN runtime.",
+      description: "Identifies a repository/project managed by the Crew runtime.",
       type: "string"
     },
     ClientPrincipalSummary: {
@@ -7317,8 +7337,8 @@ confirm how the runtime identified it.`,
       description: "Identifies a worker process spawned by the runtime.",
       type: "string"
     },
-    BatmanMethod: {
-      description: `All JSON-RPC methods implemented by the BATMAN runtime, including
+    CrewMethod: {
+      description: `All JSON-RPC methods implemented by the Crew runtime, including
 orchestration extension methods.
 
 Serialized as the literal method name string used on the wire.`,
@@ -7380,6 +7400,27 @@ state, so an operator can find which violation still holds a
 quarantine without diffing the raw event stream (R80).`,
           type: "string",
           const: "policy/violation/list"
+        },
+        {
+          description: "Proposes a decomposition of a run into subtasks, persisting a\n`PlanProposed` event pending `plan/decide`.",
+          type: "string",
+          const: "plan/propose"
+        },
+        {
+          description: "Approves or rejects a previously proposed plan, persisting a\n`PlanDecided` event.",
+          type: "string",
+          const: "plan/decide"
+        },
+        {
+          description: `Fetches the most recently proposed plan for a run and its decision,
+if any.`,
+          type: "string",
+          const: "plan/get"
+        },
+        {
+          description: "The leader acknowledges a `WorkerTimeout` event, resolving how the\nrun proceeds.",
+          type: "string",
+          const: "run/timeoutAck"
         }
       ]
     },
@@ -7486,7 +7527,7 @@ number and routing metadata.`,
       description: `Canonical UTC RFC 3339 timestamp text, as carried on the wire.
 
 Rather than expose [\`time::OffsetDateTime\`] across generated bindings,
-BATMAN normalizes every timestamp to a UTC RFC 3339 string at
+Crew normalizes every timestamp to a UTC RFC 3339 string at
 construction time; downstream consumers (including schemars/ts-rs) only
 ever see a plain string.`,
       type: "string"
@@ -8430,7 +8471,7 @@ what an unexpected observation means.`,
           additionalProperties: false
         },
         {
-          description: "A display backend attached or detached a Batman-owned pane.",
+          description: "A display backend attached or detached a Crew-owned pane.",
           type: "object",
           properties: {
             type: {
@@ -8500,6 +8541,314 @@ contents, never an absolute socket or filesystem path.`,
                 "runId",
                 "backend",
                 "paneRef"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
+          description: "A leader proposed a decomposition of a run into subtasks via\n`plan/propose`, pending `plan/decide`.",
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "planProposed"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                plan: {
+                  $ref: "#/$defs/PlanSpec"
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId",
+                "plan"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
+          description: "A previously proposed plan was approved or rejected via\n`plan/decide`.",
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "planDecided"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                approved: {
+                  type: "boolean"
+                },
+                reason: {
+                  description: "`None` when no rationale was given for the decision.",
+                  type: [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId",
+                "approved"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
+          description: "A worker asked a question that blocks its own progress, without\nescalating control (compare [`Self::EscalationRaised`]). `question`\nhas already crossed the redaction boundary; `None` means the\nentire fragment was `Thinking`/`Secret`-classified and was\ndropped, not that the question was empty.",
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "workerQuestion"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                question: {
+                  type: [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
+          description: "A worker escalated a blocking condition to its leader or a human\noperator. `reason` is a plain, machine-assigned code (never raw\nworker content); `question` has already crossed the redaction\nboundary the same way [`Self::WorkerQuestion`]'s field has.",
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "escalationRaised"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                reason: {
+                  type: "string"
+                },
+                question: {
+                  type: [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId",
+                "reason"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
+          description: "An escalation was answered by the leader or a human user.\n`answer` has already crossed the redaction boundary the same way\n[`Self::WorkerQuestion`]'s field has.",
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "escalationAnswered"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                answeredBy: {
+                  $ref: "#/$defs/AnsweredBy"
+                },
+                answer: {
+                  type: [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId",
+                "answeredBy"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
+          description: "A worker exceeded its configured turn budget.",
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "budgetExceeded"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                turnsUsed: {
+                  type: "integer",
+                  format: "uint32",
+                  minimum: 0
+                },
+                turnLimit: {
+                  type: "integer",
+                  format: "uint32",
+                  minimum: 0
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId",
+                "turnsUsed",
+                "turnLimit"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
+          description: "A worker's supervised process missed a liveness deadline.",
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "workerTimeout"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                kind: {
+                  $ref: "#/$defs/TimeoutKind"
+                },
+                sinceMs: {
+                  type: "integer",
+                  format: "uint64",
+                  minimum: 0
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId",
+                "kind",
+                "sinceMs"
               ]
             }
           },
@@ -8627,12 +8976,12 @@ session/thread identifier.`,
           const: "adapterNestedWorkerObserved"
         },
         {
-          description: "A display backend attached a Batman-owned pane to a run.",
+          description: "A display backend attached a Crew-owned pane to a run.",
           type: "string",
           const: "displayPaneAttached"
         },
         {
-          description: "A display backend detached (closed) a Batman-owned pane.",
+          description: "A display backend detached (closed) a Crew-owned pane.",
           type: "string",
           const: "displayPaneDetached"
         },
@@ -9240,7 +9589,7 @@ operator can correlate the violation to its cause.`,
       ]
     },
     DisplayBackend: {
-      description: "Supported display backends.",
+      description: 'Supported display backends.\n\nReconciled with `crates/runtime`\'s config-facing\n`crew::config::crew::DisplayBackend` (WP9): that enum additionally has\n`Auto`, which means "no forced backend" and has no concrete backend of\nits own here -- every other variant of the config enum maps to exactly\none of these (`crate::config::protocol_display_backend` in the runtime\ncrate does that mapping). `Terminal` (an always-available, capability-\nfree stub) is retired in the same change: [`Self::Hidden`] is now the\none always-available fallback, and it is a real, deliberate "no pane"\nchoice rather than a degraded terminal rendering.',
       oneOf: [
         {
           description: "Herdr terminal multiplexer backend.",
@@ -9253,9 +9602,14 @@ operator can correlate the violation to its cause.`,
           const: "tmux"
         },
         {
-          description: "Raw terminal backend (degraded capabilities).",
+          description: "A new OS-native terminal window (`osascript`/Terminal on macOS,\n`x-terminal-emulator` on Linux).",
           type: "string",
-          const: "terminal"
+          const: "osWindow"
+        },
+        {
+          description: "No pane at all -- the always-available fallback. Not degraded\ncapability like the retired `Terminal`; a deliberate, always-safe\nchoice for headless or opted-out runs.",
+          type: "string",
+          const: "hidden"
         }
       ]
     },
@@ -9288,6 +9642,75 @@ terminal. Changes presentation only; never run ownership.`,
           type: "string",
           const: "workspace"
         }
+      ]
+    },
+    PlanSpec: {
+      description: "A proposed decomposition of a run into subtasks, carried by\n[`RuntimeEvent::PlanProposed`] and returned by `plan/get`, awaiting\n`plan/decide`.",
+      type: "object",
+      properties: {
+        subtasks: {
+          type: "array",
+          items: {
+            $ref: "#/$defs/SubtaskSpec"
+          }
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "subtasks"
+      ]
+    },
+    SubtaskSpec: {
+      description: "One subtask within a [`PlanSpec`], as proposed by `plan/propose`.",
+      type: "object",
+      properties: {
+        id: {
+          description: "The caller-assigned identifier for this subtask within its plan;\ndistinct from a [`TaskId`], since a proposed subtask is not yet a\nregistered task until (and unless) the plan is approved.",
+          type: "string"
+        },
+        description: {
+          type: "string"
+        },
+        adapter: {
+          description: "The adapter wire name (e.g. `claude`, `codex`) this subtask is\nintended to run under.",
+          type: "string"
+        },
+        writes: {
+          description: "Whether this subtask is expected to write to the workspace.",
+          type: "boolean"
+        },
+        turnBudget: {
+          description: "The maximum number of turns this subtask may take; `None` means no\nexplicit budget was proposed.",
+          type: [
+            "integer",
+            "null"
+          ],
+          format: "uint32",
+          minimum: 0
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "id",
+        "description",
+        "adapter",
+        "writes"
+      ]
+    },
+    AnsweredBy: {
+      description: "Who answered a [`RuntimeEvent::EscalationRaised`] escalation.",
+      type: "string",
+      enum: [
+        "leader",
+        "user"
+      ]
+    },
+    TimeoutKind: {
+      description: "Which liveness deadline a [`RuntimeEvent::WorkerTimeout`] event reports.",
+      type: "string",
+      enum: [
+        "inactivity",
+        "total"
       ]
     },
     DisplayConfig: {
@@ -9471,7 +9894,7 @@ terminal. Changes presentation only; never run ownership.`,
       ]
     },
     JsonRpcNotification: {
-      description: "A JSON-RPC 2.0 notification envelope: a method call with no `id`, for\nwhich no response is expected. BATMAN uses these to push runtime events to\nsubscribed clients via the `events/event` method.",
+      description: "A JSON-RPC 2.0 notification envelope: a method call with no `id`, for\nwhich no response is expected. Crew uses these to push runtime events to\nsubscribed clients via the `events/event` method.",
       type: "object",
       properties: {
         jsonrpc: {
@@ -9946,12 +10369,98 @@ child at all (a cost ceiling does not).`,
         "inputTokens",
         "outputTokens"
       ]
+    },
+    PlanProposeResult: {
+      description: "Result of `plan/propose`: the sequence of the `PlanProposed` event it\npersisted.",
+      type: "object",
+      properties: {
+        runId: {
+          $ref: "#/$defs/RunId"
+        },
+        sequence: {
+          type: "integer",
+          format: "uint64",
+          minimum: 0
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "runId",
+        "sequence"
+      ]
+    },
+    PlanDecideResult: {
+      description: "Result of `plan/decide`: the sequence of the `PlanDecided` event it\npersisted.",
+      type: "object",
+      properties: {
+        runId: {
+          $ref: "#/$defs/RunId"
+        },
+        sequence: {
+          type: "integer",
+          format: "uint64",
+          minimum: 0
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "runId",
+        "sequence"
+      ]
+    },
+    PlanGetResult: {
+      description: "Result of `plan/get`: the most recently proposed plan for a run and its\ndecision, if any. `plan: None` means no plan has been proposed yet;\n`approved: None` means a plan exists but has not yet been decided.",
+      type: "object",
+      properties: {
+        runId: {
+          $ref: "#/$defs/RunId"
+        },
+        plan: {
+          anyOf: [
+            {
+              $ref: "#/$defs/PlanSpec"
+            },
+            {
+              type: "null"
+            }
+          ]
+        },
+        approved: {
+          type: [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "runId"
+      ]
+    },
+    RunTimeoutAckResult: {
+      description: "Result of `run/timeoutAck`: the sequence of the event the leader's\ntimeout acknowledgement persisted.",
+      type: "object",
+      properties: {
+        runId: {
+          $ref: "#/$defs/RunId"
+        },
+        sequence: {
+          type: "integer",
+          format: "uint64",
+          minimum: 0
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "runId",
+        "sequence"
+      ]
     }
   }
 };
 
 // ../protocol-ts/src/validate.ts
-var SCHEMA_ID = "https://schema.batman.satorianalytics.com/batman.schema.json";
+var SCHEMA_ID = "urn:crew:schema:crew.schema.json";
 var ajv = new import__2020.default({
   strict: true,
   allErrors: true,
@@ -9962,7 +10471,7 @@ var ajv = new import__2020.default({
 for (const format of ["int16", "uint16", "int32", "uint32", "int64", "uint64", "float", "double"]) {
   ajv.addFormat(format, true);
 }
-ajv.addSchema({ ...batman_schema_default, $id: SCHEMA_ID });
+ajv.addSchema({ ...crew_schema_default, $id: SCHEMA_ID });
 function def(name) {
   const validate = ajv.getSchema(`${SCHEMA_ID}#/$defs/${name}`);
   if (validate === undefined) {
@@ -9983,8 +10492,12 @@ var validateJsonRpcResponse = def("JsonRpcResponse");
 var validateJsonRpcErrorResponse = def("JsonRpcErrorResponse");
 var validateJsonRpcNotification = def("JsonRpcNotification");
 var validateRunResultResult = def("RunResultResult");
+var validatePlanProposeResult = def("PlanProposeResult");
+var validatePlanDecideResult = def("PlanDecideResult");
+var validatePlanGetResult = def("PlanGetResult");
+var validateRunTimeoutAckResult = def("RunTimeoutAckResult");
 var validateEventEnvelopeArray = ajv.compile({
-  $id: "https://schema.batman.satorianalytics.com/event-envelope-array.json",
+  $id: "urn:crew:schema:event-envelope-array.json",
   type: "array",
   items: { $ref: `${SCHEMA_ID}#/$defs/EventEnvelope` }
 });
@@ -10253,7 +10766,7 @@ var package_default = {
   peerDependencies: { "@oh-my-pi/pi-coding-agent": ">=17.0.7 <18" },
   devDependencies: {
     "@oh-my-pi/pi-coding-agent": ">=17.0.7 <18",
-    "@nikolasd/batman-protocol": "workspace:*",
+    "@nikolasd/crew-protocol": "workspace:*",
     "@types/bun": "1.3.14",
     ajv: "8.17.1",
     zod: "^4"
@@ -10461,7 +10974,7 @@ function resolveCrewd(platform, arch, libc, env, stateRoot) {
   const binPath = join3(dir, "crewd");
   const manifestPath = join3(dir, "manifest.json");
   if (!existsSync3(binPath) || !existsSync3(manifestPath)) {
-    throw new BinarySelectionError("runtime-not-installed", `no crewd binary installed for version ${EXTENSION_VERSION}; run /crew-runtime-install to download it, or set OMP_CREW_BINARY to a local build`);
+    throw new BinarySelectionError("runtime-not-installed", `no crewd binary installed for version ${EXTENSION_VERSION}; run /crew-install to download it, or set OMP_CREW_BINARY to a local build`);
   }
   const manifest = readManifest(manifestPath);
   if (manifest.target !== target) {
@@ -10530,6 +11043,7 @@ function detectLibc(platform = process.platform) {
 }
 
 // src/state.ts
+import { existsSync as existsSync4 } from "fs";
 import { isAbsolute as isAbsolute2, join as join4 } from "path";
 class StateRootError extends Error {
   code;
@@ -10539,7 +11053,7 @@ class StateRootError extends Error {
     this.code = code;
   }
 }
-function resolveStateRoot(env, home) {
+function resolveStateRoot(env, home, exists = existsSync4) {
   const crewStateDir = envFlag(env, "CREW_STATE_DIR", "BATMAN_STATE_DIR");
   if (crewStateDir !== undefined) {
     if (!isAbsolute2(crewStateDir)) {
@@ -10552,10 +11066,18 @@ function resolveStateRoot(env, home) {
     if (!isAbsolute2(xdgStateHome)) {
       throw new StateRootError("relative-override", `XDG_STATE_HOME must be an absolute path, got ${JSON.stringify(xdgStateHome)}`);
     }
-    return join4(xdgStateHome, "omp", "batman");
+    return preferringLegacyIfOnlyItExists(join4(xdgStateHome, "omp"), exists);
   }
   const piConfigDir = env.PI_CONFIG_DIR ?? ".omp";
-  return join4(home, piConfigDir, "batman");
+  return preferringLegacyIfOnlyItExists(join4(home, piConfigDir), exists);
+}
+function preferringLegacyIfOnlyItExists(parent, exists) {
+  const crewDir = join4(parent, "crew");
+  const legacyDir = join4(parent, "batman");
+  if (!exists(crewDir) && exists(legacyDir)) {
+    return legacyDir;
+  }
+  return crewDir;
 }
 
 // src/context.ts
@@ -10800,7 +11322,7 @@ async function getRuntimeStatus(ctx) {
 function failureResult(options, err) {
   const code = errorCode(err);
   const doctorCommand = `crewd status --repo ${options.repository}`;
-  const message = code === "runtime-not-installed" ? "The Crew runtime binary is not installed yet. Run /crew-runtime-install to download and verify it." : GENERIC_FAILURE_MESSAGE;
+  const message = code === "runtime-not-installed" ? "The Crew runtime binary is not installed yet. Run /crew-install to download and verify it." : GENERIC_FAILURE_MESSAGE;
   return {
     isError: true,
     content: [{ type: "text", text: message }],
@@ -10949,7 +11471,7 @@ import { homedir as homedir3 } from "os";
 // src/download.ts
 import { chmodSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "fs";
 import { join as join5 } from "path";
-var API_BASE_URL = "https://api.github.com/repos/nikolasd/batman";
+var API_BASE_URL = "https://api.github.com/repos/nikolasd/crew";
 
 class RuntimeDownloadError extends Error {
   code;
@@ -11701,6 +12223,7 @@ function reduceEvent(state, envelope) {
     latestActivity: patch.latestActivity ?? base.latestActivity,
     pendingApprovalCount: patch.pendingApprovalCountDelta !== undefined ? Math.max(0, base.pendingApprovalCount + patch.pendingApprovalCountDelta) : base.pendingApprovalCount,
     openViolations: applyViolationPatch(base.openViolations, patch),
+    pane: patch.pane ?? base.pane,
     lastEventAt: envelope.timestamp,
     lastAppliedSequence: envelope.sequence
   };
@@ -11827,6 +12350,15 @@ function eventPatch(envelope) {
         latestActivity: `artifact ${event.payload.artifactKind} ${event.payload.artifactId}`
       };
     }
+    case "displayEvent": {
+      const attached = event.payload.kind === "displayPaneAttached";
+      const { backend, placement, paneRef } = event.payload;
+      return {
+        runId: event.payload.runId,
+        latestActivity: attached ? `pane attached: ${backend}${paneRef !== "" ? ` (${paneRef})` : ""}` : `pane detached: ${backend}`,
+        pane: { backend, placement, paneRef, attached }
+      };
+    }
     case "workspaceEvent": {
       const kindLabel = event.payload.kind.type;
       return {
@@ -11949,6 +12481,10 @@ function renderRowDetails(row) {
   const openViolations = Object.entries(row.openViolations);
   if (openViolations.length > 0) {
     lines.push(`Open violations: ${openViolations.map(([id, code]) => `${code} (${id})`).join(", ")} -- decide with crew_violation`);
+  }
+  if (row.pane !== undefined) {
+    const ref = row.pane.paneRef !== "" ? ` ${row.pane.paneRef}` : "";
+    lines.push(`Pane: ${row.pane.backend}${ref} (${row.pane.attached ? "attached" : "detached"})`);
   }
   lines.push(`Pending approvals: ${row.pendingApprovalCount}`);
   if (row.workspaceMode !== undefined) {
@@ -12086,7 +12622,7 @@ function registerMonitor(pi, ctx) {
 var TOOL_NAME = "crew_health";
 var COMMAND_NAME = "crew-status";
 var STATUS_DESCRIPTION = "Use to verify the Crew runtime is reachable and healthy before orchestration operations. Returns connection status, runtime identity, and binary source. Call this if you're unsure the daemon is running, or after a connection failure.";
-var RUNTIME_INSTALL_TOOL_NAME = "crew_runtime_install";
+var INSTALL_TOOL_NAME = "crew_install";
 function crewExtension(pi) {
   let cachedClient;
   function statusContextFor(extCtx) {
@@ -12154,16 +12690,16 @@ function crewExtension(pi) {
     }
   });
   pi.registerTool({
-    name: RUNTIME_INSTALL_TOOL_NAME,
-    label: "Crew Runtime Install",
-    description: "Use to download and verify the crewd runtime binary for this platform. Call this when crew_health or any orchestration tool fails with code 'runtime-not-installed'. Downloads the GitHub release asset matching this extension's version, verifies its SHA-256 against the published manifest, and caches it under the Crew state root. nikolasd/batman is a private repository, so this needs read access to it: set GITHUB_TOKEN or GH_TOKEN, or run `gh auth login` locally.",
+    name: INSTALL_TOOL_NAME,
+    label: "Crew Install",
+    description: "Use to download and verify the crewd runtime binary for this platform. Call this when crew_health or any orchestration tool fails with code 'runtime-not-installed'. Downloads the GitHub release asset matching this extension's version, verifies its SHA-256 against the published manifest, and caches it under the Crew state root. nikolasd/crew is a private repository, so this needs read access to it: set GITHUB_TOKEN or GH_TOKEN, or run `gh auth login` locally.",
     parameters: pi.zod.object({}),
     approval: "exec",
     async execute(_toolCallId, _params, _signal, _onUpdate) {
       return installRuntimeForEnv(process.env);
     }
   });
-  pi.registerCommand("crew-runtime-install", {
+  pi.registerCommand("crew-install", {
     description: "Download and verify the crewd runtime binary for this platform.",
     handler: async (_args, ctx) => {
       const result = await installRuntimeForEnv(process.env);

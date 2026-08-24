@@ -10,7 +10,7 @@
 //! transition is validated through [`super::transitions::check_transition`]
 //! before its event is appended.
 
-use batman_protocol::{
+use crew_protocol::{
     ApprovalRequest, DeliveryState, EventEnvelope, EventSource, PolicyViolationId, ProjectId, Run,
     RunFlags, RunId, RunMessage, RunState, RuntimeEvent, RuntimeEventKind, TaskId, TaskRef,
     Timestamp, Worker, WorkerId,
@@ -143,7 +143,7 @@ pub struct PolicyViolationSnapshot {
 /// inside its own guarded write instead of taking a whole
 /// caller-computed [`RunFlags`] struct on trust (R73). It is `pub`,
 /// re-exported from `domain` (a `pub mod` of this crate), and integration
-/// tests construct it directly as `batman_runtime::domain::RunFlag` -- it
+/// tests construct it directly as `crew_runtime::domain::RunFlag` -- it
 /// is not internal to this crate. What is true is narrower: it is not a
 /// protocol type, so the wire shape of `RunFlagsChanged` is unaffected by
 /// it and still carries the full [`RunFlags`] struct.
@@ -179,8 +179,8 @@ impl RunFlag {
 #[derive(Debug, Clone)]
 pub enum ChildDecision {
     Accept {
-        child_task_id: batman_protocol::TaskId,
-        child_worker_id: batman_protocol::WorkerId,
+        child_task_id: crew_protocol::TaskId,
+        child_worker_id: crew_protocol::WorkerId,
         child_run_id: RunId,
     },
     Deny {
@@ -247,7 +247,7 @@ impl<'c> DomainRepository<'c> {
         Self { conn, project_id }
     }
 
-    /// Journals a [`batman_protocol::WorkspaceEvent`] durably. Workspace
+    /// Journals a [`crew_protocol::WorkspaceEvent`] durably. Workspace
     /// and artifact state lives in the lease database and the artifact
     /// store, not in a projection table, so this appends the event only --
     /// but it appends it through the same transaction and sequence
@@ -259,8 +259,8 @@ impl<'c> DomainRepository<'c> {
     /// Returns [`DomainError`] if the append fails.
     pub fn record_workspace_event(
         &mut self,
-        kind: batman_protocol::WorkspaceEvent,
-        run_id: batman_protocol::RunId,
+        kind: crew_protocol::WorkspaceEvent,
+        run_id: crew_protocol::RunId,
         lease_id: String,
     ) -> Result<Committed, DomainError> {
         self.append_and_apply(
@@ -284,8 +284,8 @@ impl<'c> DomainRepository<'c> {
     /// no cross-database transaction can close.
     pub fn record_workspace_event_unless_quarantined(
         &mut self,
-        kind: batman_protocol::WorkspaceEvent,
-        run_id: batman_protocol::RunId,
+        kind: crew_protocol::WorkspaceEvent,
+        run_id: crew_protocol::RunId,
         lease_id: String,
     ) -> Result<Committed, DomainError> {
         self.append_and_apply(
@@ -324,10 +324,10 @@ impl<'c> DomainRepository<'c> {
     /// Returns [`DomainError`] if the append fails.
     pub fn record_display_event(
         &mut self,
-        kind: batman_protocol::RuntimeEventKind,
-        run_id: batman_protocol::RunId,
-        backend: batman_protocol::DisplayBackend,
-        placement: batman_protocol::DisplayPlacement,
+        kind: crew_protocol::RuntimeEventKind,
+        run_id: crew_protocol::RunId,
+        backend: crew_protocol::DisplayBackend,
+        placement: crew_protocol::DisplayPlacement,
         pane_ref: String,
     ) -> Result<Committed, DomainError> {
         self.append_and_apply(
@@ -350,9 +350,9 @@ impl<'c> DomainRepository<'c> {
     fn append_and_apply<F>(
         &mut self,
         event: &RuntimeEvent,
-        task_id: Option<batman_protocol::TaskId>,
-        worker_id: Option<batman_protocol::WorkerId>,
-        run_id: Option<batman_protocol::RunId>,
+        task_id: Option<crew_protocol::TaskId>,
+        worker_id: Option<crew_protocol::WorkerId>,
+        run_id: Option<crew_protocol::RunId>,
         apply: F,
     ) -> Result<Committed, DomainError>
     where
@@ -436,7 +436,7 @@ impl<'c> DomainRepository<'c> {
     /// owner to protect. Emits a `TaskCreated`/`TaskUpdated` event.
     pub fn upsert_task(
         &mut self,
-        task_id: batman_protocol::TaskId,
+        task_id: crew_protocol::TaskId,
         task_ref: &TaskRef,
     ) -> Result<Committed, DomainError> {
         // Read for the event kind only. This runs before `append_and_apply`
@@ -756,7 +756,7 @@ impl<'c> DomainRepository<'c> {
     /// documented above.
     pub fn transition_run(
         &mut self,
-        run_id: batman_protocol::RunId,
+        run_id: crew_protocol::RunId,
         to: &RunState,
         principal_instance_id: Option<&str>,
     ) -> Result<Committed, DomainError> {
@@ -773,7 +773,7 @@ impl<'c> DomainRepository<'c> {
             })?;
 
         let task_id =
-            batman_protocol::TaskId::parse(&task_id_str).map_err(|_| DomainError::NotFound {
+            crew_protocol::TaskId::parse(&task_id_str).map_err(|_| DomainError::NotFound {
                 kind: "task",
                 id: task_id_str.clone(),
             })?;
@@ -816,12 +816,11 @@ impl<'c> DomainRepository<'c> {
         })?;
         check_transition(&run_id.to_string(), &from, to)?;
 
-        let worker_id = batman_protocol::WorkerId::parse(&worker_id_str).map_err(|_| {
-            DomainError::NotFound {
+        let worker_id =
+            crew_protocol::WorkerId::parse(&worker_id_str).map_err(|_| DomainError::NotFound {
                 kind: "worker",
                 id: worker_id_str.clone(),
-            }
-        })?;
+            })?;
 
         let kind = kind_for_state(to);
         let event = RuntimeEvent::RunEvent {
@@ -906,7 +905,7 @@ impl<'c> DomainRepository<'c> {
     ///
     /// # Errors
     /// Returns [`DomainError::NotFound`] if `run_id` does not exist.
-    fn read_run_flags(&self, run_id: batman_protocol::RunId) -> Result<RunFlags, DomainError> {
+    fn read_run_flags(&self, run_id: crew_protocol::RunId) -> Result<RunFlags, DomainError> {
         self.conn
             .query_row(
                 "SELECT flags_degraded_control, flags_needs_reconciliation, flags_protocol_unhealthy,
@@ -938,7 +937,7 @@ impl<'c> DomainRepository<'c> {
     /// even as R75 adds a second caller.
     fn write_run_flags(
         &mut self,
-        run_id: batman_protocol::RunId,
+        run_id: crew_protocol::RunId,
         flags: RunFlags,
     ) -> Result<Committed, DomainError> {
         let event = RuntimeEvent::RunFlagsEvent {
@@ -1003,7 +1002,7 @@ impl<'c> DomainRepository<'c> {
     /// Returns [`DomainError::NotFound`] if `run_id` does not exist.
     pub fn set_run_flag(
         &mut self,
-        run_id: batman_protocol::RunId,
+        run_id: crew_protocol::RunId,
         flag: RunFlag,
         value: bool,
     ) -> Result<Committed, DomainError> {
@@ -1046,7 +1045,7 @@ impl<'c> DomainRepository<'c> {
     /// Returns [`DomainError::NotFound`] if `run_id` does not exist.
     pub fn release_quarantine(
         &mut self,
-        run_id: batman_protocol::RunId,
+        run_id: crew_protocol::RunId,
     ) -> Result<Option<Committed>, DomainError> {
         let mut flags = self.read_run_flags(run_id)?;
         if !flags.policy_quarantined {
@@ -1228,7 +1227,7 @@ impl<'c> DomainRepository<'c> {
     pub fn record_diagnostic(
         &mut self,
         run_id: RunId,
-        level: batman_protocol::DiagnosticLevel,
+        level: crew_protocol::DiagnosticLevel,
         code: impl Into<String>,
         message: impl Into<String>,
     ) -> Result<Committed, DomainError> {
@@ -1244,7 +1243,7 @@ impl<'c> DomainRepository<'c> {
     /// event.
     pub fn update_delivery(
         &mut self,
-        message_id: batman_protocol::MessageId,
+        message_id: crew_protocol::MessageId,
         state: &DeliveryState,
     ) -> Result<Committed, DomainError> {
         let (run_id_str, task_id_str): (String, String) = self
@@ -1259,12 +1258,12 @@ impl<'c> DomainRepository<'c> {
                 id: message_id.to_string(),
             })?;
         let run_id =
-            batman_protocol::RunId::parse(&run_id_str).map_err(|_| DomainError::NotFound {
+            crew_protocol::RunId::parse(&run_id_str).map_err(|_| DomainError::NotFound {
                 kind: "run",
                 id: run_id_str.clone(),
             })?;
         let task_id =
-            batman_protocol::TaskId::parse(&task_id_str).map_err(|_| DomainError::NotFound {
+            crew_protocol::TaskId::parse(&task_id_str).map_err(|_| DomainError::NotFound {
                 kind: "task",
                 id: task_id_str.clone(),
             })?;
@@ -1403,11 +1402,11 @@ impl<'c> DomainRepository<'c> {
     /// reached a terminal state.
     pub fn decide_approval(
         &mut self,
-        approval_id: batman_protocol::ApprovalId,
+        approval_id: crew_protocol::ApprovalId,
         principal_instance_id: &str,
         decision: &str,
         reason: &str,
-        decided_by: batman_protocol::DecidedBy,
+        decided_by: crew_protocol::DecidedBy,
     ) -> Result<Committed, DomainError> {
         let (run_id_str, task_id_str, action): (String, String, String) = self
             .conn
@@ -1421,12 +1420,12 @@ impl<'c> DomainRepository<'c> {
                 id: approval_id.to_string(),
             })?;
         let run_id =
-            batman_protocol::RunId::parse(&run_id_str).map_err(|_| DomainError::NotFound {
+            crew_protocol::RunId::parse(&run_id_str).map_err(|_| DomainError::NotFound {
                 kind: "run",
                 id: run_id_str.clone(),
             })?;
         let task_id =
-            batman_protocol::TaskId::parse(&task_id_str).map_err(|_| DomainError::NotFound {
+            crew_protocol::TaskId::parse(&task_id_str).map_err(|_| DomainError::NotFound {
                 kind: "task",
                 id: task_id_str.clone(),
             })?;
@@ -1833,7 +1832,7 @@ impl<'c> DomainRepository<'c> {
     /// old/new owner ids and the (unchanged) stored revision.
     pub fn reconcile_ownership(
         &mut self,
-        task_id: batman_protocol::TaskId,
+        task_id: crew_protocol::TaskId,
         new_owner: &str,
         revision: u64,
     ) -> Result<Committed, DomainError> {
@@ -2209,8 +2208,8 @@ fn delivery_state_str(state: &DeliveryState) -> &'static str {
 }
 
 /// The canonical wire string for a message kind.
-fn message_kind_str(kind: &batman_protocol::MessageKind) -> &'static str {
-    use batman_protocol::MessageKind;
+fn message_kind_str(kind: &crew_protocol::MessageKind) -> &'static str {
+    use crew_protocol::MessageKind;
     match kind {
         MessageKind::Assign => "assign",
         MessageKind::Steer => "steer",
@@ -2227,9 +2226,7 @@ fn message_kind_str(kind: &batman_protocol::MessageKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use batman_protocol::{
-        PolicyViolationId, ProjectId, RunId, TaskId, WorkerId, WorkerProfileRef,
-    };
+    use crew_protocol::{PolicyViolationId, ProjectId, RunId, TaskId, WorkerId, WorkerProfileRef};
     use rusqlite::Connection;
 
     /// Opens an in-memory database migrated by the *production* migration

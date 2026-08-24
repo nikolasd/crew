@@ -1,12 +1,12 @@
-//! The canonical JSON Schema document for the BATMAN wire protocol.
+//! The canonical JSON Schema document for the Crew wire protocol.
 //!
 //! [`ProtocolDocument`] exists solely to give `schemars` a single root that
 //! transitively references every exported request, result, and event type,
 //! so one invocation produces a schema with everything reachable from the
 //! wire protocol in `$defs`.
 //!
-//! [`render_schema`] is the sole renderer. `batman-xtask generate` writes
-//! its output to `packages/protocol-ts/schema/batman.schema.json`, and
+//! [`render_schema`] is the sole renderer. `crew-xtask generate` writes
+//! its output to `packages/protocol-ts/schema/crew.schema.json`, and
 //! `crewd doctor`'s `schema_compatibility` check compares the committed
 //! file against it -- both must derive the schema the same way or the check
 //! would report drift that does not exist.
@@ -17,8 +17,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     ApplyResult, ArtifactFetchResult, ArtifactListResult, DisplayBackend, DisplayConfig,
     DisplayStatus, EventEnvelope, InitializeParams, InitializeResult, InspectResult,
-    JsonRpcErrorResponse, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
-    PolicyViolationListResult, RunResultResult, RuntimeEvent, RuntimeStatus, WorkspaceInfo,
+    JsonRpcErrorResponse, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PlanDecideResult,
+    PlanGetResult, PlanProposeResult, PolicyViolationListResult, RunResultResult,
+    RunTimeoutAckResult, RuntimeEvent, RuntimeStatus, WorkspaceInfo,
 };
 
 /// Root schema document referencing every exported request/result/event
@@ -47,6 +48,14 @@ pub struct ProtocolDocument {
     policy_violation_list_result: PolicyViolationListResult,
     /// `run/result` result payload.
     run_result_result: RunResultResult,
+    /// `plan/propose` result payload.
+    plan_propose_result: PlanProposeResult,
+    /// `plan/decide` result payload.
+    plan_decide_result: PlanDecideResult,
+    /// `plan/get` result payload.
+    plan_get_result: PlanGetResult,
+    /// `run/timeoutAck` result payload.
+    run_timeout_ack_result: RunTimeoutAckResult,
 }
 
 /// Renders the [`ProtocolDocument`] schema as pretty JSON with a trailing

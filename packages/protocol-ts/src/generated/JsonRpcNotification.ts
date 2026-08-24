@@ -2,7 +2,7 @@
 
 /**
  * A JSON-RPC 2.0 notification envelope: a method call with no `id`, for
- * which no response is expected. BATMAN uses these to push runtime events to
+ * which no response is expected. Crew uses these to push runtime events to
  * subscribed clients via the `events/event` method.
  */
 export type JsonRpcNotification<P> = { jsonrpc: string, method: string, params: P | null, };

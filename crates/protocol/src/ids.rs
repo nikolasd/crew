@@ -1,4 +1,4 @@
-//! UUIDv7-backed string identifiers used throughout the BATMAN wire protocol.
+//! UUIDv7-backed string identifiers used throughout the Crew wire protocol.
 //!
 //! Every identifier is a distinct newtype around [`uuid::Uuid`] so that, for
 //! example, a [`TaskId`] can never be passed where a [`WorkerId`] is expected.
@@ -86,7 +86,7 @@ macro_rules! uuid_id {
 }
 
 uuid_id!(
-    /// Identifies a repository/project managed by the BATMAN runtime.
+    /// Identifies a repository/project managed by the Crew runtime.
     ProjectId
 );
 uuid_id!(

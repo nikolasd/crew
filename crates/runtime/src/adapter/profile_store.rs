@@ -61,7 +61,7 @@ impl ProfileStore {
                 serde_json::to_string(&profile.environment_allowlist)?,
                 profile.source,
                 fingerprint,
-                batman_protocol::Timestamp::now().as_str(),
+                crew_protocol::Timestamp::now().as_str(),
             ],
         )?;
         Ok(())

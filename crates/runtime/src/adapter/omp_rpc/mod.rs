@@ -29,23 +29,23 @@ use std::sync::Mutex as StdMutex;
 use serde_json::Value;
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
 
-use batman_protocol::{RunId, TaskId, WorkerId};
+use crew_protocol::{RunId, TaskId, WorkerId};
 
 use self::client::{OmpRpcClient, abort_command, follow_up_command, steer_command};
 use self::normalize::{PendingApproval, extension_ui_request_to_pending_approval, normalize_frame};
-use batman_runtime::adapter::{
+use crew_runtime::adapter::{
     Adapter, AdapterCapabilities, AdapterError, AdapterEvent, AdapterEventPayload,
     AdapterEventSink, AdapterFuture, AdapterMessage, AdapterSnapshot, ApprovalsCapability,
     CancelScope, DurabilityCapability, NativeViewCapability, NestedCapability, ProbeResult,
     ProtocolKind, ResumeCapability, StartSpec, StartupOptions, SteeringCapability, UsageCapability,
     VendorSessionRef, WorkerProfile, WorkspaceControlCapability,
 };
-use batman_runtime::coordination::mcp_protocol::BoundScope;
-use batman_runtime::coordination::{CoordinationBroker, mcp_protocol};
-use batman_runtime::supervisor::{EnvironmentPolicy, SpawnSpec, Supervisor};
+use crew_runtime::coordination::mcp_protocol::BoundScope;
+use crew_runtime::coordination::{CoordinationBroker, mcp_protocol};
+use crew_runtime::supervisor::{EnvironmentPolicy, SpawnSpec, Supervisor};
 
 /// Adapter-owned startup toggles this milestone's frozen
-/// [`batman_runtime::adapter::OmpRpcStartupOptions`] has no field for. `crates/runtime/src/
+/// [`crew_runtime::adapter::OmpRpcStartupOptions`] has no field for. `crates/runtime/src/
 /// adapter/profile.rs` is explicitly off-limits to edit for this task (see
 /// the shared adapter-task context's non-negotiable constraints, which
 /// supersede that same file's own doc comment inviting additive fields),
@@ -249,7 +249,7 @@ impl OmpRpcAdapter {
     /// process access to the worker coordination tools via `set_host_tools`
     /// -- OMP-RPC has no separate MCP subprocess of its own to inject a
     /// scope-token-authenticated socket connection into (see
-    /// `batman_runtime::adapter::mcp_config`'s module doc for why), so
+    /// `crew_runtime::adapter::mcp_config`'s module doc for why), so
     /// this adapter fulfills `host_tool_call` frames directly, in-process,
     /// against `broker` (see `run_pump`'s interception of that frame,
     /// before `normalize::normalize_frame` ever sees it). When `Some`,
@@ -355,7 +355,7 @@ impl OmpRpcAdapter {
         &self.profile.model
     }
 
-    fn profile_startup_options(&self) -> Option<&batman_runtime::adapter::OmpRpcStartupOptions> {
+    fn profile_startup_options(&self) -> Option<&crew_runtime::adapter::OmpRpcStartupOptions> {
         match &self.profile.startup_options {
             StartupOptions::OmpRpc(options) => Some(options),
             _ => None,
@@ -837,9 +837,9 @@ mod host_tool_bridge_tests {
         BoundScope, CoordinationBroker, RunId, TaskId, WorkerId, handle_host_tool_call,
         mcp_result_to_host_tool_result_frame,
     };
-    use batman_protocol::ProjectId;
-    use batman_runtime::coordination::mcp_protocol;
-    use batman_runtime::db::DatabaseHandle;
+    use crew_protocol::ProjectId;
+    use crew_runtime::coordination::mcp_protocol;
+    use crew_runtime::db::DatabaseHandle;
 
     fn scope() -> BoundScope {
         BoundScope {
@@ -946,7 +946,7 @@ mod host_tool_bridge_tests {
                     "INSERT INTO runs (run_id, task_id, worker_id, state, created_at) VALUES (?1, ?2, ?3, 'working', ?4)",
                     rusqlite::params![run_id.to_string(), task_id.to_string(), worker_id.to_string(), "2026-01-01T00:00:00Z"],
                 )?;
-                Ok::<_, batman_runtime::domain::DomainError>(serde_json::json!({}))
+                Ok::<_, crew_runtime::domain::DomainError>(serde_json::json!({}))
             }
         }))
         .await
@@ -954,7 +954,7 @@ mod host_tool_bridge_tests {
 
         let (events_tx, _events_rx) = tokio::sync::broadcast::channel(16);
         let lease_service = std::sync::Arc::new(
-            batman_runtime::workspace::LeaseService::open_in_memory(project_id)
+            crew_runtime::workspace::LeaseService::open_in_memory(project_id)
                 .expect("in-memory lease service must open"),
         );
         let broker = CoordinationBroker::new(

@@ -19,7 +19,7 @@
 
 use crate::adapter::AdapterEventPayload;
 
-use batman_protocol::{ArtifactId, Classified, ContentClass};
+use crew_protocol::{ArtifactId, Classified, ContentClass};
 
 use serde_json::Value;
 

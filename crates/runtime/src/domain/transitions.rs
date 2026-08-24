@@ -2,10 +2,10 @@
 //!
 //! The runtime is the sole authority for run-state transitions. Every edge
 //! is validated against the canonical lifecycle relation in
-//! [`batman_protocol::RunState`] before an event is appended; an illegal
+//! [`crew_protocol::RunState`] before an event is appended; an illegal
 //! edge produces [`TransitionError::Illegal`] and appends nothing.
 
-use batman_protocol::RunState;
+use crew_protocol::RunState;
 
 /// An error raised when a requested run-state transition is not allowed by
 /// the canonical lifecycle relation.

@@ -9,7 +9,7 @@
 //! - Artifacts carry SHA-256, byte length, media type, and immutable
 //!   relative storage path
 
-use batman_protocol::{
+use crew_protocol::{
     ApplyRequest, ApplyResult, ApplyStrategy, Artifact, ArtifactFetchRequest, ArtifactFetchResult,
     ArtifactId, ArtifactKind, ArtifactListRequest, ArtifactListResult, InspectRequest,
     InspectResult, IsolationKind, LeaseMode, LeaseRequest, ProjectId, ReleaseRequest, RunId,
@@ -36,8 +36,8 @@ fn sample_lease() -> WorkspaceLease {
         run_id: RunId::parse("01900000-0000-0000-0000-000000000001").unwrap(),
         mode: LeaseMode::Write,
         isolation_kind: IsolationKind::GitWorktree,
-        path: "/tmp/batman-workspace-abc123".to_string(),
-        canonical_repository_root: "/tmp/batman-smoke".to_string(),
+        path: "/tmp/crew-workspace-abc123".to_string(),
+        canonical_repository_root: "/tmp/crew-smoke".to_string(),
         base_revision: "abc123def456".to_string(),
         state: WorkspaceState::Active,
         acquired_at: "2026-07-22T00:00:00Z".to_string(),
@@ -102,7 +102,7 @@ fn decided_by_as_str_matches_its_serde_tokens() {
     // R34's fix hand-mirrors the serde rename in `DecidedBy::as_str`; a
     // future `#[serde(rename = ...)]` silently re-creates R34 unless the
     // two are pinned together.
-    use batman_protocol::DecidedBy;
+    use crew_protocol::DecidedBy;
     for variant in [DecidedBy::Human, DecidedBy::Model] {
         assert_eq!(serialise(&variant).as_str().unwrap(), variant.as_str());
     }
@@ -172,7 +172,7 @@ fn workspace_info_contract() {
         run_id: RunId::parse("01900000-0000-0000-0000-000000000001").unwrap(),
         mode: LeaseMode::ReadOnly,
         isolation_kind: IsolationKind::Shared,
-        path: "/tmp/batman-workspace-xyz".to_string(),
+        path: "/tmp/crew-workspace-xyz".to_string(),
         state: WorkspaceState::Active,
         base_revision: "def456".to_string(),
     };
@@ -299,7 +299,7 @@ fn workspace_event_lease_acquired() {
     let event = WorkspaceEvent::LeaseAcquired {
         lease_id: "ws-001".to_string(),
         run_id: RunId::parse("01900000-0000-0000-0000-000000000001").unwrap(),
-        path: "/tmp/batman-workspace-xyz".to_string(),
+        path: "/tmp/crew-workspace-xyz".to_string(),
         isolation_kind: IsolationKind::GitWorktree,
         base_revision: "abc123".to_string(),
     };
@@ -626,19 +626,19 @@ fn event_type_name(event: &WorkspaceEvent) -> &'static str {
     }
 }
 
-// ------------------------------------------------------------------ BatmanMethod workspace/* and artifact/* strings
+// ------------------------------------------------------------------ CrewMethod workspace/* and artifact/* strings
 
 #[test]
 fn workspace_method_strings_serialize_correctly() {
-    use batman_protocol::BatmanMethod;
-    let methods: Vec<(BatmanMethod, &str)> = vec![
-        (BatmanMethod::WorkspaceAcquire, "workspace/acquire"),
-        (BatmanMethod::WorkspaceGet, "workspace/get"),
-        (BatmanMethod::WorkspaceRelease, "workspace/release"),
-        (BatmanMethod::WorkspaceInspect, "workspace/inspect"),
-        (BatmanMethod::WorkspaceApply, "workspace/apply"),
-        (BatmanMethod::ArtifactList, "artifact/list"),
-        (BatmanMethod::ArtifactFetch, "artifact/fetch"),
+    use crew_protocol::CrewMethod;
+    let methods: Vec<(CrewMethod, &str)> = vec![
+        (CrewMethod::WorkspaceAcquire, "workspace/acquire"),
+        (CrewMethod::WorkspaceGet, "workspace/get"),
+        (CrewMethod::WorkspaceRelease, "workspace/release"),
+        (CrewMethod::WorkspaceInspect, "workspace/inspect"),
+        (CrewMethod::WorkspaceApply, "workspace/apply"),
+        (CrewMethod::ArtifactList, "artifact/list"),
+        (CrewMethod::ArtifactFetch, "artifact/fetch"),
     ];
     for (method, expected) in methods {
         let json = serde_json::to_value(method).expect("serializable");
@@ -656,9 +656,9 @@ fn workspace_method_strings_serialize_correctly() {
 
 #[test]
 fn runtime_event_workspace_event_serializes() {
-    use batman_protocol::RuntimeEvent;
+    use crew_protocol::RuntimeEvent;
     let ws_event = RuntimeEvent::WorkspaceEvent {
-        kind: batman_protocol::WorkspaceEvent::LeaseRequested {
+        kind: crew_protocol::WorkspaceEvent::LeaseRequested {
             lease_id: "ws-001".to_string(),
             run_id: RunId::parse("01900000-0000-0000-0000-000000000001").unwrap(),
             mode: LeaseMode::Write,
@@ -677,9 +677,9 @@ fn runtime_event_workspace_event_serializes() {
 
 #[test]
 fn runtime_event_workspace_event_lease_acquired_serializes() {
-    use batman_protocol::RuntimeEvent;
+    use crew_protocol::RuntimeEvent;
     let ws_event = RuntimeEvent::WorkspaceEvent {
-        kind: batman_protocol::WorkspaceEvent::LeaseAcquired {
+        kind: crew_protocol::WorkspaceEvent::LeaseAcquired {
             lease_id: "ws-002".to_string(),
             run_id: RunId::parse("01900000-0000-0000-0000-000000000002").unwrap(),
             path: "/tmp/ws-002".to_string(),
@@ -699,9 +699,9 @@ fn runtime_event_workspace_event_lease_acquired_serializes() {
 
 #[test]
 fn runtime_event_workspace_event_apply_completed_serializes() {
-    use batman_protocol::RuntimeEvent;
+    use crew_protocol::RuntimeEvent;
     let ws_event = RuntimeEvent::WorkspaceEvent {
-        kind: batman_protocol::WorkspaceEvent::ApplyCompleted {
+        kind: crew_protocol::WorkspaceEvent::ApplyCompleted {
             lease_id: "ws-003".to_string(),
             success: true,
             conflict_artifact_id: None,
@@ -720,9 +720,9 @@ fn runtime_event_workspace_event_apply_completed_serializes() {
 
 #[test]
 fn runtime_event_workspace_event_artifact_published_serializes() {
-    use batman_protocol::RuntimeEvent;
+    use crew_protocol::RuntimeEvent;
     let ws_event = RuntimeEvent::WorkspaceEvent {
-        kind: batman_protocol::WorkspaceEvent::ArtifactPublished {
+        kind: crew_protocol::WorkspaceEvent::ArtifactPublished {
             lease_id: "ws-004".to_string(),
             artifact_id: ArtifactId::parse("01900000-0000-0000-0000-000000000004").unwrap(),
             kind: "patch".to_string(),
@@ -740,9 +740,9 @@ fn runtime_event_workspace_event_artifact_published_serializes() {
 
 #[test]
 fn runtime_event_workspace_event_apply_conflict_serializes() {
-    use batman_protocol::RuntimeEvent;
+    use crew_protocol::RuntimeEvent;
     let ws_event = RuntimeEvent::WorkspaceEvent {
-        kind: batman_protocol::WorkspaceEvent::ApplyConflict {
+        kind: crew_protocol::WorkspaceEvent::ApplyConflict {
             lease_id: "ws-005".to_string(),
             conflict_artifact_id: ArtifactId::parse("01900000-0000-0000-0000-000000000005")
                 .unwrap(),

@@ -59,32 +59,50 @@ impl Fixture {
 }
 
 #[test]
-fn doctor_with_missing_db_returns_failure() {
+fn doctor_provisions_a_missing_database_and_reports_healthy() {
+    // A missing database is not itself a failure: `check_database` opens
+    // (and so lazily creates) it same as `serve` would, and -- since
+    // WP9's `display_available` fix (`auto` is healthy without a real
+    // backend; see the `display_available_is_healthy_...` tests below) --
+    // a fresh repository with no prior state has nothing left to fail on.
     let fixture = Fixture::new();
     let mut cmd = fixture.doctor(false);
     let output = cmd.output().expect("failed to execute doctor");
 
-    // Should fail because no database exists yet
-    assert!(!output.status.success());
+    assert!(
+        output.status.success(),
+        "a fresh repo with no config or prior state must be healthy: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let paths = crew_runtime::paths::RuntimePaths::resolve(fixture.state_dir(), fixture.repo_dir())
+        .expect("state dir resolves to runtime paths");
+    assert!(
+        paths.database.exists(),
+        "doctor must provision the database rather than requiring one to pre-exist"
+    );
 }
 
 #[test]
-fn doctor_json_mode_with_missing_db() {
+fn doctor_json_mode_provisions_a_missing_database_and_reports_healthy() {
     let fixture = Fixture::new();
     let mut cmd = fixture.doctor(true);
     let output = cmd.output().expect("failed to execute doctor");
 
-    // Should fail and output JSON
-    assert!(!output.status.success());
+    assert!(output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Should be valid JSON even on failure
     let parsed: Result<Value, _> = serde_json::from_str(&stdout);
     assert!(parsed.is_ok(), "JSON output should be parseable: {stdout}");
 
     let json = parsed.unwrap();
-    assert_eq!(json.get("healthy").and_then(|v| v.as_bool()), Some(false));
-    assert!(json.get("error").is_some() || json.get("failed_checks").is_some());
+    assert_eq!(json.get("healthy").and_then(|v| v.as_bool()), Some(true));
+    assert!(
+        json.get("passed_checks")
+            .and_then(Value::as_array)
+            .is_some_and(|checks| checks
+                .iter()
+                .any(|c| c.as_str() == Some("database_connectivity")))
+    );
 }
 
 #[test]
@@ -118,19 +136,22 @@ fn doctor_with_nonexistent_state_dir() {
         "doctor should have provisioned the missing state dir, same as `serve`"
     );
 
-    // Still unhealthy overall (no database, no rollout-gate config were
-    // supplied), but never because the state dir itself was missing.
-    assert!(!output.status.success());
+    // Healthy overall: a freshly-provisioned state dir with no prior
+    // state and no config layers has nothing left to fail on (see
+    // `doctor_provisions_a_missing_database_and_reports_healthy`'s doc).
+    assert!(
+        output.status.success(),
+        "a freshly-provisioned state dir must not leave doctor unhealthy: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: Value = serde_json::from_str(&stdout).expect("doctor --json prints valid JSON");
     let failed_checks = json["failed_checks"]
         .as_array()
         .expect("failed_checks is an array");
     assert!(
-        failed_checks
-            .iter()
-            .all(|check| check["check_name"] != "state_dir_writable"),
-        "a freshly-provisioned state dir must not fail state_dir_writable: {failed_checks:?}"
+        failed_checks.is_empty(),
+        "a freshly-provisioned state dir must fail no check: {failed_checks:?}"
     );
 }
 
@@ -158,17 +179,17 @@ fn doctor_with_nonexistent_repo() {
 // for one check has to be forced in isolation, and the CLI only exposes
 // the aggregate.
 
-use batman_protocol::ProjectId;
-use batman_runtime::config::RuntimePolicy;
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::doctor::{Doctor, DoctorResult};
+use crew_protocol::ProjectId;
+use crew_runtime::config::RuntimePolicy;
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::doctor::{Doctor, DoctorResult};
 use std::sync::Arc;
 
 /// The default merged policy: no config layers, so this is the built-in
 /// `CrewConfig` defaults adapted to a `RuntimePolicy`. This is the common
 /// case the doctor must never treat as an error.
 fn default_policy() -> RuntimePolicy {
-    batman_runtime::config::resolve_policy(&[], None).expect("no layers always resolves")
+    crew_runtime::config::resolve_policy(&[], None).expect("no layers always resolves")
 }
 
 fn repo_root() -> std::path::PathBuf {
@@ -245,8 +266,8 @@ async fn configuration_valid_fails_on_a_zero_concurrency_ceiling() {
 
 #[tokio::test]
 async fn stale_workspaces_fails_when_an_active_lease_path_is_gone() {
-    use batman_protocol::{IsolationKind, LeaseMode, RunId};
-    use batman_runtime::workspace::LeaseService;
+    use crew_protocol::{IsolationKind, LeaseMode, RunId};
+    use crew_runtime::workspace::LeaseService;
 
     let state = tempfile::tempdir().unwrap();
     let leases = LeaseService::open(ProjectId::new(), &state.path().join("workspace-leases.db"))
@@ -279,8 +300,8 @@ async fn stale_workspaces_fails_when_an_active_lease_path_is_gone() {
 
 #[tokio::test]
 async fn stale_workspaces_fails_when_an_allocating_lease_outlives_the_grace_period() {
-    use batman_protocol::{IsolationKind, LeaseMode, RunId};
-    use batman_runtime::workspace::{ALLOCATING_LEASE_GRACE, LeaseService};
+    use crew_protocol::{IsolationKind, LeaseMode, RunId};
+    use crew_runtime::workspace::{ALLOCATING_LEASE_GRACE, LeaseService};
 
     let state = tempfile::tempdir().unwrap();
     let db_path = state.path().join("workspace-leases.db");
@@ -490,7 +511,7 @@ async fn schema_compatibility_passes_against_the_committed_schema() {
 async fn display_available_fails_when_the_forced_backend_is_unavailable() {
     let state = tempfile::tempdir().unwrap();
     let mut policy = default_policy();
-    policy.display_backend = batman_runtime::config::crew::DisplayBackend::Tmux;
+    policy.display_backend = crew_runtime::config::crew::DisplayBackend::Tmux;
     let (doctor, _db) = doctor_over(state.path(), policy).await;
 
     let result = doctor.check().await.expect("catalog runs");
@@ -498,6 +519,28 @@ async fn display_available_fails_when_the_forced_backend_is_unavailable() {
     assert!(
         error_for(&result, "display_available").is_some_and(|e| e.contains("tmux")),
         "expected the forced-but-unavailable backend to be named: {:?}",
+        result.failed_checks
+    );
+}
+
+/// `display.backend: "auto"` (the default) is healthy even when this
+/// machine has no real backend (no tmux, no herdr, no OS terminal) --
+/// `HiddenDisplay` is a legitimate, always-available fallback by design,
+/// not a degraded state to report. This replaces the earlier transitional
+/// behavior where `auto` failed unless a real backend was present.
+#[tokio::test]
+async fn display_available_is_healthy_with_the_default_auto_backend() {
+    let state = tempfile::tempdir().unwrap();
+    let (doctor, _db) = doctor_over(state.path(), default_policy()).await;
+
+    let result = doctor.check().await.expect("catalog runs");
+
+    assert!(
+        result
+            .passed_checks
+            .iter()
+            .any(|name| name == "display_available"),
+        "auto must be healthy regardless of real-backend availability: {:?}",
         result.failed_checks
     );
 }

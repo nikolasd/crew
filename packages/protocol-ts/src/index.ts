@@ -1,11 +1,12 @@
-// Re-exports every type generated from `batman-protocol` by
-// `cargo run -p batman-xtask -- generate`. `src/generated/` is fully owned
+// Re-exports every type generated from `crew-protocol` by
+// `cargo run -p crew-xtask -- generate`. `src/generated/` is fully owned
 // by that generator; do not hand-edit anything under it.
 //
 // This list is the complete contents of `src/generated/` (R17): every
 // generated file is re-exported, so a type that exists on the wire is
 // always importable from the barrel. Enforced by `bun run generate --check`
 // (xtask's check_barrel_completeness), which fails CI on any omission.
+export type * from "./generated/AnsweredBy";
 export type * from "./generated/ApplyRequest";
 export type * from "./generated/ApplyResult";
 export type * from "./generated/ApplyStrategy";
@@ -17,7 +18,7 @@ export type * from "./generated/ArtifactId";
 export type * from "./generated/ArtifactKind";
 export type * from "./generated/ArtifactListRequest";
 export type * from "./generated/ArtifactListResult";
-export type * from "./generated/BatmanMethod";
+export type * from "./generated/CrewMethod";
 export type * from "./generated/BinarySource";
 export type * from "./generated/Classified";
 export type * from "./generated/ClientAuth";
@@ -49,6 +50,10 @@ export type * from "./generated/LeaseRequest";
 export type * from "./generated/MessageId";
 export type * from "./generated/MessageKind";
 export type * from "./generated/OperationId";
+export type * from "./generated/PlanDecideResult";
+export type * from "./generated/PlanGetResult";
+export type * from "./generated/PlanProposeResult";
+export type * from "./generated/PlanSpec";
 export type * from "./generated/PolicyViolationId";
 export type * from "./generated/PolicyViolationListResult";
 export type * from "./generated/PolicyViolationSummary";
@@ -61,13 +66,16 @@ export type * from "./generated/RunFlags";
 export type * from "./generated/RunId";
 export type * from "./generated/RunResultResult";
 export type * from "./generated/RunState";
+export type * from "./generated/RunTimeoutAckResult";
 export type * from "./generated/RunUsage";
 export type * from "./generated/RuntimeCapabilities";
 export type * from "./generated/RuntimeEvent";
 export type * from "./generated/RuntimeEventKind";
 export type * from "./generated/RuntimeInfo";
 export type * from "./generated/RuntimeStatus";
+export type * from "./generated/SubtaskSpec";
 export type * from "./generated/TaskId";
+export type * from "./generated/TimeoutKind";
 export type * from "./generated/Timestamp";
 export type * from "./generated/VersionRange";
 export type * from "./generated/WorkerId";

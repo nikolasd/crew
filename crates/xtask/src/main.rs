@@ -1,7 +1,7 @@
 //! Build tooling for the `crew` workspace.
 //!
-//! `cargo run -p batman-xtask -- generate` regenerates the canonical JSON
-//! Schema document and TypeScript bindings from `batman-protocol`, the sole
+//! `cargo run -p crew-xtask -- generate` regenerates the canonical JSON
+//! Schema document and TypeScript bindings from `crew-protocol`, the sole
 //! source of truth for every Crew wire type. `--check` verifies the
 //! committed outputs are up to date and that Rust crate versions match the
 //! npm source of truth, without modifying anything.
@@ -10,19 +10,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use batman_protocol::{
+use clap::Subcommand;
+use crew_protocol::{
     ApplyRequest, ApplyResult, ApprovalId, Artifact, ArtifactFetchRequest, ArtifactFetchResult,
-    ArtifactId, ArtifactKind, ArtifactListRequest, ArtifactListResult, BatmanMethod, BinarySource,
-    Classified, ClientAuth, ClientCapabilities, ClientInfo, ClientPrincipalSummary, ClientRole,
-    ContentClass, DiagnosticLevel, DisplayBackend, DisplayConfig, DisplayStatus, EventEnvelope,
+    ArtifactId, ArtifactKind, ArtifactListRequest, ArtifactListResult, BinarySource, Classified,
+    ClientAuth, ClientCapabilities, ClientInfo, ClientPrincipalSummary, ClientRole, ContentClass,
+    CrewMethod, DiagnosticLevel, DisplayBackend, DisplayConfig, DisplayStatus, EventEnvelope,
     EventSource, InitializeParams, InitializeResult, InspectRequest, InspectResult, JsonRpcError,
     JsonRpcErrorResponse, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, LeaseRequest,
-    MessageId, MessageKind, OperationId, PolicyViolationListResult, PolicyViolationSummary,
-    ProjectId, ProtocolVersion, ReleaseRequest, RepositoryIdentity, RequestId, RunId,
-    RunResultResult, RunUsage, RuntimeCapabilities, RuntimeEvent, RuntimeInfo, RuntimeStatus,
-    TaskId, Timestamp, VersionRange, WorkerId, WorkspaceInfo,
+    MessageId, MessageKind, OperationId, PlanDecideResult, PlanGetResult, PlanProposeResult,
+    PolicyViolationListResult, PolicyViolationSummary, ProjectId, ProtocolVersion, ReleaseRequest,
+    RepositoryIdentity, RequestId, RunId, RunResultResult, RunTimeoutAckResult, RunUsage,
+    RuntimeCapabilities, RuntimeEvent, RuntimeInfo, RuntimeStatus, TaskId, Timestamp, VersionRange,
+    WorkerId, WorkspaceInfo,
 };
-use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use ts_rs::TS;
@@ -36,7 +37,7 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     /// Generate the canonical JSON Schema document and TypeScript bindings
-    /// from `batman-protocol`.
+    /// from `crew-protocol`.
     Generate {
         /// Verify the committed outputs are up to date without modifying
         /// them. Exits non-zero if generation would produce different
@@ -184,11 +185,11 @@ fn workspace_root() -> PathBuf {
 }
 
 /// Renders the canonical protocol schema. The renderer lives in
-/// `batman-protocol` because `crewd doctor`'s `schema_compatibility`
+/// `crew-protocol` because `crewd doctor`'s `schema_compatibility`
 /// check compares against the same bytes; a second copy here would let the
 /// two drift.
 fn render_schema() -> Result<Vec<u8>> {
-    batman_protocol::render_schema().context("serializing schema to JSON")
+    crew_protocol::render_schema().context("serializing schema to JSON")
 }
 
 /// Exports TypeScript bindings for the explicit allowlist of wire types
@@ -220,7 +221,7 @@ fn export_bindings(dir: &Path) -> Result<()> {
         RunUsage,
         TaskId,
         WorkerId,
-        BatmanMethod,
+        CrewMethod,
         BinarySource,
         ClientAuth,
         ClientCapabilities,
@@ -267,13 +268,17 @@ fn export_bindings(dir: &Path) -> Result<()> {
         PolicyViolationSummary,
         PolicyViolationListResult,
         MessageKind,
+        PlanProposeResult,
+        PlanDecideResult,
+        PlanGetResult,
+        RunTimeoutAckResult,
     );
 
     Ok(())
 }
 
 /// Removes every `*.ts` file directly inside `dir`, so that types renamed or
-/// removed from `batman-protocol` don't leave stale bindings behind.
+/// removed from `crew-protocol` don't leave stale bindings behind.
 /// `dir` is treated as fully owned by the generator.
 fn clear_ts_files(dir: &Path) -> Result<()> {
     if !dir.exists() {
@@ -380,7 +385,7 @@ fn check_barrel_completeness(root: &Path, generated_dir: &Path) -> Result<()> {
 
 fn run_generate(check: bool) -> Result<()> {
     let root = workspace_root();
-    let schema_path = root.join("packages/protocol-ts/schema/batman.schema.json");
+    let schema_path = root.join("packages/protocol-ts/schema/crew.schema.json");
     let generated_dir = root.join("packages/protocol-ts/src/generated");
 
     let schema_bytes = render_schema()?;
@@ -388,7 +393,7 @@ fn run_generate(check: bool) -> Result<()> {
     if check {
         let temp = tempfile::tempdir().context("creating temporary directory for --check")?;
 
-        let temp_schema_path = temp.path().join("batman.schema.json");
+        let temp_schema_path = temp.path().join("crew.schema.json");
         fs::write(&temp_schema_path, &schema_bytes)
             .with_context(|| format!("writing {}", temp_schema_path.display()))?;
 
@@ -626,7 +631,7 @@ fn package_leaf(root: &Path, target: &str, binary: &Path) -> Result<()> {
         size_bytes: bytes.len() as u64,
         rust_version: rust_version()?,
         source_commit: source_commit(root)?,
-        protocol_range: batman_protocol::supported_range_text(),
+        protocol_range: crew_protocol::supported_range_text(),
         schema_fingerprint: schema_fingerprint(root)?,
         os: entry.os,
         cpu: entry.cpu,
@@ -690,7 +695,7 @@ fn source_commit(root: &Path) -> Result<String> {
 /// surface it was generated against, so `package-set` can refuse a set
 /// assembled from mismatched builds.
 fn schema_fingerprint(root: &Path) -> Result<String> {
-    let path = root.join("packages/protocol-ts/schema/batman.schema.json");
+    let path = root.join("packages/protocol-ts/schema/crew.schema.json");
     let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     Ok(sha256_hex(&bytes))
 }
@@ -911,11 +916,8 @@ mod package_tests {
 
         let schema_dir = root.path().join("packages/protocol-ts/schema");
         fs::create_dir_all(&schema_dir).expect("creating fixture schema dir");
-        fs::write(
-            schema_dir.join("batman.schema.json"),
-            b"{\"fixture\":true}\n",
-        )
-        .expect("writing fixture schema");
+        fs::write(schema_dir.join("crew.schema.json"), b"{\"fixture\":true}\n")
+            .expect("writing fixture schema");
 
         // `source_commit` shells out to git, so the fixture needs a repo with
         // one commit. Committer identity is set locally so the test does not
@@ -1051,11 +1053,11 @@ mod version_coherence_tests {
         );
         write(
             "crates/runtime/Cargo.toml",
-            format!("[package]\nname = \"batman-runtime\"\nversion = \"{runtime}\"\n"),
+            format!("[package]\nname = \"crew-runtime\"\nversion = \"{runtime}\"\n"),
         );
         write(
             "crates/protocol/Cargo.toml",
-            format!("[package]\nname = \"batman-protocol\"\nversion = \"{protocol}\"\n"),
+            format!("[package]\nname = \"crew-protocol\"\nversion = \"{protocol}\"\n"),
         );
         write(
             ".claude-plugin/marketplace.json",

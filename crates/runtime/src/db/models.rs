@@ -2,7 +2,7 @@
 //! already-durable, already-sanitized data -- never raw or classified
 //! content.
 
-use batman_protocol::{OperationId, ProjectId, RunId, TaskId, Timestamp, WorkerId};
+use crew_protocol::{OperationId, ProjectId, RunId, TaskId, Timestamp, WorkerId};
 
 /// A durable event fetched via [`crate::db::DatabaseHandle::replay_events`],
 /// exactly as it was stored.

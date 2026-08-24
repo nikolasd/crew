@@ -29,7 +29,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use batman_protocol::{ProjectId, RunId, RunState, WorkerId};
+use crew_protocol::{ProjectId, RunId, RunState, WorkerId};
 use thiserror::Error;
 
 use crate::db::{DatabaseHandle, DomainClosure};
@@ -171,9 +171,9 @@ impl RecoveryCoordinator {
     ///
     /// ```no_run
     /// # use std::sync::Arc;
-    /// # use batman_protocol::ProjectId;
-    /// # use batman_runtime::db::DatabaseHandle;
-    /// # use batman_runtime::recovery::RecoveryCoordinator;
+    /// # use crew_protocol::ProjectId;
+    /// # use crew_runtime::db::DatabaseHandle;
+    /// # use crew_runtime::recovery::RecoveryCoordinator;
     /// # async fn example(db: Arc<DatabaseHandle>, project_id: ProjectId) -> Result<(), Box<dyn std::error::Error>> {
     /// let coordinator = RecoveryCoordinator::with_defaults(db, project_id);
     /// let result = coordinator.recover().await?;

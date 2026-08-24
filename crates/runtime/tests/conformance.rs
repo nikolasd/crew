@@ -83,7 +83,7 @@ fn conformance_fixture_all_writes_four_reports_matching_stdout() {
         // baseline gate is bidirectional, so setting the switch here rather
         // than inheriting it keeps this deterministic on a machine that does
         // have the vendor CLIs installed.
-        .env(batman_runtime::conformance::DISABLE_VENDOR_CLI_ENV, "1")
+        .env(crew_runtime::conformance::DISABLE_VENDOR_CLI_ENV, "1")
         .output()
         .expect("crewd conformance --adapter all --fixture must be runnable");
     assert!(
@@ -118,7 +118,7 @@ fn conformance_fixture_one_adapter_writes_a_single_element_array() {
         .arg(&output_path)
         // Same reason as the `--adapter all` case above: the baseline gate is
         // only deterministic with the switch explicitly set.
-        .env(batman_runtime::conformance::DISABLE_VENDOR_CLI_ENV, "1")
+        .env(crew_runtime::conformance::DISABLE_VENDOR_CLI_ENV, "1")
         .output()
         .expect("must be runnable");
     assert!(output.status.success());
@@ -211,7 +211,7 @@ fn conformance_fixture_with_the_kill_switch_never_spawns_a_vendor_cli() {
         let output = crewd()
             .args(["conformance", "--adapter", adapter, "--fixture", "--output"])
             .arg(&output_path)
-            .env(batman_runtime::conformance::DISABLE_VENDOR_CLI_ENV, "1")
+            .env(crew_runtime::conformance::DISABLE_VENDOR_CLI_ENV, "1")
             .env("PATH", "/usr/bin:/bin")
             .output()
             .expect("must be runnable");
@@ -250,7 +250,7 @@ fn conformance_fixture_with_the_kill_switch_never_spawns_a_vendor_cli() {
                     !detail.contains(spawn_marker),
                     "{adapter}/{name}: fixture mode attempted a real vendor-CLI spawn despite \
                      {}=1 -- detail was {detail:?}",
-                    batman_runtime::conformance::DISABLE_VENDOR_CLI_ENV
+                    crew_runtime::conformance::DISABLE_VENDOR_CLI_ENV
                 );
             }
         }
@@ -284,7 +284,7 @@ fn conformance_live_with_the_kill_switch_reports_an_honest_error_not_a_hard_fail
         // Setting the kill switch is what makes this deterministic: it
         // forbids the vendor process regardless of whether `claude` happens
         // to be installed on the machine running the suite.
-        .env(batman_runtime::conformance::DISABLE_VENDOR_CLI_ENV, "1")
+        .env(crew_runtime::conformance::DISABLE_VENDOR_CLI_ENV, "1")
         .output()
         .expect("must be runnable");
     assert!(
@@ -302,7 +302,7 @@ fn conformance_live_with_the_kill_switch_reports_an_honest_error_not_a_hard_fail
         reports[0]["error"]
             .as_str()
             .expect("a disabled-CLI report carries an error string")
-            .contains(batman_runtime::conformance::DISABLE_VENDOR_CLI_ENV),
+            .contains(crew_runtime::conformance::DISABLE_VENDOR_CLI_ENV),
         "the error must name the switch that forbade the invocation: {reports:?}"
     );
     let _ = std::fs::remove_file(&output_path);

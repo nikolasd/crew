@@ -1,8 +1,8 @@
 //! The Claude adapter's fixture/live conformance scenario suite. See
-//! `batman_runtime::conformance` for the shared report/scenario contract
+//! `crew_runtime::conformance` for the shared report/scenario contract
 //! this module fills in.
 //!
-//! Uses `batman_runtime::` (this crate's own external path) rather than
+//! Uses `crew_runtime::` (this crate's own external path) rather than
 //! `crate::`, exactly like every other file in this directory -- see
 //! `super::super::command`'s module doc for why (this file compiles
 //! unchanged both inside the library and when pulled into a standalone
@@ -12,13 +12,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use batman_protocol::{RunId, TaskId, WorkerId};
-use batman_runtime::adapter::{
+use crew_protocol::{RunId, TaskId, WorkerId};
+use crew_runtime::adapter::{
     Adapter, AdapterCapabilities, AdapterKind, AdapterMessage, CancelScope, ClaudeStartupOptions,
     NestedCapability, StartSpec, VendorSessionRef,
 };
-use batman_runtime::conformance::report::AdapterKindLabel;
-use batman_runtime::conformance::{ConformanceMode, ConformanceReport, ScenarioResult, scenario};
+use crew_runtime::conformance::report::AdapterKindLabel;
+use crew_runtime::conformance::{ConformanceMode, ConformanceReport, ScenarioResult, scenario};
 use uuid::Uuid;
 
 use super::normalize::{ClaudeEvent, ClaudeNormalizer};
@@ -46,7 +46,7 @@ fn fixture(name: &str) -> Vec<Vec<u8>> {
     text.lines().map(|line| line.as_bytes().to_vec()).collect()
 }
 
-fn emitted_payloads(events: &[ClaudeEvent]) -> Vec<&batman_runtime::adapter::AdapterEventPayload> {
+fn emitted_payloads(events: &[ClaudeEvent]) -> Vec<&crew_runtime::adapter::AdapterEventPayload> {
     events
         .iter()
         .filter_map(|event| match event {
@@ -59,13 +59,13 @@ fn emitted_payloads(events: &[ClaudeEvent]) -> Vec<&batman_runtime::adapter::Ada
 pub async fn probe_scenario() -> (
     ScenarioResult,
     Option<String>,
-    batman_runtime::adapter::AdapterCapabilities,
+    crew_runtime::adapter::AdapterCapabilities,
 ) {
     let adapter = new_adapter();
     let declared_capabilities = adapter.capabilities();
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
         return (
-            batman_runtime::conformance::vendor_cli_skipped_probe(),
+            crew_runtime::conformance::vendor_cli_skipped_probe(),
             None,
             declared_capabilities,
         );
@@ -194,7 +194,7 @@ fn approval_scenario() -> ScenarioResult {
 /// vendor session, usage, and the result frame's final text all
 /// correlate to the one replayed session.
 fn result_usage_artifacts_scenario() -> ScenarioResult {
-    use batman_runtime::adapter::AdapterEventPayload::{
+    use crew_runtime::adapter::AdapterEventPayload::{
         MessageFinal, UsageReported, VendorSessionEstablished,
     };
 
@@ -252,7 +252,7 @@ fn result_usage_artifacts_scenario() -> ScenarioResult {
 fn unexpected_child_observation_scenario(
     declared_capabilities: AdapterCapabilities,
 ) -> ScenarioResult {
-    use batman_runtime::adapter::AdapterEventPayload::NestedWorkerObserved;
+    use crew_runtime::adapter::AdapterEventPayload::NestedWorkerObserved;
 
     let mut normalizer = ClaudeNormalizer::new();
     let mut all_events = Vec::new();
@@ -358,7 +358,7 @@ fn redaction_scenario() -> ScenarioResult {
         }
     }
     let leaked = emitted_payloads(&all_events).iter().any(|payload| {
-        use batman_runtime::adapter::AdapterEventPayload::{MessageChunk, MessageFinal};
+        use crew_runtime::adapter::AdapterEventPayload::{MessageChunk, MessageFinal};
         match payload {
             MessageChunk { text, .. } | MessageFinal { text, .. } => {
                 text.value.contains("I should check config.toml")
@@ -407,17 +407,17 @@ fn vendor_reconnect_scenario() -> ScenarioResult {
 /// never model-invoking) process spawns below.
 #[derive(Default)]
 struct CollectingSink {
-    events: tokio::sync::Mutex<Vec<batman_runtime::adapter::AdapterEvent>>,
+    events: tokio::sync::Mutex<Vec<crew_runtime::adapter::AdapterEvent>>,
 }
 
 impl CollectingSink {
-    async fn has(&self, pred: impl Fn(&batman_runtime::adapter::AdapterEvent) -> bool) -> bool {
+    async fn has(&self, pred: impl Fn(&crew_runtime::adapter::AdapterEvent) -> bool) -> bool {
         self.events.lock().await.iter().any(pred)
     }
 
     /// Polls (bounded by the caller's own `tokio::time::timeout`) until a
     /// `UsageReported` event has been collected, then returns it.
-    async fn wait_for_usage(&self) -> batman_runtime::adapter::AdapterEvent {
+    async fn wait_for_usage(&self) -> crew_runtime::adapter::AdapterEvent {
         loop {
             let found = self
                 .events
@@ -427,7 +427,7 @@ impl CollectingSink {
                 .find(|event| {
                     matches!(
                         event.payload,
-                        batman_runtime::adapter::AdapterEventPayload::UsageReported { .. }
+                        crew_runtime::adapter::AdapterEventPayload::UsageReported { .. }
                     )
                 })
                 .cloned();
@@ -439,11 +439,11 @@ impl CollectingSink {
     }
 }
 
-impl batman_runtime::adapter::AdapterEventSink for CollectingSink {
+impl crew_runtime::adapter::AdapterEventSink for CollectingSink {
     fn emit(
         &self,
-        event: batman_runtime::adapter::AdapterEvent,
-    ) -> batman_runtime::adapter::AdapterFuture<'_, u64> {
+        event: crew_runtime::adapter::AdapterEvent,
+    ) -> crew_runtime::adapter::AdapterFuture<'_, u64> {
         Box::pin(async move {
             let mut events = self.events.lock().await;
             events.push(event);
@@ -470,9 +470,9 @@ impl batman_runtime::adapter::AdapterEventSink for CollectingSink {
 ///   (never a model's reply, since this session's `--resume` lookup
 ///   fails before the vendor CLI ever reads stdin).
 async fn live_process_scenarios() -> Vec<ScenarioResult> {
-    use batman_runtime::conformance::vendor_cli_required_scenario;
+    use crew_runtime::conformance::vendor_cli_required_scenario;
 
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
         return vec![
             vendor_cli_required_scenario(scenario::READ_ONLY_START_AND_PROGRESS),
             vendor_cli_required_scenario(scenario::FOLLOW_UP),
@@ -518,7 +518,7 @@ async fn live_process_scenarios() -> Vec<ScenarioResult> {
         .has(|event| {
             matches!(
                 event.payload,
-                batman_runtime::adapter::AdapterEventPayload::ProcessStarted { .. }
+                crew_runtime::adapter::AdapterEventPayload::ProcessStarted { .. }
             )
         })
         .await;
@@ -598,8 +598,8 @@ async fn live_process_scenarios() -> Vec<ScenarioResult> {
 /// terminates the whole vendor process identically -- this exercises
 /// `CancelScope::Subtree` as representative of all three.
 async fn cancellation_scope_scenario() -> ScenarioResult {
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
-        return batman_runtime::conformance::vendor_cli_required_scenario(
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
+        return crew_runtime::conformance::vendor_cli_required_scenario(
             scenario::CANCELLATION_SCOPE,
         );
     }
@@ -622,7 +622,7 @@ async fn cancellation_scope_scenario() -> ScenarioResult {
         .has(|event| {
             matches!(
                 event.payload,
-                batman_runtime::adapter::AdapterEventPayload::ProcessStarted { .. }
+                crew_runtime::adapter::AdapterEventPayload::ProcessStarted { .. }
             )
         })
         .await;
@@ -691,10 +691,10 @@ pub async fn fixture_report() -> ConformanceReport {
 /// # Errors
 /// Returns a message if `CREW_DISABLE_VENDOR_CLI=1` is set.
 pub async fn live_report() -> Result<ConformanceReport, String> {
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
         return Err(format!(
             "live Claude conformance is disabled by {}=1",
-            batman_runtime::conformance::DISABLE_VENDOR_CLI_ENV
+            crew_runtime::conformance::DISABLE_VENDOR_CLI_ENV
         ));
     }
     let (probe_result, version, declared_capabilities) = probe_scenario().await;

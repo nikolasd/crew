@@ -1,5 +1,5 @@
 [package]
-name = "batman-runtime"
+name = "crew-runtime"
 version = "0.4.1"
 edition.workspace = true
 rust-version.workspace = true
@@ -11,12 +11,13 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-batman-protocol = { path = "../protocol" }
+crew-protocol = { path = "../protocol" }
 clap.workspace = true
 futures-util.workspace = true
 hex.workspace = true
 nix.workspace = true
 parking_lot.workspace = true
+portable-pty.workspace = true
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
 regex.workspace = true

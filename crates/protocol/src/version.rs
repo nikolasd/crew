@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// A BATMAN protocol version, expressed as `major.minor` with no patch
+/// A Crew protocol version, expressed as `major.minor` with no patch
 /// component (patch-level changes must be backward compatible).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema, TS,
@@ -36,7 +36,7 @@ pub struct VersionRange {
 ///
 /// Lives here rather than in the runtime because it is a property of the
 /// protocol itself, and two crates need it independently: the runtime
-/// negotiates against it on every `initialize`, and `batman-xtask` records
+/// negotiates against it on every `initialize`, and `crew-xtask` records
 /// it as release provenance in each leaf manifest. A second copy would let
 /// a shipped manifest claim a version the runtime does not speak.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);

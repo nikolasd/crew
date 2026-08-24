@@ -9,12 +9,12 @@
 //! transition check inside its own guarded write, so a racing settle can
 //! no longer be overwritten with `waitingPeer`.
 
-use batman_protocol::{
+use crew_protocol::{
     DeliveryState, MessageId, MessageKind, ProjectId, Run, RunFlags, RunId, RunMessage, RunState,
     TaskId, TaskRef, Timestamp, Worker, WorkerId, WorkerProfileRef,
 };
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::domain::{DomainError, DomainRepository};
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::domain::{DomainError, DomainRepository};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -136,7 +136,7 @@ async fn an_enforced_write_against_a_settled_run_is_refused_in_transaction() {
                 |row| row.get::<_, i64>(0),
             )
             .map(|count| json!({ "count": count }))
-            .map_err(batman_runtime::domain::DomainError::from)
+            .map_err(crew_runtime::domain::DomainError::from)
         }))
         .await
         .expect("count messages");

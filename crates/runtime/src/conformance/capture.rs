@@ -11,7 +11,7 @@ use crate::conformance::{
     ConformanceReport, run_fixture_conformance, vendor_cli_invocation_disabled,
 };
 use crate::supervisor::install_frame_tap;
-use batman_protocol::{RunId, TaskId, WorkerId};
+use crew_protocol::{RunId, TaskId, WorkerId};
 use serde_yaml_ng as serde_yaml;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};

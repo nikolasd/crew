@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use batman_runtime::lifecycle::should_idle_shutdown;
+use crew_runtime::lifecycle::should_idle_shutdown;
 use serde_json::Value;
 
 const CREWD: &str = env!("CARGO_BIN_EXE_crewd");
@@ -376,7 +376,7 @@ fn graceful_stop_removes_socket_only_after_journal_shutdown() {
     let db_path = find_database(fixture.state_dir()).expect("daemon created a database");
     let rt = tokio::runtime::Runtime::new().unwrap();
     let saw_stopping = rt.block_on(async move {
-        let db = batman_runtime::db::DatabaseHandle::start(db_path)
+        let db = crew_runtime::db::DatabaseHandle::start(db_path)
             .await
             .unwrap();
         let events = db.replay_events(0).await.unwrap();

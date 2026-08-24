@@ -11,10 +11,10 @@
       },
     },
     "packages/extension": {
-      "name": "@nikolasd/batman",
-      "version": "0.4.0",
+      "name": "@nikolasd/crew",
+      "version": "0.4.1",
       "devDependencies": {
-        "@nikolasd/batman-protocol": "workspace:*",
+        "@nikolasd/crew-protocol": "workspace:*",
         "@oh-my-pi/pi-coding-agent": ">=17.0.7 <18",
         "@types/bun": "1.3.14",
         "ajv": "8.17.1",
@@ -25,7 +25,7 @@
       },
     },
     "packages/protocol-ts": {
-      "name": "@nikolasd/batman-protocol",
+      "name": "@nikolasd/crew-protocol",
       "version": "0.1.0",
       "dependencies": {
         "ajv": "8.17.1",
@@ -141,9 +141,9 @@
 
     "@mozilla/readability": ["@mozilla/readability@0.6.0", "", {}, "sha512-juG5VWh4qAivzTAeMzvY9xs9HY5rAcr2E4I7tiSSCokRFi7XIZCAu92ZkSTsIj1OPceCifL3cpfteP3pDT9/QQ=="],
 
-    "@nikolasd/batman": ["@nikolasd/batman@workspace:packages/extension"],
+    "@nikolasd/crew": ["@nikolasd/crew@workspace:packages/extension"],
 
-    "@nikolasd/batman-protocol": ["@nikolasd/batman-protocol@workspace:packages/protocol-ts"],
+    "@nikolasd/crew-protocol": ["@nikolasd/crew-protocol@workspace:packages/protocol-ts"],
 
     "@nodable/entities": ["@nodable/entities@3.0.0", "", {}, "sha512-8L9xFeTYKhm49xfIypoe2W5wV1m/3Z58kT+7kR9A8OyFxcPduI4VmxaUMQyKYrRjUoLLSXv6EKKID5Tvj9cUVw=="],
 

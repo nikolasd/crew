@@ -11,7 +11,7 @@
 // reasoning and secret-marked fields structurally cannot enter this view
 // model.
 
-import type { EventEnvelope, RuntimeEvent } from "@nikolasd/batman-protocol";
+import type { EventEnvelope, RuntimeEvent } from "@nikolasd/crew-protocol";
 
 /** Independent lifecycle flags, mirrored from the runtime's `RunFlags`. */
 export interface MonitorFlags {
@@ -21,6 +21,16 @@ export interface MonitorFlags {
   readonly policyQuarantined: boolean;
   readonly workspaceDirty: boolean;
   readonly childrenActive: boolean;
+}
+
+/** A run's Crew-owned display pane, as of the latest `displayEvent`. */
+export interface MonitorPane {
+  readonly backend: string;
+  readonly placement: string;
+  /** Empty for a `hidden` backend, or a headless run's placeholder
+   *  attach event -- never a filesystem path, only a vendor pane id. */
+  readonly paneRef: string;
+  readonly attached: boolean;
 }
 
 const EMPTY_FLAGS: MonitorFlags = {
@@ -52,6 +62,12 @@ export interface MonitorRow {
   readonly model?: string;
   /** Set by the controller from `run/get`; absent until enriched. */
   readonly workspaceMode?: string;
+  /** The run's Crew-owned display pane, from the latest `displayEvent`;
+   *  absent until one arrives. `attached: false` means the most recent
+   *  event was a detach -- the row keeps the last-known backend/pane
+   *  ref rather than clearing them, so a detail view can still say what
+   *  was there. */
+  readonly pane?: MonitorPane;
   readonly firstSeenAt: string;
   readonly lastEventAt: string;
   /** The highest event sequence applied to this row; guards against a
@@ -116,6 +132,7 @@ export function reduceEvent(state: MonitorState, envelope: EventEnvelope): Monit
     latestActivity: patch.latestActivity ?? base.latestActivity,
     pendingApprovalCount: patch.pendingApprovalCountDelta !== undefined ? Math.max(0, base.pendingApprovalCount + patch.pendingApprovalCountDelta) : base.pendingApprovalCount,
     openViolations: applyViolationPatch(base.openViolations, patch),
+    pane: patch.pane ?? base.pane,
     lastEventAt: envelope.timestamp,
     lastAppliedSequence: envelope.sequence,
   };
@@ -172,6 +189,7 @@ interface EventPatch {
   readonly addViolation?: { readonly violationId: string; readonly code: string };
   /** A decided violation to remove from the open set. */
   readonly removeViolationId?: string;
+  readonly pane?: MonitorPane;
 }
 
 function applyViolationPatch(open: Readonly<Record<string, string>>, patch: EventPatch): Readonly<Record<string, string>> {
@@ -296,6 +314,19 @@ function eventPatch(envelope: EventEnvelope): EventPatch | undefined {
         runId: event.payload.runId,
         taskId: event.payload.taskId,
         latestActivity: `artifact ${event.payload.artifactKind} ${event.payload.artifactId}`,
+      };
+    }
+    case "displayEvent": {
+      // `kind` is `RuntimeEventKind`'s plain string form here
+      // (`"displayPaneAttached"`/`"displayPaneDetached"`) -- unlike
+      // `policyViolationRecorded`/`policyViolationDecided`, this event's
+      // `kind` never carries the object-shaped violation-detail variants.
+      const attached = event.payload.kind === "displayPaneAttached";
+      const { backend, placement, paneRef } = event.payload;
+      return {
+        runId: event.payload.runId,
+        latestActivity: attached ? `pane attached: ${backend}${paneRef !== "" ? ` (${paneRef})` : ""}` : `pane detached: ${backend}`,
+        pane: { backend, placement, paneRef, attached },
       };
     }
     case "workspaceEvent": {

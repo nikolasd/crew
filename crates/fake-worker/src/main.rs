@@ -14,11 +14,11 @@
 //!   design spec documents).
 //! - `omp-rpc`: emits the `{"type":"ready"}` handshake frame before
 //!   reading anything, then distinguishes prompt acknowledgement from
-//!   prompt completion. Predates `batman-runtime`'s real OMP-RPC
+//!   prompt completion. Predates `crew-runtime`'s real OMP-RPC
 //!   wire-shape grounding and intentionally does not match it -- kept
 //!   only for whatever already depends on its own invented shape.
 //! - `omp-rpc-host-tool`: the real, grounded OMP-RPC wire shape (see
-//!   `batman_runtime::adapter::omp_rpc::client`'s module doc): a
+//!   `crew_runtime::adapter::omp_rpc::client`'s module doc): a
 //!   `{"type":"ready",...}` handshake, `{"type":"response","id",
 //!   "command","success","data"}` for every command except `prompt`,
 //!   and for `prompt` specifically, a `{"type":"host_tool_call",...}`

@@ -35,17 +35,17 @@ use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::task::JoinHandle;
 
-use batman_runtime::adapter::mcp_config::{
+use crew_runtime::adapter::mcp_config::{
     AdapterMcpConfig, coordination_mcp_config_document, coordination_mcp_env,
 };
-use batman_runtime::adapter::{
+use crew_runtime::adapter::{
     Adapter, AdapterCapabilities, AdapterError, AdapterEvent, AdapterEventPayload,
     AdapterEventSink, AdapterFuture, AdapterMessage, AdapterSnapshot, ApprovalsCapability,
     CancelScope, CopilotStartupOptions, DurabilityCapability, NativeViewCapability,
     NestedCapability, ProbeResult, ProtocolKind, ResumeCapability, StartSpec, SteeringCapability,
     UsageCapability, VendorSessionRef, WorkspaceControlCapability,
 };
-use batman_runtime::supervisor::EnvironmentPolicy;
+use crew_runtime::supervisor::EnvironmentPolicy;
 
 /// This adapter's fixed declared capabilities. `resume` narrows to
 /// [`ResumeCapability::None`] at runtime if a live `initialize` probe
@@ -90,9 +90,9 @@ pub struct CopilotAdapter {
     cwd: PathBuf,
     startup_options: CopilotStartupOptions,
     environment_allowlist: Vec<String>,
-    run_id: batman_protocol::RunId,
-    task_id: batman_protocol::TaskId,
-    worker_id: batman_protocol::WorkerId,
+    run_id: crew_protocol::RunId,
+    task_id: crew_protocol::TaskId,
+    worker_id: crew_protocol::WorkerId,
     state: TokioMutex<AdapterState>,
     /// Worker-MCP coordination tool injection for this adapter's
     /// supervised `copilot` process, or `None` for a caller that never
@@ -126,9 +126,9 @@ impl CopilotAdapter {
         cwd: PathBuf,
         startup_options: CopilotStartupOptions,
         environment_allowlist: Vec<String>,
-        run_id: batman_protocol::RunId,
-        task_id: batman_protocol::TaskId,
-        worker_id: batman_protocol::WorkerId,
+        run_id: crew_protocol::RunId,
+        task_id: crew_protocol::TaskId,
+        worker_id: crew_protocol::WorkerId,
         mcp: Option<AdapterMcpConfig>,
     ) -> Self {
         Self {
@@ -337,9 +337,9 @@ impl CopilotAdapter {
         &self,
         stop_reason: &str,
         sink: &Arc<dyn AdapterEventSink>,
-        run_id: batman_protocol::RunId,
-        task_id: batman_protocol::TaskId,
-        worker_id: batman_protocol::WorkerId,
+        run_id: crew_protocol::RunId,
+        task_id: crew_protocol::TaskId,
+        worker_id: crew_protocol::WorkerId,
     ) -> Result<(), AdapterError> {
         let outcome =
             crate::adapter::copilot::normalize::copilot_normalize_stop_reason(stop_reason);

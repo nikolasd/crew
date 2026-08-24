@@ -22,8 +22,8 @@ Small, dependency-light, and the vocabulary for everything else.
 | `src/lib.rs` | Re-exports everything; the crate's public API is this one page |
 | `src/ids.rs` | `uuid_id!` macro generating the 9 id newtypes (`ProjectId`, `RunId`, `PolicyViolationId`, …) |
 | `src/version.rs` | `ProtocolVersion`, `VersionRange` |
-| `src/rpc.rs` | JSON-RPC envelopes, `InitializeParams/Result`, `ClientAuth` roles, `RuntimeStatus`, `error_code` constants (`BatmanMethod` itself now lives in `method.rs`, re-exported here) |
-| `src/method.rs` | `BatmanMethod` — every JSON-RPC method name, foundation and orchestration alike |
+| `src/rpc.rs` | JSON-RPC envelopes, `InitializeParams/Result`, `ClientAuth` roles, `RuntimeStatus`, `error_code` constants (`CrewMethod` itself now lives in `method.rs`, re-exported here) |
+| `src/method.rs` | `CrewMethod` — every JSON-RPC method name, foundation and orchestration alike |
 | `src/event.rs` | `EventEnvelope`, `RuntimeEvent`, `Timestamp`, `ContentClass`/`Classified<T>`, `RunFlags`, `DiagnosticLevel`, `EventSource`, `RuntimeEventKind` |
 | `src/task.rs` | `TaskRef` |
 | `src/worker.rs` | `WorkerProfileRef`, `Worker` |
@@ -35,7 +35,7 @@ Small, dependency-light, and the vocabulary for everything else.
 | `src/display.rs` | `DisplayBackend`, `DisplayConfig`, `DisplayPlacement`, `DisplayStatus` |
 | `src/artifact.rs` | `Artifact`, `ArtifactFetchResult`, `ArtifactFetchRequest`, `ArtifactKind`, `ArtifactListRequest`, `ArtifactListResult` |
 | `tests/wire_contract.rs` | Proves camelCase + `deny_unknown_fields` on the wire |
-| `tests/domain_contract.rs` | `RunState` lifecycle table, `RunFlags` field names, `BatmanMethod` orchestration variants |
+| `tests/domain_contract.rs` | `RunState` lifecycle table, `RunFlags` field names, `CrewMethod` orchestration variants |
 | `tests/coordination_contract.rs` | Message kinds, delivery states, coordination request/result wire shapes |
 | `tests/fixtures.rs` | Deserializes the golden fixtures through the real types |
 
@@ -149,7 +149,7 @@ binary into a leaf package with a deterministic manifest).
 
 Each module has a sibling `*.test.ts`. `client.test.ts` and `index.test.ts` spawn the real daemon.
 
-### `packages/protocol-ts` — generated contract (`@nikolasd/batman-protocol`)
+### `packages/protocol-ts` — generated contract (`@nikolasd/crew-protocol`)
 
 `src/generated/*.ts` and `schema/crew.schema.json` are build outputs — regenerate, never edit.
 `src/validate.ts` is hand-written: it compiles Ajv validators once (`validateInitializeResult`,
@@ -210,7 +210,7 @@ companion to the design-level sequence in
    client every orchestration tool and the monitor share — see [`engineering-lessons.md`](engineering-lessons.md#cached-client-must-authenticate-with-the-union-of-all-roles) for why
    its role matters) and `callOrchestration(client, "run/submit", params)`
    (`tools/shared.ts`) — nothing more; no worker selection, no retry, no lifecycle inference here.
-2. **Dispatch** — `connection.rs::dispatch` sees `BatmanMethod::RunSubmit` is one of the
+2. **Dispatch** — `connection.rs::dispatch` sees `CrewMethod::RunSubmit` is one of the
    orchestration methods, forwards the raw params to `OrchestrationService::dispatch`
    (`service/orchestration.rs`), which the role table (Appendix A's "Role Table Summary" in `architecture.md`) already confirmed
    this connection's `ompExtension` principal may call.
@@ -367,7 +367,7 @@ follow TDD — the suite's failure message before implementation is part of the 
 **Fast loops:**
 
 ```bash
-cargo test -p batman-runtime --test ipc -- --nocapture some_test_name   # one Rust test, with output
+cargo test -p crew-runtime --test ipc -- --nocapture some_test_name   # one Rust test, with output
 bun test packages/extension/src/client.test.ts -t "frame"              # TS tests matching a name
 ```
 

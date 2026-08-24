@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use batman_protocol::ProjectId;
+use crew_protocol::ProjectId;
 use serde::Serialize;
 use thiserror::Error;
 
@@ -153,8 +153,8 @@ impl Doctor {
     ///
     /// ```no_run
     /// # use std::sync::Arc;
-    /// # use batman_runtime::db::DatabaseHandle;
-    /// # use batman_runtime::doctor::Doctor;
+    /// # use crew_runtime::db::DatabaseHandle;
+    /// # use crew_runtime::doctor::Doctor;
     /// # async fn example(db: Arc<DatabaseHandle>) -> Result<(), Box<dyn std::error::Error>> {
     /// let doctor = Doctor::new(Some(db), None, None);
     /// let result = doctor.check().await?;
@@ -347,7 +347,7 @@ impl Doctor {
     }
 
     /// Asserts the committed schema document matches what this binary's
-    /// linked `batman-protocol` generates -- the same comparison
+    /// linked `crew-protocol` generates -- the same comparison
     /// `xtask generate --check` performs. This only applies when `--repo`
     /// happens to be a checkout of the Crew source tree itself (the only
     /// place this file is ever committed); `--repo` is ordinarily an
@@ -371,7 +371,7 @@ impl Doctor {
                 )));
             }
         };
-        let generated = batman_protocol::render_schema()
+        let generated = crew_protocol::render_schema()
             .map_err(|e| DoctorError::ConfigError(format!("rendering schema: {e}")))?;
         if committed != generated {
             return Err(DoctorError::ConfigError(format!(
@@ -402,16 +402,30 @@ impl Doctor {
     /// Reports per-backend display availability. When the merged policy
     /// forces a specific backend (`display.backend`, anything other than
     /// `"auto"`), that backend must itself be available -- an operator who
-    /// pinned `tmux` gets told `tmux` is unusable, not a vacuous pass. With
-    /// no forced backend, a *real* backend (Herdr or tmux) must be
-    /// available: `TerminalDisplay` is unconditionally available (it is
-    /// deleted outright in a later milestone) and must never satisfy this
-    /// check on its own, or the check could never fail.
+    /// pinned `tmux` gets told `tmux` is unusable, not a vacuous pass.
+    ///
+    /// With no forced backend (`auto`), this is unconditionally healthy:
+    /// `HiddenDisplay` is a legitimate, always-available fallback by
+    /// design (unlike the retired `TerminalDisplay`, which this check
+    /// used to have to carve out specifically so a real-backend-only
+    /// requirement could still fail) -- `auto` resolving to "no pane" is
+    /// an accepted normal outcome (e.g. headless CI), not a health
+    /// problem to report.
     fn check_display(&self) -> Result<(), DoctorError> {
-        use crate::display::{DisplayBackendTrait, HerdrDisplay, TerminalDisplay, TmuxDisplay};
-        use batman_protocol::{DisplayBackend, DisplayConfig};
+        use crate::display::{
+            DisplayBackendTrait, HerdrDisplay, HiddenDisplay, OsWindowDisplay, TmuxDisplay,
+        };
+        use crew_protocol::{DisplayBackend, DisplayConfig};
 
-        let availability: [(DisplayBackend, bool); 3] = [
+        let Some(forced) = self
+            .policy
+            .as_ref()
+            .and_then(|policy| crate::config::protocol_display_backend(policy.display_backend))
+        else {
+            return Ok(());
+        };
+
+        let availability: [(DisplayBackend, bool); 4] = [
             (
                 DisplayBackend::Herdr,
                 HerdrDisplay::new(DisplayConfig::default()).is_available(),
@@ -421,45 +435,25 @@ impl Doctor {
                 TmuxDisplay::new(DisplayConfig::default()).is_available(),
             ),
             (
-                DisplayBackend::Terminal,
-                TerminalDisplay::new(DisplayConfig::default()).is_available(),
+                DisplayBackend::OsWindow,
+                OsWindowDisplay::new(DisplayConfig::default()).is_available(),
+            ),
+            (
+                DisplayBackend::Hidden,
+                HiddenDisplay::new(DisplayConfig::default()).is_available(),
             ),
         ];
 
-        let forced = self
-            .policy
-            .as_ref()
-            .and_then(|policy| crate::config::protocol_display_backend(policy.display_backend));
-
-        if let Some(forced) = forced {
-            let available = availability
-                .iter()
-                .find(|(backend, _)| *backend == forced)
-                .map(|(_, available)| *available)
-                .unwrap_or(false);
-            return if available {
-                Ok(())
-            } else {
-                Err(DoctorError::ConfigError(format!(
-                    "configured display backend '{forced}' is not available"
-                )))
-            };
-        }
-
-        let real_backend_available = availability
+        let available = availability
             .iter()
-            .any(|(backend, available)| *backend != DisplayBackend::Terminal && *available);
-        if real_backend_available {
+            .find(|(backend, _)| *backend == forced)
+            .map(|(_, available)| *available)
+            .unwrap_or(false);
+        if available {
             Ok(())
         } else {
-            let detail = availability
-                .iter()
-                .map(|(backend, available)| format!("{backend}: {available}"))
-                .collect::<Vec<_>>()
-                .join(", ");
             Err(DoctorError::ConfigError(format!(
-                "no real display backend is available ({detail}); the always-available terminal \
-                 fallback does not satisfy this check"
+                "configured display backend '{forced}' is not available"
             )))
         }
     }

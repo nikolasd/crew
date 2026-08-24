@@ -44,10 +44,14 @@ export CREW_DISABLE_VENDOR_CLI=1
 export OMP_CREW_BINARY="$PWD/target/debug/crewd"
 ```
 
-**State directory resolution** (in precedence order):
+**State directory resolution** (in precedence order) — applied identically whether the extension
+resolves `--state-dir` before spawning `crewd`, or you omit `--state-dir` on a bare `crewd`
+invocation (`StateRoot::resolve`, `crates/runtime/src/security/mod.rs`):
 1. `CREW_STATE_DIR` (must be absolute)
-2. `$XDG_STATE_HOME/omp/batman` when `XDG_STATE_HOME` is set (must be absolute)
-3. `$HOME/${PI_CONFIG_DIR:-.omp}/batman`
+2. `$XDG_STATE_HOME/omp/crew` when `XDG_STATE_HOME` is set (must be absolute) -- or its legacy
+   `$XDG_STATE_HOME/omp/batman` sibling, if only that one exists
+3. `$HOME/${PI_CONFIG_DIR:-.omp}/crew` -- or its legacy `$HOME/${PI_CONFIG_DIR:-.omp}/batman`
+   sibling, if only that one exists
 
 **Configuration file locations** (in precedence order, lowest to highest). The CLI itself has no
 auto-discovery and no `CREW_CONFIG`-style environment variable — each layer is loaded only from a
@@ -79,6 +83,57 @@ depth, failing closed with the exact JSON path that named the unknown key. Examp
   redaction patterns can never be silently dropped by a higher one. An org pattern that fails to
   compile as a regex refuses the daemon's startup rather than degrading to built-in rules only.
 - Vendor CLIs are ordinary installed dependencies; live conformance and the availability probe run by default. `CREW_DISABLE_VENDOR_CLI=1` should always be set in CI jobs or unattended runs — it forbids observation-only vendor invocation and guarantees no billed model call is made.
+
+## Owning what you test
+
+Two things get rebuilt independently — the `crewd` binary and the extension bundle
+(`packages/extension/dist/index.js`) — and it's easy to run a check below while actually still
+exercising the *old* build of either one. Before trusting any result in this document, make sure
+you're exercising the build you just made.
+
+**The extension side has two speeds.** Point `--extension` directly at
+`packages/extension/src/index.ts` for fast iteration — Bun runs TypeScript directly, so an edit
+takes effect on the next `omp` invocation with no build step. Only switch to `bun run build` +
+`packages/extension/dist/index.js` (what every example below uses) when you want to test the exact
+bundle that ships — `dist/index.js` is a separate build output and silently lags your source if you
+edit `src/` and forget to rebuild it.
+
+**The daemon side does not restart itself.** `crewd` runs detached, and OMP connects-or-spawns
+(ADR-0008, §1 below) — if a daemon started from your *previous* build of `crewd` is still alive, a
+fresh `omp` session just reconnects to it over its Unix socket. Rebuilding `crewd` and re-running a
+check without killing the old daemon first tests nothing new. After any Rust change:
+
+```bash
+crewd stop --repo "$PWD"   # or: pkill -f "crewd serve"
+```
+
+before your next `omp` invocation. `--state-dir` can be omitted here — the bare CLI resolves the
+same state root the extension does (see
+[cli-reference.md's state-directory note](cli-reference.md#before-you-start-state-directories))
+— but only pass it explicitly when your current shell's environment might not match the one the
+extension used to spawn the daemon (a different `$CREW_STATE_DIR`/`$XDG_STATE_HOME`, or none set
+in one shell and set in the other).
+
+**Confirm identity, don't assume it.** §1's expected output includes `Binary source: override` —
+that's the extension reporting it resolved `crewd` via `OMP_CREW_BINARY`, not a downloaded release
+(`platform.ts`'s `resolveCrewd`). If you ever see `Binary source: package` when you meant to test a
+local build, `OMP_CREW_BINARY` isn't set, or isn't pointing where you think.
+
+**Cheapest first check, no daemon needed.** `crew_doctor` / `/crew-doctor` (or
+`cargo run -p crew-runtime -- doctor`) verifies config parsing, the state directory, and rollout
+gates without spawning anything — run it before any section below when you just want to know "did
+I break something obvious," without paying for a daemon spawn or a model call.
+
+**Match the section to what you touched** — you don't need to run all six every time:
+
+| You touched | Run |
+|---|---|
+| IPC/lifecycle/journal/daemon startup | §1 |
+| Event model or monitor rendering | §2 |
+| An orchestration RPC method or tool | §3 |
+| Adapter code (claude/codex/copilot/omp-rpc) | §4b first (free); §4c only if the change could affect real vendor-CLI behavior |
+| Workspace lease/apply/isolation | §5 |
+| `run/result` / redaction / read-back | §6 |
 
 ## 1. The daemon through OMP (no model call, no extension CLI needed)
 
@@ -112,7 +167,10 @@ omp --extension "$EXT" --print "/crew-status"
 ```
 
 Expect the **same** `Project` id, with a **higher** `Uptime`. That's the connect-or-spawn design
-(ADR-0008) reconnecting to the daemon it just started, not spawning a second one.
+(ADR-0008) reconnecting to the daemon it just started, not spawning a second one. If you rebuilt
+`crewd` between these two invocations and still see the same `Project` id, that's the gotcha in
+["Owning what you test"](#owning-what-you-test) above — you reconnected to the daemon from your
+*old* build, not the new one.
 
 **What this verifies:** The extension's `ensureRuntime()` can derive the per-repo Unix socket
 path (SHA-256 of the canonical VCS root, `<stateDir>/repos/<repoId>/runtime.sock`), spawn
@@ -303,7 +361,7 @@ needs human sign-off, and there is no `approval/request` RPC method — so there
 trigger it from a live `omp` session. Exercise that half of the flow with:
 
 ```bash
-cargo test -p batman-runtime --test approval
+cargo test -p crew-runtime --test approval
 ```
 
 which drives `ApprovalService` directly, the same way this walkthrough can't.
@@ -370,7 +428,7 @@ export OMP_CREW_BINARY="$PWD/target/debug/crewd"
 Build the daemon:
 
 ```bash
-cargo build -p batman-runtime
+cargo build -p crew-runtime
 ```
 
 ### 4b. Per-adapter smoke, fixture mode (no model call)
@@ -380,13 +438,13 @@ Fixture mode runs the conformance suites against committed JSONL fixtures under
 
 ```bash
 # All four adapters, fixture mode:
-cargo test -p batman-runtime --test conformance
+cargo test -p crew-runtime --test conformance
 
 # Individual adapters:
-cargo test -p batman-runtime --test claude_adapter
-cargo test -p batman-runtime --test codex_adapter
-cargo test -p batman-runtime --test copilot_adapter
-cargo test -p batman-runtime --test omp_rpc_adapter
+cargo test -p crew-runtime --test claude_adapter
+cargo test -p crew-runtime --test codex_adapter
+cargo test -p crew-runtime --test copilot_adapter
+cargo test -p crew-runtime --test omp_rpc_adapter
 ```
 
 Expected shape (one array element per adapter for the full test; a single-element array otherwise):
@@ -437,23 +495,23 @@ mkdir -p /tmp/crew-conformance-live && cd /tmp/crew-conformance-live && git init
 
 # Claude — needs an authenticated `claude` CLI session (run `claude auth status` first if unsure).
 # `#[ignore]`d: an explicit `--ignored` run is itself the signal a human wants the live call.
-cargo test -p batman-runtime --test claude_live -- --ignored
+cargo test -p crew-runtime --test claude_live -- --ignored
 
 # Codex — needs $OPENAI_API_KEY (or an authenticated `codex` CLI session) in the environment.
 # `#[ignore]`d for the same reason.
-cargo test -p batman-runtime --test codex_adapter -- --ignored
+cargo test -p crew-runtime --test codex_adapter -- --ignored
 
 # Copilot — needs an authenticated `copilot` CLI session (`copilot` itself manages this, not an
 # env var this adapter reads directly). Not `#[ignore]`d: its real-binary test only performs the
 # `initialize` + `session/list` handshake, which never invokes a model, so it runs in every
 # default `cargo test` and simply skips if `copilot` is not on PATH.
-cargo test -p batman-runtime --test copilot_adapter
+cargo test -p crew-runtime --test copilot_adapter
 
 # OMP-RPC — no cloud API key needed. The harness resolves a cloud selector from `omp`'s built-in
 # catalog of 583 models; no local model server is required. Not `#[ignore]`d: its real-binary
 # tests exercise zero-model-call stdio probes and run on every `cargo test`, skipping only if
 # `omp` is not on PATH.
-cargo test -p batman-runtime --test omp_rpc_adapter
+cargo test -p crew-runtime --test omp_rpc_adapter
 ```
 
 Run each from inside `/tmp/crew-conformance-live` (a disposable repo — some live scenarios spawn
@@ -479,7 +537,7 @@ invocation degrades to an honest skip instead of a charge.
 
 `AdapterRegistry` (the `RunDriver` implementation this section's conformance suites feed into) is
 wired into the running daemon: `lifecycle::serve()`'s `ServerConfig` sets `run_driver` to an
-`AdapterRegistry` instance (`cargo test -p batman-runtime --test adapter_registry` exercises it
+`AdapterRegistry` instance (`cargo test -p crew-runtime --test adapter_registry` exercises it
 directly).
 
 However, whether the registry starts an adapter is still gated by `PolicyEvaluator`: the
@@ -501,7 +559,7 @@ example `concurrency ceiling 8 reached; 8 active runs`), and an absent vendor CL
 To exercise the registry's own start/reject/authorize/construct logic directly:
 
 ```bash
-cargo test -p batman-runtime --test adapter_registry
+cargo test -p crew-runtime --test adapter_registry
 ```
 
 ### 4e. Worker MCP coordination tools
@@ -519,7 +577,7 @@ in-process/subprocess plumbing behind it are fully built and independently teste
 real compiled `crewd` binary, driven as a genuine MCP client would:
 
 ```bash
-cargo test -p batman-runtime --test coordination_mcp
+cargo test -p crew-runtime --test coordination_mcp
 ```
 
 That suite spawns the real `crewd coordination-mcp --state-dir ... --repo ... --run-id ...`

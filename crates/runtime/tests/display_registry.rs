@@ -1,7 +1,16 @@
 //! Display registry integration tests.
 
-use batman_protocol::{DisplayBackend, DisplayStatus};
-use batman_runtime::display::{DisplayBackendTrait, DisplayRegistry};
+use crew_protocol::{DisplayBackend, DisplayStatus};
+use crew_runtime::display::{
+    DisplayBackendTrait, DisplayFuture, DisplayRegistry, PaneHandle, PaneRequest,
+};
+
+/// Every fake backend below shares the same "no pane support" stub --
+/// none of these registry-focused tests exercise pane creation (see
+/// `coordinator`'s own tests for that).
+fn no_pane_support<'a, T>() -> DisplayFuture<'a, T> {
+    Box::pin(async { Err("this fake backend has no pane support".to_string()) })
+}
 
 #[test]
 fn display_registry_basic() {
@@ -26,7 +35,13 @@ fn display_registry_register_and_list() {
             Ok(())
         }
         fn status(&self) -> DisplayStatus {
-            DisplayStatus::new(DisplayBackend::Terminal, true, false)
+            DisplayStatus::new(DisplayBackend::Hidden, true, false)
+        }
+        fn create_pane(&self, _req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
+            no_pane_support()
+        }
+        fn close_pane(&self, _handle: &PaneHandle) -> DisplayFuture<'_, ()> {
+            no_pane_support()
         }
     }
 
@@ -54,6 +69,12 @@ fn display_registry_select_best_favors_available() {
         fn status(&self) -> DisplayStatus {
             DisplayStatus::new(DisplayBackend::Tmux, false, false)
         }
+        fn create_pane(&self, _req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
+            no_pane_support()
+        }
+        fn close_pane(&self, _handle: &PaneHandle) -> DisplayFuture<'_, ()> {
+            no_pane_support()
+        }
     }
 
     // Register an available backend second
@@ -70,6 +91,12 @@ fn display_registry_select_best_favors_available() {
         }
         fn status(&self) -> DisplayStatus {
             DisplayStatus::new(DisplayBackend::Herdr, true, false)
+        }
+        fn create_pane(&self, _req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
+            no_pane_support()
+        }
+        fn close_pane(&self, _handle: &PaneHandle) -> DisplayFuture<'_, ()> {
+            no_pane_support()
         }
     }
 
@@ -99,6 +126,12 @@ fn display_registry_select_best_returns_none_when_unavailable() {
         }
         fn status(&self) -> DisplayStatus {
             DisplayStatus::new(DisplayBackend::Tmux, false, false)
+        }
+        fn create_pane(&self, _req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
+            no_pane_support()
+        }
+        fn close_pane(&self, _handle: &PaneHandle) -> DisplayFuture<'_, ()> {
+            no_pane_support()
         }
     }
 
@@ -133,6 +166,12 @@ fn display_registry_activation_error_surface() {
         }
         fn status(&self) -> DisplayStatus {
             DisplayStatus::new(DisplayBackend::Tmux, true, self.activated)
+        }
+        fn create_pane(&self, _req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
+            no_pane_support()
+        }
+        fn close_pane(&self, _handle: &PaneHandle) -> DisplayFuture<'_, ()> {
+            no_pane_support()
         }
     }
 

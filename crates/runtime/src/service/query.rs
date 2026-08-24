@@ -1,7 +1,7 @@
 //! Read-only projection queries, built as [`DomainClosure`]s so they run on
 //! the database actor thread alongside every mutating command.
 
-use batman_protocol::{ApprovalId, MessageId, ProjectId, RunId, TaskId, WorkerId};
+use crew_protocol::{ApprovalId, MessageId, ProjectId, RunId, TaskId, WorkerId};
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 

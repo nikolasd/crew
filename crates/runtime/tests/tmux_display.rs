@@ -1,7 +1,9 @@
 //! Tmux display backend tests using injected command executors.
 
-use batman_protocol::{DisplayBackend, DisplayConfig, DisplayPlacement};
-use batman_runtime::display::{CommandExecutor, CommandResult, DisplayBackendTrait, TmuxDisplay};
+use crew_protocol::{DisplayBackend, DisplayConfig, DisplayPlacement};
+use crew_runtime::display::{
+    CommandExecutor, CommandResult, DisplayBackendTrait, PaneHandle, PaneRequest, TmuxDisplay,
+};
 use std::io;
 use std::sync::{Arc, Mutex};
 
@@ -330,14 +332,24 @@ fn tmux_display_verifies_no_extra_commands_on_unavailable() {
 
 // ---------------------------------------------------------- pane fidelity
 
-#[test]
-fn create_pane_for_workspace_placement_is_capability_unsupported_and_issues_no_command() {
+fn pane_request(command: Vec<&str>, placement: DisplayPlacement) -> PaneRequest {
+    PaneRequest {
+        title: "crew: worker-1 (claude)".to_string(),
+        command: command.into_iter().map(str::to_string).collect(),
+        placement,
+    }
+}
+
+#[tokio::test]
+async fn create_pane_for_workspace_placement_is_capability_unsupported_and_issues_no_command() {
     let mock = MockCommandExecutor::new();
     let config = DisplayConfig::default();
     let mock = Arc::new(mock);
     let tmux = TmuxDisplay::with_executor(config, mock.clone());
 
-    let result = tmux.create_pane(&["crewd".to_string()], DisplayPlacement::Workspace, "run-1");
+    let result = tmux
+        .create_pane(pane_request(vec!["crewd"], DisplayPlacement::Workspace))
+        .await;
     let err = result.expect_err("tmux has no workspace concept");
     assert!(err.contains("capability_unsupported"));
     assert!(
@@ -346,8 +358,8 @@ fn create_pane_for_workspace_placement_is_capability_unsupported_and_issues_no_c
     );
 }
 
-#[test]
-fn create_pane_without_an_active_session_refuses_rather_than_starting_one() {
+#[tokio::test]
+async fn create_pane_without_an_active_session_refuses_rather_than_starting_one() {
     let mut mock = MockCommandExecutor::new();
     mock.push_failure(b"no server running".to_vec());
 
@@ -355,11 +367,12 @@ fn create_pane_without_an_active_session_refuses_rather_than_starting_one() {
     let mock = Arc::new(mock);
     let tmux = TmuxDisplay::with_executor(config, mock.clone());
 
-    let result = tmux.create_pane(
-        &["crewd".to_string(), "monitor".to_string()],
-        DisplayPlacement::SplitRight,
-        "run-1",
-    );
+    let result = tmux
+        .create_pane(pane_request(
+            vec!["crewd", "monitor"],
+            DisplayPlacement::SplitRight,
+        ))
+        .await;
     let err = result.expect_err("no active session must refuse, not spawn a server");
     assert!(err.contains("no active tmux session"));
     let calls = mock.recorded_calls();
@@ -371,8 +384,8 @@ fn create_pane_without_an_active_session_refuses_rather_than_starting_one() {
     assert_eq!(calls[0].1, vec!["display-message", "-p", "#{session_id}"]);
 }
 
-#[test]
-fn split_right_creates_one_tagged_pane_and_records_ownership_with_argv_safe_command() {
+#[tokio::test]
+async fn split_right_creates_one_tagged_pane_and_records_ownership_with_argv_safe_command() {
     let mut mock = MockCommandExecutor::new();
     mock.push_success(b"main".to_vec()); // session check
     mock.push_success(b"%7\n".to_vec()); // split-window -P -F '#{pane_id}'
@@ -386,14 +399,15 @@ fn split_right_creates_one_tagged_pane_and_records_ownership_with_argv_safe_comm
     // by a joined shell string -- proven by asserting the mock recorded
     // it as a single element, exactly as this backend's own use of
     // `Command::args` (never a shell) guarantees.
-    let pane_id = tmux
-        .create_pane(
-            &["/opt/my crewd/bin/crewd".to_string(), "monitor".to_string()],
+    let handle = tmux
+        .create_pane(pane_request(
+            vec!["/opt/my crewd/bin/crewd", "monitor"],
             DisplayPlacement::SplitRight,
-            "run-1",
-        )
+        ))
+        .await
         .expect("an active session must allow pane creation");
-    assert_eq!(pane_id, "%7");
+    assert_eq!(handle.pane_ref, "%7");
+    assert_eq!(handle.backend, DisplayBackend::Tmux);
     assert_eq!(tmux.owned_pane_ids(), vec!["%7".to_string()]);
 
     let calls = mock.recorded_calls();
@@ -407,8 +421,8 @@ fn split_right_creates_one_tagged_pane_and_records_ownership_with_argv_safe_comm
     );
 }
 
-#[test]
-fn closing_an_untracked_pane_is_refused_and_closing_an_owned_one_removes_it() {
+#[tokio::test]
+async fn closing_an_untracked_pane_is_refused_and_closing_an_owned_one_removes_it() {
     let mut mock = MockCommandExecutor::new();
     mock.push_success(b"main".to_vec());
     mock.push_success(b"%3\n".to_vec());
@@ -419,19 +433,24 @@ fn closing_an_untracked_pane_is_refused_and_closing_an_owned_one_removes_it() {
     let mock = Arc::new(mock);
     let tmux = TmuxDisplay::with_executor(config, mock.clone());
 
-    let pane_id = tmux
-        .create_pane(
-            &["crewd".to_string(), "monitor".to_string()],
+    let handle = tmux
+        .create_pane(pane_request(
+            vec!["crewd", "monitor"],
             DisplayPlacement::SplitDown,
-            "run-1",
-        )
+        ))
+        .await
         .expect("an active session must allow pane creation");
 
+    let unowned = PaneHandle {
+        backend: DisplayBackend::Tmux,
+        pane_ref: "%99".to_string(),
+    };
     assert!(
-        tmux.close_owned_pane("%99").is_err(),
+        tmux.close_pane(&unowned).await.is_err(),
         "an unrelated pane must never be closed"
     );
-    tmux.close_owned_pane(&pane_id)
+    tmux.close_pane(&handle)
+        .await
         .expect("the pane this backend created must close");
     assert!(tmux.owned_pane_ids().is_empty());
 }

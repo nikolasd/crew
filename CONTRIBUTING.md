@@ -20,8 +20,8 @@ invariants). For the technical *how* of building and testing Crew itself, see
 
 ```bash
 # Clone the repository
-git clone https://github.com/nikolasd/batman.git
-cd batman
+git clone https://github.com/nikolasd/crew.git
+cd crew
 
 # Install JS deps and build the crewd runtime in one step
 bun run setup
@@ -161,7 +161,7 @@ git push origin v<version>
 
 Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which:
 1. Builds `crewd` for macOS ARM/Intel and Linux x64/ARM
-2. Assembles each target's release manifest (`cargo run -p batman-xtask -- package`), then validates the four together and emits one aggregate `release-manifest.json` (`package-set`)
+2. Assembles each target's release manifest (`cargo run -p crew-xtask -- package`), then validates the four together and emits one aggregate `release-manifest.json` (`package-set`)
 3. Runs the fixture-mode conformance gate
 4. Uploads the four `crewd-<target>` binaries, their four `.manifest.json` files, and `release-manifest.json` as GitHub Release assets on the tag — no package is published anywhere
 

@@ -23,7 +23,7 @@
 
 use std::sync::Arc;
 
-use batman_protocol::{
+use crew_protocol::{
     ArtifactId, Classified, EventEnvelope, ProjectId, RunId, RuntimeEvent, RuntimeEventKind,
     TaskId, WorkerId,
 };

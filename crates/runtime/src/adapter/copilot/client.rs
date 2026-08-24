@@ -47,8 +47,8 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex as TokioMutex, Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use batman_runtime::adapter::{AdapterError, AdapterEventPayload};
-use batman_runtime::supervisor::{SpawnSpec, Supervisor};
+use crew_runtime::adapter::{AdapterError, AdapterEventPayload};
+use crew_runtime::supervisor::{SpawnSpec, Supervisor};
 
 use super::compatibility::{
     COPILOT_MAX_ACP_PROTOCOL_VERSION, COPILOT_MIN_ACP_PROTOCOL_VERSION,

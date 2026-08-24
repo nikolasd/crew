@@ -13,7 +13,7 @@
 //!
 //! A human runs this deliberately with:
 //! ```sh
-//! cargo test -p batman-runtime --test claude_live -- --ignored
+//! cargo test -p crew-runtime --test claude_live -- --ignored
 //! ```
 //! An explicit `--ignored` run is itself the signal that a human wants
 //! the live call; the only thing that still skips it is
@@ -26,11 +26,11 @@ mod claude;
 
 use std::sync::Arc;
 
-use batman_protocol::{RunId, TaskId, WorkerId};
-use batman_runtime::adapter::{
+use claude::ClaudeAdapter;
+use crew_protocol::{RunId, TaskId, WorkerId};
+use crew_runtime::adapter::{
     Adapter, AdapterEvent, AdapterEventSink, AdapterFuture, ClaudeStartupOptions, StartSpec,
 };
-use claude::ClaudeAdapter;
 use tokio::sync::Mutex;
 
 struct CollectingSink {
@@ -53,7 +53,7 @@ async fn start_a_real_claude_session_and_observe_its_result() {
     // An explicit `--ignored` run already means the human wants this
     // live call -- the only remaining reason to refuse is the kill
     // switch, which forbids observation-only vendor invocation.
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
         eprintln!("skipping: CREW_DISABLE_VENDOR_CLI=1 forbids live vendor-CLI invocation");
         return;
     }

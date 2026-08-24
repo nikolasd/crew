@@ -18,15 +18,15 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use batman_protocol::{ProjectId, RunId, TaskId, WorkerId};
-use batman_runtime::adapter::{
+use crew_protocol::{ProjectId, RunId, TaskId, WorkerId};
+use crew_runtime::adapter::{
     AdapterKind, AdapterRegistry, ClaudeStartupOptions, FixtureAuthorization, StartupOptions,
     WorkerProfile,
 };
-use batman_runtime::conformance::{DISABLE_VENDOR_CLI_ENV, probe_availability};
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::policy::ViolationService;
-use batman_runtime::service::{RunDriver, RunDriverContext};
+use crew_runtime::conformance::{DISABLE_VENDOR_CLI_ENV, probe_availability};
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::policy::ViolationService;
+use crew_runtime::service::{RunDriver, RunDriverContext};
 
 /// A Claude profile. Claude is probed by resolving `claude` on `PATH`, so
 /// emptying `PATH` is what makes its CLI "not installed" for the probe --
@@ -34,7 +34,7 @@ use batman_runtime::service::{RunDriver, RunDriverContext};
 /// file.
 fn claude_profile() -> WorkerProfile {
     WorkerProfile {
-        id: batman_runtime::adapter::ProfileId::new(),
+        id: crew_runtime::adapter::ProfileId::new(),
         adapter: "claude".to_string(),
         model: "sonnet".to_string(),
         permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
@@ -101,7 +101,7 @@ fn ctx(
         project_id,
         events_tx.clone(),
         None,
-        batman_runtime::config::NestedViolationAction::default(),
+        crew_runtime::config::NestedViolationAction::default(),
     ));
     RunDriverContext {
         db,

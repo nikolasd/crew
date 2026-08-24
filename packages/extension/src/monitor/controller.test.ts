@@ -10,7 +10,7 @@ import { expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
 import type { CrewClient } from "../client";
-import type { EventEnvelope } from "@nikolasd/batman-protocol";
+import type { EventEnvelope } from "@nikolasd/crew-protocol";
 import { registerMonitor } from "./controller";
 
 type SessionHandler = (event: unknown, extCtx: ExtensionContext) => Promise<void>;

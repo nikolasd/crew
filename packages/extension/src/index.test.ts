@@ -6,7 +6,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@o
 
 import { z as zod } from "zod/v4";
 
-import { validateRuntimeStatus } from "@nikolasd/batman-protocol/validate";
+import { validateRuntimeStatus } from "@nikolasd/crew-protocol/validate";
 
 import extension from "./index";
 import { getRuntimeStatus, type RuntimeStatusResult } from "./status";
@@ -87,8 +87,8 @@ function fakeCommandContext(cwd: string, hasUI: boolean): { ctx: ExtensionComman
 test("registers crew_health plus every orchestration tool, and every slash command", () => {
   const { api, tools, commands } = createFakeApi();
   extension(api);
-  expect([...tools.keys()]).toEqual(["crew_health", "crew_task", "crew_worker", "crew_profile", "crew_run", "crew_workspace", "crew_artifact", "crew_child", "crew_violation", "crew_message", "crew_approval", "crew_reconcile", "crew_doctor", "crew_runtime_install"]);
-  expect([...commands.keys()]).toEqual(["crew-status", "crew", "crew-doctor", "crew-runtime-install"]);
+  expect([...tools.keys()]).toEqual(["crew_health", "crew_task", "crew_worker", "crew_profile", "crew_run", "crew_workspace", "crew_artifact", "crew_child", "crew_violation", "crew_message", "crew_approval", "crew_reconcile", "crew_doctor", "crew_install"]);
+  expect([...commands.keys()]).toEqual(["crew-status", "crew", "crew-doctor", "crew-install"]);
 });
 
 // ---- Live-daemon path: a real foreground `crewd` the tool must reach. ----
@@ -143,7 +143,7 @@ async function waitForSocket(state: string): Promise<void> {
 }
 
 beforeAll(async () => {
-  const build = Bun.spawnSync(["cargo", "build", "-p", "batman-runtime"], { cwd: REPO_ROOT });
+  const build = Bun.spawnSync(["cargo", "build", "-p", "crew-runtime"], { cwd: REPO_ROOT });
   if (build.exitCode !== 0) {
     throw new Error(`cargo build failed: ${build.stderr.toString()}`);
   }

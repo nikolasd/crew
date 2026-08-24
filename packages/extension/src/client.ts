@@ -32,8 +32,8 @@ import {
   validateRuntimeStatus,
   validateWorkspaceInfo,
   type ValidateFunction,
-} from "@nikolasd/batman-protocol/validate";
-import type { EventEnvelope, InitializeParams, InitializeResult } from "@nikolasd/batman-protocol";
+} from "@nikolasd/crew-protocol/validate";
+import type { EventEnvelope, InitializeParams, InitializeResult } from "@nikolasd/crew-protocol";
 
 /** The 4 MiB bootstrap frame limit applied before `initialize` completes. */
 const BOOTSTRAP_MAX_FRAME_BYTES = 4 * 1024 * 1024;

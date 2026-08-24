@@ -10,7 +10,7 @@
 //! normalizer produced from a live child process.
 //!
 //! The `fake-worker --mode rpc` alias is the grounded OMP-RPC wire shape (see
-//! `batman_runtime::adapter::omp_rpc::client`'s module doc), and it answers
+//! `crew_runtime::adapter::omp_rpc::client`'s module doc), and it answers
 //! the host-tool exchange with a `None` broker, exactly as
 //! `a_host_tool_call_during_the_prompt_turn_never_deadlocks_start` in
 //! `omp_rpc_adapter.rs` already proves: its `prompt` response (the
@@ -20,19 +20,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use batman_protocol::{
+use crew_protocol::{
     ProjectId, Run, RunFlags, RunId, RunState, RuntimeEvent, TaskId, TaskRef, Timestamp, Worker,
     WorkerId, WorkerProfileRef,
 };
-use batman_runtime::adapter::{
+use crew_runtime::adapter::{
     Adapter, DomainAdapterEventSink, OmpRpcAdapter, OmpRpcAdapterOptions, OmpRpcStartupOptions,
     ProfileId, RunLifecycleSink, StartSpec, StartupOptions, WorkerProfile,
 };
-use batman_runtime::config::NestedViolationAction;
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::domain::DomainRepository;
-use batman_runtime::policy::ViolationService;
-use batman_runtime::recovery::RecoveryCoordinator;
+use crew_runtime::config::NestedViolationAction;
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::domain::DomainRepository;
+use crew_runtime::policy::ViolationService;
+use crew_runtime::recovery::RecoveryCoordinator;
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 use tokio::time::{Instant, MissedTickBehavior};
@@ -86,6 +86,7 @@ fn omp_rpc_test_profile() -> WorkerProfile {
         startup_options: StartupOptions::OmpRpc(OmpRpcStartupOptions {
             profile: None,
             host_tools: None,
+            ..Default::default()
         }),
         environment_allowlist: Vec::new(),
         source: "test".to_string(),
@@ -163,9 +164,9 @@ async fn seed_run(db: &DatabaseHandle, project_id: ProjectId) -> (TaskId, Worker
 fn production_sink_chain(
     db: &Arc<DatabaseHandle>,
     project_id: ProjectId,
-    events_tx: broadcast::Sender<batman_protocol::EventEnvelope>,
+    events_tx: broadcast::Sender<crew_protocol::EventEnvelope>,
     run_id: RunId,
-) -> Arc<dyn batman_runtime::adapter::AdapterEventSink> {
+) -> Arc<dyn crew_runtime::adapter::AdapterEventSink> {
     let violation = Arc::new(ViolationService::new(
         Arc::clone(db),
         project_id,

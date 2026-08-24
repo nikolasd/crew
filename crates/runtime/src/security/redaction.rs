@@ -11,7 +11,7 @@
 //! public constructor, so the only way to obtain one -- anywhere in this
 //! crate or downstream -- is through [`Redactor::sanitize`].
 
-use batman_protocol::{
+use crew_protocol::{
     Classified, ContentClass, DiagnosticLevel, ProjectId, RunId, RuntimeEvent, Timestamp,
 };
 use regex::Regex;

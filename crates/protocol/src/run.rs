@@ -115,7 +115,7 @@ pub struct RunSpec {
     pub workspace_mode: Option<String>,
     /// Priority (higher = scheduled first).
     pub priority: i32,
-    /// The task content OMP supplies for this run. Batman never authors it.
+    /// The task content OMP supplies for this run. Crew never authors it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
 }

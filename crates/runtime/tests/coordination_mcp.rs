@@ -16,14 +16,14 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use batman_protocol::{ProjectId, RunId, TaskId, Timestamp, WorkerId};
-use batman_runtime::coordination::{
+use crew_protocol::{ProjectId, RunId, TaskId, Timestamp, WorkerId};
+use crew_runtime::coordination::{
     ScopeBinding, ScopeTokenStore, ScopeTokenVerifier, VendorProcessIdentity,
 };
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::ipc::{Server, ServerConfig};
-use batman_runtime::paths::RuntimePaths;
-use batman_runtime::service::FakeRunDriver;
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::ipc::{Server, ServerConfig};
+use crew_runtime::paths::RuntimePaths;
+use crew_runtime::service::FakeRunDriver;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -131,7 +131,7 @@ impl Harness {
                 "INSERT INTO runs (run_id, task_id, worker_id, state, created_at) VALUES (?1, ?2, ?3, 'working', ?4)",
                 rusqlite::params![run_id.to_string(), task_id.to_string(), worker_id.to_string(), "2026-01-01T00:00:00Z"],
             )?;
-            Ok::<_, batman_runtime::domain::DomainError>(json!({}))
+            Ok::<_, crew_runtime::domain::DomainError>(json!({}))
         }))
         .await
         .unwrap();

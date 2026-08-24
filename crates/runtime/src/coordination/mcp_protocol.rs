@@ -13,7 +13,7 @@
 //! in from its own bound scope, exactly as the socket dispatch layer
 //! trusts only that bound scope, never a caller-supplied identity.
 
-use batman_protocol::COORDINATION_PAYLOAD_MAX_BYTES;
+use crew_protocol::COORDINATION_PAYLOAD_MAX_BYTES;
 use serde_json::{Value, json};
 
 /// The conservative *character*-count upper bound this module's JSON
@@ -356,9 +356,9 @@ fn matches_schema_shape(value: &Value, schema: &Value) -> Result<(), String> {
 /// directly in its public signature.
 #[derive(Debug, Clone, Copy)]
 pub struct BoundScope {
-    pub run_id: batman_protocol::RunId,
-    pub task_id: batman_protocol::TaskId,
-    pub worker_id: batman_protocol::WorkerId,
+    pub run_id: crew_protocol::RunId,
+    pub task_id: crew_protocol::TaskId,
+    pub worker_id: crew_protocol::WorkerId,
 }
 
 /// Translates one MCP `tools/call` (`name` plus its `arguments` object)
@@ -578,7 +578,7 @@ pub fn tool_result_from_error(message: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use batman_protocol::{RunId, TaskId, WorkerId};
+    use crew_protocol::{RunId, TaskId, WorkerId};
 
     fn scope() -> BoundScope {
         BoundScope {

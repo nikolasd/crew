@@ -10,20 +10,20 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use batman_runtime::ScopeTokenStore;
-use batman_runtime::adapter::copilot::client::{
+use crew_runtime::ScopeTokenStore;
+use crew_runtime::adapter::copilot::client::{
     CopilotAcpClient, CopilotClientEvent, parse_initialize_response,
 };
-use batman_runtime::adapter::copilot::compatibility::{
+use crew_runtime::adapter::copilot::compatibility::{
     COPILOT_MAX_ACP_PROTOCOL_VERSION, COPILOT_MIN_ACP_PROTOCOL_VERSION,
     copilot_acp_protocol_version_supported, copilot_cli_version_known,
 };
-use batman_runtime::adapter::copilot::normalize::copilot_normalize_session_update;
-use batman_runtime::adapter::copilot::{CopilotAdapter, CopilotSpawnPlan};
-use batman_runtime::adapter::mcp_config::{
+use crew_runtime::adapter::copilot::normalize::copilot_normalize_session_update;
+use crew_runtime::adapter::copilot::{CopilotAdapter, CopilotSpawnPlan};
+use crew_runtime::adapter::mcp_config::{
     AdapterMcpConfig, McpLaunchContext, coordination_mcp_config_document,
 };
-use batman_runtime::adapter::{
+use crew_runtime::adapter::{
     Adapter, AdapterCapabilities, AdapterErrorCode, ApprovalsCapability, DurabilityCapability,
     NativeViewCapability, NestedCapability, ProtocolKind, ResumeCapability, SteeringCapability,
     UsageCapability, WorkspaceControlCapability,
@@ -175,7 +175,7 @@ fn a_missing_agent_version_is_unknown_not_implicitly_verified() {
     // against a completely unverified CLI. The shared decision function
     // both `ensure_client` and `probe()` now consult must treat a missing
     // version exactly like an unknown one.
-    use batman_runtime::adapter::copilot::compatibility::copilot_negotiated_version_verified;
+    use crew_runtime::adapter::copilot::compatibility::copilot_negotiated_version_verified;
 
     let mut response = load_json_fixture("initialize-v1.json");
     response["result"]["agentInfo"]
@@ -202,7 +202,7 @@ async fn ensure_client_refuses_end_to_end_when_the_agent_omits_its_version() {
     // predicate stays correct. No vendor CLI, no model call.
     use std::os::unix::fs::PermissionsExt;
 
-    use batman_runtime::adapter::{AdapterEvent, AdapterEventSink, AdapterFuture};
+    use crew_runtime::adapter::{AdapterEvent, AdapterEventSink, AdapterFuture};
 
     struct NullSink;
     impl AdapterEventSink for NullSink {
@@ -244,11 +244,11 @@ async fn ensure_client_refuses_end_to_end_when_the_agent_omits_its_version() {
     let adapter = CopilotAdapter::new(
         program,
         std::env::temp_dir(),
-        batman_runtime::adapter::CopilotStartupOptions::default(),
+        crew_runtime::adapter::CopilotStartupOptions::default(),
         Vec::new(),
-        batman_protocol::RunId::new(),
-        batman_protocol::TaskId::new(),
-        batman_protocol::WorkerId::new(),
+        crew_protocol::RunId::new(),
+        crew_protocol::TaskId::new(),
+        crew_protocol::WorkerId::new(),
         None,
     );
 
@@ -258,7 +258,7 @@ async fn ensure_client_refuses_end_to_end_when_the_agent_omits_its_version() {
         // deadlines dominate this test's wall time.
         Duration::from_secs(30),
         adapter.resume(
-            batman_runtime::adapter::VendorSessionRef("session-1".to_string()),
+            crew_runtime::adapter::VendorSessionRef("session-1".to_string()),
             std::sync::Arc::new(NullSink),
         ),
     )
@@ -396,9 +396,9 @@ fn session_updates_fixture_normalizes_every_variant_correctly() {
     let payloads = copilot_normalize_session_update(&updates[0]);
     assert_eq!(payloads.len(), 1);
     match &payloads[0] {
-        batman_runtime::adapter::AdapterEventPayload::MessageChunk { role, text } => {
+        crew_runtime::adapter::AdapterEventPayload::MessageChunk { role, text } => {
             assert_eq!(role, "user");
-            assert_eq!(text.class, batman_protocol::ContentClass::Visible);
+            assert_eq!(text.class, crew_protocol::ContentClass::Visible);
             assert_eq!(text.value, "Fix the failing assertion in adapter.rs");
         }
         other => panic!("expected MessageChunk, got {other:?}"),
@@ -410,7 +410,7 @@ fn session_updates_fixture_normalizes_every_variant_correctly() {
     // 3. agent_message_chunk -> visible MessageChunk{role: "assistant"}.
     let payloads = copilot_normalize_session_update(&updates[2]);
     match &payloads[0] {
-        batman_runtime::adapter::AdapterEventPayload::MessageChunk { role, .. } => {
+        crew_runtime::adapter::AdapterEventPayload::MessageChunk { role, .. } => {
             assert_eq!(role, "assistant");
         }
         other => panic!("expected MessageChunk, got {other:?}"),
@@ -419,7 +419,7 @@ fn session_updates_fixture_normalizes_every_variant_correctly() {
     // 4. tool_call -> ToolStarted.
     let payloads = copilot_normalize_session_update(&updates[3]);
     match &payloads[0] {
-        batman_runtime::adapter::AdapterEventPayload::ToolStarted { tool_call_id, name } => {
+        crew_runtime::adapter::AdapterEventPayload::ToolStarted { tool_call_id, name } => {
             assert_eq!(tool_call_id, "tool-000000000001");
             assert_eq!(name, "Read adapter.rs");
         }
@@ -429,7 +429,7 @@ fn session_updates_fixture_normalizes_every_variant_correctly() {
     // 5. tool_call_update{status: completed} -> ToolResult{ok: true}.
     let payloads = copilot_normalize_session_update(&updates[4]);
     match &payloads[0] {
-        batman_runtime::adapter::AdapterEventPayload::ToolResult { ok, detail, .. } => {
+        crew_runtime::adapter::AdapterEventPayload::ToolResult { ok, detail, .. } => {
             assert!(ok);
             assert_eq!(detail.value, "fn main() {}");
         }
@@ -439,7 +439,7 @@ fn session_updates_fixture_normalizes_every_variant_correctly() {
     // 7. tool_call_update{status: in_progress} -> ToolProgress.
     let payloads = copilot_normalize_session_update(&updates[6]);
     match &payloads[0] {
-        batman_runtime::adapter::AdapterEventPayload::ToolProgress { tool_call_id, .. } => {
+        crew_runtime::adapter::AdapterEventPayload::ToolProgress { tool_call_id, .. } => {
             assert_eq!(tool_call_id, "tool-000000000002");
         }
         other => panic!("expected ToolProgress, got {other:?}"),
@@ -449,7 +449,7 @@ fn session_updates_fixture_normalizes_every_variant_correctly() {
     //    whose detail names only the path, never the old/new file text.
     let payloads = copilot_normalize_session_update(&updates[7]);
     match &payloads[0] {
-        batman_runtime::adapter::AdapterEventPayload::ToolResult { ok, detail, .. } => {
+        crew_runtime::adapter::AdapterEventPayload::ToolResult { ok, detail, .. } => {
             assert!(ok);
             assert_eq!(detail.value, "diff: /workspace/adapter.rs");
             assert!(!detail.value.contains("assert_eq"));
@@ -460,7 +460,7 @@ fn session_updates_fixture_normalizes_every_variant_correctly() {
     // 10. tool_call_update{status: failed} -> ToolResult{ok: false}.
     let payloads = copilot_normalize_session_update(&updates[9]);
     match &payloads[0] {
-        batman_runtime::adapter::AdapterEventPayload::ToolResult { ok, detail, .. } => {
+        crew_runtime::adapter::AdapterEventPayload::ToolResult { ok, detail, .. } => {
             assert!(!ok);
             assert_eq!(detail.value, "permission denied");
         }
@@ -481,11 +481,11 @@ fn declared_capabilities_match_exactly_what_this_adapter_tests() {
     let adapter = CopilotAdapter::new(
         PathBuf::from("copilot"),
         std::env::temp_dir(),
-        batman_runtime::adapter::CopilotStartupOptions::default(),
+        crew_runtime::adapter::CopilotStartupOptions::default(),
         Vec::new(),
-        batman_protocol::RunId::new(),
-        batman_protocol::TaskId::new(),
-        batman_protocol::WorkerId::new(),
+        crew_protocol::RunId::new(),
+        crew_protocol::TaskId::new(),
+        crew_protocol::WorkerId::new(),
         None,
     );
     let capabilities: AdapterCapabilities = adapter.capabilities();
@@ -663,23 +663,23 @@ async fn respond_permission_answers_a_real_pending_request_over_the_wire() {
 fn mcp_config_for_test() -> AdapterMcpConfig {
     AdapterMcpConfig {
         scope_tokens: std::sync::Arc::new(ScopeTokenStore::new()),
-        project_id: batman_protocol::ProjectId::new(),
+        project_id: crew_protocol::ProjectId::new(),
         crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
         state_dir: PathBuf::from("/tmp/crew-state"),
         repository: PathBuf::from("/tmp/my-repo"),
     }
 }
 
-fn adapter_with_mcp(mcp: Option<AdapterMcpConfig>) -> (CopilotAdapter, batman_protocol::RunId) {
-    let run_id = batman_protocol::RunId::new();
+fn adapter_with_mcp(mcp: Option<AdapterMcpConfig>) -> (CopilotAdapter, crew_protocol::RunId) {
+    let run_id = crew_protocol::RunId::new();
     let adapter = CopilotAdapter::new(
         PathBuf::from("copilot"),
         std::env::temp_dir(),
-        batman_runtime::adapter::CopilotStartupOptions::default(),
+        crew_runtime::adapter::CopilotStartupOptions::default(),
         Vec::new(),
         run_id,
-        batman_protocol::TaskId::new(),
-        batman_protocol::WorkerId::new(),
+        crew_protocol::TaskId::new(),
+        crew_protocol::WorkerId::new(),
         mcp,
     );
     (adapter, run_id)
@@ -748,19 +748,20 @@ fn disable_builtin_mcps_is_never_added_regardless_of_mcp_config() {
 
 #[test]
 fn spawn_plan_is_unchanged_when_mcp_is_none() {
-    let startup_options = batman_runtime::adapter::CopilotStartupOptions {
+    let startup_options = crew_runtime::adapter::CopilotStartupOptions {
         allow_tool: Some(vec!["fs_read".to_string()]),
         deny_tool: Some(vec!["fs_write".to_string()]),
         log_level: Some("debug".to_string()),
+        ..Default::default()
     };
     let adapter = CopilotAdapter::new(
         PathBuf::from("copilot"),
         std::env::temp_dir(),
         startup_options,
         Vec::new(),
-        batman_protocol::RunId::new(),
-        batman_protocol::TaskId::new(),
-        batman_protocol::WorkerId::new(),
+        crew_protocol::RunId::new(),
+        crew_protocol::TaskId::new(),
+        crew_protocol::WorkerId::new(),
         None,
     );
     let plan = adapter.spawn_plan();
@@ -782,8 +783,8 @@ fn spawn_plan_is_unchanged_when_mcp_is_none() {
 
 #[tokio::test]
 async fn fixture_conformance_report_covers_every_canonical_scenario_and_provable_ones_pass() {
-    use batman_runtime::adapter::copilot::conformance::fixture_report;
-    use batman_runtime::conformance::scenario::ALL;
+    use crew_runtime::adapter::copilot::conformance::fixture_report;
+    use crew_runtime::conformance::scenario::ALL;
 
     let report = fixture_report().await;
     assert_eq!(
@@ -819,9 +820,9 @@ async fn fixture_conformance_report_covers_every_canonical_scenario_and_provable
     // resume would require an actual turn (a model call), which this
     // suite must never make.
     let honest_gaps = [
-        batman_runtime::conformance::scenario::UNEXPECTED_CHILD_OBSERVATION,
-        batman_runtime::conformance::scenario::SESSION_RESUME,
-        batman_runtime::conformance::scenario::RUNTIME_RESTART,
+        crew_runtime::conformance::scenario::UNEXPECTED_CHILD_OBSERVATION,
+        crew_runtime::conformance::scenario::SESSION_RESUME,
+        crew_runtime::conformance::scenario::RUNTIME_RESTART,
     ];
     for scenario in &report.scenarios {
         if honest_gaps.contains(&scenario.name) {
@@ -831,11 +832,11 @@ async fn fixture_conformance_report_covers_every_canonical_scenario_and_provable
         // `real_client` is forbidden from spawning `copilot --acp` at all
         // and reports an honest skip instead (R52). Any *other* reason for
         // failing here is still a real regression.
-        if batman_runtime::conformance::vendor_cli_invocation_disabled() && scenario.was_skipped() {
+        if crew_runtime::conformance::vendor_cli_invocation_disabled() && scenario.was_skipped() {
             assert!(
                 scenario
                     .detail
-                    .contains(batman_runtime::conformance::DISABLE_VENDOR_CLI_ENV),
+                    .contains(crew_runtime::conformance::DISABLE_VENDOR_CLI_ENV),
                 "scenario {} was skipped for a reason other than the kill switch: {}",
                 scenario.name,
                 scenario.detail

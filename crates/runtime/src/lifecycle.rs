@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use batman_protocol::{
+use crew_protocol::{
     BinarySource, Classified, ContentClass, DiagnosticLevel, EventEnvelope, RuntimeEvent,
 };
 use nix::errno::Errno;
@@ -183,8 +183,12 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     // can re-merge a run's own `policyOverrides` onto them.
     let config_paths = opts.config_paths.clone();
     let path_refs: Vec<&Path> = config_paths.iter().map(PathBuf::as_path).collect();
-    let policy = crate::config::resolve_policy(&path_refs, None)
+    // Load the merged CrewConfig once: the policy adapter below is what
+    // `run/submit` re-merges against, while sections the policy does not
+    // carry (the dashboard listener) are read off the config directly.
+    let crew_config = crate::config::crew::load_layers(&path_refs, None)
         .map_err(|e| ServeError::ConfigError(e.to_string()))?;
+    let policy = crate::config::RuntimePolicy::from_crew_config(&crew_config);
 
     // Org security patterns fail *closed*. An org configures these to keep
     // specific secrets out of a durable journal it cannot retroactively
@@ -200,7 +204,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     })?;
 
     let started = redactor.sanitize(RawRuntimeEvent {
-        timestamp: batman_protocol::Timestamp::now(),
+        timestamp: crew_protocol::Timestamp::now(),
         project_id: paths.project_id,
         run_id: None,
         kind: RawEventKind::RuntimeStarted,
@@ -231,7 +235,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         }),
         Err(err) => {
             let unavailable = redactor.sanitize(RawRuntimeEvent {
-                timestamp: batman_protocol::Timestamp::now(),
+                timestamp: crew_protocol::Timestamp::now(),
                 project_id: paths.project_id,
                 run_id: None,
                 kind: RawEventKind::Diagnostic {
@@ -259,9 +263,30 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         mcp,
         org_security_patterns,
     ));
+    // The artifact store persists under the state root so a journaled
+    // `patch_artifact_id` survives a daemon restart -- `workspace/apply`
+    // after a restart must still find its patch. Failing to open it is a
+    // real permission/disk problem and refuses startup: silently falling
+    // back to memory would journal artifact ids that quietly die with the
+    // process.
+    let artifact_store = Arc::new(
+        crate::workspace::ArtifactStore::with_storage(
+            paths.artifacts.clone(),
+            crew_config
+                .workspace
+                .artifact_max_bytes
+                .unwrap_or(crate::workspace::DEFAULT_ARTIFACT_STORE_MAX_BYTES),
+        )
+        .map_err(|e| ServeError::Io {
+            path: paths.artifacts.clone(),
+            source: std::io::Error::other(e.to_string()),
+        })?,
+    );
+
     let config = ServerConfig {
         binary_source: opts.binary_source,
         run_driver: Some(Arc::clone(&registry) as Arc<dyn crate::service::RunDriver>),
+        artifact_store: Some(artifact_store),
         repository: repo_root.clone(),
         worker_verifier: Arc::new(ScopeTokenVerifier::new(Arc::clone(&scope_tokens))),
         nested_violation_action,
@@ -321,13 +346,47 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         }
     });
 
+    // The dashboard is an opt-in, read-only, localhost-only projection; a
+    // bind failure (port taken) degrades to "no dashboard" rather than
+    // failing a daemon that orchestrates fine without it.
+    let dashboard = if crew_config.dashboard.enabled {
+        match crate::dashboard::DashboardServer::bind(
+            crew_config.dashboard.port,
+            crate::dashboard::DashboardDeps {
+                db: Arc::clone(&db),
+                project_id: paths.project_id,
+                events_tx: server.events_sender(),
+            },
+        )
+        .await
+        {
+            Ok(dashboard) => {
+                tracing::info!(addr = %dashboard.local_addr(), "dashboard_started");
+                Some(dashboard)
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, port = crew_config.dashboard.port, "dashboard_bind_failed");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     server.serve(shutdown_signal()).await?;
+
+    // Stop the dashboard before the journal drains below: its readers go
+    // through the same DatabaseHandle, so nothing may still be answering
+    // HTTP once the actor begins shutting down.
+    if let Some(dashboard) = dashboard {
+        dashboard.stop();
+    }
 
     // Graceful shutdown: journal the stop record durably FIRST, then close the
     // database, and only then remove the socket and release the lock. The
     // socket's disappearance is therefore proof the journal shut down first.
     let stopping = redactor.sanitize(RawRuntimeEvent {
-        timestamp: batman_protocol::Timestamp::now(),
+        timestamp: crew_protocol::Timestamp::now(),
         project_id: paths.project_id,
         run_id: None,
         kind: RawEventKind::RuntimeStopping,
@@ -684,7 +743,7 @@ fn apply_and_render(
         RuntimeEvent::ApprovalEvent { kind, action, .. } => (
             None,
             Some(
-                if matches!(kind, batman_protocol::RuntimeEventKind::ApprovalRequested) {
+                if matches!(kind, crew_protocol::RuntimeEventKind::ApprovalRequested) {
                     format!("approval requested: {action}")
                 } else {
                     "approval decided".to_string()
@@ -695,12 +754,10 @@ fn apply_and_render(
             None,
             Some(
                 match kind {
-                    batman_protocol::RuntimeEventKind::ChildWorkerRequested => {
+                    crew_protocol::RuntimeEventKind::ChildWorkerRequested => {
                         "child worker requested"
                     }
-                    batman_protocol::RuntimeEventKind::ChildWorkerAccepted => {
-                        "child worker accepted"
-                    }
+                    crew_protocol::RuntimeEventKind::ChildWorkerAccepted => "child worker accepted",
                     _ => "child worker request denied",
                 }
                 .to_string(),
@@ -1085,9 +1142,7 @@ fn init_logging(foreground: bool, log_path: &Path) -> Result<(), ServeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use batman_protocol::{
-        EventSource, ProjectId, RunId, RuntimeEvent, TaskId, Timestamp, WorkerId,
-    };
+    use crew_protocol::{EventSource, ProjectId, RunId, RuntimeEvent, TaskId, Timestamp, WorkerId};
 
     fn health_envelope(healthy: bool, detail: Option<&str>) -> EventEnvelope {
         let run_id = RunId::new();

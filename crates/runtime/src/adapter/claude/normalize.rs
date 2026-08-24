@@ -28,8 +28,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use batman_protocol::{Classified, ContentClass};
-use batman_runtime::adapter::{AdapterError, AdapterEventPayload};
+use crew_protocol::{Classified, ContentClass};
+use crew_runtime::adapter::{AdapterError, AdapterEventPayload};
 use serde_json::Value;
 
 use super::protocol::{

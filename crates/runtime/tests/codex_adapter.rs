@@ -14,19 +14,19 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use batman_protocol::{ContentClass, RunId, TaskId, WorkerId};
-use batman_runtime::adapter::{
+use crew_protocol::{ContentClass, RunId, TaskId, WorkerId};
+use crew_runtime::adapter::{
     Adapter, AdapterEvent, AdapterEventPayload, AdapterEventSink, AdapterFuture,
     CodexStartupOptions,
 };
-use batman_runtime::supervisor::{EnvironmentPolicy, SpawnSpec, Supervisor};
+use crew_runtime::supervisor::{EnvironmentPolicy, SpawnSpec, Supervisor};
 use serde_json::Value;
 
-use batman_runtime::adapter::codex::CodexAdapter;
-use batman_runtime::adapter::codex::client::CodexRpcClient;
-use batman_runtime::adapter::codex::normalize;
-use batman_runtime::adapter::codex::schema::{SchemaManifest, verify_against_installed_binary};
-use batman_runtime::adapter::mcp_config::McpLaunchContext;
+use crew_runtime::adapter::codex::CodexAdapter;
+use crew_runtime::adapter::codex::client::CodexRpcClient;
+use crew_runtime::adapter::codex::normalize;
+use crew_runtime::adapter::codex::schema::{SchemaManifest, verify_against_installed_binary};
+use crew_runtime::adapter::mcp_config::McpLaunchContext;
 
 // ------------------------------------------------------------ real binary
 
@@ -291,32 +291,29 @@ async fn capabilities_match_the_verified_protocol_surface() {
     let caps = adapter.capabilities();
     assert_eq!(
         caps.protocol,
-        batman_runtime::adapter::ProtocolKind::Structured
+        crew_runtime::adapter::ProtocolKind::Structured
     );
     assert_eq!(
         caps.resume,
-        batman_runtime::adapter::ResumeCapability::Session
+        crew_runtime::adapter::ResumeCapability::Session
     );
     assert_eq!(
         caps.steering,
-        batman_runtime::adapter::SteeringCapability::ActiveTurn
+        crew_runtime::adapter::SteeringCapability::ActiveTurn
     );
     assert_eq!(
         caps.approvals,
-        batman_runtime::adapter::ApprovalsCapability::Controllable
+        crew_runtime::adapter::ApprovalsCapability::Controllable
     );
-    assert_eq!(
-        caps.usage,
-        batman_runtime::adapter::UsageCapability::PerTurn
-    );
-    assert_eq!(caps.nested, batman_runtime::adapter::NestedCapability::None);
+    assert_eq!(caps.usage, crew_runtime::adapter::UsageCapability::PerTurn);
+    assert_eq!(caps.nested, crew_runtime::adapter::NestedCapability::None);
     assert_eq!(
         caps.workspace_control,
-        batman_runtime::adapter::WorkspaceControlCapability::Write
+        crew_runtime::adapter::WorkspaceControlCapability::Write
     );
     assert_eq!(
         caps.durability,
-        batman_runtime::adapter::DurabilityCapability::VendorResumable
+        crew_runtime::adapter::DurabilityCapability::VendorResumable
     );
 }
 
@@ -430,7 +427,7 @@ async fn real_transport_completes_initialize_and_thread_start_with_zero_model_ca
 /// itself the signal that a human wants the live call; the only thing
 /// that still skips it is `CREW_DISABLE_VENDOR_CLI=1`, which forbids
 /// observation-only vendor invocation. A human wanting to exercise it
-/// locally: `cargo test -p batman-runtime --test codex_adapter --
+/// locally: `cargo test -p crew-runtime --test codex_adapter --
 /// --ignored live_start_actually_runs_a_turn_against_a_real_model`.
 #[tokio::test]
 #[ignore = "invokes a real model turn against an authenticated Codex account; human-run only, see doc comment"]
@@ -438,7 +435,7 @@ async fn live_start_actually_runs_a_turn_against_a_real_model() {
     // An explicit `--ignored` run already means the human wants this
     // live call -- the only remaining reason to refuse is the kill
     // switch, which forbids observation-only vendor invocation.
-    if batman_runtime::conformance::vendor_cli_invocation_disabled() {
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
         eprintln!("skipping: CREW_DISABLE_VENDOR_CLI=1 forbids live vendor-CLI invocation");
         return;
     }
@@ -449,7 +446,7 @@ async fn live_start_actually_runs_a_turn_against_a_real_model() {
         None,
     );
     let sink: Arc<dyn AdapterEventSink> = Arc::new(RecordingSink::default());
-    let spec = batman_runtime::adapter::StartSpec {
+    let spec = crew_runtime::adapter::StartSpec {
         run_id: RunId::new(),
         task_id: TaskId::new(),
         worker_id: WorkerId::new(),
@@ -575,10 +572,10 @@ fn spawn_spec_with_mcp_config_leaves_native_discovery_flags_untouched() {
 
 #[tokio::test]
 async fn fixture_conformance_report_covers_every_canonical_scenario_exactly_once() {
-    use batman_runtime::conformance::scenario;
+    use crew_runtime::conformance::scenario;
     use std::collections::HashSet;
 
-    let report = batman_runtime::adapter::codex::conformance::fixture_report().await;
+    let report = crew_runtime::adapter::codex::conformance::fixture_report().await;
     assert_eq!(report.scenarios.len(), 14);
     let mut seen = HashSet::new();
     for result in &report.scenarios {
@@ -624,11 +621,11 @@ async fn fixture_conformance_report_covers_every_canonical_scenario_exactly_once
         // `codex app-server` spawn is forbidden too, so it reports an
         // honest skip rather than spawning (R52). Any *other* reason for
         // failing here is still a real regression.
-        if batman_runtime::conformance::vendor_cli_invocation_disabled() && !result.proved() {
+        if crew_runtime::conformance::vendor_cli_invocation_disabled() && !result.proved() {
             assert!(
                 result
                     .detail
-                    .contains(batman_runtime::conformance::DISABLE_VENDOR_CLI_ENV),
+                    .contains(crew_runtime::conformance::DISABLE_VENDOR_CLI_ENV),
                 "scenario {} failed for a reason other than the kill switch: {}",
                 result.name,
                 result.detail

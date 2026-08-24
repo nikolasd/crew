@@ -4,7 +4,7 @@
 //! commit history, and generates a patch artifact stored in the ArtifactStore.
 
 use crate::workspace::artifact_store::sha256_hex;
-use batman_protocol::{Artifact, ArtifactId, ArtifactKind, InspectRequest, InspectResult};
+use crew_protocol::{Artifact, ArtifactId, ArtifactKind, InspectRequest, InspectResult};
 use std::process::Command;
 use std::sync::Arc;
 use thiserror::Error;
@@ -20,7 +20,7 @@ pub enum InspectError {
 pub struct WorkspaceInspector {
     path: std::path::PathBuf,
     store: Option<Arc<crate::workspace::ArtifactStore>>,
-    run_id: Option<batman_protocol::RunId>,
+    run_id: Option<crew_protocol::RunId>,
 }
 
 impl WorkspaceInspector {
@@ -35,7 +35,7 @@ impl WorkspaceInspector {
     pub fn with_store(
         path: std::path::PathBuf,
         store: Arc<crate::workspace::ArtifactStore>,
-        run_id: batman_protocol::RunId,
+        run_id: crew_protocol::RunId,
     ) -> Self {
         WorkspaceInspector {
             path,

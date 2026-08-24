@@ -19,24 +19,24 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use batman_protocol::{RunId, TaskId, WorkerId};
-use batman_runtime::adapter::omp_rpc::OmpRpcAdapter;
-use batman_runtime::adapter::omp_rpc::client::{
+use crew_protocol::{RunId, TaskId, WorkerId};
+use crew_runtime::adapter::omp_rpc::OmpRpcAdapter;
+use crew_runtime::adapter::omp_rpc::client::{
     self, OmpRpcClient, abort_command, follow_up_command, get_session_stats_command,
     get_state_command, prompt_command, set_subagent_subscription_command, steer_command,
 };
-use batman_runtime::adapter::omp_rpc::conformance;
-use batman_runtime::adapter::omp_rpc::normalize::{
+use crew_runtime::adapter::omp_rpc::conformance;
+use crew_runtime::adapter::omp_rpc::normalize::{
     PROMPT_ACCEPTED_MARKER, PROMPT_COMPLETED_MARKER, PendingApproval,
     extension_ui_request_to_pending_approval, normalize_frame,
 };
-use batman_runtime::adapter::{
+use crew_runtime::adapter::{
     Adapter, AdapterEvent, AdapterEventPayload, AdapterEventSink, AdapterFuture,
     OmpRpcAdapterOptions, OmpRpcStartupOptions, ProfileId, StartSpec, StartupOptions,
     WorkerProfile,
 };
-use batman_runtime::conformance::scenario;
-use batman_runtime::supervisor::{EnvironmentPolicy, SpawnSpec, Supervisor};
+use crew_runtime::conformance::scenario;
+use crew_runtime::supervisor::{EnvironmentPolicy, SpawnSpec, Supervisor};
 use serde_json::Value;
 
 // ------------------------------------------------------------- fixtures
@@ -757,6 +757,7 @@ fn omp_rpc_test_profile() -> WorkerProfile {
         startup_options: StartupOptions::OmpRpc(OmpRpcStartupOptions {
             profile: None,
             host_tools: None,
+            ..Default::default()
         }),
         environment_allowlist: Vec::new(),
         source: "test".to_string(),
@@ -902,11 +903,11 @@ async fn fixture_report_covers_every_canonical_scenario_exactly_once_and_passes_
         // `resume_flag_probe` is forbidden from spawning the real `omp`
         // binary and reports an honest skip instead (R52). Any *other*
         // reason for failing here is still a real regression.
-        if batman_runtime::conformance::vendor_cli_invocation_disabled() && result.was_skipped() {
+        if crew_runtime::conformance::vendor_cli_invocation_disabled() && result.was_skipped() {
             assert!(
                 result
                     .detail
-                    .contains(batman_runtime::conformance::DISABLE_VENDOR_CLI_ENV),
+                    .contains(crew_runtime::conformance::DISABLE_VENDOR_CLI_ENV),
                 "scenario {:?} was skipped for a reason other than the kill switch: {}",
                 result.name,
                 result.detail

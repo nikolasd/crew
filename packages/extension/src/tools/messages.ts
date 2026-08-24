@@ -11,7 +11,7 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 import type { OrchestrationToolContext } from "./shared";
-import type { MessageKind } from "@nikolasd/batman-protocol";
+import type { MessageKind } from "@nikolasd/crew-protocol";
 import { callOrchestration } from "./shared";
 
 // The nine coordination kinds, tied to the generated MessageKind union so

@@ -4,14 +4,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use batman_protocol::{Classified, ContentClass, ProjectId, RunId, TaskId, WorkerId};
-use batman_runtime::adapter::{
+use crew_protocol::{Classified, ContentClass, ProjectId, RunId, TaskId, WorkerId};
+use crew_runtime::adapter::{
     Adapter, AdapterEvent, AdapterEventPayload, AdapterEventSink, CancelScope,
 };
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::ipc::{PeerCredentialReader, PeerCredentials, Server, ServerConfig};
-use batman_runtime::paths::RuntimePaths;
-use batman_runtime::service::{AdapterFuture, FakeRunDriver, RunDriver, RunDriverContext};
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::ipc::{PeerCredentialReader, PeerCredentials, Server, ServerConfig};
+use crew_runtime::paths::RuntimePaths;
+use crew_runtime::service::{AdapterFuture, FakeRunDriver, RunDriver, RunDriverContext};
 use nix::unistd::Uid;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -228,7 +228,7 @@ impl RunDriver for SeedingRunDriver {
         let security_patterns = self.security_patterns.clone();
         let events = self.events.lock().unwrap().take().unwrap_or_default();
         Box::pin(async move {
-            let sink = batman_runtime::adapter::DomainAdapterEventSink::new(
+            let sink = crew_runtime::adapter::DomainAdapterEventSink::new(
                 ctx.db.clone(),
                 ctx.project_id,
                 ctx.events_tx.clone(),
@@ -269,8 +269,8 @@ impl RunDriver for SeedingRunDriver {
         &self,
         _run_id: RunId,
         _scope: CancelScope,
-    ) -> AdapterFuture<'static, Result<batman_runtime::service::CancelOutcome, String>> {
-        Box::pin(async move { Ok(batman_runtime::service::CancelOutcome::NoRunningAdapter) })
+    ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
+        Box::pin(async move { Ok(crew_runtime::service::CancelOutcome::NoRunningAdapter) })
     }
 }
 

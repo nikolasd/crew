@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 
-import type { InitializeParams, InitializeResult, RuntimeStatus } from "@nikolasd/batman-protocol";
+import type { InitializeParams, InitializeResult, RuntimeStatus } from "@nikolasd/crew-protocol";
 import { CrewClient, JsonRpcRemoteError, ValidationError } from "./client";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
@@ -55,7 +55,7 @@ function ompInitParams(agentDir: string, maxFrameBytes: number): InitializeParam
 
 beforeAll(async () => {
   // Ensure the binary the TypeScript client talks to exists.
-  const build = Bun.spawnSync(["cargo", "build", "-p", "batman-runtime"], { cwd: REPO_ROOT });
+  const build = Bun.spawnSync(["cargo", "build", "-p", "crew-runtime"], { cwd: REPO_ROOT });
   if (build.exitCode !== 0) {
     throw new Error(`cargo build failed: ${build.stderr.toString()}`);
   }

@@ -30,22 +30,22 @@ Crew consists of two components, installed in two steps:
 - **Binary**: the `crewd` runtime daemon, downloaded as a verified GitHub Release asset
 
 ```
-/marketplace add nikolasd/batman
+/marketplace add nikolasd/crew
 /marketplace install crew@crew
 ```
 
 **Exit and start a new `omp` session.** `/reload-plugins` does not reload extension modules,
-so `/crew-runtime-install` (and every `crew_*` tool) only exists once a fresh session has
+so `/crew-install` (and every `crew_*` tool) only exists once a fresh session has
 loaded the installed module. Then:
 
 ```
-/crew-runtime-install
+/crew-install
 /crew-status
 ```
 
 **This repository is private.** The marketplace step git-clones it, so you need your own GitHub
-read access to `nikolasd/batman` — an SSH key registered with GitHub, or a `gh auth login` session
-backed by a git credential helper. `/crew-runtime-install` additionally needs a `GITHUB_TOKEN` or
+read access to `nikolasd/crew` — an SSH key registered with GitHub, or a `gh auth login` session
+backed by a git credential helper. `/crew-install` additionally needs a `GITHUB_TOKEN` or
 `GH_TOKEN` environment variable set, or that same `gh auth login` session, to download and verify
 the release asset. The binary is cached under your Crew state root.
 
@@ -64,8 +64,8 @@ For contributors building or modifying Crew itself (not for end users — see [I
 **Prerequisites:** Bun 1.3.14+, macOS or glibc Linux on arm64/x64, and Rust — via [rustup](https://rustup.rs) (recommended: automatically respects the pinned `1.97.1` in `rust-toolchain.toml`) or your system package manager. For the full OMP integration you also need OMP ≥ 17.0.7.
 
 ```bash
-git clone https://github.com/nikolasd/batman.git
-cd batman
+git clone https://github.com/nikolasd/crew.git
+cd crew
 bun run setup               # installs JS deps + builds the crewd runtime
 bun run check               # schema drift check + build + all tests
 ```

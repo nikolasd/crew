@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import type { EventEnvelope } from "@nikolasd/batman-protocol";
+import type { EventEnvelope } from "@nikolasd/crew-protocol";
 
 import { EMPTY_MONITOR_STATE, hasVisibleRows, reduceEvent, reduceEvents } from "./model";
 
@@ -119,6 +119,84 @@ test("an adapterArtifactEvent reports the artifact's kind and id", () => {
     }),
   );
   expect(state.rows["run-1"]?.latestActivity).toBe("artifact fileChange 018f0000-0000-7000-8000-0000000000ab");
+});
+
+test("a displayPaneAttached event sets the pane field and reports the backend and pane ref", () => {
+  const state = reduceEvent(
+    EMPTY_MONITOR_STATE,
+    envelope({
+      event: {
+        type: "displayEvent",
+        payload: {
+          kind: "displayPaneAttached",
+          runId: "run-1",
+          backend: "tmux",
+          placement: "splitRight",
+          paneRef: "%7",
+        },
+      },
+    }),
+  );
+  const row = state.rows["run-1"];
+  expect(row?.pane).toEqual({ backend: "tmux", placement: "splitRight", paneRef: "%7", attached: true });
+  expect(row?.latestActivity).toBe("pane attached: tmux (%7)");
+});
+
+test("a displayPaneAttached event with an empty pane ref (hidden fallback) omits the parenthetical", () => {
+  const state = reduceEvent(
+    EMPTY_MONITOR_STATE,
+    envelope({
+      event: {
+        type: "displayEvent",
+        payload: {
+          kind: "displayPaneAttached",
+          runId: "run-1",
+          backend: "hidden",
+          placement: "embedded",
+          paneRef: "",
+        },
+      },
+    }),
+  );
+  const row = state.rows["run-1"];
+  expect(row?.pane).toEqual({ backend: "hidden", placement: "embedded", paneRef: "", attached: true });
+  expect(row?.latestActivity).toBe("pane attached: hidden");
+});
+
+test("a displayPaneDetached event marks the pane detached but keeps its last-known backend and ref", () => {
+  const attached = reduceEvent(
+    EMPTY_MONITOR_STATE,
+    envelope({
+      event: {
+        type: "displayEvent",
+        payload: {
+          kind: "displayPaneAttached",
+          runId: "run-1",
+          backend: "herdr",
+          placement: "tab",
+          paneRef: "w1:p2",
+        },
+      },
+    }),
+  );
+  const detached = reduceEvent(
+    attached,
+    envelope({
+      event: {
+        type: "displayEvent",
+        payload: {
+          kind: "displayPaneDetached",
+          runId: "run-1",
+          backend: "herdr",
+          placement: "tab",
+          paneRef: "w1:p2",
+        },
+      },
+    }),
+  );
+  const row = detached.rows["run-1"];
+  expect(row?.pane).toEqual({ backend: "herdr", placement: "tab", paneRef: "w1:p2", attached: false });
+  expect(row?.latestActivity).toBe("pane detached: herdr");
 });
 
 test("a workspaceEvent renders its adjacently-tagged variant name", () => {
@@ -310,7 +388,7 @@ test("only the sanitized fields the RuntimeEvent union carries ever reach a row 
   // RuntimeEvent::MessageEvent carries no payload field on the wire).
   expect(row?.latestActivity).toBe("messageSent sent");
   expect(JSON.stringify(row, (_key, value) => (typeof value === "bigint" ? value.toString() : value))).not.toContain("payload");
-  expect(Object.keys(row ?? {}).sort()).toEqual(["runId", "taskId", "workerId", "state", "flags", "latestActivity", "pendingApprovalCount", "openViolations", "firstSeenAt", "lastEventAt", "lastAppliedSequence"].sort());
+  expect(Object.keys(row ?? {}).sort()).toEqual(["runId", "taskId", "workerId", "state", "flags", "latestActivity", "pendingApprovalCount", "openViolations", "pane", "firstSeenAt", "lastEventAt", "lastAppliedSequence"].sort());
 });
 
 // ------------------------------------------------- open violation tracking

@@ -7,7 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use batman_protocol::{ApprovalId, ApprovalRequest, EventEnvelope, ProjectId, RunId, RunState};
+use crew_protocol::{ApprovalId, ApprovalRequest, EventEnvelope, ProjectId, RunId, RunState};
 use serde_json::Value;
 use tokio::sync::broadcast;
 
@@ -171,11 +171,11 @@ impl ApprovalService {
         principal_instance_id: &str,
         decision: &str,
         reason: &str,
-        decided_by: batman_protocol::DecidedBy,
+        decided_by: crew_protocol::DecidedBy,
     ) -> Result<DecideOutcome, ApprovalError> {
         let snapshot = self.load_snapshot(approval_id).await?;
 
-        if snapshot.human_required && decided_by != batman_protocol::DecidedBy::Human {
+        if snapshot.human_required && decided_by != crew_protocol::DecidedBy::Human {
             return Err(ApprovalError::HumanRequired { approval_id });
         }
 

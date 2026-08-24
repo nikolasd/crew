@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use batman_protocol::{ProjectId, RunId, TaskId, Timestamp, WorkerId};
+use crew_protocol::{ProjectId, RunId, TaskId, Timestamp, WorkerId};
 
 use crate::ipc::{ScopedRun, VerifyError, WorkerCredentialVerifier};
 

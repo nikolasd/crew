@@ -6,22 +6,69 @@
 //!   operations (split/run/move/close/report-agent).
 //! - [`TmuxDisplay`]: tmux terminal multiplexer backend, with pane-level
 //!   operations via `new-window`/`split-window`.
-//! - [`TerminalDisplay`]: raw terminal backend (degraded capabilities),
-//!   always available as a fallback.
+//! - [`OsWindowDisplay`]: a new OS-native terminal window (`osascript`
+//!   Terminal on macOS, `x-terminal-emulator` on Linux).
+//! - [`HiddenDisplay`]: no pane at all -- the always-available fallback.
+//!   Replaces the retired `TerminalDisplay` stub: unlike that always-
+//!   available-but-inert backend, `Hidden` is a real, deliberate choice
+//!   whose `create_pane` is a documented no-op, not a degraded terminal
+//!   rendering.
+//!
+//! [`PaneCoordinator`] (in [`coordinator`]) is the higher-level piece
+//! that resolves one of these per run and journals its
+//! attach/detach -- not yet wired into any production call site (see its
+//! module doc).
 
+pub mod attach;
+pub mod coordinator;
 mod herdr;
-mod terminal;
+mod hidden;
+mod os_window;
 mod tmux;
 
+pub use attach::{AttachError, AttachServer, AttachTarget, PumpOutcome};
+pub use coordinator::{PaneAttachOutcome, PaneAttachRequest, PaneCoordinator};
 pub use herdr::{HerdrDisplay, HerdrStatus};
-pub use terminal::TerminalDisplay;
+pub use hidden::HiddenDisplay;
+pub use os_window::OsWindowDisplay;
 pub use tmux::TmuxDisplay;
 
-use batman_protocol::{
-    DisplayBackend, DisplayConfig, DisplayPreference, DisplaySelection, DisplayStatus,
+use crew_protocol::{
+    DisplayBackend, DisplayConfig, DisplayPlacement, DisplayPreference, DisplaySelection,
+    DisplayStatus,
 };
+use std::future::Future;
 use std::io;
+use std::pin::Pin;
 use std::process::Command;
+
+/// A future returned by a [`DisplayBackendTrait`] pane operation.
+/// Mirrors [`crate::adapter::AdapterFuture`]'s shape: every backend's
+/// pane work today is a quick, synchronous process spawn wrapped in an
+/// already-ready `async move` block, but the trait is async so a future
+/// backend (or a real socket-based one) never has to fake synchrony.
+pub type DisplayFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
+
+/// What [`DisplayBackendTrait::create_pane`] needs to open a Crew-owned
+/// pane: a human-readable title (`crew: <worker-id> (<adapter>)`, built
+/// by [`PaneCoordinator`]), the argv to run inside it (`crewd attach
+/// <run-id> ...`), and where to place it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneRequest {
+    pub title: String,
+    pub command: Vec<String>,
+    pub placement: DisplayPlacement,
+}
+
+/// A pane [`DisplayBackendTrait::create_pane`] created: which backend
+/// owns it and the backend's own reference to it (a tmux/Herdr pane id;
+/// empty for [`HiddenDisplay`], which owns nothing). The only thing
+/// [`DisplayBackendTrait::close_pane`] needs to close it again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneHandle {
+    pub backend: DisplayBackend,
+    pub pane_ref: String,
+}
 
 /// Result of a command execution — platform-independent, fixture-friendly.
 #[derive(Debug, Clone)]
@@ -41,6 +88,20 @@ pub struct CommandResult {
 pub trait CommandExecutor: Send + Sync {
     /// Execute `program` with `args`, returning a platform-independent result.
     fn execute(&self, program: &str, args: &[&str]) -> io::Result<CommandResult>;
+
+    /// Spawns `program` with `args` and returns immediately without
+    /// waiting for it to exit, yielding its pid.
+    ///
+    /// The default implementation delegates to [`Self::execute`]
+    /// (blocking) and reports a placeholder pid of `0` -- correct enough
+    /// for a fake/fixture executor, which never actually blocks.
+    /// [`RealCommandExecutor`] overrides this with a genuine
+    /// non-blocking spawn: [`crate::display::OsWindowDisplay`]'s Linux
+    /// path launches a long-running GUI terminal process that must never
+    /// block pane creation on the caller closing that window.
+    fn spawn_detached(&self, program: &str, args: &[&str]) -> io::Result<u32> {
+        self.execute(program, args).map(|_| 0)
+    }
 }
 
 /// Real process executor wrapping `std::process::Command`.
@@ -67,6 +128,17 @@ impl CommandExecutor for RealCommandExecutor {
             stderr: output.stderr,
         })
     }
+
+    fn spawn_detached(&self, program: &str, args: &[&str]) -> io::Result<u32> {
+        // Deliberately never `.wait()`s: the spawned process (an OS
+        // terminal window) is meant to outlive this call by design.
+        // Never reaped, so it becomes a zombie once it exits until this
+        // `crewd` process itself exits and `init` reaps it -- an
+        // accepted, documented tradeoff of a fire-and-forget GUI launch,
+        // not a leak of any live resource.
+        let child = Command::new(program).args(args).spawn()?;
+        Ok(child.id())
+    }
 }
 
 /// Trait for display backends.
@@ -87,6 +159,18 @@ pub trait DisplayBackendTrait: Send + Sync {
     fn version(&self) -> Option<String> {
         None
     }
+
+    /// Creates a Crew-owned pane running `req.command`, or errors
+    /// without creating anything. Reachable through `Box<dyn
+    /// DisplayBackendTrait>` -- before WP9 this was an inherent method
+    /// per concrete backend, unreachable through the trait object the
+    /// registry actually holds.
+    fn create_pane(&self, req: PaneRequest) -> DisplayFuture<'_, PaneHandle>;
+
+    /// Closes a pane this backend created (`handle.pane_ref`, exactly as
+    /// returned by [`Self::create_pane`]). Implementations refuse to
+    /// close a `pane_ref` they never created.
+    fn close_pane(&self, handle: &PaneHandle) -> DisplayFuture<'_, ()>;
 }
 
 /// Display registry that manages available backends.
@@ -128,16 +212,30 @@ impl DisplayRegistry {
     }
 
     /// Registers every display backend this runtime knows how to build, in
-    /// descending capability order (Herdr, tmux, raw terminal). Availability
-    /// is *not* probed here -- each backend answers `is_available()` when
-    /// asked, so constructing a registry never spawns a process.
+    /// descending capability order (Herdr, tmux, OS window, hidden).
+    /// Availability is *not* probed here -- each backend answers
+    /// `is_available()` when asked, so constructing a registry never
+    /// spawns a process. `Hidden` is always available, so `resolve()`
+    /// against a registry built this way never returns `selected: None`.
     #[must_use]
     pub fn with_default_backends(config: DisplayConfig) -> Self {
         let mut registry = Self::new();
         registry.register(Box::new(herdr::HerdrDisplay::new(config.clone())));
         registry.register(Box::new(tmux::TmuxDisplay::new(config.clone())));
-        registry.register(Box::new(terminal::TerminalDisplay::new(config)));
+        registry.register(Box::new(os_window::OsWindowDisplay::new(config.clone())));
+        registry.register(Box::new(hidden::HiddenDisplay::new(config)));
         registry
+    }
+
+    /// Looks up a registered backend by its [`DisplayBackend`] enum
+    /// value (matching on `backend_name()`, the same string
+    /// [`Self::resolve`] parses candidates against).
+    #[must_use]
+    pub fn find(&self, backend: DisplayBackend) -> Option<&dyn DisplayBackendTrait> {
+        self.backends
+            .iter()
+            .find(|b| b.backend_name() == backend.to_string())
+            .map(|b| b.as_ref())
     }
 
     /// Resolves a caller's ordered [`DisplayPreference`] against what is
@@ -256,9 +354,11 @@ pub(crate) fn version_gte(current: &str, minimum: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use batman_protocol::{DisplayBackend, DisplayConfig, DisplayStatus};
+    use crew_protocol::{DisplayBackend, DisplayConfig, DisplayStatus};
 
-    /// Fake backend for testing.
+    /// Fake backend for testing. Its pane operations are never exercised
+    /// by these registry/selector-focused tests (see `coordinator`'s own
+    /// tests for pane-flow coverage), so both always error.
     struct FakeBackend {
         name: String,
         available: bool,
@@ -279,7 +379,15 @@ mod tests {
         }
 
         fn status(&self) -> DisplayStatus {
-            DisplayStatus::new(DisplayBackend::Terminal, self.available, self.available)
+            DisplayStatus::new(DisplayBackend::Hidden, self.available, self.available)
+        }
+
+        fn create_pane(&self, _req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
+            Box::pin(async { Err("FakeBackend has no pane support".to_string()) })
+        }
+
+        fn close_pane(&self, _handle: &PaneHandle) -> DisplayFuture<'_, ()> {
+            Box::pin(async { Err("FakeBackend has no pane support".to_string()) })
         }
     }
 
@@ -291,14 +399,17 @@ mod tests {
         let tmux = TmuxDisplay::new(DisplayConfig::default());
         assert_eq!(tmux.backend_name(), "tmux");
 
-        let terminal = TerminalDisplay::new(DisplayConfig::default());
-        assert_eq!(terminal.backend_name(), "terminal");
+        let hidden = HiddenDisplay::new(DisplayConfig::default());
+        assert_eq!(hidden.backend_name(), "hidden");
+
+        let os_window = OsWindowDisplay::new(DisplayConfig::default());
+        assert_eq!(os_window.backend_name(), "osWindow");
     }
 
     #[test]
-    fn test_terminal_always_available() {
-        let terminal = TerminalDisplay::new(DisplayConfig::default());
-        assert!(terminal.is_available());
+    fn test_hidden_always_available() {
+        let hidden = HiddenDisplay::new(DisplayConfig::default());
+        assert!(hidden.is_available());
     }
 
     #[test]
@@ -331,9 +442,9 @@ mod tests {
     #[test]
     fn test_display_selector_ordered_fallback() {
         let mut registry = DisplayRegistry::new();
-        // Register in reverse order: terminal, herdr, tmux
+        // Register in reverse order: hidden, herdr, tmux
         registry.register(Box::new(FakeBackend {
-            name: "terminal".to_string(),
+            name: "hidden".to_string(),
             available: true,
             activate_result: Ok(()),
         }));
@@ -348,11 +459,11 @@ mod tests {
             activate_result: Ok(()),
         }));
 
-        // Selector prefers tmux first, then herdr, then terminal
+        // Selector prefers tmux first, then herdr, then hidden
         let selector = DisplaySelector::new(vec![
             DisplayBackend::Tmux,
             DisplayBackend::Herdr,
-            DisplayBackend::Terminal,
+            DisplayBackend::Hidden,
         ]);
 
         // Should select tmux (first in preferred list that's available)
@@ -362,11 +473,11 @@ mod tests {
     }
 
     #[test]
-    fn test_display_selector_fallback_to_terminal() {
+    fn test_display_selector_fallback_to_hidden() {
         let mut registry = DisplayRegistry::new();
-        // Register only terminal (herdr/tmux not available)
+        // Register only hidden (herdr/tmux not available)
         registry.register(Box::new(FakeBackend {
-            name: "terminal".to_string(),
+            name: "hidden".to_string(),
             available: true,
             activate_result: Ok(()),
         }));
@@ -374,10 +485,10 @@ mod tests {
         let selector = DisplaySelector::new(vec![
             DisplayBackend::Tmux,
             DisplayBackend::Herdr,
-            DisplayBackend::Terminal,
+            DisplayBackend::Hidden,
         ]);
 
-        // Should fall back to terminal and activate it
+        // Should fall back to hidden and activate it
         let selected_index = selector.select_index(&registry);
         assert!(selected_index.is_some());
         let idx = selected_index.unwrap();
@@ -397,7 +508,7 @@ mod tests {
         let selector = DisplaySelector::new(vec![
             DisplayBackend::Tmux,
             DisplayBackend::Herdr,
-            DisplayBackend::Terminal,
+            DisplayBackend::Hidden,
         ]);
 
         // Should return None when no backend is available

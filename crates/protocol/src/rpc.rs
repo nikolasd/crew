@@ -1,10 +1,10 @@
 //! JSON-RPC 2.0 envelopes and the `initialize` handshake types.
 //!
-//! BATMAN speaks JSON-RPC 2.0 over NDJSON. This module owns the generic
+//! Crew speaks JSON-RPC 2.0 over NDJSON. This module owns the generic
 //! request/response/error envelopes plus the concrete payloads exchanged
 //! during the `initialize` handshake.
 
-use crate::BatmanMethod;
+use crate::CrewMethod;
 use crate::ids::{ProjectId, RunId, TaskId, WorkerId};
 use crate::version::{ProtocolVersion, VersionRange};
 use schemars::JsonSchema;
@@ -131,7 +131,7 @@ pub struct ClientPrincipalSummary {
     pub scoped_worker_id: Option<WorkerId>,
 }
 
-// BatmanMethod is re-exported from method.rs.
+// CrewMethod is re-exported from method.rs.
 
 /// Where the running `crewd` binary was loaded from. `override` means a
 /// developer override path, `package` a bundled/installed binary, and
@@ -181,7 +181,7 @@ pub struct InitializeResult {
     pub negotiated: ProtocolVersion,
     pub project_id: ProjectId,
     pub principal: ClientPrincipalSummary,
-    pub allowed_methods: Vec<BatmanMethod>,
+    pub allowed_methods: Vec<CrewMethod>,
     pub capabilities: RuntimeCapabilities,
     #[ts(type = "number")]
     pub next_sequence: u64,
@@ -195,7 +195,7 @@ pub mod error_code {
     pub const INVALID_PARAMS: i32 = -32602;
     pub const INTERNAL_ERROR: i32 = -32603;
 
-    /// BATMAN application-defined error codes, in the reserved
+    /// Crew application-defined error codes, in the reserved
     /// `-32000..-32099` range.
     pub const NOT_INITIALIZED: i32 = -32001;
     pub const INCOMPATIBLE_VERSION: i32 = -32002;
@@ -330,7 +330,7 @@ impl JsonRpcErrorResponse {
 }
 
 /// A JSON-RPC 2.0 notification envelope: a method call with no `id`, for
-/// which no response is expected. BATMAN uses these to push runtime events to
+/// which no response is expected. Crew uses these to push runtime events to
 /// subscribed clients via the `events/event` method.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -361,17 +361,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn batman_method_serializes_as_literal_method_name() {
+    fn crew_method_serializes_as_literal_method_name() {
         assert_eq!(
-            serde_json::to_value(BatmanMethod::RuntimeStatus).unwrap(),
+            serde_json::to_value(CrewMethod::RuntimeStatus).unwrap(),
             "runtime/status"
         );
         assert_eq!(
-            serde_json::to_value(BatmanMethod::EventsSubscribe).unwrap(),
+            serde_json::to_value(CrewMethod::EventsSubscribe).unwrap(),
             "events/subscribe"
         );
-        let parsed: BatmanMethod = serde_json::from_str("\"runtime/shutdown\"").unwrap();
-        assert_eq!(parsed, BatmanMethod::RuntimeShutdown);
+        let parsed: CrewMethod = serde_json::from_str("\"runtime/shutdown\"").unwrap();
+        assert_eq!(parsed, CrewMethod::RuntimeShutdown);
     }
 
     #[test]

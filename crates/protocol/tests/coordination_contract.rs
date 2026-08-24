@@ -1,41 +1,41 @@
 //! Wire-contract tests for the coordination broker's worker-safe surface.
 
-use batman_protocol::{
-    BatmanMethod, COORDINATION_PAYLOAD_MAX_BYTES, COORDINATION_RATE_LIMIT_PER_MINUTE,
+use crew_protocol::{
+    COORDINATION_PAYLOAD_MAX_BYTES, COORDINATION_RATE_LIMIT_PER_MINUTE,
     CoordinationAskPolicyParams, CoordinationChildDecision, CoordinationPeersParams,
     CoordinationPublishArtifactParams, CoordinationReportBlockedParams,
-    CoordinationRequestChildParams, CoordinationSendParams, CoordinationTaskParams, MessageKind,
-    ProjectId, RunId, TaskId, WorkerId,
+    CoordinationRequestChildParams, CoordinationSendParams, CoordinationTaskParams, CrewMethod,
+    MessageKind, ProjectId, RunId, TaskId, WorkerId,
 };
 
 #[test]
 fn coordination_methods_serialize_to_exact_wire_strings() {
     assert_eq!(
-        serde_json::to_string(&BatmanMethod::CoordinationTask).unwrap(),
+        serde_json::to_string(&CrewMethod::CoordinationTask).unwrap(),
         "\"coordination/task\""
     );
     assert_eq!(
-        serde_json::to_string(&BatmanMethod::CoordinationPeers).unwrap(),
+        serde_json::to_string(&CrewMethod::CoordinationPeers).unwrap(),
         "\"coordination/peers\""
     );
     assert_eq!(
-        serde_json::to_string(&BatmanMethod::CoordinationSend).unwrap(),
+        serde_json::to_string(&CrewMethod::CoordinationSend).unwrap(),
         "\"coordination/send\""
     );
     assert_eq!(
-        serde_json::to_string(&BatmanMethod::CoordinationRequestChild).unwrap(),
+        serde_json::to_string(&CrewMethod::CoordinationRequestChild).unwrap(),
         "\"coordination/requestChild\""
     );
     assert_eq!(
-        serde_json::to_string(&BatmanMethod::CoordinationPublishArtifact).unwrap(),
+        serde_json::to_string(&CrewMethod::CoordinationPublishArtifact).unwrap(),
         "\"coordination/publishArtifact\""
     );
     assert_eq!(
-        serde_json::to_string(&BatmanMethod::CoordinationReportBlocked).unwrap(),
+        serde_json::to_string(&CrewMethod::CoordinationReportBlocked).unwrap(),
         "\"coordination/reportBlocked\""
     );
     assert_eq!(
-        serde_json::to_string(&BatmanMethod::CoordinationAskPolicy).unwrap(),
+        serde_json::to_string(&CrewMethod::CoordinationAskPolicy).unwrap(),
         "\"coordination/askPolicy\""
     );
 }

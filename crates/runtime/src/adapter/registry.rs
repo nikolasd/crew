@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use batman_protocol::{RunId, TaskId, WorkerId};
+use crew_protocol::{RunId, TaskId, WorkerId};
 use tokio::sync::oneshot;
 
 use super::capability::{AdapterCapabilities, NestedCapability};
@@ -324,16 +324,16 @@ impl RunDriver for AdapterRegistry {
 /// pane record must never keep a finished adapter alive.
 async fn emit_pane_detached(
     db: &Arc<crate::db::DatabaseHandle>,
-    project_id: batman_protocol::ProjectId,
+    project_id: crew_protocol::ProjectId,
     run_id: RunId,
-    backend: batman_protocol::DisplayBackend,
-    placement: batman_protocol::DisplayPlacement,
+    backend: crew_protocol::DisplayBackend,
+    placement: crew_protocol::DisplayPlacement,
 ) {
     let _ = db
         .run_domain_op(Box::new(move |conn| {
             let mut repo = crate::domain::DomainRepository::new(conn, project_id);
             repo.record_display_event(
-                batman_protocol::RuntimeEventKind::DisplayPaneDetached,
+                crew_protocol::RuntimeEventKind::DisplayPaneDetached,
                 run_id,
                 backend,
                 placement,
@@ -361,9 +361,9 @@ async fn watch_settlement(
     settled: oneshot::Receiver<()>,
     running: Arc<Mutex<HashMap<RunId, Arc<dyn Adapter>>>>,
     authorization: Arc<dyn AdapterAuthorization>,
-    display: Option<batman_protocol::DisplaySelection>,
+    display: Option<crew_protocol::DisplaySelection>,
     db: Arc<crate::db::DatabaseHandle>,
-    project_id: batman_protocol::ProjectId,
+    project_id: crew_protocol::ProjectId,
     run_id: RunId,
 ) {
     if settled.await.is_err() {
@@ -613,7 +613,7 @@ mod build_adapter_tests {
     fn mcp_config() -> AdapterMcpConfig {
         AdapterMcpConfig {
             scope_tokens: Arc::new(ScopeTokenStore::new()),
-            project_id: batman_protocol::ProjectId::new(),
+            project_id: crew_protocol::ProjectId::new(),
             crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
             state_dir: std::env::temp_dir(),
             repository: std::env::temp_dir(),
@@ -694,7 +694,7 @@ mod build_adapter_tests {
 mod settlement_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use batman_protocol::ProjectId;
+    use crew_protocol::ProjectId;
     use tokio::sync::oneshot;
 
     use super::*;

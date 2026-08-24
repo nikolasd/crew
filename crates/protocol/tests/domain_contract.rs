@@ -3,7 +3,7 @@
 //! Verifies the complete legal run lifecycle, serialization invariants, and
 //! wire-format strictness of every orchestration record.
 
-use batman_protocol::{
+use crew_protocol::{
     ApprovalDecision, DeliveryState, Run, RunFlags, RunSpec, RunState, RuntimeEventKind, TaskRef,
     Timestamp, Worker, WorkerProfileRef,
 };
@@ -131,9 +131,9 @@ fn terminal_states_have_is_terminal_true() {
 #[test]
 fn run_flags_serialize_as_independent_booleans() {
     let run = Run {
-        run_id: batman_protocol::RunId::new(),
-        task_id: batman_protocol::TaskId::new(),
-        worker_id: batman_protocol::WorkerId::new(),
+        run_id: crew_protocol::RunId::new(),
+        task_id: crew_protocol::TaskId::new(),
+        worker_id: crew_protocol::WorkerId::new(),
         state: RunState::try_from("working").unwrap(),
         flags: RunFlags {
             degraded_control: true,
@@ -230,7 +230,7 @@ fn task_ref_rejects_unknown_fields() {
 #[test]
 fn worker_profile_ref_serializes_fields() {
     let profile = WorkerProfileRef {
-        id: batman_protocol::WorkerId::new(),
+        id: crew_protocol::WorkerId::new(),
         fingerprint: "sha256:abc".to_string(),
         adapter: "claude".to_string(),
         model: "claude-sonnet-4-20250514".to_string(),
@@ -249,7 +249,7 @@ fn worker_profile_ref_serializes_fields() {
 
 #[test]
 fn worker_contains_profile_ref() {
-    let profile_id = batman_protocol::WorkerId::new();
+    let profile_id = crew_protocol::WorkerId::new();
     let worker = Worker {
         worker_id: profile_id,
         profile_ref: WorkerProfileRef {
@@ -274,8 +274,8 @@ fn worker_contains_profile_ref() {
 #[test]
 fn run_spec_contains_task_and_worker() {
     let spec = RunSpec {
-        task_id: batman_protocol::TaskId::new(),
-        worker_id: batman_protocol::WorkerId::new(),
+        task_id: crew_protocol::TaskId::new(),
+        worker_id: crew_protocol::WorkerId::new(),
         workspace_mode: Some("isolated".to_string()),
         priority: 5,
         prompt: None,
@@ -328,12 +328,12 @@ fn runtime_event_kind_covers_all_variants() {
 }
 
 // ---------------------------------------------------------------------------
-// BatmanMethod — every orchestration method.
+// CrewMethod — every orchestration method.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn all_orchestration_methods_exist() {
-    use batman_protocol::BatmanMethod::{
+    use crew_protocol::CrewMethod::{
         ApprovalDecide, ApprovalList, CoordinationChildDecide, CoordinationChildList, MessageList,
         MessageSend, ReconcileOmp, RunCancel, RunGet, RunList, RunRetry, RunSubmit, TaskGet,
         TaskUpsert, WorkerCreate, WorkerGet, WorkerList,
@@ -360,7 +360,7 @@ fn all_orchestration_methods_exist() {
     assert_eq!(serde_json::to_string(&RunRetry).unwrap(), "\"run/retry\"",);
     assert_eq!(serde_json::to_string(&RunCancel).unwrap(), "\"run/cancel\"",);
     assert_eq!(
-        serde_json::to_string(&batman_protocol::BatmanMethod::RunResult).unwrap(),
+        serde_json::to_string(&crew_protocol::CrewMethod::RunResult).unwrap(),
         "\"run/result\"",
     );
     assert_eq!(
@@ -433,9 +433,9 @@ fn approval_decision_serializes_fields() {
 #[test]
 fn full_run_serialization_round_trips() {
     let run = Run {
-        run_id: batman_protocol::RunId::new(),
-        task_id: batman_protocol::TaskId::new(),
-        worker_id: batman_protocol::WorkerId::new(),
+        run_id: crew_protocol::RunId::new(),
+        task_id: crew_protocol::TaskId::new(),
+        worker_id: crew_protocol::WorkerId::new(),
         state: RunState::try_from("queued").unwrap(),
         flags: RunFlags {
             degraded_control: false,

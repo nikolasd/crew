@@ -4,9 +4,9 @@ use std::io;
 use std::process::ExitStatus;
 use std::sync::{Arc, Mutex};
 
-use batman_protocol::{RunId, TaskId, WorkerId};
-use batman_runtime::adapter::terminal::{CommandRunner, TerminalAdapter};
-use batman_runtime::adapter::{
+use crew_protocol::{RunId, TaskId, WorkerId};
+use crew_runtime::adapter::terminal::{CommandRunner, TerminalAdapter};
+use crew_runtime::adapter::{
     Adapter, AdapterErrorCode, AdapterEvent, AdapterEventSink, ProtocolKind, StartSpec,
 };
 
@@ -237,13 +237,13 @@ async fn terminal_adapter_capabilities() {
 /// adapter never started.
 #[tokio::test]
 async fn terminal_adapter_cancel_settles_the_run_with_a_synthetic_exit() {
-    use batman_runtime::adapter::{AdapterEventPayload, CancelScope};
+    use crew_runtime::adapter::{AdapterEventPayload, CancelScope};
 
     struct CollectingSink {
         events: parking_lot::Mutex<Vec<AdapterEvent>>,
     }
     impl AdapterEventSink for CollectingSink {
-        fn emit(&self, event: AdapterEvent) -> batman_runtime::adapter::AdapterFuture<'_, u64> {
+        fn emit(&self, event: AdapterEvent) -> crew_runtime::adapter::AdapterFuture<'_, u64> {
             self.events.lock().push(event);
             Box::pin(async { Ok(0) })
         }
@@ -293,7 +293,7 @@ async fn terminal_adapter_cancel_settles_the_run_with_a_synthetic_exit() {
 struct NullSink;
 
 impl AdapterEventSink for NullSink {
-    fn emit(&self, _event: AdapterEvent) -> batman_runtime::adapter::AdapterFuture<'_, u64> {
+    fn emit(&self, _event: AdapterEvent) -> crew_runtime::adapter::AdapterFuture<'_, u64> {
         Box::pin(async { Ok(0) })
     }
 }

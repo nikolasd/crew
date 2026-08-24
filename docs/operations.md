@@ -17,16 +17,17 @@ full path. Where installed and source-built binaries live is specified once in
 ### Starting the runtime
 
 ```bash
-crewd serve --repo <path> --state-dir "$HOME/.omp/batman" [--idle-seconds <n>]
+crewd serve --repo <path> --state-dir "$HOME/.omp/crew" [--idle-seconds <n>]
 ```
 
 In normal use you don't run this yourself — the OMP extension spawns it on first use per
 repository (see [`getting-started.md`](getting-started.md#how-the-extension-finds-and-starts-crewd)).
 Run it by hand for debugging or CI. See [`cli-reference.md`](cli-reference.md#crewd-serve) for
 every flag, and the [state-directory note](cli-reference.md#before-you-start-state-directories)
-before you pick a `--state-dir` — the CLI's own default when it's omitted (`.crew` in the current
-directory) is *not* the same location the extension resolves and uses. Always pass `--state-dir`
-explicitly (as above) unless you specifically want the bare `.crew`-in-cwd fallback.
+before you pick a `--state-dir` — the CLI's own default when it's omitted resolves the same
+precedence the extension uses (`StateRoot::resolve`), but both read it from the *current* process
+environment independently, so they only land in the same place if that environment agrees. Pass
+`--state-dir` explicitly (as above) whenever you're not sure the two shells' environments match.
 
 ### Single-instance enforcement
 
@@ -38,7 +39,7 @@ released because its owning process died. If a runtime is already running, the n
 ### Graceful shutdown
 
 ```bash
-crewd stop --repo <path> --state-dir "$HOME/.omp/batman"
+crewd stop --repo <path> --state-dir "$HOME/.omp/crew"
 ```
 
 The runtime journals a stop record, closes the database actor, removes the socket, then releases
@@ -50,10 +51,10 @@ no runtime is found holding the lock, it exits **1** immediately rather than sig
 
 ```bash
 # Every run in the project, live-tailed after an initial catch-up replay
-crewd monitor --repo <path> --state-dir "$HOME/.omp/batman"
+crewd monitor --repo <path> --state-dir "$HOME/.omp/crew"
 
 # Filtered to one run
-crewd monitor --repo <path> --state-dir "$HOME/.omp/batman" --run-id <run-id>
+crewd monitor --repo <path> --state-dir "$HOME/.omp/crew" --run-id <run-id>
 ```
 
 There's no separate "replay" vs. "live" mode — `monitor` always replays what's already journaled
@@ -65,7 +66,7 @@ inside OMP, prefer `/crew` (see [`plugin-usage.md`](plugin-usage.md#4-watching-r
 ### Diagnosing a runtime
 
 ```bash
-crewd doctor --repo <path> --state-dir "$HOME/.omp/batman" [--json]
+crewd doctor --repo <path> --state-dir "$HOME/.omp/crew" [--json]
 ```
 
 Runs the full check catalog documented in [`cli-reference.md`](cli-reference.md#crewd-doctor)
@@ -92,7 +93,7 @@ journaled event is older than five minutes, read-only, transitioning nothing.
 
 1. **Check the log** (only present without `--foreground`): `cat <runtime-dir>/runtime.log`
 2. **Check for orphaned processes:** `ps aux | grep crewd`
-3. **Restart:** `crewd serve --repo <path> --state-dir "$HOME/.omp/batman"` — there's nothing to clean up
+3. **Restart:** `crewd serve --repo <path> --state-dir "$HOME/.omp/crew"` — there's nothing to clean up
    by hand first. The lock file doesn't need removing (a crashed process's `flock` is already
    released by the kernel), and the next `serve` runs recovery automatically on startup.
 
@@ -105,16 +106,16 @@ apt/deb/rpm package, or any other system package** — don't reach for a package
 ### Installing / uninstalling
 
 ```bash
-/marketplace add nikolasd/batman     # registers this repo as a marketplace source
+/marketplace add nikolasd/crew     # registers this repo as a marketplace source
 /marketplace install crew@crew   # installs the extension + skills
 ```
 
 **Exit and start a new `omp` session** — `/reload-plugins` does not reload extension modules, so
-`/crew-runtime-install` (and every `crew_*` tool) only exists once a fresh session has loaded
+`/crew-install` (and every `crew_*` tool) only exists once a fresh session has loaded
 the newly-installed module. Then, in that session:
 
 ```bash
-/crew-runtime-install              # downloads and verifies the crewd binary
+/crew-install              # downloads and verifies the crewd binary
 ```
 
 Uninstalling works in any session:
@@ -124,14 +125,14 @@ Uninstalling works in any session:
 ```
 
 **This repository is private.** `/marketplace add` git-clones it, so it needs your own GitHub read
-access to `nikolasd/batman` (an SSH key registered with GitHub, or a `gh auth login` session backed
-by a git credential helper). `/crew-runtime-install` additionally needs a `GITHUB_TOKEN` or
+access to `nikolasd/crew` (an SSH key registered with GitHub, or a `gh auth login` session backed
+by a git credential helper). `/crew-install` additionally needs a `GITHUB_TOKEN` or
 `GH_TOKEN` environment variable, or that same `gh auth login` session, to download the asset — see
 the README's [Installation](../README.md#installation) section. The `crewd` binary itself resolves
 in two tiers (see
 [`plugin-usage.md`](getting-started.md#how-the-extension-finds-and-starts-crewd)): `OMP_CREW_BINARY`
 (a local-development override) if set, otherwise the SHA-256-verified binary
-`/crew-runtime-install` cached under the Crew state root — there's no separate binary install
+`/crew-install` cached under the Crew state root — there's no separate binary install
 step beyond that command.
 
 After uninstalling, confirm no `crewd` process is still running: `ps aux | grep crewd`, and
@@ -149,7 +150,7 @@ if you want to keep other repositories' history.
 
 The extension and the `crewd` binary are no longer one atomic install — upgrading each is a
 separate step. `/marketplace upgrade crew@crew` refreshes the extension + skills from this
-repository; if that bumps the extension's version, re-run `/crew-runtime-install` to download the
+repository; if that bumps the extension's version, re-run `/crew-install` to download the
 matching binary (a version-mismatched cached binary is rejected rather than silently reused). If
 you're testing an unreleased build instead, use the `OMP_CREW_BINARY` override described in
 [`plugin-usage.md`](getting-started.md#how-the-extension-finds-and-starts-crewd) instead of
@@ -159,14 +160,14 @@ installing anything.
    (or just let the next `ensureRuntime()` call reconnect after the update — a stale old binary
    still running won't be replaced automatically, so stop it first if you want the new version
    active immediately).
-2. **Update**: `/marketplace upgrade crew@crew`, then `/crew-runtime-install` if the version
+2. **Update**: `/marketplace upgrade crew@crew`, then `/crew-install` if the version
    changed. Confirm with `crewd version` (should report the new version) and `crewd doctor --json`
    (should report `healthy: true`, or only expected, pre-existing failures).
 
 ## Troubleshooting
 
 **Runtime won't start:**
-- Check whether one's already running: `crewd status --repo <path> --state-dir "$HOME/.omp/batman"` (exit 73 from `serve`
+- Check whether one's already running: `crewd status --repo <path> --state-dir "$HOME/.omp/crew"` (exit 73 from `serve`
   means another instance holds the lock — that's not a bug, connect to it instead of restarting).
 - Check the log: `cat <runtime-dir>/runtime.log`.
 - Run `crewd doctor --json` — it doesn't need a live connection and will usually name the exact

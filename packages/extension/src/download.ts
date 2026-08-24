@@ -5,7 +5,7 @@
 // Modelled on `doctor.ts`'s split: this module is the pure worker; `install.ts`
 // builds its context and shapes the tool/command result.
 //
-// nikolasd/batman is a PRIVATE repository, so a plain `releases/download/
+// nikolasd/crew is a PRIVATE repository, so a plain `releases/download/
 // <tag>/<asset>` URL always 404s -- that browser-facing URL is never
 // token-authenticated. Assets are instead fetched through the GitHub REST
 // API: a release-by-tag lookup returns each asset's download `url`, then
@@ -21,7 +21,7 @@ import { sha256File } from "./integrity";
 import { BinaryIntegrityError, parseManifest, runtimeCacheDir } from "./platform";
 
 /** The GitHub REST API base for this repository's releases. */
-const API_BASE_URL = "https://api.github.com/repos/nikolasd/batman";
+const API_BASE_URL = "https://api.github.com/repos/nikolasd/crew";
 
 /** Machine-readable reason a download failed for a non-integrity reason. */
 export type RuntimeDownloadErrorCode = "http-error" | "write-failed";

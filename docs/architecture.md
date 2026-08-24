@@ -424,7 +424,7 @@ uuid_id!(PolicyViolationId);
 pub struct JsonRpcRequest<P> {
     pub jsonrpc: &'static str,
     pub id: RequestId,
-    pub method: BatmanMethod,
+    pub method: CrewMethod,
     pub params: P,
 }
 
@@ -730,9 +730,9 @@ This appendix provides fast access to common operations, error codes, and file p
 
 | Operation | Command |
 |---|---|
-| Generate TypeScript bindings | `cargo run -p batman-xtask -- generate` or `bun run generate` |
+| Generate TypeScript bindings | `cargo run -p crew-xtask -- generate` or `bun run generate` |
 | Check for drift (CI) | `bun run check` |
-| Package binary for platform | `cargo run -p batman-xtask -- package --target <triple> --binary <path>` |
+| Package binary for platform | `cargo run -p crew-xtask -- package --target <triple> --binary <path>` |
 | Start daemon (foreground) | `crewd serve --foreground` |
 | Stop daemon | `crewd stop` |
 
@@ -771,8 +771,10 @@ This appendix provides fast access to common operations, error codes, and file p
 State lives under `<state root>/repos/<repository-id>/`, where the state root resolves with this precedence:
 
 1. `CREW_STATE_DIR` (must be absolute)
-2. `$XDG_STATE_HOME/omp/batman` when `XDG_STATE_HOME` is set (must be absolute)
-3. `$HOME/${PI_CONFIG_DIR:-.omp}/batman`
+2. `$XDG_STATE_HOME/omp/crew` when `XDG_STATE_HOME` is set (must be absolute) -- or its legacy
+   `$XDG_STATE_HOME/omp/batman` sibling, if only that one exists
+3. `$HOME/${PI_CONFIG_DIR:-.omp}/crew` -- or its legacy `$HOME/${PI_CONFIG_DIR:-.omp}/batman`
+   sibling, if only that one exists
 
 ### Role Table Summary
 

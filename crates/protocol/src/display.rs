@@ -1,13 +1,23 @@
 //! Display backend contracts.
 //!
 //! Defines the display backend types and configuration for rendering
-//! Batman output in different environments (Herdr, Tmux, Terminal).
+//! Crew output in different environments (Herdr, Tmux, Terminal).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Supported display backends.
+///
+/// Reconciled with `crates/runtime`'s config-facing
+/// `crew::config::crew::DisplayBackend` (WP9): that enum additionally has
+/// `Auto`, which means "no forced backend" and has no concrete backend of
+/// its own here -- every other variant of the config enum maps to exactly
+/// one of these (`crate::config::protocol_display_backend` in the runtime
+/// crate does that mapping). `Terminal` (an always-available, capability-
+/// free stub) is retired in the same change: [`Self::Hidden`] is now the
+/// one always-available fallback, and it is a real, deliberate "no pane"
+/// choice rather than a degraded terminal rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -16,8 +26,13 @@ pub enum DisplayBackend {
     Herdr,
     /// Tmux terminal multiplexer backend.
     Tmux,
-    /// Raw terminal backend (degraded capabilities).
-    Terminal,
+    /// A new OS-native terminal window (`osascript`/Terminal on macOS,
+    /// `x-terminal-emulator` on Linux).
+    OsWindow,
+    /// No pane at all -- the always-available fallback. Not degraded
+    /// capability like the retired `Terminal`; a deliberate, always-safe
+    /// choice for headless or opted-out runs.
+    Hidden,
 }
 
 impl std::fmt::Display for DisplayBackend {
@@ -25,7 +40,8 @@ impl std::fmt::Display for DisplayBackend {
         match self {
             DisplayBackend::Herdr => write!(f, "herdr"),
             DisplayBackend::Tmux => write!(f, "tmux"),
-            DisplayBackend::Terminal => write!(f, "terminal"),
+            DisplayBackend::OsWindow => write!(f, "osWindow"),
+            DisplayBackend::Hidden => write!(f, "hidden"),
         }
     }
 }
@@ -40,7 +56,8 @@ impl std::str::FromStr for DisplayBackend {
         match s {
             "herdr" => Ok(DisplayBackend::Herdr),
             "tmux" => Ok(DisplayBackend::Tmux),
-            "terminal" => Ok(DisplayBackend::Terminal),
+            "osWindow" => Ok(DisplayBackend::OsWindow),
+            "hidden" => Ok(DisplayBackend::Hidden),
             other => Err(format!("unknown display backend '{other}'")),
         }
     }
@@ -80,7 +97,7 @@ pub struct DisplayConfig {
 impl Default for DisplayConfig {
     fn default() -> Self {
         DisplayConfig {
-            backend: DisplayBackend::Terminal,
+            backend: DisplayBackend::Hidden,
             width: None,
             height: None,
         }

@@ -4,9 +4,7 @@
 //! using the specified strategy (ApplyPatch or CherryPick).
 
 use crate::workspace::artifact_store::sha256_hex;
-use batman_protocol::{
-    ApplyRequest, ApplyResult, ApplyStrategy, Artifact, ArtifactId, ArtifactKind,
-};
+use crew_protocol::{ApplyRequest, ApplyResult, ApplyStrategy, Artifact, ArtifactId, ArtifactKind};
 use std::process::Command;
 use std::sync::Arc;
 use thiserror::Error;
@@ -27,7 +25,7 @@ pub enum ApplyError {
 pub struct WorkspaceApplier {
     path: std::path::PathBuf,
     store: Option<Arc<crate::workspace::ArtifactStore>>,
-    run_id: Option<batman_protocol::RunId>,
+    run_id: Option<crew_protocol::RunId>,
 }
 
 impl WorkspaceApplier {
@@ -42,7 +40,7 @@ impl WorkspaceApplier {
     pub fn from_store(
         path: std::path::PathBuf,
         store: Arc<crate::workspace::ArtifactStore>,
-        run_id: batman_protocol::RunId,
+        run_id: crew_protocol::RunId,
     ) -> Self {
         WorkspaceApplier {
             path,

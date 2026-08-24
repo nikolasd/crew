@@ -20,13 +20,13 @@
 
 use std::sync::Arc;
 
-use batman_protocol::{
+use crew_protocol::{
     ProjectId, Run, RunFlags, RunState, TaskId, TaskRef, Timestamp, WorkerId, WorkerProfileRef,
 };
-use batman_runtime::db::DatabaseHandle;
-use batman_runtime::doctor::{Doctor, DoctorResult};
-use batman_runtime::domain::DomainRepository;
-use batman_runtime::recovery::{DEFAULT_STALE_RUN_THRESHOLD, RecoveryConfig, RecoveryCoordinator};
+use crew_runtime::db::DatabaseHandle;
+use crew_runtime::doctor::{Doctor, DoctorResult};
+use crew_runtime::domain::DomainRepository;
+use crew_runtime::recovery::{DEFAULT_STALE_RUN_THRESHOLD, RecoveryConfig, RecoveryCoordinator};
 use tempfile::TempDir;
 
 /// Seeds one task + one worker + one run in `initial_state` against a real,
@@ -36,10 +36,10 @@ async fn seed_run(
     db: &DatabaseHandle,
     project_id: ProjectId,
     initial_state: &str,
-) -> (TaskId, WorkerId, batman_protocol::RunId) {
+) -> (TaskId, WorkerId, crew_protocol::RunId) {
     let task_id = TaskId::new();
     let worker_id = WorkerId::new();
-    let run_id = batman_protocol::RunId::new();
+    let run_id = crew_protocol::RunId::new();
 
     db.run_domain_op(Box::new(move |conn| {
         let mut repo = DomainRepository::new(conn, project_id);
@@ -50,7 +50,7 @@ async fn seed_run(
                 revision: 1,
             },
         )?;
-        let worker = batman_protocol::Worker {
+        let worker = crew_protocol::Worker {
             worker_id,
             profile_ref: WorkerProfileRef {
                 id: worker_id,
@@ -90,7 +90,7 @@ async fn seed_run(
 async fn drive_to_state(
     db: &DatabaseHandle,
     project_id: ProjectId,
-    run_id: batman_protocol::RunId,
+    run_id: crew_protocol::RunId,
     target: &str,
 ) {
     let path: &[&str] = match target {
@@ -114,7 +114,7 @@ async fn drive_to_state(
 }
 
 /// Reads a run's current projected state directly, for assertions.
-async fn run_state(db: &DatabaseHandle, run_id: batman_protocol::RunId) -> String {
+async fn run_state(db: &DatabaseHandle, run_id: crew_protocol::RunId) -> String {
     db.run_domain_op(Box::new(move |conn| {
         let state: String = conn.query_row(
             "SELECT state FROM runs WHERE run_id = ?1",
@@ -367,7 +367,7 @@ async fn multiple_stuck_runs_are_all_recovered_independently() {
 /// it journaled -- past `DEFAULT_STALE_RUN_THRESHOLD`. Raw SQL on purpose: no
 /// production API back-dates a timestamp, and the doctor's report is the only
 /// consumer left that reads age at all.
-async fn backdate_past_stale_threshold(db: &DatabaseHandle, run_id: batman_protocol::RunId) {
+async fn backdate_past_stale_threshold(db: &DatabaseHandle, run_id: crew_protocol::RunId) {
     let old = (time::OffsetDateTime::now_utc()
         - time::Duration::seconds(
             i64::try_from(DEFAULT_STALE_RUN_THRESHOLD.as_secs()).unwrap() + 60,

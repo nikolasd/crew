@@ -4,7 +4,7 @@
 // an artifact only streams bytes the runtime already stored.
 
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import type { ArtifactKind } from "@nikolasd/batman-protocol";
+import type { ArtifactKind } from "@nikolasd/crew-protocol";
 
 import type { OrchestrationToolContext } from "./shared";
 import { callOrchestration } from "./shared";

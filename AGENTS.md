@@ -43,7 +43,7 @@ OMP Extension (TypeScript)  ──JSON-RPC 2.0 over NDJSON──>  crewd daemon 
 | `crates/xtask/` | Codegen (schema + TS bindings) and platform package assembly |
 | `packages/extension/` | OMP extension: client, tools, monitor, reconciliation |
 | `packages/protocol-ts/` | Generated TS bindings + JSON Schema + Ajv validators |
-| `packages/crew-*/` | Per-target release build staging (created on demand by `batman-xtask package`; gitignored, not committed) |
+| `packages/crew-*/` | Per-target release build staging (created on demand by `crew-xtask package`; gitignored, not committed) |
 | `fixtures/` | Cross-language golden fixtures (protocol frames, state roots, configs) |
 | `tests/` | Conformance test runner |
 | `release/` | Release build inputs and evidence: `targets.json` (platform build matrix, read by xtask and CI) plus per-version release checklists and live adapter conformance results |
@@ -91,7 +91,7 @@ OMP_CREW_BINARY="$PWD/target/debug/crewd" \
 crewd serve --repo /path/to/repo [--config /path/to/crew.json]...
 crewd status --repo /path/to/repo
 crewd stop --repo /path/to/repo
-crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/batman" --output /tmp/audit.jsonl
+crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl
 ```
 
 ---
@@ -108,7 +108,7 @@ crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/batman" --output /tmp/a
 - **Database:** `rusqlite` with `rusqlite_migration` for versioned migrations; single-thread actor owns the SQLite connection
 - **Logging:** `tracing` + `tracing-subscriber` (with `env-filter` and `json` features)
 - **Serialization:** `serde` with `derive`; `serde_json` for JSON, `serde_yaml_ng` for YAML config
-- **Self-referential crate pattern:** `extern crate self as batman_runtime;` in `lib.rs` so adapter submodules can use the crate's external path, allowing the same source to compile both inside the library and in standalone test binaries via `#[path = "..."]`
+- **Self-referential crate pattern:** `extern crate self as crew_runtime;` in `lib.rs` so adapter submodules can use the crate's external path, allowing the same source to compile both inside the library and in standalone test binaries via `#[path = "..."]`
 
 ### TypeScript
 
@@ -174,7 +174,7 @@ crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/batman" --output /tmp/a
 - **Exact install mode:** `bunfig.toml` sets `exact = true` — lockfile is strict.
 - **Rust toolchain:** 1.97.1 via `rust-toolchain.toml`. Use `rustup` for automatic version pinning.
 - **Formatter:** Biome for TS/JS (`bun run format`), `cargo fmt` for Rust. Linting disabled in Biome; use `cargo clippy` for Rust.
-- **Distribution:** Extension + skills install via the OMP marketplace (`.claude-plugin/marketplace.json`, git clone of this repo — private, so needs GitHub read access via SSH key or `gh auth login`). The `crewd` binary downloads on demand as a GitHub Release asset via `/crew-runtime-install`, verified by SHA-256; that download needs `GITHUB_TOKEN`/`GH_TOKEN` set, or a local `gh auth login` session.
+- **Distribution:** Extension + skills install via the OMP marketplace (`.claude-plugin/marketplace.json`, git clone of this repo — private, so needs GitHub read access via SSH key or `gh auth login`). The `crewd` binary downloads on demand as a GitHub Release asset via `/crew-install`, verified by SHA-256; that download needs `GITHUB_TOKEN`/`GH_TOKEN` set, or a local `gh auth login` session.
 - **Test environment:** Set `CREW_DISABLE_VENDOR_CLI=1` to skip live vendor CLI calls (required in CI to avoid billed model calls).
 - **Cross-platform:** macOS (arm64/x64) and glibc Linux (arm64/x64). Everything else rejected with typed error.
 

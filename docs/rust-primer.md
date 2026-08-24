@@ -30,12 +30,12 @@ The plan:
 |---|---|
 | `package.json` | `Cargo.toml` (root one defines the *workspace*; each crate has its own) |
 | `bun.lock` | `Cargo.lock` |
-| a package | a **crate** (this repo has four: `batman-protocol`, `batman-runtime`, `batman-xtask`, `fake-worker`) |
+| a package | a **crate** (this repo has four: `crew-protocol`, `crew-runtime`, `crew-xtask`, `fake-worker`) |
 | `bun test` | `cargo test` |
 | `bun run build` | `cargo build` (`target/debug/crewd` is the output binary) |
 | eslint / prettier | `cargo clippy` / `cargo fmt` |
 
-`cargo test -p batman-protocol` = "run tests for that one workspace package".
+`cargo test -p crew-protocol` = "run tests for that one workspace package".
 
 The workspace uses Rust edition 2024 and pins `rust-version = "1.97.1"`. The resolver is `"3"`.
 
@@ -89,11 +89,11 @@ will complain about the type mismatch.
 
 ### Modules
 
-`crates/protocol/src/lib.rs` is the crate root. It declares 15 child modules (`approval`, `artifact`, `coordination`, `display`, `event`, `ids`, `message`, `method`, `rpc`, `run`, `schema`, `task`, `version`, `worker`, `workspace`) and re-exports their public items so users write `batman_protocol::Timestamp` instead of `batman_protocol::event::Timestamp`.
+`crates/protocol/src/lib.rs` is the crate root. It declares 15 child modules (`approval`, `artifact`, `coordination`, `display`, `event`, `ids`, `message`, `method`, `rpc`, `run`, `schema`, `task`, `version`, `worker`, `workspace`) and re-exports their public items so users write `crew_protocol::Timestamp` instead of `crew_protocol::event::Timestamp`.
 
 This is the same pattern as a TypeScript barrel `index.ts`, except visibility is enforced: without `pub`, an item is private to its module — a fact Day 5 turns into a security mechanism.
 
-**Do now:** run `cargo test -p batman-protocol`, then read all the files in `crates/protocol/src/` top to bottom. They're short, and they're 80% struct/enum declarations — ideal first Rust.
+**Do now:** run `cargo test -p crew-protocol`, then read all the files in `crates/protocol/src/` top to bottom. They're short, and they're 80% struct/enum declarations — ideal first Rust.
 
 ## Day 2 — Ownership and borrowing (the one genuinely new idea)
 
@@ -436,14 +436,14 @@ architecture doc promises: stopping event committed → actor closed → socket 
   are the assertion macros. `tempfile::TempDir` is the throwaway-directory helper you'll see in
   nearly every runtime test.
 
-Run one test with output: `cargo test -p batman-runtime --test ipc -- --nocapture <name_substring>`.
+Run one test with output: `cargo test -p crew-runtime --test ipc -- --nocapture <name_substring>`.
 
 ### The tools that keep you honest
 
 ```bash
 cargo clippy --workspace --all-targets   # the linter; this repo keeps it warning-clean
 cargo fmt --all                          # the formatter; --check in CI
-cargo doc -p batman-runtime --open       # rendered API docs from the /// doc comments
+cargo doc -p crew-runtime --open       # rendered API docs from the /// doc comments
 ```
 
 Treat clippy as a tutor: it usually names the exact idiomatic replacement.

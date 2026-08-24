@@ -113,7 +113,7 @@ jobs:
 
       - name: Assemble leaf package
         run: |
-          cargo run -p batman-xtask -- package \
+          cargo run -p crew-xtask -- package \
             --target ${{ matrix.leaf_target }} \
             --binary target/${{ matrix.rust_target }}/release/crewd
 
@@ -163,7 +163,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build crewd
-        run: cargo build -p batman-runtime --bin crewd
+        run: cargo build -p crew-runtime --bin crewd
 
       - name: Generate conformance report
         run: bun run -e "import { runAllFixtures } from './tests/conformance/run.ts'; await runAllFixtures('conformance-report.json');"
@@ -209,7 +209,7 @@ jobs:
 
       - name: Validate the assembled set
         run: |
-          cargo run -p batman-xtask -- package-set \
+          cargo run -p crew-xtask -- package-set \
             --version "$RELEASE_VERSION" \
             --input assembled \
             --output release

@@ -1,12 +1,12 @@
 {
-  "name": "@nikolasd/batman-protocol",
+  "name": "@nikolasd/crew-protocol",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./validate": "./src/validate.ts",
-    "./schema": "./schema/batman.schema.json"
+    "./schema": "./schema/crew.schema.json"
   },
   "dependencies": { "ajv": "8.17.1" }
 }

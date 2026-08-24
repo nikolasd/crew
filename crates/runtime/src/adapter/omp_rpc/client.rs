@@ -61,8 +61,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Map, Value};
 
-use batman_runtime::adapter::AdapterError;
-use batman_runtime::supervisor::ManagedProcess;
+use crew_runtime::adapter::AdapterError;
+use crew_runtime::supervisor::ManagedProcess;
 
 /// A parsed `{"type":"response",...}` frame.
 #[derive(Debug, Clone)]

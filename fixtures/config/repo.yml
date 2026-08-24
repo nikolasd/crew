@@ -1,4 +1,4 @@
-# Repository-level BATMAN configuration.
+# Repository-level Crew configuration.
 # Precedence: higher than org, lower than user.
 
 # Override display backend for this repo.

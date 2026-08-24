@@ -1,6 +1,6 @@
 {
   "runtime": {
-    "name": "batman-runtime",
+    "name": "crewd",
     "version": "0.1.0"
   },
   "negotiated": { "major": 1, "minor": 0 },

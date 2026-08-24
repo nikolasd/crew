@@ -1,12 +1,12 @@
-// Ajv 2020 validators compiled once from the canonical BATMAN JSON Schema.
+// Ajv 2020 validators compiled once from the canonical Crew JSON Schema.
 //
-// The schema is generated from `batman-protocol` (see `bun run generate`);
+// The schema is generated from `crew-protocol` (see `bun run generate`);
 // every `$def` uses `additionalProperties: false`, so validating an inbound
 // payload against its `$def` rejects any unknown field. Validators are
 // compiled a single time at module load and reused for every message.
 
 import Ajv2020, { type ValidateFunction } from "ajv/dist/2020";
-import schema from "../schema/batman.schema.json" with { type: "json" };
+import schema from "../schema/crew.schema.json" with { type: "json" };
 
 /** The Ajv validate-function type every exported validator conforms to;
  *  re-exported so consumers can type validator tables without importing
@@ -14,8 +14,11 @@ import schema from "../schema/batman.schema.json" with { type: "json" };
 export type { ValidateFunction };
 
 /** The `$id` under which the whole schema document is registered, so
- * individual `$def`s can be retrieved (and cross-referenced) by JSON pointer. */
-const SCHEMA_ID = "https://schema.batman.satorianalytics.com/batman.schema.json";
+ * individual `$def`s can be retrieved (and cross-referenced) by JSON pointer.
+ * This is a URN, not a URL: it's never fetched over the network — Ajv only
+ * uses it as an opaque registry key for `$ref` resolution — so there is
+ * nothing to host and no domain to imply ownership of. */
+const SCHEMA_ID = "urn:crew:schema:crew.schema.json";
 
 const ajv = new Ajv2020({
   strict: true,
@@ -72,10 +75,18 @@ export const validateJsonRpcErrorResponse = def("JsonRpcErrorResponse");
 export const validateJsonRpcNotification = def("JsonRpcNotification");
 /** Validates a `run/result` result payload. */
 export const validateRunResultResult = def("RunResultResult");
+/** Validates a `plan/propose` result payload. */
+export const validatePlanProposeResult = def("PlanProposeResult");
+/** Validates a `plan/decide` result payload. */
+export const validatePlanDecideResult = def("PlanDecideResult");
+/** Validates a `plan/get` result payload. */
+export const validatePlanGetResult = def("PlanGetResult");
+/** Validates a `run/timeoutAck` result payload. */
+export const validateRunTimeoutAckResult = def("RunTimeoutAckResult");
 
 /** Validates the array of event envelopes returned by `events/replay`. */
 export const validateEventEnvelopeArray = ajv.compile({
-  $id: "https://schema.batman.satorianalytics.com/event-envelope-array.json",
+  $id: "urn:crew:schema:event-envelope-array.json",
   type: "array",
   items: { $ref: `${SCHEMA_ID}#/$defs/EventEnvelope` },
 });
