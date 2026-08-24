@@ -11,15 +11,55 @@
 //! nonce-based transcript discovery ([`find_transcript_by_nonce`]).
 
 mod adapter;
+pub mod claude;
+pub mod claude_conformance;
 mod discovery;
 mod tailer;
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use crew_protocol::Classified;
 use serde::{Deserialize, Serialize};
 
 pub use adapter::{LaunchSpec, TuiAdapter, TuiTimings, TuiVendor, VersionVerdict};
+pub use claude::ClaudeTuiVendor;
 pub use discovery::{DiscoveryError, find_transcript_by_nonce};
 pub use tailer::{TailerHandle, TranscriptTailer};
+
+use crate::config::crew::{AdapterConfig, CloseOnExit};
+use crate::display::DisplayRegistry;
+
+/// Static, daemon-lifetime inputs a real [`TuiVendor`] impl needs beyond
+/// what its own trait methods compute -- threaded into
+/// [`crate::adapter::registry::AdapterRegistry`] once, post-construction
+/// (via `AdapterRegistry::set_tui_support`), mirroring exactly why
+/// `AdapterMcpConfig`/`CoordinationBroker` are threaded the way they are:
+/// the per-run pieces this bundles into a [`crate::display::PaneCoordinator`]
+/// (`db`, `project_id`, `events_tx`) are only available from a run's own
+/// [`crate::service::RunDriverContext`], never at registry-construction
+/// time, so this struct carries everything that *is* available then --
+/// the resolved `crewd` binary path, the state root, and the display
+/// registry/config -- and `AdapterRegistry` builds a fresh
+/// `PaneCoordinator` per run from this plus that run's own context.
+#[derive(Clone)]
+pub struct TuiSupport {
+    pub display_registry: Arc<DisplayRegistry>,
+    pub panes_dir: PathBuf,
+    pub crewd_path: PathBuf,
+    pub state_dir: PathBuf,
+    pub close_on_exit: CloseOnExit,
+    /// The config-forced display backend (`display.backend`, mapped via
+    /// `crate::config::protocol_display_backend`; `None` for `Auto`,
+    /// meaning "try the default chain").
+    pub forced_backend: Option<crew_protocol::DisplayBackend>,
+    /// `CrewConfig.adapters`, keyed by vendor name (`"claude"`, ...) --
+    /// each vendor's own `TuiVendor` impl reads its own entry for `bin`/
+    /// `permissionMode`/`model`/`sessionDir`/`extraArgs`.
+    pub adapters: BTreeMap<String, AdapterConfig>,
+    pub timings: TuiTimings,
+}
 
 /// A durable position in a vendor transcript: the byte offset of the
 /// first unconsumed byte, plus the vendor id of the last consumed entry
@@ -153,12 +193,18 @@ where
 impl TuiEvent {
     /// Whether mapping this event (`crate::adapter::tui::adapter::emit_tui_event`)
     /// produces at least one `crate::adapter::event_sink::AdapterEventPayload`.
-    /// `false` only for `TurnEnded` (no payload exists for a bare turn
-    /// boundary) and `Raw` (a debug trace only) -- every other variant
-    /// always emits at least one payload.
+    /// An exhaustive positive/negative match, deliberately never a
+    /// wildcard arm: a future `TuiEvent` variant is a compile error here
+    /// until it declares which side it's on, rather than silently
+    /// inheriting whichever default a wildcard would have picked.
     #[must_use]
     pub fn emits_a_payload(&self) -> bool {
-        !matches!(self, TuiEvent::TurnEnded | TuiEvent::Raw { .. })
+        match self {
+            TuiEvent::AssistantText { .. }
+            | TuiEvent::ToolActivity { .. }
+            | TuiEvent::SessionMeta { .. } => true,
+            TuiEvent::TurnEnded | TuiEvent::Raw { .. } => false,
+        }
     }
 }
 

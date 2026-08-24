@@ -36,9 +36,9 @@ pub use error::{AdapterError, AdapterErrorCode};
 pub use event_sink::{AdapterEvent, AdapterEventPayload, AdapterEventSink, DomainAdapterEventSink};
 pub use omp_rpc::{OmpRpcAdapter, OmpRpcAdapterOptions};
 pub use profile::{
-    AdapterKind, ClaudeStartupOptions, CodexStartupOptions, CopilotStartupOptions, EffectivePolicy,
-    OmpRpcStartupOptions, ProfileError, ProfileId, StartupOptions, TerminalDegradedStartupOptions,
-    WorkerProfile,
+    AdapterKind, AdapterMode, ClaudeStartupOptions, CodexStartupOptions, CopilotStartupOptions,
+    EffectivePolicy, OmpRpcStartupOptions, ProfileError, ProfileId, StartupOptions,
+    TerminalDegradedStartupOptions, WorkerProfile,
 };
 pub use profile_store::{ProfileStore, ProfileStoreError};
 pub use registry::{AdapterAuthorization, AdapterRegistry, FixtureAuthorization, RegistryError};
@@ -46,7 +46,9 @@ pub use run_lifecycle::RunLifecycleSink;
 pub use r#trait::{
     Adapter, AdapterMessage, AdapterSnapshot, CancelScope, ProbeResult, StartSpec, VendorSessionRef,
 };
-pub use tui::{LaunchSpec, TuiAdapter, TuiTimings, TuiVendor, VersionVerdict};
+pub use tui::{
+    ClaudeTuiVendor, LaunchSpec, TuiAdapter, TuiSupport, TuiTimings, TuiVendor, VersionVerdict,
+};
 
 /// A boxed future returned by every [`Adapter`]/[`AdapterEventSink`]
 /// operation, resolving to `Result<T, AdapterError>`.
