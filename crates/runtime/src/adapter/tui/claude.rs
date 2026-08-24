@@ -222,6 +222,12 @@ impl TuiVendor for ClaudeTuiVendor {
         }
     }
 
+    // `transcript_path_for_session` is not overridden either: the trait's
+    // default (`<transcript_root>/<session-id>.jsonl`) *is* this vendor's
+    // own on-disk layout -- a resumed session's transcript is derived
+    // deterministically from the session id rather than nonce-discovered
+    // (WP14), and the real CLI's transcript filename stem *is* its
+    // session id (a UUID).
     // `session_id_from_transcript_path` is not overridden: the real
     // CLI's own transcript filename stem *is* its session id (a UUID),
     // exactly what the trait's default implementation derives.

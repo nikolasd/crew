@@ -45,8 +45,8 @@ use super::event_sink::{AdapterEventSink, DomainAdapterEventSink, SettlementSink
 use super::mcp_config::AdapterMcpConfig;
 use super::profile::{StartupOptions, WorkerProfile};
 use super::run_lifecycle::RunLifecycleSink;
-use super::r#trait::{Adapter, AdapterMessage, StartSpec};
-use super::tui::{ClaudeTuiVendor, TuiAdapter, TuiSupport};
+use super::r#trait::{Adapter, AdapterMessage, StartSpec, VendorSessionRef};
+use super::tui::{ClaudeTuiVendor, Cursor, ResumeContext, TuiAdapter, TuiSupport};
 use crate::adapter::CancelScope;
 use crate::config::crew::{AdapterConfig, AdapterMode as CrewAdapterMode, PermissionMode};
 use crate::conformance;
@@ -130,12 +130,33 @@ pub enum RegistryError {
     /// until its TUI vendor impl lands).
     #[error("adapter {0} has no TUI-mode implementation yet; mode: \"tui\" is unavailable for it")]
     TuiModeUnavailable(String),
+    /// [`AdapterRegistry::resume_run`] was called before the caller ever
+    /// supplied [`ResumeSupport`] via
+    /// [`AdapterRegistry::set_resume_support`]. Fail closed: a resume
+    /// without its own journal/sink wiring could only run unsupervised.
+    #[error("resume support was never supplied (set_resume_support); cannot resume run {0}")]
+    ResumeUnsupported(RunId),
 }
 
 impl From<RegistryError> for String {
     fn from(err: RegistryError) -> Self {
         err.to_string()
     }
+}
+
+/// Everything [`AdapterRegistry::resume_run`] needs that, exactly like
+/// the [`CoordinationBroker`] and [`TuiSupport`] bundles, only exists
+/// once the IPC server has bound: the journal handle and project id the
+/// resumed run's sink stack writes through, the mid-run policy-violation
+/// service that sink stack consults, and the live event broadcast every
+/// journaled mutation must fan out on. Supplied once via
+/// [`AdapterRegistry::set_resume_support`]; a caller that never resumes
+/// (every test but the resume ones) simply never calls it.
+pub struct ResumeSupport {
+    pub db: Arc<DatabaseHandle>,
+    pub project_id: crew_protocol::ProjectId,
+    pub violation_service: Arc<crate::policy::ViolationService>,
+    pub events_tx: tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
 }
 
 /// Implements [`RunDriver`] against the four real worker adapters.
@@ -174,6 +195,12 @@ pub struct AdapterRegistry {
     /// never call it): every reserved kind's `mode: "tui"` gets the same
     /// typed refusal it always has in that window.
     tui: Mutex<Option<Arc<TuiSupport>>>,
+    /// The [`ResumeSupport`] bundle [`Self::resume_run`] drives a
+    /// continuation through. `None` until [`Self::set_resume_support`] is
+    /// called (or permanently, for callers that never resume); `None`
+    /// makes every `resume_run` a typed [`RegistryError::ResumeUnsupported`]
+    /// refusal, never a silently unwired resume.
+    resume_support: Mutex<Option<Arc<ResumeSupport>>>,
     running: Arc<Mutex<HashMap<RunId, Arc<dyn Adapter>>>>,
     /// Org security patterns for redaction.
     org_security_patterns: Vec<String>,
@@ -194,6 +221,7 @@ impl AdapterRegistry {
             org_security_patterns,
             broker: Mutex::new(None),
             tui: Mutex::new(None),
+            resume_support: Mutex::new(None),
             running: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -221,6 +249,16 @@ impl AdapterRegistry {
         *self.tui.lock() = Some(tui);
     }
 
+    /// Supplies the [`ResumeSupport`] bundle [`Self::resume_run`] needs.
+    /// A post-construction setter -- exactly like `set_broker`/
+    /// `set_tui_support`, for exactly the same reason: the server-owned
+    /// violation service and event broadcast only exist after
+    /// `Server::bind` returns, which happens after this registry must
+    /// already be handed to [`crate::ipc::ServerConfig::run_driver`].
+    pub fn set_resume_support(&self, support: Arc<ResumeSupport>) {
+        *self.resume_support.lock() = Some(support);
+    }
+
     /// The adapter instance currently running for `run_id`, if any --
     /// exposed for tests and for the message-forwarding seam this
     /// module's own doc comment names as a follow-up.
@@ -234,6 +272,190 @@ impl AdapterRegistry {
     #[must_use]
     pub fn running_count(&self) -> usize {
         self.running.lock().len()
+    }
+    /// Resumes `run_id` on a previously-established vendor session: the
+    /// first production caller of [`Adapter::resume`].
+    ///
+    /// This is deliberately an inherent method, *not* a [`RunDriver`]
+    /// trait method: `RunDriver` is the run/submit seam (its only other
+    /// implementation is the tests' [`FakeRunDriver`], and nothing in
+    /// that seam consumes a resume), while resume is the recovery-driven
+    /// continuation of one specific run -- its caller (WP15's boot sweep)
+    /// already holds this registry concretely. Hanging it anywhere in the
+    /// orchestration service instead would re-route it through the
+    /// submit-time state machine, but a resume is not a submission: it
+    /// creates no run row, takes no prompt, and continues the same run.
+    ///
+    /// Eligibility is the caller's judgment (WP15 checks vendor session
+    /// presence and adapter availability before calling); this method
+    /// re-runs the same policy/authorization/availability pre-flight a
+    /// fresh start gets -- authorization is per-spawn, so a resumed run
+    /// books its concurrency slot exactly like a new one -- then builds a
+    /// fresh adapter instance for the run, hands it the stored cursor via
+    /// its construction-time [`ResumeContext`], and calls `resume`.
+    pub async fn resume_run(
+        &self,
+        run_id: RunId,
+        session: VendorSessionRef,
+        cursor: Option<Cursor>,
+    ) -> Result<(), String> {
+        // Reserve the run-id slot atomically with the duplicate check,
+        // exactly like `Self::start`: a concurrent resume/start for the
+        // same run must be rejected as a duplicate, never raced into two
+        // live adapters.
+        {
+            let mut guard = self.running.lock();
+            if guard.contains_key(&run_id) {
+                return Err(RegistryError::DuplicateStart(run_id).into());
+            }
+            guard.insert(run_id, build_placeholder_adapter());
+        }
+
+        let result = self.resume_one(run_id, session, cursor).await;
+        match result {
+            Ok((adapter, settled)) => {
+                self.running.lock().insert(run_id, adapter);
+                let running_for_watcher = Arc::clone(&self.running);
+                let authorization_for_watcher = Arc::clone(&self.authorization);
+                // A resumed TUI run owns its own pane lifecycle through
+                // its adapter, same as a fresh one. `resume_run` carries
+                // no `DisplaySelection` -- recovery callers do not resolve
+                // displays -- so there is nothing to journal a placeholder
+                // detach from either way; `watch_settlement`'s `None`
+                // display skips that path entirely.
+                let display: Option<crew_protocol::DisplaySelection> = None;
+                let Some(support) = self.resume_support.lock().clone() else {
+                    unreachable!("resume_one cannot succeed without resume support");
+                };
+                tokio::spawn(watch_settlement(
+                    settled,
+                    running_for_watcher,
+                    authorization_for_watcher,
+                    display,
+                    Arc::clone(&support.db),
+                    support.project_id,
+                    run_id,
+                ));
+                Ok(())
+            }
+            Err(err) => {
+                // The reservation must not leak on any failure path -- a
+                // rejected resume leaves the run resumable again.
+                self.running.lock().remove(&run_id);
+                Err(err)
+            }
+        }
+    }
+
+    /// The body of [`Self::resume_run`], between slot reservation and
+    /// insertion: resolve the run's worker profile, gate it, build the
+    /// sink stack and the adapter, and hand the session to `resume`.
+    async fn resume_one(
+        &self,
+        run_id: RunId,
+        session: VendorSessionRef,
+        cursor: Option<Cursor>,
+    ) -> Result<(Arc<dyn Adapter>, oneshot::Receiver<()>), String> {
+        let Some(support) = self.resume_support.lock().clone() else {
+            return Err(RegistryError::ResumeUnsupported(run_id).into());
+        };
+        let (task_id, worker_id) = {
+            let run_id_string = run_id.to_string();
+            let value = support
+                .db
+                .run_domain_op(Box::new(move |conn| {
+                    let row: (String, String) = conn.query_row(
+                        "SELECT task_id, worker_id FROM runs WHERE run_id = ?1",
+                        [&run_id_string],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )?;
+                    Ok(serde_json::json!({ "task_id": row.0, "worker_id": row.1 }))
+                }))
+                .await
+                .map_err(|err| format!("run {run_id} is unreadable: {err}"))?;
+            let parse_id = |key: &str| -> Result<String, String> {
+                value
+                    .get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("run {run_id} has no {key}"))
+            };
+            let task_id = parse_id("task_id")?;
+            let worker_id = parse_id("worker_id")?;
+            (
+                TaskId::parse(&task_id).map_err(|e| format!("run {run_id}: bad task id: {e}"))?,
+                WorkerId::parse(&worker_id)
+                    .map_err(|e| format!("run {run_id}: bad worker id: {e}"))?,
+            )
+        };
+        let profile = resolve_worker_profile(&support.db, support.project_id, worker_id)
+            .await
+            .map_err(String::from)?;
+        // No run-specific policy overrides are re-merged here: the run's
+        // own policy was fixed at submit time; the authorizer falls back
+        // to its startup policy (its documented behavior for `None`),
+        // which is the same policy the boot sweep itself runs under.
+        let effective_capabilities = gate_profile(&self.authorization, &profile, None)
+            .await
+            .inspect_err(|_| {
+                self.authorization.release();
+            })?;
+        // Fresh starts launch at the run's isolated workspace when one was
+        // materialized; no such path is stored per-run, so a resumed
+        // process lands back at the repository root (disclosed WP14 gap).
+        let cwd = self.repo_root.as_path();
+        let adapter = match build_adapter(
+            &profile,
+            cwd,
+            run_id,
+            task_id,
+            worker_id,
+            self.mcp.clone(),
+            self.broker.lock().clone(),
+            self.tui.lock().clone(),
+            Arc::clone(&support.db),
+            support.project_id,
+            support.events_tx.clone(),
+            None,
+            cursor,
+        ) {
+            Ok(adapter) => adapter,
+            Err(err) => {
+                self.authorization.release();
+                return Err(err.into());
+            }
+        };
+        // The identical fail-closed sink stack a fresh start gets:
+        // redaction before durability (invariant 4), lifecycle edges from
+        // journaled evidence, and settlement signalled only after the
+        // terminal edge committed.
+        let sink = match DomainAdapterEventSink::new(
+            Arc::clone(&support.db),
+            support.project_id,
+            support.events_tx.clone(),
+            self.org_security_patterns.clone(),
+            effective_capabilities.nested != NestedCapability::Managed,
+            Arc::clone(&support.violation_service),
+        ) {
+            Ok(sink) => Arc::new(sink) as Arc<dyn AdapterEventSink>,
+            Err(err) => {
+                self.authorization.release();
+                return Err(format!("org security patterns failed to compile: {err}"));
+            }
+        };
+        let sink = RunLifecycleSink::wrap(
+            sink,
+            Arc::clone(&support.db),
+            support.project_id,
+            support.events_tx.clone(),
+            run_id,
+        );
+        let (sink, settled) = SettlementSink::wrap(sink);
+        if let Err(err) = adapter.resume(session, sink).await {
+            self.authorization.release();
+            return Err(err.to_string());
+        }
+        Ok((adapter, settled))
     }
 }
 
@@ -466,65 +688,8 @@ async fn run_one(
 ) -> Result<(Arc<dyn Adapter>, oneshot::Receiver<()>, bool), String> {
     let profile = resolve_profile(ctx).await.map_err(String::from)?;
 
-    // Handle TerminalDegraded specially (it has no adapter kind)
-    let effective_capabilities = if profile.adapter_kind().is_none() {
-        // TerminalDegraded uses the terminal adapter with degraded capabilities
-        // We need to extract the backend from the startup options
-        if let StartupOptions::TerminalDegraded(opts) = &profile.startup_options() {
-            super::terminal::TerminalAdapter::new(opts.backend.clone()).capabilities()
-        } else {
-            return Err("TerminalDegraded profile has no startup options".to_string());
-        }
-    } else {
-        let Some(kind) = profile.adapter_kind() else {
-            return Err("no adapter kind".to_string());
-        };
-        // Scope boundary (WP13, documented not silently omitted):
-        // `run_fixture_conformance` dispatches by `AdapterKind` only --
-        // it has no `mode` axis -- so a `mode: "tui"` run is authorized
-        // against its *headless* fixture suite's effective capabilities
-        // (e.g. Claude headless's `ApprovalsCapability::Controllable`),
-        // even though the `TuiAdapter` actually constructed below
-        // declares a materially different profile (`ProtocolKind::Terminal`,
-        // `ApprovalsCapability::None`, `UsageCapability::None`, ...). Giving
-        // this call a `mode` parameter means widening the closed
-        // `AdapterKind`-keyed dispatch `conformance::run_fixture_conformance`/
-        // `run_live_conformance`/`probe_availability` and the `crewd
-        // conformance`/`adapters --json` CLI surfaces all share -- out of
-        // scope for the WP that first makes `mode: "tui"` reachable at
-        // all; flagged for a follow-up rather than fixed here.
-        conformance::run_fixture_conformance(kind)
-            .await
-            .effective_capabilities
-    };
-
-    // Policy first: it is the cheaper, machine-independent decision, and
-    // probing a vendor CLI for a run policy already forbids would spawn a
-    // process to answer a question that no longer matters.
-    authorization
-        .authorize(&profile, &effective_capabilities, ctx.policy.as_deref())
-        .map_err(RegistryError::AuthorizationDenied)
-        .map_err(String::from)?;
-
-    // Then availability: deny an unusable vendor CLI here rather than
-    // letting `adapter.start()` fail after a process is spawned. The probe
-    // is a version handshake only -- never a model call -- and is cached
-    // for 60s, so repeated submits do not re-spawn the binary.
-    //
-    // Only a *disproof* denies: a skipped probe (the kill switch) was never
-    // attempted, so it is not evidence the CLI is unusable.
-    if let Some(kind) = profile.adapter_kind() {
-        let availability = conformance::probe_availability(kind).await;
-        if availability.disproved() {
-            authorization.release();
-            return Err(format!(
-                "adapter {} is unavailable: {}",
-                kind.wire_name(),
-                availability.detail
-            ));
-        }
-    }
-
+    let effective_capabilities =
+        gate_profile(authorization, &profile, ctx.policy.as_deref()).await?;
     // Use the workspace path from the context (isolated worktree or copy)
     // when available; fall back to the repository root.
     let cwd = ctx.workspace_path.as_deref().unwrap_or(repo_root);
@@ -542,6 +707,7 @@ async fn run_one(
         ctx.project_id,
         ctx.events_tx.clone(),
         ctx.display.clone(),
+        None,
     ) {
         Ok(adapter) => adapter,
         Err(err) => {
@@ -580,7 +746,16 @@ async fn run_one(
                 task_id: ctx.task_id,
                 worker_id: ctx.worker_id,
                 prompt: ctx.prompt.clone().unwrap_or_default(),
-                resume: None,
+                // A run whose row already carries a vendor session id is
+                // a continuation of that same vendor session, never a
+                // fresh start wearing new clothes (and never a retry --
+                // retries create new runs; this is the same run). The
+                // adapter decides what `Some` means for its own protocol;
+                // every headless adapter already implemented this and the
+                // TUI adapter now skips injection and resumes its launch.
+                resume: stored_vendor_session(&ctx.db, ctx.project_id, ctx.run_id)
+                    .await
+                    .map(VendorSessionRef),
             },
             sink,
         )
@@ -592,13 +767,19 @@ async fn run_one(
     Ok((adapter, settled, pane_lifecycle_owned_by_adapter))
 }
 
-async fn resolve_profile(ctx: &RunDriverContext) -> Result<WorkerProfile, RegistryError> {
-    let db = Arc::clone(&ctx.db);
-    let project_id = ctx.project_id;
-    let worker_id = ctx.worker_id;
+/// The resolved profile snapshot for one worker, read through the domain
+/// repository. Shared by the fresh-start path (`run_one`, which reads ids
+/// off its `RunDriverContext`) and resume (`resume_one`, which re-derives
+/// them from the run row).
+async fn resolve_worker_profile(
+    db: &Arc<DatabaseHandle>,
+    project_id: crew_protocol::ProjectId,
+    worker_id: WorkerId,
+) -> Result<WorkerProfile, RegistryError> {
+    let project_id_for_query = project_id;
     let snapshot = db
         .run_domain_op(Box::new(move |conn| {
-            let repo = DomainRepository::new(conn, project_id);
+            let repo = DomainRepository::new(conn, project_id_for_query);
             let snapshot = repo.resolved_profile_snapshot(worker_id)?;
             Ok(serde_json::json!({ "snapshot": snapshot }))
         }))
@@ -612,6 +793,109 @@ async fn resolve_profile(ctx: &RunDriverContext) -> Result<WorkerProfile, Regist
         return Err(RegistryError::NoResolvedProfile);
     };
     serde_json::from_str(&snapshot).map_err(|err| RegistryError::ProfileUnreadable(err.to_string()))
+}
+
+/// The shared pre-flight every adapter-bearing entry point runs before
+/// any process is spawned: conformance-derived effective capabilities,
+/// the policy decision, and the vendor-CLI availability probe. Shared by
+/// [`run_one`] (fresh start / resume-through-`StartSpec`) and
+/// [`AdapterRegistry::resume_run`] so the two paths can never drift.
+async fn gate_profile(
+    authorization: &Arc<dyn AdapterAuthorization>,
+    profile: &WorkerProfile,
+    policy: Option<&crate::config::RuntimePolicy>,
+) -> Result<AdapterCapabilities, String> {
+    // Handle TerminalDegraded specially (it has no adapter kind)
+    let effective_capabilities = if profile.adapter_kind().is_none() {
+        // TerminalDegraded uses the terminal adapter with degraded capabilities
+        // We need to extract the backend from the startup options
+        if let StartupOptions::TerminalDegraded(opts) = &profile.startup_options() {
+            super::terminal::TerminalAdapter::new(opts.backend.clone()).capabilities()
+        } else {
+            return Err("TerminalDegraded profile has no startup options".to_string());
+        }
+    } else {
+        let Some(kind) = profile.adapter_kind() else {
+            return Err("no adapter kind".to_string());
+        };
+        // Scope boundary (WP13, documented not silently omitted):
+        // `run_fixture_conformance` dispatches by `AdapterKind` only --
+        // it has no `mode` axis -- so a `mode: "tui"` run is authorized
+        // against its *headless* fixture suite's effective capabilities
+        // (e.g. Claude headless's `ApprovalsCapability::Controllable`),
+        // even though the `TuiAdapter` actually constructed below
+        // declares a materially different profile (`ProtocolKind::Terminal`,
+        // `ApprovalsCapability::None`, `UsageCapability::None`, ...). Giving
+        // this call a `mode` parameter means widening the closed
+        // `AdapterKind`-keyed dispatch `conformance::run_fixture_conformance`/
+        // `run_live_conformance`/`probe_availability` and the `crewd
+        // conformance`/`adapters --json` CLI surfaces all share -- out of
+        // scope for the WP that first makes `mode: "tui"` reachable at
+        // all; flagged for a follow-up rather than fixed here.
+        conformance::run_fixture_conformance(kind)
+            .await
+            .effective_capabilities
+    };
+
+    // Policy first: it is the cheaper, machine-independent decision, and
+    // probing a vendor CLI for a run policy already forbids would spawn a
+    // process to answer a question that no longer matters.
+    authorization
+        .authorize(profile, &effective_capabilities, policy)
+        .map_err(RegistryError::AuthorizationDenied)
+        .map_err(String::from)?;
+
+    // Then availability: deny an unusable vendor CLI here rather than
+    // letting `adapter.start()` fail after a process is spawned. The probe
+    // is a version handshake only -- never a model call -- and is cached
+    // for 60s, so repeated submits do not re-spawn the binary.
+    //
+    // Only a *disproof* denies: a skipped probe (the kill switch) was never
+    // attempted, so it is not evidence the CLI is unusable.
+    if let Some(kind) = profile.adapter_kind() {
+        let availability = conformance::probe_availability(kind).await;
+        if availability.disproved() {
+            authorization.release();
+            return Err(format!(
+                "adapter {} is unavailable: {}",
+                kind.wire_name(),
+                availability.detail
+            ));
+        }
+    }
+    Ok(effective_capabilities)
+}
+
+/// The `vendor_session_id` a prior incarnation of this run already
+/// established, if any. `Some` turns what would have been a fresh
+/// `StartSpec` into a continuation (`StartSpec::resume`) -- resuming the
+/// same run through its same vendor session, never a retry that would
+/// fabricate a new one.
+async fn stored_vendor_session(
+    db: &Arc<DatabaseHandle>,
+    project_id: crew_protocol::ProjectId,
+    run_id: RunId,
+) -> Option<String> {
+    let _ = project_id;
+    let run_id = run_id.to_string();
+    db.run_domain_op(Box::new(move |conn| {
+        let value: Option<String> = conn
+            .query_row(
+                "SELECT vendor_session_id FROM runs WHERE run_id = ?1",
+                [&run_id],
+                |row| row.get(0),
+            )
+            .ok();
+        Ok(value
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null))
+    }))
+    .await
+    .ok()
+    .and_then(|value| value.as_str().map(str::to_string))
+}
+async fn resolve_profile(ctx: &RunDriverContext) -> Result<WorkerProfile, RegistryError> {
+    resolve_worker_profile(&ctx.db, ctx.project_id, ctx.worker_id).await
 }
 
 /// The [`super::profile::AdapterMode`] a startup-options variant
@@ -655,6 +939,10 @@ fn build_adapter(
     project_id: crew_protocol::ProjectId,
     events_tx: tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
     display: Option<crew_protocol::DisplaySelection>,
+    // The stored tailer position a resume hands the constructed adapter
+    // (`None` for every fresh start). Only a `TuiAdapter` consumes it --
+    // headless adapters carry their session state internally.
+    resume_cursor: Option<Cursor>,
 ) -> Result<Arc<dyn Adapter>, RegistryError> {
     // `mode: "tui"` dispatches to a `TuiAdapter<V>` for a vendor with a
     // `TuiVendor` implementation. Claude's landed (WP13): given both a
@@ -685,6 +973,7 @@ fn build_adapter(
                 events_tx,
                 display,
                 profile.environment_allowlist.clone(),
+                resume_cursor,
             ));
         }
         return Err(RegistryError::TuiModeUnavailable(
@@ -742,10 +1031,11 @@ fn build_adapter(
 /// default if a caller never configured one) for the vendor's own
 /// `AdapterConfig`.
 ///
-/// `resume_transcript_path` is always `None` here: `AdapterRegistry`
-/// (via `RunDriver`) never calls `Adapter::resume` itself today -- WP14/
-/// 15's stored-cursor handoff is what will supply a known path for a
-/// real resume.
+/// The constructed adapter's `ResumeContext` carries this run's stored
+/// tailer position (WP12's `runs.transcript_cursor`) so a subsequent
+/// [`Adapter::resume`] re-tails from exactly where the journal says the
+/// previous incarnation stopped; the transcript path itself is derived
+/// deterministically inside the adapter from the vendor's own layout.
 #[allow(clippy::too_many_arguments)]
 fn build_claude_tui_adapter(
     tui: &Arc<TuiSupport>,
@@ -758,6 +1048,7 @@ fn build_claude_tui_adapter(
     events_tx: tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
     display: Option<crew_protocol::DisplaySelection>,
     environment_allowlist: Vec<String>,
+    resume_cursor: Option<Cursor>,
 ) -> Arc<dyn Adapter> {
     let cfg = tui
         .adapters
@@ -790,7 +1081,10 @@ fn build_claude_tui_adapter(
         tui.forced_backend,
         tui.close_on_exit,
         tui.timings.clone(),
-        None,
+        ResumeContext {
+            transcript_path: None,
+            cursor: resume_cursor,
+        },
     ))
 }
 
@@ -900,6 +1194,7 @@ mod build_adapter_tests {
             crew_protocol::ProjectId::new(),
             events_tx,
             None,
+            None,
         );
         assert!(
             result.is_ok(),
@@ -925,6 +1220,7 @@ mod build_adapter_tests {
             crew_protocol::ProjectId::new(),
             events_tx,
             None,
+            None,
         );
         assert!(
             result.is_ok(),
@@ -949,6 +1245,7 @@ mod build_adapter_tests {
             db,
             crew_protocol::ProjectId::new(),
             events_tx,
+            None,
             None,
         );
         assert!(
@@ -983,6 +1280,7 @@ mod build_adapter_tests {
             db,
             crew_protocol::ProjectId::new(),
             events_tx,
+            None,
             None,
         );
 
@@ -1031,6 +1329,7 @@ mod build_adapter_tests {
                 crew_protocol::ProjectId::new(),
                 events_tx.clone(),
                 None,
+                None,
             );
             match result {
                 Ok(_) => panic!("{expected_kind}: mode: tui must still refuse (no TuiVendor impl)"),
@@ -1071,6 +1370,7 @@ mod build_adapter_tests {
             crew_protocol::ProjectId::new(),
             events_tx,
             None,
+            None,
         );
 
         let adapter = result.expect("Claude TUI mode must construct with TuiSupport supplied");
@@ -1104,6 +1404,7 @@ mod build_adapter_tests {
                 Arc::clone(&db),
                 crew_protocol::ProjectId::new(),
                 events_tx.clone(),
+                None,
                 None,
             );
             assert!(

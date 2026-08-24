@@ -334,6 +334,18 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     // post-construction setter rather than a constructor argument.
     registry.set_broker(server.coordination_broker());
 
+    // Resume support (WP14): everything `AdapterRegistry::resume_run`
+    // needs that only exists after bind -- the journal handle, project id,
+    // the server-owned violation service, and the live event broadcast.
+    // Without this a boot-time resume sweep (WP15) could only fail closed;
+    // callers that never resume are unaffected either way.
+    registry.set_resume_support(Arc::new(crate::adapter::registry::ResumeSupport {
+        db: Arc::clone(&db),
+        project_id: paths.project_id,
+        violation_service: server.violation_service(),
+        events_tx: server.events_sender(),
+    }));
+
     // Settle messages a crash left in `recorded`/`sent`. Like the
     // recovery sweep, this runs after bind but before the first
     // connection is accepted, so no live run can race it. One-shot, not

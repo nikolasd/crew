@@ -41,7 +41,9 @@ pub use profile::{
     TerminalDegradedStartupOptions, WorkerProfile,
 };
 pub use profile_store::{ProfileStore, ProfileStoreError};
-pub use registry::{AdapterAuthorization, AdapterRegistry, FixtureAuthorization, RegistryError};
+pub use registry::{
+    AdapterAuthorization, AdapterRegistry, FixtureAuthorization, RegistryError, ResumeSupport,
+};
 pub use run_lifecycle::RunLifecycleSink;
 pub use r#trait::{
     Adapter, AdapterMessage, AdapterSnapshot, CancelScope, ProbeResult, StartSpec, VendorSessionRef,

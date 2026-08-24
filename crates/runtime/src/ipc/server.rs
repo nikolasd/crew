@@ -36,6 +36,10 @@ pub(crate) struct Shared {
     /// Routes every worker-safe `coordination/*` method to the domain
     /// repository.
     pub(crate) coordination: Arc<crate::coordination::CoordinationBroker>,
+    /// The mid-run nested-worker policy violation service, shared with
+    /// [`Self::orchestration`] and exposed post-bind for the adapter
+    /// registry's resume support bundle (see `Server::violation_service`).
+    pub(crate) violation: Arc<crate::policy::ViolationService>,
 }
 
 impl Shared {
@@ -176,7 +180,7 @@ impl Server {
             project_id,
             config.run_driver.clone(),
             config.approval_callback.clone(),
-            violation_service,
+            violation_service.clone(),
             events_tx.clone(),
             lease_service.clone(),
             artifact_store.clone(),
@@ -204,6 +208,7 @@ impl Server {
             shutdown: Arc::new(Notify::new()),
             orchestration,
             coordination,
+            violation: Arc::clone(&violation_service),
         });
 
         Ok(Self {
@@ -258,6 +263,17 @@ impl Server {
     #[must_use]
     pub fn events_sender(&self) -> broadcast::Sender<crew_protocol::EventEnvelope> {
         self.shared.events_tx.clone()
+    }
+
+    /// The policy-violation service this server constructed at bind time,
+    /// exposed (like [`Server::coordination_broker`] and for the same
+    /// construction-order reason: it only exists once `bind` has created
+    /// the live event broadcast) so the adapter registry's resume support
+    /// bundle shares the SAME instance orchestration dispatch uses, never
+    /// a second service with independent quarantine state.
+    #[must_use]
+    pub fn violation_service(&self) -> Arc<crate::policy::ViolationService> {
+        Arc::clone(&self.shared.violation)
     }
 
     /// Accepts and serves connections until `shutdown` resolves.

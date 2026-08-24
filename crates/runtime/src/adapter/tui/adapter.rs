@@ -115,6 +115,27 @@ pub trait TuiVendor: Send + Sync + 'static {
     /// session transcript (a `session_dir` override from `cfg`, or the
     /// vendor's own default).
     fn transcript_root(&self, spec: &StartSpec, cfg: &AdapterConfig) -> PathBuf;
+    /// The deterministic transcript path for a resumed session:
+    /// `<transcript_root>/<session-id>.jsonl` by default -- the layout at
+    /// least one real vendor (Claude) uses, whose transcript filename stem
+    /// *is* the session id (a UUID). A vendor whose resumed-session naming
+    /// differs overrides this.
+    ///
+    /// This is what makes resume reliable (WP14): unlike a fresh start,
+    /// a resume has no freshly injected nonce to discover the transcript
+    /// by, and the vendor may never re-touch an existing transcript
+    /// within any discovery window -- but the runtime already knows the
+    /// session id (`runs.vendor_session_id`) and the vendor's own root
+    /// layout, so the path follows without touching the filesystem.
+    fn transcript_path_for_session(
+        &self,
+        session: &VendorSessionRef,
+        spec: &StartSpec,
+        cfg: &AdapterConfig,
+    ) -> PathBuf {
+        self.transcript_root(spec, cfg)
+            .join(format!("{}.jsonl", session.0))
+    }
 
     /// This vendor's transcript line format.
     fn format(&self) -> Arc<dyn TranscriptFormat>;
@@ -213,6 +234,31 @@ struct RunState {
     pane_ref: String,
 }
 
+/// Everything a caller that already knows a prior session's durable
+/// state can hand a [`TuiAdapter`] so its `resume()` needs no discovery
+/// and re-tails from the exact stored position. The registry supplies
+/// this (from `runs.vendor_session_id`/`runs.transcript_cursor`) when it
+/// constructs an adapter it is about to resume; `Default` (both fields
+/// empty) keeps the pre-WP14 shape: the transcript path is derived
+/// deterministically from the vendor's own layout
+/// ([`TuiVendor::transcript_path_for_session`]) and tailing starts from
+/// the beginning of the file.
+#[derive(Debug, Clone, Default)]
+pub struct ResumeContext {
+    /// An already-known transcript path for `resume()` to tail directly,
+    /// skipping even the deterministic derivation. `Some` wins over the
+    /// derived path; a caller that has only the session id leaves this
+    /// `None`.
+    pub transcript_path: Option<PathBuf>,
+    /// The durable tailer position reached before the crash
+    /// (`runs.transcript_cursor`, WP12), resumed from verbatim. `None`
+    /// means nothing was ever durably consumed -- tailing starts at
+    /// [`Cursor::start`], which cannot duplicate anything because every
+    /// event batch persists its cursor transactionally with the events
+    /// themselves.
+    pub cursor: Option<Cursor>,
+}
+
 /// The vendor-agnostic TUI adapter: implements [`Adapter`] against any
 /// [`TuiVendor`].
 pub struct TuiAdapter<V: TuiVendor> {
@@ -234,14 +280,11 @@ pub struct TuiAdapter<V: TuiVendor> {
     forced_backend: Option<DisplayBackend>,
     close_on_exit: CloseOnExit,
     timings: TuiTimings,
-    /// An already-known transcript path for `resume()` to tail directly,
-    /// skipping nonce/session-id discovery entirely. `None` (the only
-    /// option available until a caller can look one up -- see WP14/15)
-    /// falls back to discovering by the resumed `VendorSessionRef`'s own
-    /// id, which only works if the vendor happens to re-touch its
-    /// transcript within the discovery window; a caller that already has
-    /// the path (e.g. from a stored cursor) should always supply it.
-    resume_transcript_path: Option<PathBuf>,
+    /// Resume-time knowledge supplied at construction: see
+    /// [`ResumeContext`]. Read only by `resume()` (and by `start()` when
+    /// its `StartSpec.resume` is set -- the same continuation, reached
+    /// through a different seam).
+    resume: ResumeContext,
     run: AsyncMutex<Option<RunState>>,
 }
 
@@ -260,7 +303,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
         forced_backend: Option<DisplayBackend>,
         close_on_exit: CloseOnExit,
         timings: TuiTimings,
-        resume_transcript_path: Option<PathBuf>,
+        resume: ResumeContext,
     ) -> Self {
         Self {
             vendor: Arc::new(vendor),
@@ -274,7 +317,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
             forced_backend,
             close_on_exit,
             timings,
-            resume_transcript_path,
+            resume,
             run: AsyncMutex::new(None),
         }
     }
@@ -290,6 +333,90 @@ impl<V: TuiVendor> TuiAdapter<V> {
     /// panes directory, not a full state root.
     fn socket_path(&self, run_id: RunId) -> PathBuf {
         self.panes_dir.join(format!("{run_id}.sock"))
+    }
+
+    /// The shared resume continuation, reached from two seams: a caller
+    /// that already holds the session ref calls [`Adapter::resume`]
+    /// directly, and a caller whose `StartSpec.resume` is set reaches the
+    /// identical path through `start()` (WP14 wiring -- `StartSpec.resume`
+    /// is never treated as a fresh launch with a flag bolted on).
+    ///
+    /// Respawns the vendor via [`TuiVendor::resume_launch`] (no prompt
+    /// injection), reopens the attach socket and pane exactly like a
+    /// fresh start, tails the transcript at the deterministic
+    /// session-derived path (or an explicitly supplied one) starting from
+    /// the stored cursor, and journals one resume-flavored
+    /// `ProtocolHealthChanged` diagnostic. `run_slot` is the caller's
+    /// already-held, already-checked-empty `self.run` guard -- see
+    /// `run_pipeline`'s own doc comment for why it stays held throughout.
+    async fn resume_from(
+        &self,
+        run_slot: &mut Option<RunState>,
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        session: &VendorSessionRef,
+        sink: Arc<dyn AdapterEventSink>,
+    ) -> Result<(), AdapterError> {
+        let placeholder = StartSpec {
+            run_id,
+            task_id,
+            worker_id,
+            prompt: String::new(),
+            resume: Some(session.clone()),
+        };
+        let launch = self.vendor.resume_launch(session, &placeholder, &self.cfg);
+        let transcript_root = self.vendor.transcript_root(&placeholder, &self.cfg);
+        // Deterministic derivation first (WP14): the vendor's own layout +
+        // the already-known session id. An explicitly supplied
+        // `ResumeContext::transcript_path` still wins over the derivation.
+        let transcript_path = self.resume.transcript_path.clone().unwrap_or_else(|| {
+            self.vendor
+                .transcript_path_for_session(session, &placeholder, &self.cfg)
+        });
+        let tail_from = self.resume.cursor.clone().unwrap_or_else(Cursor::start);
+
+        // Resume-flavored diagnostics: journaled evidence that this run
+        // continued an existing vendor session rather than starting fresh
+        // (the respawn itself is the ordinary `ProcessStarted` below; the
+        // re-established session id is re-journaled by the tailer's
+        // initial `VendorSessionEstablished`). The offset is the position
+        // tailing actually resumed from.
+        emit(
+            &sink,
+            run_id,
+            task_id,
+            worker_id,
+            AdapterEventPayload::ProtocolHealthChanged {
+                healthy: true,
+                detail: Classified {
+                    class: ContentClass::Visible,
+                    value: format!(
+                        "resumed vendor session {}; tailing {} from byte offset {}",
+                        session.0,
+                        transcript_path.display(),
+                        tail_from.offset
+                    ),
+                },
+            },
+            None,
+        )
+        .await;
+
+        self.run_pipeline(
+            run_slot,
+            run_id,
+            task_id,
+            worker_id,
+            launch,
+            transcript_root,
+            session.0.clone(),
+            None,
+            Some(transcript_path),
+            tail_from,
+            sink,
+        )
+        .await
     }
 
     /// The shared start/resume pipeline: spawn the PTY, attach a viewer
@@ -319,6 +446,12 @@ impl<V: TuiVendor> TuiAdapter<V> {
         discovery_key: String,
         inject: Option<String>,
         known_transcript_path: Option<PathBuf>,
+        // The transcript position this pipeline's tailer starts from:
+        // `Cursor::start` for a fresh start, the stored pre-crash
+        // position (`ResumeContext::cursor`) for a resume -- never
+        // hard-coded here, or a resumed session would replay (and
+        // re-journal) events an earlier run already committed.
+        tail_from: Cursor,
         sink: Arc<dyn AdapterEventSink>,
     ) -> Result<(), AdapterError> {
         let started_at = SystemTime::now();
@@ -512,7 +645,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
         let tailer = TranscriptTailer::new(
             transcript_path,
             self.vendor.format(),
-            Cursor::start(),
+            tail_from,
             self.timings.tailer_poll,
         );
         let tailer_handle = Arc::new(tailer.spawn(move |events, cursor| {
@@ -940,14 +1073,28 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                     "adapter already has an active run",
                 ));
             }
+            // A `StartSpec` that carries a session ref is not a fresh
+            // start wearing a flag -- it *is* a resume (WP14 wiring): the
+            // vendor continues its existing session, nothing is injected,
+            // and tailing picks up from the stored position. Fresh ids on
+            // the spec are the correlation (the registry binds the same
+            // run/task/worker into this adapter at construction).
+            if let Some(session) = spec.resume {
+                return self
+                    .resume_from(
+                        &mut guard,
+                        spec.run_id,
+                        spec.task_id,
+                        spec.worker_id,
+                        &session,
+                        sink,
+                    )
+                    .await;
+            }
             let launch = self.vendor.launch(&spec, &self.cfg);
             let transcript_root = self.vendor.transcript_root(&spec, &self.cfg);
             let nonce = Uuid::now_v7().to_string();
             let injected = format!("{}\n\n[crew:{nonce}]", spec.prompt);
-            // `start()` uses the (matching) ids on its own `StartSpec`,
-            // exactly like `ClaudeAdapter::start`; `resume()` has no
-            // `StartSpec` to read them from, so it uses `self.run_id`/
-            // `task_id`/`worker_id` instead (bound at construction).
             self.run_pipeline(
                 &mut guard,
                 spec.run_id,
@@ -958,6 +1105,7 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                 nonce,
                 Some(injected),
                 None,
+                Cursor::start(),
                 sink,
             )
             .await
@@ -985,25 +1133,12 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
             // doc comment) are what every emitted event is stamped with
             // -- never fabricated fresh ids for a run/task/worker this
             // adapter has no correlation to.
-            let placeholder = StartSpec {
-                run_id: self.run_id,
-                task_id: self.task_id,
-                worker_id: self.worker_id,
-                prompt: String::new(),
-                resume: Some(session.clone()),
-            };
-            let launch = self.vendor.resume_launch(&session, &placeholder, &self.cfg);
-            let transcript_root = self.vendor.transcript_root(&placeholder, &self.cfg);
-            self.run_pipeline(
+            self.resume_from(
                 &mut guard,
                 self.run_id,
                 self.task_id,
                 self.worker_id,
-                launch,
-                transcript_root,
-                session.0,
-                None,
-                self.resume_transcript_path.clone(),
+                &session,
                 sink,
             )
             .await
