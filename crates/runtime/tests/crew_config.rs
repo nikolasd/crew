@@ -23,7 +23,8 @@ fn write_layer(dir: &Path, name: &str, value: &serde_json::Value) -> std::path::
 }
 
 /// Defaults match spec §10, with the controller override that every
-/// adapter's `mode` defaults to `headless` (no TUI adapter exists yet).
+/// adapter's `mode` defaults to `headless` except `claude`, whose TUI
+/// adapter has landed (WP13) and so defaults to `tui`.
 #[test]
 fn defaults_match_spec_with_headless_mode_override() {
     let cfg = crew::load_layers(&[], None).expect("defaults load with no layers");
@@ -44,7 +45,12 @@ fn defaults_match_spec_with_headless_mode_override() {
             panic!("expected default adapter '{name}'");
         });
         assert!(adapter.enabled);
-        assert_eq!(adapter.mode, AdapterMode::Headless, "adapter '{name}' mode");
+        let expected_mode = if name == "claude" {
+            AdapterMode::Tui
+        } else {
+            AdapterMode::Headless
+        };
+        assert_eq!(adapter.mode, expected_mode, "adapter '{name}' mode");
         assert_eq!(adapter.permission_mode, PermissionMode::Max);
     }
     assert_eq!(cfg.adapters["claude"].bin, "claude");
