@@ -46,7 +46,8 @@ pub use ipc::{IpcError, Server, ServerConfig};
 pub use lifecycle::should_idle_shutdown;
 pub use paths::{PathError, RuntimePaths, repository_id_from_canonical_root};
 pub use recovery::{
-    DEFAULT_STALE_RUN_THRESHOLD, RecoveryConfig, RecoveryCoordinator, RecoveryError, RecoveryResult,
+    DEFAULT_STALE_RUN_THRESHOLD, RecoveredOutcome, RecoveryConfig, RecoveryCoordinator,
+    RecoveryError, RecoveryResult, ResumeSeam,
 };
 pub use security::{SecurityError, StateRoot};
 pub use service::{FakeRunDriver, OrchestrationService, RunDriver, RunDriverContext, ServiceError};

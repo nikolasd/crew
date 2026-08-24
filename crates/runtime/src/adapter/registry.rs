@@ -43,10 +43,10 @@ use tokio::sync::oneshot;
 use super::capability::{AdapterCapabilities, NestedCapability};
 use super::event_sink::{AdapterEventSink, DomainAdapterEventSink, SettlementSink};
 use super::mcp_config::AdapterMcpConfig;
-use super::profile::{StartupOptions, WorkerProfile};
+use super::profile::{AdapterKind, StartupOptions, WorkerProfile};
 use super::run_lifecycle::RunLifecycleSink;
 use super::r#trait::{Adapter, AdapterMessage, StartSpec, VendorSessionRef};
-use super::tui::{ClaudeTuiVendor, Cursor, ResumeContext, TuiAdapter, TuiSupport};
+use super::tui::{ClaudeTuiVendor, Cursor, ResumeContext, TuiAdapter, TuiSupport, TuiVendor};
 use crate::adapter::CancelScope;
 use crate::config::crew::{AdapterConfig, AdapterMode as CrewAdapterMode, PermissionMode};
 use crate::conformance;
@@ -931,7 +931,9 @@ async fn resolve_profile(ctx: &RunDriverContext) -> Result<WorkerProfile, Regist
 /// requested, or `None` for [`StartupOptions::TerminalDegraded`] (which
 /// carries no mode field -- it wraps an arbitrary underlying harness
 /// rather than one of the four reserved adapter kinds).
-fn requested_mode(startup_options: &StartupOptions) -> Option<super::profile::AdapterMode> {
+pub(crate) fn requested_mode(
+    startup_options: &StartupOptions,
+) -> Option<super::profile::AdapterMode> {
     match startup_options {
         StartupOptions::Claude(options) => Some(options.mode),
         StartupOptions::Codex(options) => Some(options.mode),
@@ -953,6 +955,77 @@ fn requested_mode(startup_options: &StartupOptions) -> Option<super::profile::Ad
 pub(crate) fn pane_lifecycle_owned_by_adapter(startup_options: &StartupOptions) -> bool {
     requested_mode(startup_options) == Some(super::profile::AdapterMode::Tui)
         && startup_options.adapter_kind() == Some(super::AdapterKind::Claude)
+}
+
+/// The capabilities the given reserved adapter kind declares, read off a
+/// throwaway adapter instance so each kind's `capabilities()` body remains
+/// the single source of truth (no second, driftable capability literal
+/// lives here). Construction is pure in-memory bookkeeping -- no process is
+/// spawned and no vendor CLI probe runs -- which is exactly what the boot
+/// recovery sweep's *eligibility* check needs: "does this run's adapter
+/// even claim session resumption", decided before any resume is attempted.
+/// The full availability/policy pre-flight still runs later, inside
+/// [`Self::resume_run`], through the same `gate_profile` a fresh start uses.
+pub(crate) fn declared_capabilities_for_kind(kind: AdapterKind) -> Option<AdapterCapabilities> {
+    let cwd = std::path::PathBuf::from(".");
+    Some(match kind {
+        AdapterKind::Claude => super::ClaudeAdapter::new(
+            super::ClaudeStartupOptions::default(),
+            cwd,
+            Vec::new(),
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            None,
+        )
+        .capabilities(),
+        AdapterKind::Codex => {
+            super::CodexAdapter::new(cwd, super::CodexStartupOptions::default(), Vec::new(), None)
+                .capabilities()
+        }
+        AdapterKind::Copilot => super::CopilotAdapter::new(
+            PathBuf::from("copilot"),
+            cwd,
+            super::CopilotStartupOptions::default(),
+            Vec::new(),
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            None,
+        )
+        .capabilities(),
+        AdapterKind::OmpRpc => super::OmpRpcAdapter::declared_capabilities(),
+    })
+}
+
+impl AdapterRegistry {
+    /// The deterministic transcript path a resumed TUI session would tail
+    /// (`TuiVendor::transcript_path_for_session`), or `None` when this
+    /// daemon could not resume a TUI-mode run for this kind at all: no
+    /// [`TuiSupport`] was ever supplied, or the kind has no configured
+    /// adapter entry. This is the WP15 sweep's TUI-eligibility check -- the
+    /// same derivation the resumed adapter itself will perform, evaluated
+    /// against the filesystem *before* anything is spawned.
+    #[must_use]
+    pub fn tui_transcript_path_for_session(
+        &self,
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        session: &VendorSessionRef,
+    ) -> Option<std::path::PathBuf> {
+        let tui = self.tui.lock().clone()?;
+        let cfg = tui.adapters.get("claude")?;
+        let vendor = ClaudeTuiVendor::new(self.repo_root.clone(), Vec::new());
+        let spec = StartSpec {
+            run_id,
+            task_id,
+            worker_id,
+            prompt: String::new(),
+            resume: Some(session.clone()),
+        };
+        Some(vendor.transcript_path_for_session(session, &spec, cfg))
+    }
 }
 #[allow(clippy::too_many_arguments)]
 fn build_adapter(

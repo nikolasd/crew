@@ -143,41 +143,6 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
 
     let db = Arc::new(DatabaseHandle::start(paths.database.clone()).await?);
 
-    // Crash recovery: transition any run left stuck in a non-terminal state
-    // by an unclean prior shutdown, before anything else touches the
-    // database or the socket accepts a single connection. Every run this
-    // sweep can see predates this process, so there is no live run to race.
-    let recovery =
-        crate::recovery::RecoveryCoordinator::with_defaults(Arc::clone(&db), paths.project_id);
-    match recovery.recover().await {
-        Ok(result) if result.recovered_count > 0 => {
-            for recovered in &result.recovered_runs {
-                if recovered.success {
-                    tracing::info!(
-                        run_id = %recovered.run_id,
-                        worker_id = %recovered.worker_id,
-                        from_state = %recovered.previous_state,
-                        to_state = %recovered.new_state,
-                        last_activity = %recovered.last_activity,
-                        "crash_recovery_transitioned_run"
-                    );
-                } else {
-                    tracing::warn!(
-                        run_id = %recovered.run_id,
-                        worker_id = %recovered.worker_id,
-                        from_state = %recovered.previous_state,
-                        error = recovered.error.as_deref().unwrap_or("unknown"),
-                        "crash_recovery_failed_to_transition_run"
-                    );
-                }
-            }
-        }
-        Ok(_) => {}
-        Err(err) => {
-            tracing::warn!(error = %err, "crash_recovery_sweep_failed");
-        }
-    }
-
     // Use the config paths from ServeOptions (passed through from CLI).
     // The paths are retained alongside the merged policy so `run/submit`
     // can re-merge a run's own `policyOverrides` onto them.
@@ -346,8 +311,66 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         events_tx: server.events_sender(),
     }));
 
+    // Crash recovery (WP15): the sweep is now RESUME FIRST. It runs here --
+    // not earlier -- because it must follow both post-construction registry
+    // supports: `set_tui_support` above (a `mode: "tui"` run cannot even
+    // have its transcript eligibility checked without it) and
+    // `set_resume_support` just below bind (`resume_run` fails closed with
+    // `RegistryError::ResumeUnsupported` without it). It still runs before
+    // `server.serve()` below accepts the first connection, so no live run
+    // can race it, and every non-terminal run it can see still predates this
+    // process: there is no live supervisor to race, and whatever spawn a
+    // resume performs is owned by THIS daemon.
+    let recovery = crate::recovery::RecoveryCoordinator::with_resume(
+        Arc::clone(&db),
+        paths.project_id,
+        crate::recovery::RecoveryConfig::default(),
+        Arc::clone(&registry),
+        server.events_sender(),
+    );
+    match recovery.recover().await {
+        Ok(result) if !result.recovered_runs.is_empty() => {
+            for recovered in &result.recovered_runs {
+                match recovered.outcome {
+                    crate::recovery::RecoveredOutcome::Resumed => tracing::info!(
+                        run_id = %recovered.run_id,
+                        worker_id = %recovered.worker_id,
+                        state = %recovered.new_state,
+                        "crash_recovery_resumed_run"
+                    ),
+                    crate::recovery::RecoveredOutcome::Terminalized if recovered.success => {
+                        tracing::info!(
+                            run_id = %recovered.run_id,
+                            worker_id = %recovered.worker_id,
+                            from_state = %recovered.previous_state,
+                            to_state = %recovered.new_state,
+                            last_activity = %recovered.last_activity,
+                            "crash_recovery_transitioned_run"
+                        )
+                    }
+                    crate::recovery::RecoveredOutcome::Terminalized => tracing::warn!(
+                        run_id = %recovered.run_id,
+                        worker_id = %recovered.worker_id,
+                        error = recovered.error.as_deref().unwrap_or("unknown"),
+                        "crash_recovery_failed_to_transition_run"
+                    ),
+                    crate::recovery::RecoveredOutcome::LeftUntouched => tracing::warn!(
+                        run_id = %recovered.run_id,
+                        worker_id = %recovered.worker_id,
+                        error = recovered.error.as_deref().unwrap_or("unknown"),
+                        "crash_recovery_left_run_untouched"
+                    ),
+                }
+            }
+        }
+        Ok(_) => {}
+        Err(err) => {
+            tracing::warn!(error = %err, "crash_recovery_sweep_failed");
+        }
+    }
+
     // Settle messages a crash left in `recorded`/`sent`. Like the
-    // recovery sweep, this runs after bind but before the first
+    // recovery sweep above, this runs after bind but before the first
     // connection is accepted, so no live run can race it. One-shot, not
     // periodic: a running daemon settles its own messages.
     match server
