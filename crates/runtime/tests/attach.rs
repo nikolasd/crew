@@ -205,11 +205,18 @@ async fn stop_closes_connected_clients_and_unlinks_the_socket_file() {
     let read = tokio::time::timeout(Duration::from_secs(5), viewer.read(&mut buf))
         .await
         .expect("the viewer's read must resolve promptly after stop()");
-    assert_eq!(
-        read.unwrap(),
-        0,
-        "stop() must close every connected viewer's socket (EOF)"
-    );
+    // A clean EOF (Ok(0)) is the tidy close. On Linux, aborting the
+    // server-side task while the viewer still has unread ring-replay
+    // bytes queued surfaces as ECONNRESET rather than EOF -- equally
+    // proof that stop() closed the socket. Either is acceptable; a byte
+    // (Ok(n > 0)) is not.
+    match read {
+        Ok(0) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::ConnectionReset => {}
+        other => {
+            panic!("stop() must close every connected viewer's socket, got {other:?}")
+        }
+    }
     assert!(
         !path.exists(),
         "stop() must remove the socket file from disk"
