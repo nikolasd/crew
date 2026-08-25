@@ -122,11 +122,7 @@ export function formatDigest(e: EventEnvelope, lookup: RunLookup): string | unde
     }
     case "workerTimeout": {
       const kind = event.payload.kind ?? "inactivity";
-      return (
-        `${capitalize(who)} hit a worker ${kind} timeout. The runtime reports; the leader decides: ` +
-        `give it more time via crew_run { op: "timeoutAck", runId, decision: "extend" }, ` +
-        `redirect it via crew_send (the nudge), or stop it via crew_run { op: "timeoutAck", decision: "abort" }.`
-      );
+      return `${capitalize(who)} hit a worker ${kind} timeout. The runtime reports; the leader decides: ` + `give it more time via crew_run { op: "timeoutAck", runId, decision: "extend" }, ` + `redirect it via crew_send (the nudge), or stop it via crew_run { op: "timeoutAck", decision: "abort" }.`;
     }
     case "budgetExceeded":
       return `${capitalize(who)} exceeded its turn budget. Escalate to the user or raise the budget via the plan.`;
