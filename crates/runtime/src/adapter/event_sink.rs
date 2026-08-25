@@ -158,6 +158,11 @@ pub struct DomainAdapterEventSink {
     /// plan Task 1), not merely a journaled observation.
     nested_not_managed: bool,
     violation_service: Arc<crate::policy::ViolationService>,
+    /// Whether this run executes in an isolated workspace (WP20). `false`
+    /// means writes land in the shared repo without a lease, so a
+    /// write-shaped tool from a subtask that declared `writes: false` is
+    /// an escalatable policy violation.
+    isolated_workspace: bool,
 }
 
 impl DomainAdapterEventSink {
@@ -179,6 +184,7 @@ impl DomainAdapterEventSink {
         org_security_patterns: Vec<String>,
         nested_not_managed: bool,
         violation_service: Arc<crate::policy::ViolationService>,
+        isolated_workspace: bool,
     ) -> Result<Self, String> {
         let redactor = Arc::new(Redactor::with_org_rules(&org_security_patterns)?);
         Ok(Self {
@@ -188,6 +194,7 @@ impl DomainAdapterEventSink {
             redactor,
             nested_not_managed,
             violation_service,
+            isolated_workspace,
         })
     }
 
@@ -379,6 +386,18 @@ impl AdapterEventSink for DomainAdapterEventSink {
         // block below (this function cannot `?` here -- it returns the
         // future itself, not a `Result`).
         let cursor_json = event.cursor.as_ref().map(serde_json::to_string).transpose();
+        let write_tool = match &event.payload {
+            AdapterEventPayload::ToolStarted { name, .. }
+                if !self.isolated_workspace
+                    && matches!(
+                        name.as_str(),
+                        "write" | "edit" | "apply_patch" | "str_replace_editor" | "create"
+                    ) =>
+            {
+                Some(name.clone())
+            }
+            _ => None,
+        };
         let runtime_event = self.build_runtime_event(event);
         let project_id = self.project_id;
         let events_tx = self.events_tx.clone();
@@ -445,6 +464,46 @@ impl AdapterEventSink for DomainAdapterEventSink {
                     run_id = %run_id,
                     "failed to record mid-run nested-worker policy violation"
                 );
+            }
+
+            if let Some(tool_name) = write_tool.clone() {
+                // WP20: a write-shaped tool ran in a shared (unleased)
+                // workspace. Raise only when the run's plan subtask
+                // declared writes:false; the escalation row and its
+                // `EscalationRaised` event commit together.
+                let tool_for_closure = tool_name.clone();
+                let raise_result = db
+                    .run_domain_op(Box::new(move |conn| {
+                        // The actor op boundary carries plain `Value`s:
+                        // encode "no violation" as JSON null.
+                        Ok(DomainRepository::new(conn, project_id)
+                            .raise_write_violation_if_declared_read_only(
+                                run_id,
+                                tool_for_closure.as_str(),
+                            )?
+                            .map(|committed| {
+                                embed_envelope(
+                                    json!({ "sequence": committed.sequence }),
+                                    &committed.envelope,
+                                )
+                            })
+                            .unwrap_or(serde_json::Value::Null))
+                    }))
+                    .await;
+                match raise_result {
+                    Ok(mut value) if !value.is_null() => {
+                        let _ = crate::domain::broadcast_committed(&events_tx, &mut value);
+                        tracing::warn!(run_id = %run_id, tool = %tool_name, "write_violation_escalated");
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            run_id = %run_id,
+                            "failed to record write-violation escalation"
+                        );
+                    }
+                }
             }
 
             if out_of_band {
@@ -743,6 +802,7 @@ mod out_of_band_input_tests {
             Vec::new(),
             false,
             violation_service,
+            false,
         )
         .expect("built-in redaction rules always compile")
     }
@@ -959,6 +1019,7 @@ mod question_detected_tests {
             Vec::new(),
             false,
             violation_service,
+            false,
         )
         .expect("built-in redaction rules always compile")
     }
@@ -1226,6 +1287,7 @@ mod crash_resume_tests {
             Vec::new(),
             false,
             violation_service,
+            false,
         )
         .expect("built-in redaction rules always compile")
     }

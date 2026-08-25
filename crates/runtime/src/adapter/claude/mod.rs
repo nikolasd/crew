@@ -1097,6 +1097,7 @@ mod run_state_tests {
                 Vec::new(),
                 false,
                 violation,
+                false,
             )
             .expect("built-in patterns always compile"),
         );

@@ -462,6 +462,10 @@ impl AdapterRegistry {
             self.org_security_patterns.clone(),
             effective_capabilities.nested != NestedCapability::Managed,
             Arc::clone(&support.violation_service),
+            // Resume support carries no workspace context; a resumed run
+            // is treated as shared (the conservative side for the WP20
+            // write-violation detector).
+            false,
         ) {
             Ok(sink) => Arc::new(sink) as Arc<dyn AdapterEventSink>,
             Err(err) => {
@@ -576,6 +580,7 @@ impl RunDriver for AdapterRegistry {
         _task_id: TaskId,
         _worker_id: WorkerId,
         prompt: String,
+        kind: crew_protocol::MessageKind,
     ) -> RunDriverFuture<'static, Result<(), String>> {
         let running = Arc::clone(&self.running);
 
@@ -584,10 +589,26 @@ impl RunDriver for AdapterRegistry {
                 <RegistryError as Into<String>>::into(RegistryError::NoRunningAdapter(run_id))
             })?;
 
-            adapter
-                .send(AdapterMessage::FollowUp { text: prompt })
-                .await
-                .map_err(|err| err.to_string())
+            use crew_protocol::MessageKind;
+            let message = match kind {
+                // The one kind with dedicated redirect semantics on the
+                // adapters that support it (TUI interrupt-then-compose,
+                // Codex turn/steer); adapters without it refuse with
+                // capability_unsupported rather than silently degrading.
+                MessageKind::Steer => AdapterMessage::Steer { text: prompt },
+                MessageKind::Answer => AdapterMessage::Answer { text: prompt },
+                MessageKind::PeerMessage => AdapterMessage::PeerMessage { text: prompt },
+                // Assign/question/approval-decision/cancel/shutdown all
+                // carry follow-up delivery semantics at the vendor.
+                MessageKind::Assign
+                | MessageKind::FollowUp
+                | MessageKind::Question
+                | MessageKind::ApprovalDecision
+                | MessageKind::Cancel
+                | MessageKind::Shutdown => AdapterMessage::FollowUp { text: prompt },
+            };
+
+            adapter.send(message).await.map_err(|err| err.to_string())
         })
     }
 
@@ -764,6 +785,7 @@ async fn run_one(
         org_security_patterns,
         effective_capabilities.nested != NestedCapability::Managed,
         Arc::clone(&ctx.violation_service),
+        ctx.workspace_path.is_some(),
     ) {
         Ok(sink) => Arc::new(sink) as Arc<dyn AdapterEventSink>,
         Err(err) => {

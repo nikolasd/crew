@@ -80,6 +80,7 @@ impl RunDriver for RecordingRunDriver {
         task_id: TaskId,
         worker_id: WorkerId,
         prompt: String,
+        _kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         self.follow_ups
             .lock()
@@ -122,6 +123,7 @@ impl RunDriver for FailingRunDriver {
         _task_id: TaskId,
         _worker_id: WorkerId,
         _prompt: String,
+        _kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         Box::pin(async { Ok(()) })
     }
@@ -198,6 +200,7 @@ impl RunDriver for CancelTrackingRunDriver {
         task_id: TaskId,
         worker_id: WorkerId,
         prompt: String,
+        _kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         self.follow_ups
             .lock()
@@ -327,6 +330,7 @@ impl ViolationTriggeringRunDriver {
             vec![],
             true,
             Arc::clone(&ctx.violation_service),
+            false,
         )
         .expect("built-in patterns always compile");
         sink.emit(AdapterEvent {
@@ -359,6 +363,7 @@ impl RunDriver for ViolationTriggeringRunDriver {
                 vec![],
                 true,
                 Arc::clone(&ctx.violation_service),
+                false,
             )
             .expect("built-in patterns always compile");
             sink.emit(AdapterEvent {
@@ -383,6 +388,7 @@ impl RunDriver for ViolationTriggeringRunDriver {
         _task_id: TaskId,
         _worker_id: WorkerId,
         _prompt: String,
+        _kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         Box::pin(async { Ok(()) })
     }
@@ -422,6 +428,7 @@ impl RunDriver for ConfigurableCancelViolationDriver {
                 vec![],
                 true,
                 Arc::clone(&ctx.violation_service),
+                false,
             )
             .expect("built-in patterns always compile");
             sink.emit(AdapterEvent {
@@ -446,6 +453,7 @@ impl RunDriver for ConfigurableCancelViolationDriver {
         _task_id: TaskId,
         _worker_id: WorkerId,
         _prompt: String,
+        _kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         Box::pin(async { Ok(()) })
     }
@@ -1409,6 +1417,7 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
             _task_id: TaskId,
             _worker_id: WorkerId,
             _prompt: String,
+            _kind: crew_protocol::MessageKind,
         ) -> AdapterFuture<'static, Result<(), String>> {
             Box::pin(async { Ok(()) })
         }
@@ -1451,6 +1460,7 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
                 vec![],
                 true,
                 Arc::clone(&ctx.violation_service),
+                false,
             )
             .expect("built-in patterns always compile");
             sink.emit(AdapterEvent {
@@ -2010,10 +2020,6 @@ struct StartCapturingRunDriver {
 }
 
 impl RunDriver for StartCapturingRunDriver {
-    fn active_run_count(&self) -> usize {
-        0
-    }
-
     fn start(&self, ctx: RunDriverContext) -> AdapterFuture<'static, Result<(), String>> {
         self.started.lock().push(ctx.clone());
         self.inner.start(ctx)
@@ -2025,9 +2031,10 @@ impl RunDriver for StartCapturingRunDriver {
         task_id: TaskId,
         worker_id: WorkerId,
         prompt: String,
+        kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         self.inner
-            .send_follow_up(run_id, task_id, worker_id, prompt)
+            .send_follow_up(run_id, task_id, worker_id, prompt, kind)
     }
 
     fn running_adapter(&self, run_id: RunId) -> Option<Arc<dyn Adapter>> {
@@ -2040,6 +2047,10 @@ impl RunDriver for StartCapturingRunDriver {
         scope: CancelScope,
     ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
         self.inner.cancel_run(run_id, scope)
+    }
+
+    fn active_run_count(&self) -> usize {
+        self.inner.active_run_count()
     }
 }
 
@@ -2066,9 +2077,10 @@ impl RunDriver for KillFailingRunDriver {
         task_id: TaskId,
         worker_id: WorkerId,
         prompt: String,
+        kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         self.inner
-            .send_follow_up(run_id, task_id, worker_id, prompt)
+            .send_follow_up(run_id, task_id, worker_id, prompt, kind)
     }
 
     fn running_adapter(&self, run_id: RunId) -> Option<Arc<dyn Adapter>> {
@@ -3886,6 +3898,7 @@ impl RunDriver for RealAdapterRunDriver {
         _task_id: TaskId,
         _worker_id: WorkerId,
         _prompt: String,
+        _kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         Box::pin(async { Err("not supported".to_string()) })
     }

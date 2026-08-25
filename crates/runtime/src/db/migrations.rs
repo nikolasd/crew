@@ -279,6 +279,28 @@ CREATE TABLE budgets (
 ALTER TABLE runs ADD COLUMN plan_ref TEXT;
 ";
 
+/// Migration 13: worker escalations (WP20). A row is opened in the same
+/// transaction that journals its triggering fact -- a `WorkerQuestion`
+/// event opens a `question` escalation; the write-violation and
+/// repeated-failure detectors open their kinds alongside their
+/// `EscalationRaised` events. `message/send {kind:"answer"}` resolves the
+/// run's open question escalation inside the guarded write (`decided_at`,
+/// `answered_by`, `answer`) and the resolution is journaled as
+/// `EscalationAnswered`. Nullable decision columns: an open escalation has
+/// none, and is never backfilled with a fabricated one.
+const MIGRATION_13: &str = "
+CREATE TABLE escalations (
+  escalation_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  kind TEXT NOT NULL,
+  question TEXT,
+  answered_by TEXT,
+  answer TEXT,
+  created_at TEXT NOT NULL,
+  decided_at TEXT
+);
+";
+
 /// Opens `path` as a private (mode `0600`) SQLite database, configures its
 /// PRAGMAs (`journal_mode=WAL`, `foreign_keys=ON`, `busy_timeout=5000`,
 /// `synchronous=FULL`), and migrates it to the latest schema. Migrations
@@ -318,6 +340,7 @@ fn migration_list() -> Migrations<'static> {
         M::up(MIGRATION_10),
         M::up(MIGRATION_11),
         M::up(MIGRATION_12),
+        M::up(MIGRATION_13),
     ])
 }
 

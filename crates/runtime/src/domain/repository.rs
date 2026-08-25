@@ -1118,7 +1118,7 @@ impl<'c> DomainRepository<'c> {
         principal_instance_id: Option<&str>,
         enforce_quarantine: bool,
         enforce_live: bool,
-    ) -> Result<Committed, DomainError> {
+    ) -> Result<(Committed, bool), DomainError> {
         let event = RuntimeEvent::MessageEvent {
             kind: RuntimeEventKind::MessageRecorded,
             message_id: message.message_id,
@@ -1128,7 +1128,11 @@ impl<'c> DomainRepository<'c> {
         };
         let message = message.clone();
         let principal_instance_id = principal_instance_id.map(str::to_string);
-        self.append_and_apply(
+        // Set inside the guarded write when this message resolved the
+        // run's open question escalation (WP20) -- read after the commit.
+        let answered = std::rc::Rc::new(std::cell::Cell::new(false));
+        let answered_for_tx = std::rc::Rc::clone(&answered);
+        let committed = self.append_and_apply(
             &event,
             Some(message.task_id),
             Some(message.sender_worker_id),
@@ -1256,11 +1260,29 @@ impl<'c> DomainRepository<'c> {
                         message.reply_to.map(|m| m.to_string()),
                     ],
                 )?;
+                if message.kind == crew_protocol::MessageKind::Answer
+                    && message.reply_to.is_some()
+                {
+                    let now = Timestamp::now();
+                    let resolved = tx.execute(
+                        "UPDATE escalations SET answered_by = 'ompExtension', \
+                           answer = ?1, decided_at = ?2 \
+                         WHERE run_id = ?3 AND kind = 'question' AND decided_at IS NULL",
+                        rusqlite::params![
+                            message.payload,
+                            now.as_str(),
+                            message.run_id.to_string(),
+                        ],
+                    )? > 0;
+                    if resolved {
+                        answered_for_tx.set(true);
+                    }
+                }
                 Ok(())
             },
-        )
+        )?;
+        Ok((committed, answered.get()))
     }
-
     /// Appends a `Diagnostic` event scoped to `run_id`, with no projection
     /// side effect. Used for runtime-observed conditions -- such as a
     /// follow-up message that could not be delivered to a running adapter
@@ -1326,6 +1348,153 @@ impl<'c> DomainRepository<'c> {
     /// # Errors
     /// Returns [`DomainError::NotFound`] when the run or its budget row is
     /// missing, plus the usual append failures.
+    /// Journals the durable `EscalationAnswered` fact for a run whose open
+    /// question escalation a just-recorded Answer message resolved (WP20).
+    /// Reads the run's correlating ids and the stored answer here rather
+    /// than trusting caller-carried values, so the event always matches the
+    /// row the resolution wrote.
+    ///
+    /// # Errors
+    /// Returns [`DomainError::NotFound`] when the run or its escalation is
+    /// missing, plus the usual append failures.
+    pub fn journal_escalation_answered(
+        &mut self,
+        run_id: RunId,
+        answered_by: crew_protocol::AnsweredBy,
+    ) -> Result<Committed, DomainError> {
+        let (task_id, worker_id, answer): (String, String, Option<String>) = self
+            .conn
+            .query_row(
+                "SELECT r.task_id, r.worker_id, e.answer \
+                 FROM runs r JOIN escalations e ON e.run_id = r.run_id \
+                 WHERE r.run_id = ?1 AND e.kind = 'question' AND e.decided_at IS NOT NULL \
+                 ORDER BY e.decided_at DESC LIMIT 1",
+                [run_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?
+            .ok_or(DomainError::NotFound {
+                kind: "escalation",
+                id: run_id.to_string(),
+            })?;
+        let task_id = TaskId::parse(&task_id).map_err(|_| DomainError::NotFound {
+            kind: "task",
+            id: task_id.clone(),
+        })?;
+        let worker_id = WorkerId::parse(&worker_id).map_err(|_| DomainError::NotFound {
+            kind: "worker",
+            id: worker_id.clone(),
+        })?;
+        let event = RuntimeEvent::EscalationAnswered {
+            run_id,
+            task_id,
+            worker_id,
+            answered_by,
+            answer,
+        };
+        self.append_and_apply(
+            &event,
+            Some(task_id),
+            Some(worker_id),
+            Some(run_id),
+            |_tx| Ok(()),
+        )
+    }
+
+    /// Journals an `EscalationRaised` fact for `run_id` (WP20): a
+    /// machine-assigned `reason` (`write_violation`, `repeated_failure`)
+    /// plus optional redacted `question` text. Projection-only callers --
+    /// the sink's write-violation detector and the lifecycle's
+    /// repeated-failure check -- invoke this as their own committed op and
+    /// broadcast the returned envelope themselves.
+    ///
+    /// # Errors
+    /// Returns [`DomainError`] for the usual append failures; a run that
+    /// vanished between detection and commit surfaces as
+    /// [`DomainError::NotFound`].
+    pub fn record_escalation_raised(
+        &mut self,
+        run_id: RunId,
+        reason: impl Into<String>,
+        question: Option<String>,
+    ) -> Result<Committed, DomainError> {
+        let reason = reason.into();
+        let (task_id, worker_id): (String, String) = self
+            .conn
+            .query_row(
+                "SELECT task_id, worker_id FROM runs WHERE run_id = ?1",
+                [run_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(DomainError::NotFound {
+                kind: "run",
+                id: run_id.to_string(),
+            })?;
+        let task_id = TaskId::parse(&task_id).map_err(|_| DomainError::NotFound {
+            kind: "task",
+            id: task_id.clone(),
+        })?;
+        let worker_id = WorkerId::parse(&worker_id).map_err(|_| DomainError::NotFound {
+            kind: "worker",
+            id: worker_id.clone(),
+        })?;
+        self.conn.execute(
+            "INSERT INTO escalations (escalation_id, run_id, kind, question, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                crew_protocol::EscalationId::new().to_string(),
+                run_id.to_string(),
+                reason,
+                question,
+                Timestamp::now().as_str(),
+            ],
+        )?;
+        let event = RuntimeEvent::EscalationRaised {
+            run_id,
+            task_id,
+            worker_id,
+            reason,
+            question,
+        };
+        self.append_and_apply(
+            &event,
+            Some(task_id),
+            Some(worker_id),
+            Some(run_id),
+            |_tx| Ok(()),
+        )
+    }
+
+    /// Whether this run's immediately preceding terminal run for the same
+    /// task also ended `failed` -- WP20's two-consecutive-failures trigger
+    /// for a `repeated_failure` escalation. Reads at most the two newest
+    /// terminal rows for the task.
+    ///
+    /// # Errors
+    /// Returns [`DomainError`] on query failure only; an unknown run reads
+    /// as `false`.
+    #[must_use]
+    pub fn previous_run_for_task_also_failed(&self, run_id: RunId) -> bool {
+        let Ok(task_id): Result<String, _> = self.conn.query_row(
+            "SELECT task_id FROM runs WHERE run_id = ?1",
+            [run_id.to_string()],
+            |row| row.get(0),
+        ) else {
+            return false;
+        };
+        let failed_before: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM runs \
+                 WHERE task_id = ?1 AND state = 'failed' AND run_id != ?2",
+                rusqlite::params![task_id, run_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        failed_before > 0
+    }
+
     pub fn journal_budget_exceeded(&mut self, run_id: RunId) -> Result<Committed, DomainError> {
         let (task_id, worker_id): (String, String) = self
             .conn
@@ -1373,6 +1542,70 @@ impl<'c> DomainRepository<'c> {
             Some(run_id),
             |_tx| Ok(()),
         )
+    }
+
+    /// WP20's write-violation detector: when `tool_name` is a write-shaped
+    /// tool AND the run was spawned from an approved plan subtask that
+    /// declared `writes: false`, opens a `write_violation` escalation and
+    /// journals `EscalationRaised{reason: "write_violation"}`. `None` when
+    /// the run has no plan provenance (never backfilled), the referenced
+    /// subtask declared writes, or the tool is not write-shaped -- those
+    /// are clean no-ops, never errors.
+    ///
+    /// # Errors
+    /// Returns [`DomainError`] for missing rows once detection matched,
+    /// and the usual append failures.
+    pub fn raise_write_violation_if_declared_read_only(
+        &mut self,
+        run_id: RunId,
+        _tool_name: &str,
+    ) -> Result<Option<Committed>, DomainError> {
+        let plan_ref: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT plan_ref FROM runs WHERE run_id = ?1",
+                [run_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(plan_ref) = plan_ref else {
+            return Ok(None);
+        };
+        // plan_ref is the JSON `run/submit` stored: {"planId", "subtaskId"}.
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&plan_ref) else {
+            return Ok(None);
+        };
+        let (Some(plan_id), Some(subtask_id)) = (
+            parsed.get("planId").and_then(serde_json::Value::as_str),
+            parsed.get("subtaskId").and_then(serde_json::Value::as_str),
+        ) else {
+            return Ok(None);
+        };
+        let subtasks_json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT subtasks_json FROM plans WHERE run_id = ?1",
+                [plan_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        // `subtasks_json` is `serde_json::to_string(&plan.subtasks)`: a BARE
+        // array, not an object wrapping one (matches propose_plan's writer).
+        let declared_writes = subtasks_json
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+            .and_then(|v| {
+                v.as_array()?
+                    .iter()
+                    .find(|s| s["id"] == serde_json::Value::String(subtask_id.to_string()))
+                    .map(|s| s["writes"] == serde_json::Value::Bool(true))
+            });
+        match declared_writes {
+            // Declared read-only in this plan -> violation.
+            Some(false) => {}
+            _ => return Ok(None),
+        }
+        self.record_escalation_raised(run_id, "write_violation", None)
+            .map(Some)
     }
 
     /// Journals a `WorkerTimeout` liveness report for `run_id` (WP19),
@@ -2645,6 +2878,16 @@ impl<'c> DomainRepository<'c> {
             } => Some(vendor_session_id.clone()),
             _ => None,
         };
+        // WP20: a journaled WorkerQuestion auto-opens its escalation row in
+        // the SAME transaction -- the question event is the durable fact;
+        // the open row is the projection a later `message/send {kind:
+        // "answer"}` resolves. One open question-escalation per run: the
+        // insert is skipped while one is still undecided (a worker that
+        // asks twice before anyone answers has still asked once).
+        let question = match event {
+            RuntimeEvent::WorkerQuestion { question, .. } => question.clone(),
+            _ => None,
+        };
         self.append_and_apply(
             event,
             Some(task_id),
@@ -2662,6 +2905,27 @@ impl<'c> DomainRepository<'c> {
                         "UPDATE runs SET transcript_cursor = ?1 WHERE run_id = ?2",
                         rusqlite::params![cursor, run_id.to_string()],
                     )?;
+                }
+                if let Some(question) = question {
+                    let open: i64 = tx
+                        .query_row(
+                            "SELECT COUNT(*) FROM escalations \
+                             WHERE run_id = ?1 AND kind = 'question' AND decided_at IS NULL",
+                            [run_id.to_string()],
+                            |row| row.get(0),
+                        )?;
+                    if open == 0 {
+                        tx.execute(
+                            "INSERT INTO escalations (escalation_id, run_id, kind, question, created_at) \
+                             VALUES (?1, ?2, 'question', ?3, ?4)",
+                            rusqlite::params![
+                                crew_protocol::EscalationId::new().to_string(),
+                                run_id.to_string(),
+                                question,
+                                Timestamp::now().as_str(),
+                            ],
+                        )?;
+                    }
                 }
                 Ok(())
             },

@@ -211,7 +211,49 @@ impl RunLifecycle {
         exit_code: Option<i32>,
         signal: Option<&str>,
     ) {
-        self.walk_to(&terminal_state_for(exit_code, signal)).await;
+        let terminal = terminal_state_for(exit_code, signal);
+        self.walk_to(&terminal).await;
+        // WP20 repeated-failure escalation: a run that just failed for the
+        // same task whose previous run also failed raises the leader's
+        // attention fact. Committed as its own mutation and broadcast here
+        // (invariant 7) -- never folded into the transition commit, since
+        // escalation projection is not evidence for lifecycle edges.
+        if terminal == state("failed") {
+            self.raise_repeated_failure_if_second().await;
+        }
+    }
+
+    /// Journals `EscalationRaised{reason: "repeated_failure"}` when this
+    /// run's task has already seen another failed run. Best-effort: a
+    /// failed detection is logged, never fatal -- the milestone digest
+    /// already instructs the leader to ask the human.
+    async fn raise_repeated_failure_if_second(&self) {
+        let project_id = self.project_id;
+        let run_id = self.run_id;
+        let result = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                let mut repo = DomainRepository::new(conn, project_id);
+                if repo.previous_run_for_task_also_failed(run_id) {
+                    repo.record_escalation_raised(run_id, "repeated_failure", None)
+                        .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                } else {
+                    Ok(json!(null))
+                }
+            }))
+            .await;
+        match result {
+            Ok(mut value) => {
+                crate::domain::broadcast_committed(&self.events_tx, &mut value);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    run_id = %self.run_id,
+                    "failed to record repeated-failure escalation"
+                );
+            }
+        }
     }
 }
 

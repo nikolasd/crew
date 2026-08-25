@@ -308,7 +308,7 @@ impl CoordinationBroker {
             .run_domain_op(Box::new(move |conn| {
                 let mut repo = DomainRepository::new(conn, project_id);
                 repo.record_message(&message, None, false, true)
-                    .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                    .map(|(c, _)| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
             }))
             .await?;
         self.broadcast(&mut recorded_sequence);
@@ -623,12 +623,13 @@ impl CoordinationBroker {
                 // quarantined worker from being charged rate budget; a
                 // quarantine landing between that read and this write is
                 // refused here, inside the guarded transaction.
-                repo.record_message(&message, None, true, true).map(|c| {
-                    embed_envelope(
-                        json!({ "sequence": c.sequence, "artifactRef": artifact_ref }),
-                        &c.envelope,
-                    )
-                })
+                repo.record_message(&message, None, true, true)
+                    .map(|(c, _)| {
+                        embed_envelope(
+                            json!({ "sequence": c.sequence, "artifactRef": artifact_ref }),
+                            &c.envelope,
+                        )
+                    })
             }))
             .await
             .map_err(CoordinationError::from)?;

@@ -2112,6 +2112,7 @@ impl OrchestrationService {
             .map_err(|_| ServiceError::invalid_params("replyTo is not a valid id"))?;
 
         let follow_up_payload = payload.clone();
+        let follow_up_kind = kind.clone();
         let message_id = MessageId::new();
         let message = RunMessage {
             message_id,
@@ -2143,13 +2144,27 @@ impl OrchestrationService {
                 // no live adapter (R94 gates only the worker-MCP broker
                 // writes whose doc promises liveness). The turn-budget
                 // guard (WP19) sits in that same transaction.
-                repo.record_message(&message, Some(&principal_instance_id), true, false)
-                    .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                let (committed, answered) =
+                    repo.record_message(&message, Some(&principal_instance_id), true, false)?;
+                Ok(embed_envelope(
+                    json!({ "sequence": committed.sequence, "answered": answered }),
+                    &committed.envelope,
+                ))
             }))
             .await
             .map_err(ServiceError::from);
+        let answered;
         let mut sequence = match submit_outcome {
-            Ok(value) => value,
+            Ok(mut value) => {
+                answered = value
+                    .get("answered")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if let Some(obj) = value.as_object_mut() {
+                    obj.remove("answered");
+                }
+                value
+            }
             Err(err) => {
                 // A typed budget refusal must still journal -- and
                 // broadcast -- its durable `BudgetExceeded` fact (WP19):
@@ -2175,6 +2190,23 @@ impl OrchestrationService {
         };
         self.broadcast(&mut sequence);
 
+        // WP20: this Answer resolved the run's open question escalation --
+        // journal (and broadcast) the durable `EscalationAnswered` fact as
+        // its own committed mutation, exactly like every other follow-up
+        // fact this handler emits.
+        if answered {
+            let mut answered_event = self
+                .db
+                .run_domain_op(Box::new(move |conn| {
+                    DomainRepository::new(conn, project_id)
+                        .journal_escalation_answered(run_id, crew_protocol::AnsweredBy::Leader)
+                        .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                }))
+                .await
+                .map_err(ServiceError::from)?;
+            self.broadcast(&mut answered_event);
+        }
+
         // Best-effort live delivery to an already-running adapter. A
         // missing driver, a `queued`/not-yet-started run (the normal case
         // -- `NoRunningAdapter`), or any other delivery failure must never
@@ -2186,7 +2218,13 @@ impl OrchestrationService {
         // exactly the deliveryState inversion this branch exists to avoid.
         if let Some(driver) = self.run_driver.clone() {
             match driver
-                .send_follow_up(run_id, task_id, sender_worker_id, follow_up_payload)
+                .send_follow_up(
+                    run_id,
+                    task_id,
+                    sender_worker_id,
+                    follow_up_payload,
+                    follow_up_kind,
+                )
                 .await
             {
                 Ok(()) => {

@@ -182,6 +182,7 @@ fn production_sink_chain(
             Vec::new(),
             false,
             violation,
+            false,
         )
         .expect("built-in patterns always compile"),
     );
