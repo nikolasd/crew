@@ -517,8 +517,8 @@ impl Adapter for CodexAdapter {
 
     fn send(&self, message: AdapterMessage) -> AdapterFuture<'_, ()> {
         Box::pin(async move {
-            let run_guard = self.run.lock().await;
-            let Some(run) = run_guard.as_ref() else {
+            let mut run_guard = self.run.lock().await;
+            let Some(run) = run_guard.as_mut() else {
                 return Err(AdapterError::invalid_vendor_state(
                     KIND,
                     "send",
@@ -548,13 +548,25 @@ impl Adapter for CodexAdapter {
                     Ok(())
                 }
                 AdapterMessage::FollowUp { text } => {
-                    run.client
+                    let response = run
+                        .client
                         .call(
                             "turn/start",
                             json!({"threadId": run.thread_id, "input": [{"type": "text", "text": text}]}),
                         )
                         .await
                         .map_err(|e| client_error(e, "send"))?;
+                    // The follow-up STARTS A NEW TURN: the id captured at
+                    // `turn/start` in `start()` is stale the moment this
+                    // succeeds, and a later Steer/Cancel(Turn) targeting it
+                    // would address a finished turn. Track the latest.
+                    if let Some(turn_id) = response
+                        .get("turn")
+                        .and_then(|t| t.get("id"))
+                        .and_then(Value::as_str)
+                    {
+                        run.current_turn_id = Some(turn_id.to_string());
+                    }
                     Ok(())
                 }
                 AdapterMessage::Answer { .. } | AdapterMessage::PeerMessage { .. } => {
