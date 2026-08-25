@@ -11,9 +11,9 @@
 //! before its event is appended.
 
 use crew_protocol::{
-    ApprovalRequest, DeliveryState, EventEnvelope, EventSource, PolicyViolationId, ProjectId, Run,
-    RunFlags, RunId, RunMessage, RunState, RuntimeEvent, RuntimeEventKind, TaskId, TaskRef,
-    Timestamp, Worker, WorkerId,
+    ApprovalRequest, DeliveryState, EventEnvelope, EventSource, PlanGetResult, PlanSpec,
+    PolicyViolationId, ProjectId, Run, RunFlags, RunId, RunMessage, RunState, RuntimeEvent,
+    RuntimeEventKind, SubtaskSpec, TaskId, TaskRef, Timestamp, Worker, WorkerId,
 };
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
@@ -91,6 +91,19 @@ pub enum DomainError {
     /// doctrine to the quarantine gates).
     #[error("run {run_id} is quarantined by an undecided policy violation")]
     PolicyQuarantined { run_id: String },
+    /// A leader-originated steering message was refused because the run's
+    /// turn budget is exhausted (`turns_used >= turn_limit`). Checked
+    /// inside [`DomainRepository::record_message`]'s own guarded
+    /// transaction (WP19) -- never a caller-side pre-check. The typed
+    /// refusal travels to the RPC caller as `BUDGET_EXCEEDED`; the
+    /// durable `BudgetExceeded` fact is journaled (and broadcast) by a
+    /// follow-up commit, not inside this rolled-back one.
+    #[error("run {run_id} exceeded its turn budget: {turns_used}/{turn_limit} turns used")]
+    BudgetExceeded {
+        run_id: String,
+        turns_used: u32,
+        turn_limit: u32,
+    },
     /// A serialization step failed.
     #[error("failed to serialize event: {0}")]
     Serialize(#[from] serde_json::Error),
@@ -1105,7 +1118,7 @@ impl<'c> DomainRepository<'c> {
         principal_instance_id: Option<&str>,
         enforce_quarantine: bool,
         enforce_live: bool,
-    ) -> Result<Committed, DomainError> {
+    ) -> Result<(Committed, bool), DomainError> {
         let event = RuntimeEvent::MessageEvent {
             kind: RuntimeEventKind::MessageRecorded,
             message_id: message.message_id,
@@ -1115,7 +1128,11 @@ impl<'c> DomainRepository<'c> {
         };
         let message = message.clone();
         let principal_instance_id = principal_instance_id.map(str::to_string);
-        self.append_and_apply(
+        // Set inside the guarded write when this message resolved the
+        // run's open question escalation (WP20) -- read after the commit.
+        let answered = std::rc::Rc::new(std::cell::Cell::new(false));
+        let answered_for_tx = std::rc::Rc::clone(&answered);
+        let committed = self.append_and_apply(
             &event,
             Some(message.task_id),
             Some(message.sender_worker_id),
@@ -1195,6 +1212,35 @@ impl<'c> DomainRepository<'c> {
                         });
                     }
                 }
+                // Turn budget guard (WP19): leader-originated steering
+                // kinds consume a worker turn. Checked inside this same
+                // guarded transaction -- a caller-side pre-check would
+                // read a snapshot another send could land behind. A run
+                // with no budgets row (submitted before WP19, or via
+                // retry) has no explicit budget and is never refused.
+                if is_turn_consuming(&message.kind) {
+                    let row: Option<(i64, i64)> = tx
+                        .query_row(
+                            "SELECT turns_used, turn_limit FROM budgets WHERE run_id = ?1",
+                            [message.run_id.to_string()],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
+                        )
+                        .optional()?;
+                    if let Some((turns_used, turn_limit)) = row {
+                        let (turns_used, turn_limit) = (u32::try_from(turns_used).unwrap_or(u32::MAX), u32::try_from(turn_limit).unwrap_or(0));
+                        if turns_used >= turn_limit {
+                            return Err(DomainError::BudgetExceeded {
+                                run_id: message.run_id.to_string(),
+                                turns_used,
+                                turn_limit,
+                            });
+                        }
+                        tx.execute(
+                            "UPDATE budgets SET turns_used = turns_used + 1 WHERE run_id = ?1",
+                            [message.run_id.to_string()],
+                        )?;
+                    }
+                }
                 tx.execute(
                     "INSERT INTO messages (message_id, run_id, sender_worker_id, recipient_worker_id,
                        task_id, kind, payload, delivery_state, created_at, sent_at, acknowledged_at, reply_to)
@@ -1214,11 +1260,29 @@ impl<'c> DomainRepository<'c> {
                         message.reply_to.map(|m| m.to_string()),
                     ],
                 )?;
+                if message.kind == crew_protocol::MessageKind::Answer
+                    && message.reply_to.is_some()
+                {
+                    let now = Timestamp::now();
+                    let resolved = tx.execute(
+                        "UPDATE escalations SET answered_by = 'ompExtension', \
+                           answer = ?1, decided_at = ?2 \
+                         WHERE run_id = ?3 AND kind = 'question' AND decided_at IS NULL",
+                        rusqlite::params![
+                            message.payload,
+                            now.as_str(),
+                            message.run_id.to_string(),
+                        ],
+                    )? > 0;
+                    if resolved {
+                        answered_for_tx.set(true);
+                    }
+                }
                 Ok(())
             },
-        )
+        )?;
+        Ok((committed, answered.get()))
     }
-
     /// Appends a `Diagnostic` event scoped to `run_id`, with no projection
     /// side effect. Used for runtime-observed conditions -- such as a
     /// follow-up message that could not be delivered to a running adapter
@@ -1237,6 +1301,368 @@ impl<'c> DomainRepository<'c> {
             message: message.into(),
         };
         self.append_and_apply(&event, None, None, Some(run_id), |_tx| Ok(()))
+    }
+
+    /// Snapshots a run's turn budget (WP19): records the plan provenance on
+    /// the run row and creates its `budgets` row with the resolved limit.
+    /// Projection-only bookkeeping -- the `RunQueued` event already
+    /// committed the submission fact; a budget is a *limit* the leader's
+    /// plan and config imply for the run, and the durable facts are the
+    /// later `BudgetExceeded` and turn-consuming message events that
+    /// reference it. Written once at submit; a run whose row already
+    /// exists keeps it.
+    ///
+    /// # Errors
+    /// Returns [`DomainError`] if either projection write fails.
+    pub fn attach_turn_budget(
+        &mut self,
+        run_id: RunId,
+        task_id: TaskId,
+        plan_ref: Option<String>,
+        turn_limit: u32,
+    ) -> Result<(), DomainError> {
+        if let Some(plan_ref) = &plan_ref {
+            self.conn.execute(
+                "UPDATE runs SET plan_ref = ?1 WHERE run_id = ?2",
+                rusqlite::params![plan_ref, run_id.to_string()],
+            )?;
+        }
+        self.conn.execute(
+            "INSERT INTO budgets (run_id, task_id, turns_used, turn_limit) VALUES (?1, ?2, 0, ?3)",
+            rusqlite::params![
+                run_id.to_string(),
+                task_id.to_string(),
+                i64::from(turn_limit)
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Journals the durable `BudgetExceeded` fact for a run whose guard
+    /// just refused a steering message (WP19). Reads the current counter
+    /// and the run's correlating ids here rather than trusting
+    /// caller-carried numbers, so the event always matches the row the
+    /// refusal saw. The caller broadcasts the returned envelope; the RPC
+    /// answer itself carries the typed `BUDGET_EXCEEDED` code.
+    ///
+    /// # Errors
+    /// Returns [`DomainError::NotFound`] when the run or its budget row is
+    /// missing, plus the usual append failures.
+    /// Journals the durable `EscalationAnswered` fact for a run whose open
+    /// question escalation a just-recorded Answer message resolved (WP20).
+    /// Reads the run's correlating ids and the stored answer here rather
+    /// than trusting caller-carried values, so the event always matches the
+    /// row the resolution wrote.
+    ///
+    /// # Errors
+    /// Returns [`DomainError::NotFound`] when the run or its escalation is
+    /// missing, plus the usual append failures.
+    pub fn journal_escalation_answered(
+        &mut self,
+        run_id: RunId,
+        answered_by: crew_protocol::AnsweredBy,
+    ) -> Result<Committed, DomainError> {
+        let (task_id, worker_id, answer): (String, String, Option<String>) = self
+            .conn
+            .query_row(
+                "SELECT r.task_id, r.worker_id, e.answer \
+                 FROM runs r JOIN escalations e ON e.run_id = r.run_id \
+                 WHERE r.run_id = ?1 AND e.kind = 'question' AND e.decided_at IS NOT NULL \
+                 ORDER BY e.decided_at DESC LIMIT 1",
+                [run_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?
+            .ok_or(DomainError::NotFound {
+                kind: "escalation",
+                id: run_id.to_string(),
+            })?;
+        let task_id = TaskId::parse(&task_id).map_err(|_| DomainError::NotFound {
+            kind: "task",
+            id: task_id.clone(),
+        })?;
+        let worker_id = WorkerId::parse(&worker_id).map_err(|_| DomainError::NotFound {
+            kind: "worker",
+            id: worker_id.clone(),
+        })?;
+        let event = RuntimeEvent::EscalationAnswered {
+            run_id,
+            task_id,
+            worker_id,
+            answered_by,
+            answer,
+        };
+        self.append_and_apply(
+            &event,
+            Some(task_id),
+            Some(worker_id),
+            Some(run_id),
+            |_tx| Ok(()),
+        )
+    }
+
+    /// Journals an `EscalationRaised` fact for `run_id` (WP20): a
+    /// machine-assigned `reason` (`write_violation`, `repeated_failure`)
+    /// plus optional redacted `question` text. Projection-only callers --
+    /// the sink's write-violation detector and the lifecycle's
+    /// repeated-failure check -- invoke this as their own committed op and
+    /// broadcast the returned envelope themselves.
+    ///
+    /// # Errors
+    /// Returns [`DomainError`] for the usual append failures; a run that
+    /// vanished between detection and commit surfaces as
+    /// [`DomainError::NotFound`].
+    pub fn record_escalation_raised(
+        &mut self,
+        run_id: RunId,
+        reason: impl Into<String>,
+        question: Option<String>,
+    ) -> Result<Committed, DomainError> {
+        let reason = reason.into();
+        let (task_id, worker_id): (String, String) = self
+            .conn
+            .query_row(
+                "SELECT task_id, worker_id FROM runs WHERE run_id = ?1",
+                [run_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(DomainError::NotFound {
+                kind: "run",
+                id: run_id.to_string(),
+            })?;
+        let task_id = TaskId::parse(&task_id).map_err(|_| DomainError::NotFound {
+            kind: "task",
+            id: task_id.clone(),
+        })?;
+        let worker_id = WorkerId::parse(&worker_id).map_err(|_| DomainError::NotFound {
+            kind: "worker",
+            id: worker_id.clone(),
+        })?;
+        self.conn.execute(
+            "INSERT INTO escalations (escalation_id, run_id, kind, question, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                crew_protocol::EscalationId::new().to_string(),
+                run_id.to_string(),
+                reason,
+                question,
+                Timestamp::now().as_str(),
+            ],
+        )?;
+        let event = RuntimeEvent::EscalationRaised {
+            run_id,
+            task_id,
+            worker_id,
+            reason,
+            question,
+        };
+        self.append_and_apply(
+            &event,
+            Some(task_id),
+            Some(worker_id),
+            Some(run_id),
+            |_tx| Ok(()),
+        )
+    }
+
+    /// Whether this run's immediately preceding terminal run for the same
+    /// task also ended `failed` -- WP20's two-consecutive-failures trigger
+    /// for a `repeated_failure` escalation. Reads at most the two newest
+    /// terminal rows for the task.
+    ///
+    /// # Errors
+    /// Returns [`DomainError`] on query failure only; an unknown run reads
+    /// as `false`.
+    #[must_use]
+    pub fn previous_run_for_task_also_failed(&self, run_id: RunId) -> bool {
+        let Ok(task_id): Result<String, _> = self.conn.query_row(
+            "SELECT task_id FROM runs WHERE run_id = ?1",
+            [run_id.to_string()],
+            |row| row.get(0),
+        ) else {
+            return false;
+        };
+        let failed_before: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM runs \
+                 WHERE task_id = ?1 AND state = 'failed' AND run_id != ?2",
+                rusqlite::params![task_id, run_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        failed_before > 0
+    }
+
+    pub fn journal_budget_exceeded(&mut self, run_id: RunId) -> Result<Committed, DomainError> {
+        let (task_id, worker_id): (String, String) = self
+            .conn
+            .query_row(
+                "SELECT task_id, worker_id FROM runs WHERE run_id = ?1",
+                [run_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(DomainError::NotFound {
+                kind: "run",
+                id: run_id.to_string(),
+            })?;
+        let (turns_used, turn_limit): (i64, i64) = self
+            .conn
+            .query_row(
+                "SELECT turns_used, turn_limit FROM budgets WHERE run_id = ?1",
+                [run_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(DomainError::NotFound {
+                kind: "budget",
+                id: run_id.to_string(),
+            })?;
+        let task_id = TaskId::parse(&task_id).map_err(|_| DomainError::NotFound {
+            kind: "task",
+            id: task_id.clone(),
+        })?;
+        let worker_id = WorkerId::parse(&worker_id).map_err(|_| DomainError::NotFound {
+            kind: "worker",
+            id: worker_id.clone(),
+        })?;
+        let event = RuntimeEvent::BudgetExceeded {
+            run_id,
+            task_id,
+            worker_id,
+            turns_used: u32::try_from(turns_used).unwrap_or(u32::MAX),
+            turn_limit: u32::try_from(turn_limit).unwrap_or(0),
+        };
+        self.append_and_apply(
+            &event,
+            Some(task_id),
+            Some(worker_id),
+            Some(run_id),
+            |_tx| Ok(()),
+        )
+    }
+
+    /// WP20's write-violation detector: when `tool_name` is a write-shaped
+    /// tool AND the run was spawned from an approved plan subtask that
+    /// declared `writes: false`, opens a `write_violation` escalation and
+    /// journals `EscalationRaised{reason: "write_violation"}`. `None` when
+    /// the run has no plan provenance (never backfilled), the referenced
+    /// subtask declared writes, or the tool is not write-shaped -- those
+    /// are clean no-ops, never errors.
+    ///
+    /// # Errors
+    /// Returns [`DomainError`] for missing rows once detection matched,
+    /// and the usual append failures.
+    pub fn raise_write_violation_if_declared_read_only(
+        &mut self,
+        run_id: RunId,
+        _tool_name: &str,
+    ) -> Result<Option<Committed>, DomainError> {
+        let plan_ref: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT plan_ref FROM runs WHERE run_id = ?1",
+                [run_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(plan_ref) = plan_ref else {
+            return Ok(None);
+        };
+        // plan_ref is the JSON `run/submit` stored: {"planId", "subtaskId"}.
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&plan_ref) else {
+            return Ok(None);
+        };
+        let (Some(plan_id), Some(subtask_id)) = (
+            parsed.get("planId").and_then(serde_json::Value::as_str),
+            parsed.get("subtaskId").and_then(serde_json::Value::as_str),
+        ) else {
+            return Ok(None);
+        };
+        let subtasks_json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT subtasks_json FROM plans WHERE run_id = ?1",
+                [plan_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        // `subtasks_json` is `serde_json::to_string(&plan.subtasks)`: a BARE
+        // array, not an object wrapping one (matches propose_plan's writer).
+        let declared_writes = subtasks_json
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+            .and_then(|v| {
+                v.as_array()?
+                    .iter()
+                    .find(|s| s["id"] == serde_json::Value::String(subtask_id.to_string()))
+                    .map(|s| s["writes"] == serde_json::Value::Bool(true))
+            });
+        match declared_writes {
+            // Declared read-only in this plan -> violation.
+            Some(false) => {}
+            _ => return Ok(None),
+        }
+        self.record_escalation_raised(run_id, "write_violation", None)
+            .map(Some)
+    }
+
+    /// Journals a `WorkerTimeout` liveness report for `run_id` (WP19),
+    /// unless the run has settled or is unknown -- the sweep snapshots the
+    /// clock before this check, so a run that terminated between snapshot
+    /// and commit must not receive a timeout fact. Returns the committed
+    /// envelope for broadcast, or `None` when there was nothing to report.
+    ///
+    /// # Errors
+    /// Returns [`DomainError`] for the usual append failures.
+    pub fn record_worker_timeout_if_live(
+        &mut self,
+        run_id: RunId,
+        kind: crew_protocol::TimeoutKind,
+        since_ms: u64,
+    ) -> Result<Option<Committed>, DomainError> {
+        let Some((task_id, worker_id, state)): Option<(String, String, String)> = self
+            .conn
+            .query_row(
+                "SELECT task_id, worker_id, state FROM runs WHERE run_id = ?1",
+                [run_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let parsed_state =
+            RunState::try_from(state.as_str()).map_err(|_| DomainError::NotFound {
+                kind: "run-state",
+                id: state.clone(),
+            })?;
+        if parsed_state.is_terminal() {
+            return Ok(None);
+        }
+        let task_id = TaskId::parse(&task_id).map_err(|_| DomainError::NotFound {
+            kind: "task",
+            id: task_id.clone(),
+        })?;
+        let worker_id = WorkerId::parse(&worker_id).map_err(|_| DomainError::NotFound {
+            kind: "worker",
+            id: worker_id.clone(),
+        })?;
+        let event = RuntimeEvent::WorkerTimeout {
+            run_id,
+            task_id,
+            worker_id,
+            kind,
+            since_ms,
+        };
+        Ok(Some(self.append_and_apply(
+            &event,
+            Some(task_id),
+            Some(worker_id),
+            Some(run_id),
+            |_tx| Ok(()),
+        )?))
     }
 
     /// Updates a message's delivery state. Emits the matching `Message*`
@@ -1524,6 +1950,275 @@ impl<'c> DomainRepository<'c> {
             }
             Ok(())
         })
+    }
+
+    /// Proposes a leader plan for a run: inserts a `plans` row in the
+    /// `proposed` state and appends a `PlanProposed` event. The plan is
+    /// keyed 1:1 by `run_id` -- at most one plan row may exist per run,
+    /// and re-proposing one that already exists (proposed or decided) is
+    /// refused as [`DomainError::AlreadyResolved`] so a stale second
+    /// proposal cannot clobber a live decision. `task_id`/`worker_id` are
+    /// read from the run row (the daemon does not own routing; it only
+    /// reflects the run it supervises) and carried on the event so a
+    /// monitor replaying the journal can reconstruct the subtask graph.
+    ///
+    /// # Errors
+    /// Returns [`DomainError::NotFound`] if no such run exists, or
+    /// [`DomainError::AlreadyResolved`] if a plan already exists for it.
+    pub fn propose_plan(
+        &mut self,
+        run_id: RunId,
+        owner_client_instance_id: &str,
+        task_text: &str,
+        plan: &PlanSpec,
+    ) -> Result<Committed, DomainError> {
+        let run_id_str = run_id.to_string();
+        // Reflect the run the plan is for; the daemon does not create or
+        // edit OMP's task graph (invariant 6).
+        let (task_id_str, worker_id_str): (String, String) = self
+            .conn
+            .query_row(
+                "SELECT task_id, worker_id FROM runs WHERE run_id = ?1",
+                [run_id_str.clone()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(DomainError::NotFound {
+                kind: "run",
+                id: run_id_str.clone(),
+            })?;
+        let task_id = TaskId::parse(&task_id_str).map_err(|_| DomainError::NotFound {
+            kind: "task",
+            id: task_id_str.clone(),
+        })?;
+        let worker_id = WorkerId::parse(&worker_id_str).map_err(|_| DomainError::NotFound {
+            kind: "worker",
+            id: worker_id_str.clone(),
+        })?;
+
+        // Refuse to overwrite an existing plan for this run (proposed or
+        // already decided) -- see doc above.
+        let existing: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT status FROM plans WHERE run_id = ?1",
+                [run_id_str.clone()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(status) = existing {
+            return Err(DomainError::AlreadyResolved {
+                kind: "plan",
+                id: run_id_str,
+                existing: status,
+            });
+        }
+
+        let subtasks_json = serde_json::to_string(&plan.subtasks).map_err(|err| {
+            DomainError::Sqlite(rusqlite::Error::ToSqlConversionFailure(Box::new(err)))
+        })?;
+        let now = Timestamp::now();
+        let status = "proposed".to_string();
+        let project_id = self.project_id.to_string();
+        let event = RuntimeEvent::PlanProposed {
+            run_id,
+            task_id,
+            worker_id,
+            plan: plan.clone(),
+        };
+        self.append_and_apply(
+            &event,
+            Some(task_id),
+            Some(worker_id),
+            Some(run_id),
+            move |tx| {
+                tx.execute(
+                    "INSERT INTO plans (plan_id, project_id, run_id, task_id, worker_id, \
+                     owner_client_instance_id, task_text, subtasks_json, status, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    rusqlite::params![
+                        run_id_str,
+                        project_id,
+                        run_id_str,
+                        task_id_str,
+                        worker_id_str,
+                        owner_client_instance_id,
+                        task_text,
+                        subtasks_json,
+                        status,
+                        now.as_str(),
+                    ],
+                )?;
+                Ok(())
+            },
+        )
+    }
+
+    /// Decides a previously proposed plan for a run: guards inside the
+    /// writing transaction (re-read `status` and `owner_client_instance_id`
+    /// from `plans`, mirroring [`Self::decide_approval`'s] race-safe owner
+    /// check -- R71), journals a `PlanDecided` event, and writes the
+    /// decision onto the row. The daemon enforces nothing about *routing*;
+    /// it only persists the leader's decision.
+    ///
+    /// # Errors
+    /// Returns [`DomainError::NotFound`] if no plan exists for the run,
+    /// [`DomainError::NotOwner`] if `principal_instance_id` does not own
+    /// the plan's task, or [`DomainError::AlreadyResolved`] if the plan has
+    /// already been decided.
+    pub fn decide_plan(
+        &mut self,
+        run_id: RunId,
+        principal_instance_id: &str,
+        approved: bool,
+        reason: Option<&str>,
+    ) -> Result<Committed, DomainError> {
+        let run_id_str = run_id.to_string();
+        // The run row is stable for a run, so reading task_id/worker_id here
+        // (outside the guarded transaction) is safe; only the `plans` row's
+        // owner/status guard must live inside the writing transaction (R71).
+        let (task_id_str, worker_id_str): (String, String) = self
+            .conn
+            .query_row(
+                "SELECT task_id, worker_id FROM runs WHERE run_id = ?1",
+                [run_id_str.clone()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(DomainError::NotFound {
+                kind: "run",
+                id: run_id_str.clone(),
+            })?;
+        let task_id = TaskId::parse(&task_id_str).map_err(|_| DomainError::NotFound {
+            kind: "task",
+            id: task_id_str.clone(),
+        })?;
+        let worker_id = WorkerId::parse(&worker_id_str).map_err(|_| DomainError::NotFound {
+            kind: "worker",
+            id: worker_id_str.clone(),
+        })?;
+
+        let now = Timestamp::now();
+        let decision = if approved { "approved" } else { "rejected" };
+        let reason_str = reason.map(str::to_string);
+        let principal = principal_instance_id.to_string();
+        let event = RuntimeEvent::PlanDecided {
+            run_id,
+            task_id,
+            worker_id,
+            approved,
+            reason: reason.map(str::to_string),
+        };
+        self.append_and_apply(
+            &event,
+            Some(task_id),
+            Some(worker_id),
+            Some(run_id),
+            move |tx| {
+                // Race-safe owner + status re-read inside the writing
+                // transaction (R71): a `reconcile/omp` rebind cannot land
+                // between a caller snapshot and this write because the
+                // database actor serializes whole `run_domain_op` closures.
+                let row: Option<(String, String)> = tx
+                    .query_row(
+                        "SELECT owner_client_instance_id, status FROM plans WHERE run_id = ?1",
+                        [run_id_str.clone()],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()?;
+                let (owner, status) = match row {
+                    Some(row) => row,
+                    None => {
+                        return Err(DomainError::NotFound {
+                            kind: "plan",
+                            id: run_id_str.clone(),
+                        });
+                    }
+                };
+                if owner != principal {
+                    return Err(DomainError::NotOwner {
+                        task_id: owner,
+                        instance_id: principal.clone(),
+                    });
+                }
+                if status != "proposed" {
+                    return Err(DomainError::AlreadyResolved {
+                        kind: "plan",
+                        id: run_id_str.clone(),
+                        existing: status,
+                    });
+                }
+                tx.execute(
+                    "UPDATE plans SET status = ?1, decided_at = ?2, decided_reason = ?3 \
+                     WHERE run_id = ?4 AND status = 'proposed'",
+                    rusqlite::params![decision, now.as_str(), reason_str, run_id_str,],
+                )?;
+                Ok(())
+            },
+        )
+    }
+
+    /// Returns the most recently proposed plan for a run and its decision,
+    /// if any (`plan/get`, ADR-0024 open read). `plan: None` means no plan
+    /// has been proposed yet; `approved: None` means a plan exists but has
+    /// not yet been decided.
+    ///
+    /// # Errors
+    /// Returns [`DomainError::NotFound`] if no such run exists.
+    pub fn get_plan(&self, run_id: RunId) -> Result<PlanGetResult, DomainError> {
+        let run_id_str = run_id.to_string();
+        let exists: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM runs WHERE run_id = ?1",
+                [run_id_str.clone()],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !exists {
+            return Err(DomainError::NotFound {
+                kind: "run",
+                id: run_id_str,
+            });
+        }
+        let row: Option<(String, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT subtasks_json, status FROM plans WHERE run_id = ?1 \
+                 ORDER BY created_at DESC LIMIT 1",
+                [run_id_str],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        match row {
+            None => Ok(PlanGetResult {
+                run_id,
+                plan: None,
+                approved: None,
+            }),
+            Some((subtasks_json, status)) => {
+                let subtasks: Vec<SubtaskSpec> =
+                    serde_json::from_str(&subtasks_json).map_err(|err| {
+                        DomainError::Sqlite(rusqlite::Error::FromSqlConversionFailure(
+                            0,
+                            rusqlite::types::Type::Text,
+                            Box::new(err),
+                        ))
+                    })?;
+                Ok(PlanGetResult {
+                    run_id,
+                    plan: Some(PlanSpec { subtasks }),
+                    // `None` means a plan exists but has not yet been
+                    // decided; only a decided row yields `Some(..)`.
+                    approved: match status.as_deref() {
+                        Some("approved") => Some(true),
+                        Some("rejected") => Some(false),
+                        _ => None,
+                    },
+                })
+            }
+        }
     }
 
     /// Records a mid-run policy violation: inserts the [`policy_violations`]
@@ -2183,6 +2878,16 @@ impl<'c> DomainRepository<'c> {
             } => Some(vendor_session_id.clone()),
             _ => None,
         };
+        // WP20: a journaled WorkerQuestion auto-opens its escalation row in
+        // the SAME transaction -- the question event is the durable fact;
+        // the open row is the projection a later `message/send {kind:
+        // "answer"}` resolves. One open question-escalation per run: the
+        // insert is skipped while one is still undecided (a worker that
+        // asks twice before anyone answers has still asked once).
+        let question = match event {
+            RuntimeEvent::WorkerQuestion { question, .. } => question.clone(),
+            _ => None,
+        };
         self.append_and_apply(
             event,
             Some(task_id),
@@ -2200,6 +2905,27 @@ impl<'c> DomainRepository<'c> {
                         "UPDATE runs SET transcript_cursor = ?1 WHERE run_id = ?2",
                         rusqlite::params![cursor, run_id.to_string()],
                     )?;
+                }
+                if let Some(question) = question {
+                    let open: i64 = tx
+                        .query_row(
+                            "SELECT COUNT(*) FROM escalations \
+                             WHERE run_id = ?1 AND kind = 'question' AND decided_at IS NULL",
+                            [run_id.to_string()],
+                            |row| row.get(0),
+                        )?;
+                    if open == 0 {
+                        tx.execute(
+                            "INSERT INTO escalations (escalation_id, run_id, kind, question, created_at) \
+                             VALUES (?1, ?2, 'question', ?3, ?4)",
+                            rusqlite::params![
+                                crew_protocol::EscalationId::new().to_string(),
+                                run_id.to_string(),
+                                question,
+                                Timestamp::now().as_str(),
+                            ],
+                        )?;
+                    }
                 }
                 Ok(())
             },
@@ -2249,6 +2975,25 @@ fn message_kind_str(kind: &crew_protocol::MessageKind) -> &'static str {
         MessageKind::Cancel => "cancel",
         MessageKind::Shutdown => "shutdown",
     }
+}
+
+/// Whether a message kind originates from (or acts for) the leader and
+/// therefore consumes one of the run's budgeted worker turns (WP19). The
+/// directives that make a worker take another turn -- assignment, steering,
+/// follow-ups, leader questions, approval decisions resuming a blocked turn
+/// -- consume; worker-side kinds (`answer`, `peerMessage`) and the
+/// run-terminating kinds (`cancel`, `shutdown`, which end work rather than
+/// request more) do not.
+fn is_turn_consuming(kind: &crew_protocol::MessageKind) -> bool {
+    use crew_protocol::MessageKind;
+    matches!(
+        kind,
+        MessageKind::Assign
+            | MessageKind::Steer
+            | MessageKind::FollowUp
+            | MessageKind::Question
+            | MessageKind::ApprovalDecision
+    )
 }
 
 #[cfg(test)]
@@ -2594,6 +3339,184 @@ mod tests {
         assert_eq!(
             event_count, 1,
             "exactly one policyViolationRecorded event must be journaled"
+        );
+    }
+
+    // ------------------------------------------------- WP19 turn budgets
+
+    /// Seeds a task + worker + queued run with a budgets row of the given
+    /// limit, returning the ids.
+    fn seed_budgeted_run(
+        conn: &mut Connection,
+        project_id: ProjectId,
+        turn_limit: u32,
+    ) -> (RunId, TaskId, WorkerId) {
+        let (task_id, worker_id) = seed_worker(conn, project_id);
+        let run_id = RunId::new();
+        let run = Run {
+            run_id,
+            task_id,
+            worker_id,
+            state: RunState::try_from("queued").unwrap(),
+            flags: RunFlags::default(),
+            vendor_session_id: None,
+            started_at: None,
+            completed_at: None,
+        };
+        let mut repo = DomainRepository::new(conn, project_id);
+        repo.submit_run(&run, None, None)
+            .expect("submit_run commits");
+        repo.attach_turn_budget(run_id, task_id, None, turn_limit)
+            .expect("attach_turn_budget");
+        (run_id, task_id, worker_id)
+    }
+
+    fn leader_message(
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        kind: crew_protocol::MessageKind,
+    ) -> RunMessage {
+        RunMessage {
+            message_id: crew_protocol::MessageId::new(),
+            run_id,
+            sender_worker_id: worker_id,
+            recipient_worker_id: None,
+            task_id,
+            kind,
+            payload: "next step".into(),
+            delivery_state: crew_protocol::DeliveryState::Recorded,
+            created_at: Timestamp::now(),
+            sent_at: None,
+            acknowledged_at: None,
+            reply_to: None,
+        }
+    }
+
+    #[test]
+    fn budget_guard_increments_then_refuses_at_cap() {
+        let mut conn = open_test_db();
+        let project_id = ProjectId::new();
+        let (run_id, task_id, worker_id) = seed_budgeted_run(&mut conn, project_id, 1);
+        let committed: crate::domain::Committed;
+        {
+            let mut repo = DomainRepository::new(&mut conn, project_id);
+
+            // First steering message consumes the single budgeted turn.
+            let first = leader_message(
+                run_id,
+                task_id,
+                worker_id,
+                crew_protocol::MessageKind::FollowUp,
+            );
+            repo.record_message(&first, Some("omp-1"), true, false)
+                .expect("first send within budget");
+
+            // Second is refused with the typed error; no message row written.
+            let second = leader_message(
+                run_id,
+                task_id,
+                worker_id,
+                crew_protocol::MessageKind::Steer,
+            );
+            let err = repo
+                .record_message(&second, Some("omp-1"), true, false)
+                .expect_err("send at cap must be refused");
+            match err {
+                DomainError::BudgetExceeded {
+                    turns_used,
+                    turn_limit,
+                    ..
+                } => {
+                    assert_eq!((turns_used, turn_limit), (1, 1));
+                }
+                other => panic!("expected BudgetExceeded, got {other:?}"),
+            }
+
+            // The refusal's durable fact journals with the row's own numbers.
+            committed = repo.journal_budget_exceeded(run_id).expect("journal");
+        }
+        let message_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE run_id = ?1",
+                [run_id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // The refusal's durable fact journals with the row's own numbers.
+        assert_eq!(message_rows, 1, "the refused message must not be recorded");
+        match committed.envelope.event {
+            RuntimeEvent::BudgetExceeded {
+                turns_used,
+                turn_limit,
+                ..
+            } => {
+                assert_eq!((turns_used, turn_limit), (1, 1));
+            }
+            other => panic!("expected BudgetExceeded event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn worker_side_kinds_never_consume_the_budget() {
+        let mut conn = open_test_db();
+        let project_id = ProjectId::new();
+        let (run_id, task_id, worker_id) = seed_budgeted_run(&mut conn, project_id, 1);
+        let mut repo = DomainRepository::new(&mut conn, project_id);
+
+        for _ in 0..3 {
+            let answer = leader_message(
+                run_id,
+                task_id,
+                worker_id,
+                crew_protocol::MessageKind::Answer,
+            );
+            repo.record_message(&answer, Some("omp-1"), true, false)
+                .expect("worker-side kinds bypass the guard");
+        }
+        let turns_used: i64 = conn
+            .query_row(
+                "SELECT turns_used FROM budgets WHERE run_id = ?1",
+                [run_id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(turns_used, 0, "answers must not consume turns");
+    }
+
+    #[test]
+    fn timeout_facts_skip_terminal_runs_but_journal_for_live_ones() {
+        let mut conn = open_test_db();
+        let project_id = ProjectId::new();
+        let (run_id, _task_id, _worker_id) = seed_budgeted_run(&mut conn, project_id, 10);
+        let mut repo = DomainRepository::new(&mut conn, project_id);
+
+        // Live (queued) run: the timeout fact journals and carries the kind.
+        let committed = repo
+            .record_worker_timeout_if_live(run_id, crew_protocol::TimeoutKind::Inactivity, 300_000)
+            .expect("live run journals")
+            .expect("Some(Committed) for a live run");
+        match committed.envelope.event {
+            RuntimeEvent::WorkerTimeout { kind, since_ms, .. } => {
+                assert_eq!(kind, crew_protocol::TimeoutKind::Inactivity);
+                assert_eq!(since_ms, 300_000);
+            }
+            other => panic!("expected WorkerTimeout event, got {other:?}"),
+        }
+
+        // Terminal run: nothing to report. Edges are walked, never jumped:
+        // queued -> starting -> working -> succeeded.
+        for state in ["starting", "working", "succeeded"] {
+            let target = RunState::try_from(state).unwrap();
+            repo.transition_run(run_id, &target, None)
+                .expect("legal edge");
+        }
+        let none = repo
+            .record_worker_timeout_if_live(run_id, crew_protocol::TimeoutKind::Total, 60_000)
+            .expect("terminal run is not an error");
+        assert!(
+            none.is_none(),
+            "a settled run must never receive a timeout fact"
         );
     }
 }

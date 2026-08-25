@@ -235,6 +235,7 @@ impl RunDriver for SeedingRunDriver {
                 security_patterns,
                 false, // nested_not_managed: don't trip a violation while seeding
                 Arc::clone(&ctx.violation_service),
+                false,
             )
             .expect("seed patterns always compile");
             for payload in events {
@@ -258,6 +259,7 @@ impl RunDriver for SeedingRunDriver {
         _task_id: TaskId,
         _worker_id: WorkerId,
         _prompt: String,
+        _kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         Box::pin(async { Ok(()) })
     }

@@ -271,6 +271,11 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         })?,
     );
 
+    // Liveness clocks (WP19): one instance shared by the registry's run
+    // sinks (which touch it) and the sweep task spawned below (which reads
+    // it). Created before `ServerConfig` so both holders get the same Arc.
+    let activity_clock = Arc::new(crate::adapter::ActivityClock::new());
+
     let config = ServerConfig {
         binary_source: opts.binary_source,
         run_driver: Some(Arc::clone(&registry) as Arc<dyn crate::service::RunDriver>),
@@ -279,6 +284,8 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         worker_verifier: Arc::new(ScopeTokenVerifier::new(Arc::clone(&scope_tokens))),
         nested_violation_action,
         policy: Some((config_paths.clone(), Arc::clone(&policy))),
+        turn_budget_default: crew_config.limits.turn_budget_per_subtask,
+        activity_clock: Some(Arc::clone(&activity_clock)),
         ..ServerConfig::default()
     };
     let server = Server::bind(
@@ -298,6 +305,12 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     // `AdapterRegistry::set_broker`'s own doc comment for why this is a
     // post-construction setter rather than a constructor argument.
     registry.set_broker(server.coordination_broker());
+
+    // The same clock instance the run sinks touch must be visible to
+    // `resume_one`'s sink stack before the recovery sweep below can
+    // resume anything -- a post-construction setter, exactly like
+    // `set_broker` above.
+    registry.set_activity_clock(Arc::clone(&activity_clock));
 
     // Resume support (WP14): everything `AdapterRegistry::resume_run`
     // needs that only exists after bind -- the journal handle, project id,
@@ -401,6 +414,34 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
             if let Err(err) = retention.prune(&retention_db).await {
                 tracing::warn!(error = %err, "retention_prune_failed");
             }
+        }
+    });
+
+    // Worker timeouts (WP19): the sweep journals `WorkerTimeout`
+    // {Inactivity, Total} facts ONCE per expiry and never touches run
+    // state -- the runtime reports; the leader decides (spec §7.5). New
+    // activity re-arms the inactivity deadline via the same clock the run
+    // sinks touch. A sweep failure is logged, never fatal: the next tick
+    // re-evaluates from the unchanged clocks.
+    let sweep_db = Arc::clone(&db);
+    let sweep_tx = server.events_sender();
+    let project_id = paths.project_id;
+    let inactivity_timeout = Duration::from_secs(crew_config.limits.inactivity_timeout_sec);
+    let total_timeout = Duration::from_secs(crew_config.limits.total_timeout_sec);
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(5));
+        ticker.tick().await; // fires immediately; runs are at most 5s old
+        loop {
+            ticker.tick().await;
+            crate::timeout_sweep::sweep_once(
+                &sweep_db,
+                project_id,
+                &sweep_tx,
+                &activity_clock,
+                inactivity_timeout,
+                total_timeout,
+            )
+            .await;
         }
     });
 

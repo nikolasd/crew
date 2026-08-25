@@ -32,6 +32,7 @@ pub mod recovery;
 pub mod security;
 pub mod service;
 pub mod supervisor;
+pub mod timeout_sweep;
 pub mod workspace;
 
 pub use approval::{

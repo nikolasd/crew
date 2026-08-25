@@ -121,6 +121,11 @@ uuid_id!(
     /// Identifies a mid-run nested-worker policy violation.
     PolicyViolationId
 );
+uuid_id!(
+    /// Identifies a blocking condition a worker escalated (WP20): an open
+    /// question, a write-policy violation, or repeated failures.
+    EscalationId
+);
 
 #[cfg(test)]
 mod tests {

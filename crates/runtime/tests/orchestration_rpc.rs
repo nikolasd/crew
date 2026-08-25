@@ -80,6 +80,7 @@ impl RunDriver for RecordingRunDriver {
         task_id: TaskId,
         worker_id: WorkerId,
         prompt: String,
+        _kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         self.follow_ups
             .lock()
@@ -122,6 +123,7 @@ impl RunDriver for FailingRunDriver {
         _task_id: TaskId,
         _worker_id: WorkerId,
         _prompt: String,
+        _kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         Box::pin(async { Ok(()) })
     }
@@ -198,6 +200,7 @@ impl RunDriver for CancelTrackingRunDriver {
         task_id: TaskId,
         worker_id: WorkerId,
         prompt: String,
+        _kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         self.follow_ups
             .lock()
@@ -327,6 +330,7 @@ impl ViolationTriggeringRunDriver {
             vec![],
             true,
             Arc::clone(&ctx.violation_service),
+            false,
         )
         .expect("built-in patterns always compile");
         sink.emit(AdapterEvent {
@@ -359,6 +363,7 @@ impl RunDriver for ViolationTriggeringRunDriver {
                 vec![],
                 true,
                 Arc::clone(&ctx.violation_service),
+                false,
             )
             .expect("built-in patterns always compile");
             sink.emit(AdapterEvent {
@@ -383,6 +388,7 @@ impl RunDriver for ViolationTriggeringRunDriver {
         _task_id: TaskId,
         _worker_id: WorkerId,
         _prompt: String,
+        _kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         Box::pin(async { Ok(()) })
     }
@@ -422,6 +428,7 @@ impl RunDriver for ConfigurableCancelViolationDriver {
                 vec![],
                 true,
                 Arc::clone(&ctx.violation_service),
+                false,
             )
             .expect("built-in patterns always compile");
             sink.emit(AdapterEvent {
@@ -446,6 +453,7 @@ impl RunDriver for ConfigurableCancelViolationDriver {
         _task_id: TaskId,
         _worker_id: WorkerId,
         _prompt: String,
+        _kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         Box::pin(async { Ok(()) })
     }
@@ -1409,6 +1417,7 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
             _task_id: TaskId,
             _worker_id: WorkerId,
             _prompt: String,
+            _kind: crew_protocol::MessageKind,
         ) -> AdapterFuture<'static, Result<(), String>> {
             Box::pin(async { Ok(()) })
         }
@@ -1451,6 +1460,7 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
                 vec![],
                 true,
                 Arc::clone(&ctx.violation_service),
+                false,
             )
             .expect("built-in patterns always compile");
             sink.emit(AdapterEvent {
@@ -2010,10 +2020,6 @@ struct StartCapturingRunDriver {
 }
 
 impl RunDriver for StartCapturingRunDriver {
-    fn active_run_count(&self) -> usize {
-        0
-    }
-
     fn start(&self, ctx: RunDriverContext) -> AdapterFuture<'static, Result<(), String>> {
         self.started.lock().push(ctx.clone());
         self.inner.start(ctx)
@@ -2025,9 +2031,10 @@ impl RunDriver for StartCapturingRunDriver {
         task_id: TaskId,
         worker_id: WorkerId,
         prompt: String,
+        kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         self.inner
-            .send_follow_up(run_id, task_id, worker_id, prompt)
+            .send_follow_up(run_id, task_id, worker_id, prompt, kind)
     }
 
     fn running_adapter(&self, run_id: RunId) -> Option<Arc<dyn Adapter>> {
@@ -2040,6 +2047,10 @@ impl RunDriver for StartCapturingRunDriver {
         scope: CancelScope,
     ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
         self.inner.cancel_run(run_id, scope)
+    }
+
+    fn active_run_count(&self) -> usize {
+        self.inner.active_run_count()
     }
 }
 
@@ -2066,9 +2077,10 @@ impl RunDriver for KillFailingRunDriver {
         task_id: TaskId,
         worker_id: WorkerId,
         prompt: String,
+        kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         self.inner
-            .send_follow_up(run_id, task_id, worker_id, prompt)
+            .send_follow_up(run_id, task_id, worker_id, prompt, kind)
     }
 
     fn running_adapter(&self, run_id: RunId) -> Option<Arc<dyn Adapter>> {
@@ -2699,29 +2711,432 @@ async fn display_principal_cannot_call_plan_or_timeout_ack_methods() {
 }
 
 #[tokio::test]
-async fn omp_extension_can_reach_plan_and_timeout_ack_methods_but_they_are_stubbed() {
-    // Role table membership: an `ompExtension` client's call reaches the
-    // service layer (rather than being hidden as METHOD_NOT_FOUND for the
-    // role, the way `display_principal_cannot_call_plan_or_timeout_ack_methods`
-    // proves it is for `display`) and gets a distinct "not yet
-    // implemented" refusal -- the stub this work package wires ahead of
-    // WP17/WP21's real handlers.
+async fn omp_extension_plan_methods_reach_real_handlers_and_timeout_ack_stays_stubbed() {
+    // WP17 landed real `plan/propose|decide|get` handlers; `run/timeoutAck`
+    // remains a stub until WP21. An `ompExtension` client reaches the
+    // service layer for all of them (never METHOD_NOT_FOUND).
     let harness = Harness::start(|_| {}).await;
     let mut client = omp_client(&harness, "omp-1").await;
 
-    for method in ["plan/propose", "plan/decide", "plan/get", "run/timeoutAck"] {
+    // plan/* now reach real handlers: empty params surface a structural
+    // invalid_params error (-32602), not the -32601 "not yet implemented".
+    for method in ["plan/propose", "plan/decide", "plan/get"] {
         let attempt = client.call(2, method, json!({})).await;
         assert_eq!(
-            attempt["error"]["code"], -32601,
-            "{method} should still surface a JSON-RPC error: {attempt:?}"
-        );
-        let message = attempt["error"]["message"].as_str().unwrap_or_default();
-        assert!(
-            message.contains("not yet implemented"),
-            "{method} should be refused as not-yet-implemented, not as an unknown/out-of-role \
-             method: {attempt:?}"
+            attempt["error"]["code"], -32602,
+            "{method} should reach its handler (invalid_params), not be a stub: {attempt:?}"
         );
     }
+
+    // WP21: run/timeoutAck reaches its handler too (invalid_params on
+    // empty params, never METHOD_NOT_FOUND / not-yet-implemented).
+    let attempt = client.call(2, "run/timeoutAck", json!({})).await;
+    assert_eq!(
+        attempt["error"]["code"], -32602,
+        "run/timeoutAck should reach its handler (invalid_params): {attempt:?}"
+    );
+}
+
+#[tokio::test]
+async fn run_timeout_ack_extend_rearms_nudge_noops_and_abort_cancels() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let (_task_id, _worker_id, run_id) = submit_run_with_driver(&mut client, "omp-1").await;
+
+    // extend re-arms the run's liveness clock.
+    let extend = client
+        .call(
+            2,
+            "run/timeoutAck",
+            json!({ "runId": run_id, "decision": "extend" }),
+        )
+        .await;
+    assert!(extend.get("error").is_none(), "extend failed: {extend:?}");
+    assert_eq!(extend["result"]["decision"], "extend");
+    assert_eq!(extend["result"]["rearmed"], true);
+
+    // nudge is a server-side no-op.
+    let nudge = client
+        .call(
+            3,
+            "run/timeoutAck",
+            json!({ "runId": run_id, "decision": "nudge" }),
+        )
+        .await;
+    assert!(nudge.get("error").is_none(), "nudge failed: {nudge:?}");
+    assert_eq!(nudge["result"]["decision"], "nudge");
+
+    // abort cancels the run.
+    let abort = client
+        .call(
+            4,
+            "run/timeoutAck",
+            json!({ "runId": run_id, "decision": "abort" }),
+        )
+        .await;
+    assert!(abort.get("error").is_none(), "abort failed: {abort:?}");
+    assert_eq!(abort["result"]["decision"], "abort");
+    let get = client.call(5, "run/get", json!({ "runId": run_id })).await;
+    assert_eq!(get["result"]["state"], "cancelled", "{get:?}");
+
+    // An unknown decision is the caller's error.
+    let bogus = client
+        .call(
+            6,
+            "run/timeoutAck",
+            json!({ "runId": run_id, "decision": "wiggle" }),
+        )
+        .await;
+    assert_eq!(
+        bogus["error"]["code"], -32602,
+        "unknown decision must be invalid_params: {bogus:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_propose_then_get_round_trips() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let (_task_id, _worker_id, run_id) = submit_run_with_driver(&mut client, "omp-1").await;
+
+    let plan = json!({
+        "subtasks": [
+            { "id": "s1", "description": "write tests", "adapter": "claude", "writes": true, "turnBudget": 10 },
+            { "id": "s2", "description": "implement", "adapter": "codex", "writes": false }
+        ]
+    });
+    let propose = client
+        .call(
+            2,
+            "plan/propose",
+            json!({
+                "runId": run_id,
+                "ownerClientInstanceId": "omp-1",
+                "taskText": "build the feature",
+                "plan": plan
+            }),
+        )
+        .await;
+    assert!(
+        propose.get("error").is_none(),
+        "plan/propose failed: {propose:?}"
+    );
+    assert_eq!(propose["result"]["runId"], run_id);
+    assert!(propose["result"]["sequence"].as_u64().is_some());
+
+    let get = client.call(3, "plan/get", json!({ "runId": run_id })).await;
+    assert!(get.get("error").is_none(), "plan/get failed: {get:?}");
+    assert_eq!(get["result"]["runId"], run_id);
+    let subtasks = get["result"]["plan"]["subtasks"].as_array().unwrap();
+    assert_eq!(subtasks.len(), 2);
+    assert_eq!(subtasks[0]["id"], "s1");
+    assert_eq!(subtasks[0]["turnBudget"], 10);
+    assert_eq!(get["result"]["approved"], Value::Null);
+}
+
+#[tokio::test]
+async fn plan_decide_approves_once_then_refuses_repeat() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let (_task_id, _worker_id, run_id) = submit_run_with_driver(&mut client, "omp-1").await;
+    let plan = json!({ "subtasks": [ { "id": "s1", "description": "d", "adapter": "claude", "writes": true } ] });
+    let propose = client
+        .call(
+            2,
+            "plan/propose",
+            json!({ "runId": run_id, "ownerClientInstanceId": "omp-1", "taskText": "t", "plan": plan }),
+        )
+        .await;
+    assert!(
+        propose.get("error").is_none(),
+        "propose failed: {propose:?}"
+    );
+
+    let decide = client
+        .call(
+            3,
+            "plan/decide",
+            json!({ "runId": run_id, "approved": true, "reason": "looks good" }),
+        )
+        .await;
+    assert!(
+        decide.get("error").is_none(),
+        "plan/decide failed: {decide:?}"
+    );
+    assert_eq!(decide["result"]["runId"], run_id);
+
+    // The decision stuck.
+    let get = client.call(4, "plan/get", json!({ "runId": run_id })).await;
+    assert_eq!(get["result"]["approved"], true);
+
+    // A repeat decision is refused and does not flip the stored decision.
+    let again = client
+        .call(
+            5,
+            "plan/decide",
+            json!({ "runId": run_id, "approved": false }),
+        )
+        .await;
+    assert!(
+        again.get("error").is_some(),
+        "repeat decide must be refused: {again:?}"
+    );
+    let get2 = client.call(6, "plan/get", json!({ "runId": run_id })).await;
+    assert_eq!(get2["result"]["approved"], true);
+}
+
+#[tokio::test]
+async fn plan_decide_is_refused_for_a_non_owning_client() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut owner = omp_client(&harness, "omp-owner").await;
+    let (_task_id, _worker_id, run_id) = submit_run_with_driver(&mut owner, "omp-owner").await;
+    let plan = json!({ "subtasks": [ { "id": "s1", "description": "d", "adapter": "claude", "writes": true } ] });
+    let propose = owner
+        .call(
+            2,
+            "plan/propose",
+            json!({ "runId": run_id, "ownerClientInstanceId": "omp-owner", "taskText": "t", "plan": plan }),
+        )
+        .await;
+    assert!(
+        propose.get("error").is_none(),
+        "propose failed: {propose:?}"
+    );
+
+    let mut other = omp_client(&harness, "omp-other").await;
+    let decide = other
+        .call(
+            3,
+            "plan/decide",
+            json!({ "runId": run_id, "approved": true }),
+        )
+        .await;
+    assert!(
+        decide.get("error").is_some(),
+        "non-owner decide must be refused: {decide:?}"
+    );
+
+    // The plan is still pending -- the refused decision did not write.
+    let get = owner.call(4, "plan/get", json!({ "runId": run_id })).await;
+    assert_eq!(get["result"]["approved"], Value::Null);
+}
+
+/// WP19: spawning a run from an approved plan subtask snapshots its
+/// `turnBudget`; steering sends consume turns; the send at the cap is
+/// refused with the typed `BUDGET_EXCEEDED` code AND journals (hence
+/// broadcasts) the durable `budgetExceeded` fact; the refused message row
+/// is never written.
+#[tokio::test]
+async fn turn_budget_refuses_at_cap_and_journals_budget_exceeded() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let (_task_id, _worker_id, leader_run) = submit_run_with_driver(&mut client, "omp-1").await;
+
+    // The leader's plan caps its subtask at ONE turn.
+    let plan = json!({
+        "subtasks": [
+            { "id": "s1", "description": "do the work", "adapter": "fake", "writes": true, "turnBudget": 1 }
+        ]
+    });
+    let propose = client
+        .call(
+            2,
+            "plan/propose",
+            json!({
+                "runId": leader_run,
+                "ownerClientInstanceId": "omp-1",
+                "taskText": "t",
+                "plan": plan
+            }),
+        )
+        .await;
+    assert!(
+        propose.get("error").is_none(),
+        "propose failed: {propose:?}"
+    );
+    let decide = client
+        .call(
+            3,
+            "plan/decide",
+            json!({ "runId": leader_run, "approved": true }),
+        )
+        .await;
+    assert!(decide.get("error").is_none(), "decide failed: {decide:?}");
+
+    // Spawn the worker's own run from the approved subtask.
+    let task = client
+        .call(
+            4,
+            "task/upsert",
+            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
+        )
+        .await;
+    let task_b = task["result"]["taskId"].as_str().unwrap().to_string();
+    let worker = client
+        .call(
+            5,
+            "worker/create",
+            json!({ "fingerprint": "sha256:g", "adapter": "fake", "model": "m" }),
+        )
+        .await;
+    let worker_b = worker["result"]["workerId"].as_str().unwrap().to_string();
+    let submit = client
+        .call(
+            6,
+            "run/submit",
+            json!({
+                "taskId": task_b,
+                "workerId": worker_b,
+                "planRef": { "planId": leader_run, "subtaskId": "s1" }
+            }),
+        )
+        .await;
+    assert!(
+        submit.get("error").is_none(),
+        "submit with planRef failed: {submit:?}"
+    );
+    let run_b = submit["result"]["runId"].as_str().unwrap().to_string();
+
+    // First steering send consumes the single budgeted turn.
+    let first = client
+        .call(
+            7,
+            "message/send",
+            json!({
+                "runId": run_b,
+                "senderWorkerId": worker_b,
+                "taskId": task_b,
+                "kind": "followUp",
+                "payload": "go"
+            }),
+        )
+        .await;
+    assert!(first.get("error").is_none(), "first send failed: {first:?}");
+
+    // Second hits the cap: typed refusal.
+    let refused = client
+        .call(
+            8,
+            "message/send",
+            json!({
+                "runId": run_b,
+                "senderWorkerId": worker_b,
+                "taskId": task_b,
+                "kind": "steer",
+                "payload": "more"
+            }),
+        )
+        .await;
+    assert_eq!(
+        refused["error"]["code"],
+        i64::from(crew_protocol::error_code::BUDGET_EXCEEDED),
+        "the send at cap must be refused with BUDGET_EXCEEDED: {refused:?}"
+    );
+
+    // The durable fact was journaled (and broadcast) despite the refusal.
+    let replay = client
+        .call(9, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    let exceeded = replay["result"]
+        .as_array()
+        .expect("events/replay returns an array")
+        .iter()
+        .find(|e| e["event"]["type"] == "budgetExceeded")
+        .expect("the BudgetExceeded fact must be journaled");
+    assert_eq!(exceeded["event"]["payload"]["turnsUsed"], 1);
+    assert_eq!(exceeded["event"]["payload"]["turnLimit"], 1);
+
+    // The refused message itself was never recorded.
+    let list = client
+        .call(10, "message/list", json!({ "runId": run_b }))
+        .await;
+    assert_eq!(list["result"]["messages"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn plan_propose_and_decide_are_observed_by_events_subscribe() {
+    // Every plan mutation must broadcast its committed envelope to live
+    // `events/subscribe` listeners (invariant 7), reusing the regression
+    // harness from `events_subscribe_delivers_live_notifications_...`.
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut subscriber = omp_client(&harness, "omp-sub").await;
+    let sub = subscriber.call(2, "events/subscribe", json!({})).await;
+    assert!(
+        sub.get("error").is_none(),
+        "events/subscribe failed: {sub:?}"
+    );
+    assert_eq!(sub["result"]["active"], true);
+
+    let mut mutator = omp_client(&harness, "omp-mut").await;
+    let (_task_id, _worker_id, run_id) = submit_run_with_driver(&mut mutator, "omp-mut").await;
+    let plan = json!({ "subtasks": [ { "id": "s1", "description": "d", "adapter": "claude", "writes": true } ] });
+    let propose = mutator
+        .call(
+            3,
+            "plan/propose",
+            json!({ "runId": run_id, "ownerClientInstanceId": "omp-mut", "taskText": "t", "plan": plan }),
+        )
+        .await;
+    assert!(
+        propose.get("error").is_none(),
+        "propose failed: {propose:?}"
+    );
+
+    // The subscriber also sees the task/worker/run events from
+    // `submit_run_with_driver`; drain until the plan events arrive.
+    let mut proposed = None;
+    for _ in 0..8 {
+        let n = subscriber.recv().await;
+        if n["params"]["event"]["type"] == "planProposed" {
+            proposed = Some(n);
+            break;
+        }
+    }
+    let proposed = proposed.expect("planProposed notification not received");
+    assert_eq!(proposed["method"], "events/event");
+    assert_eq!(proposed["params"]["event"]["type"], "planProposed");
+    assert_eq!(proposed["params"]["event"]["payload"]["runId"], run_id);
+
+    let decide = mutator
+        .call(
+            4,
+            "plan/decide",
+            json!({ "runId": run_id, "approved": true, "reason": "go" }),
+        )
+        .await;
+    assert!(decide.get("error").is_none(), "decide failed: {decide:?}");
+
+    let mut decided = None;
+    for _ in 0..8 {
+        let n = subscriber.recv().await;
+        if n["params"]["event"]["type"] == "planDecided" {
+            decided = Some(n);
+            break;
+        }
+    }
+    let decided = decided.expect("planDecided notification not received");
+    assert_eq!(decided["method"], "events/event");
+    assert_eq!(decided["params"]["event"]["type"], "planDecided");
+    assert_eq!(decided["params"]["event"]["payload"]["runId"], run_id);
+    assert_eq!(decided["params"]["event"]["payload"]["approved"], true);
 }
 
 // ------------------------------------------------------------- reconcile
@@ -3536,6 +3951,7 @@ impl RunDriver for RealAdapterRunDriver {
         _task_id: TaskId,
         _worker_id: WorkerId,
         _prompt: String,
+        _kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         Box::pin(async { Err("not supported".to_string()) })
     }

@@ -183,6 +183,14 @@ pub struct ServerConfig {
     /// artifacts before exercising isolation gates. `None` creates a fresh
     /// store (production default).
     pub artifact_store: Option<std::sync::Arc<crate::workspace::ArtifactStore>>,
+    /// The default per-subtask turn budget (WP19): snapshotted into each
+    /// run's budgets row at submit when its referenced plan subtask carries
+    /// no explicit `turnBudget`.
+    pub turn_budget_default: u32,
+    /// The shared liveness clock (WP19) wired into every run's lifecycle
+    /// sink and read by lifecycle's timeout sweep. `None` (tests, embeddings)
+    /// gives the service a fresh empty clock nothing sweeps.
+    pub activity_clock: Option<std::sync::Arc<crate::adapter::ActivityClock>>,
 }
 
 impl Default for ServerConfig {
@@ -200,6 +208,8 @@ impl Default for ServerConfig {
             nested_violation_action: crate::config::NestedViolationAction::default(),
             policy: None,
             artifact_store: None,
+            turn_budget_default: crate::config::crew::Limits::default().turn_budget_per_subtask,
+            activity_clock: None,
         }
     }
 }

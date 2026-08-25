@@ -12,7 +12,7 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 
 use crate::db::DatabaseHandle;
-use crate::domain::{DomainError, DomainRepository, RunFlag, embed_envelope, take_envelope};
+use crate::domain::{DomainError, DomainRepository, RunFlag, broadcast_committed, embed_envelope};
 
 /// A boxed future returned by [`ApprovalCallback::acknowledge`].
 pub type CallbackFuture<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
@@ -271,9 +271,7 @@ impl ApprovalService {
     /// closure to live subscribers, if present, then strips it so the
     /// caller's JSON-RPC response never carries the internal key.
     fn broadcast(&self, value: &mut Value) {
-        if let Some(envelope) = take_envelope(value) {
-            let _ = self.events_tx.send(envelope);
-        }
+        broadcast_committed(&self.events_tx, value);
     }
 
     async fn load_snapshot(

@@ -11859,6 +11859,214 @@ function registerChildTool(pi, ctx) {
   });
 }
 
+// src/tools/leader.ts
+var CREW_SPAWN_TOOL_NAME = "crew_spawn";
+var CREW_SEND_TOOL_NAME = "crew_send";
+var CREW_STATUS_TOOL_NAME = "crew_status";
+var CREW_TRANSCRIPT_TOOL_NAME = "crew_transcript";
+var CREW_STOP_TOOL_NAME = "crew_stop";
+var CREW_FINISH_TOOL_NAME = "crew_finish";
+function registerSpawnTool(pi, ctx) {
+  const params = pi.zod.object({
+    op: pi.zod.enum(["spawn"]).describe("Spawn a single approved subtask as its own run."),
+    taskId: pi.zod.string().describe("The leader task this subtask executes under."),
+    planId: pi.zod.string().describe("The plan's run id (plan_id = run_id); the subtask must belong to it."),
+    subtaskId: pi.zod.string().describe("The subtask id from the approved plan to spawn."),
+    workspaceMode: pi.zod.enum(["shared", "isolated", "copy"]).optional().describe("Optional workspace mode for the spawned run."),
+    priority: pi.zod.number().int().optional().describe("Optional priority for the spawned run.")
+  });
+  pi.registerTool({
+    name: CREW_SPAWN_TOOL_NAME,
+    label: "Crew Spawn",
+    description: "Use after crew_plan is approved to execute one subtask. Resolves the subtask from the plan, reuses an idle worker of its adapter (or creates one), and submits a run with the subtask description as the prompt, tagging it with the plan and subtask ids so later budget/write guards (WP19/WP20) can find the metadata.",
+    parameters: params,
+    approval: "exec",
+    async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
+      const client = await ctx.getClient(extCtx);
+      const planRes = await callOrchestration(client, "plan/get", { runId: input.planId });
+      if (planRes.isError === true)
+        return planRes;
+      const plan = planRes.details;
+      const subtasks = plan.plan?.subtasks ?? [];
+      const subtask = subtasks.find((s) => s.id === input.subtaskId);
+      if (subtask === undefined) {
+        return {
+          content: [{ type: "text", text: `Subtask ${input.subtaskId} not found in plan ${input.planId}.` }],
+          details: { planId: input.planId, subtaskId: input.subtaskId, outcome: "notFound" },
+          isError: true
+        };
+      }
+      const workersRes = await callOrchestration(client, "worker/list", {});
+      const workers = workersRes.details?.workers ?? [];
+      const existing = workers.find((w) => w.adapter === subtask.adapter);
+      let workerId;
+      if (existing !== undefined) {
+        workerId = existing.workerId;
+      } else {
+        const created = await callOrchestration(client, "worker/create", { adapter: subtask.adapter });
+        if (created.isError === true)
+          return created;
+        workerId = created.details?.workerId;
+      }
+      if (workerId === undefined) {
+        return {
+          content: [{ type: "text", text: `Could not resolve a worker for adapter ${subtask.adapter}.` }],
+          details: { adapter: subtask.adapter, outcome: "noWorker" },
+          isError: true
+        };
+      }
+      return callOrchestration(client, "run/submit", {
+        taskId: input.taskId,
+        workerId,
+        prompt: subtask.description,
+        planId: input.planId,
+        subtaskId: input.subtaskId,
+        ...input.workspaceMode !== undefined ? { workspaceMode: input.workspaceMode } : {},
+        ...input.priority !== undefined ? { priority: input.priority } : {}
+      });
+    }
+  });
+}
+function registerSendTool(pi, ctx) {
+  const params = pi.zod.object({
+    op: pi.zod.enum(["send"]).describe("Send a steering message to a run."),
+    runId: pi.zod.string().describe("The run to steer."),
+    senderWorkerId: pi.zod.string().optional().describe("The sending worker id."),
+    taskId: pi.zod.string().optional().describe("The task this message relates to."),
+    kind: pi.zod.string().optional().describe("Coordination kind; defaults to 'followUp'."),
+    payload: pi.zod.string().describe("The message payload."),
+    recipientWorkerId: pi.zod.string().optional().describe("Optional recipient worker id."),
+    replyTo: pi.zod.string().optional().describe("Optional id of a prior message this replies to.")
+  });
+  pi.registerTool({
+    name: CREW_SEND_TOOL_NAME,
+    label: "Crew Send",
+    description: "Use to steer or follow up with a running worker (e.g. after a milestone digest names a next step, or a budget refusal instructs escalation). Mirrors crew_message send; budget refusals surface verbatim as tool errors.",
+    parameters: params,
+    approval: "write",
+    async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
+      const client = await ctx.getClient(extCtx);
+      return callOrchestration(client, "message/send", {
+        runId: input.runId,
+        senderWorkerId: input.senderWorkerId,
+        taskId: input.taskId,
+        kind: input.kind ?? "followUp",
+        payload: input.payload,
+        recipientWorkerId: input.recipientWorkerId,
+        replyTo: input.replyTo
+      });
+    }
+  });
+}
+function registerStatusTool(pi, ctx) {
+  const params = pi.zod.object({
+    op: pi.zod.enum(["snapshot"]).describe("Snapshot the orchestration state for a task."),
+    taskId: pi.zod.string().optional().describe("Optional task filter; omit for all runs.")
+  });
+  pi.registerTool({
+    name: CREW_STATUS_TOOL_NAME,
+    label: "Crew Status",
+    description: "Use to read the current run list for a task (or all tasks) as a situation snapshot. Budget/escalation summaries are attached by the daemon once WP19/WP20 land; until then this returns the base run/list projection.",
+    parameters: params,
+    approval: "read",
+    async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
+      const client = await ctx.getClient(extCtx);
+      return callOrchestration(client, "run/list", { taskId: input.taskId });
+    }
+  });
+}
+function registerTranscriptTool(pi, ctx) {
+  const params = pi.zod.object({
+    op: pi.zod.enum(["replay"]).describe("Replay a run's events as normalized digests."),
+    runId: pi.zod.string().describe("The run whose events to replay."),
+    fromSequence: pi.zod.number().int().optional().describe("Optional starting sequence (default 0)."),
+    limit: pi.zod.number().int().optional().describe("Optional max number of events to return.")
+  });
+  pi.registerTool({
+    name: CREW_TRANSCRIPT_TOOL_NAME,
+    label: "Crew Transcript",
+    description: "Use to review a run's event history as normalized digests (not raw payloads), filtered to a single run and paged by sequence. Surfaces the same timeline the monitor reduces from events/replay.",
+    parameters: params,
+    approval: "read",
+    async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
+      const client = await ctx.getClient(extCtx);
+      const replay = await callOrchestration(client, "events/replay", { afterSequence: input.fromSequence ?? 0 });
+      if (replay.isError === true)
+        return replay;
+      const events = replay.details ?? [];
+      const forRun = events.filter((e) => e.runId === input.runId).map((e) => ({ sequence: e.sequence, type: e.event?.type ?? "unknown" })).slice(0, input.limit ?? events.length);
+      return {
+        content: [{ type: "text", text: `crew_transcript: ${forRun.length} event(s) for run ${input.runId}.` }],
+        details: { runId: input.runId, events: forRun }
+      };
+    }
+  });
+}
+function registerStopTool(pi, ctx) {
+  const params = pi.zod.object({
+    op: pi.zod.enum(["stop"]).describe("Stop a running worker."),
+    runId: pi.zod.string().describe("The run to stop."),
+    outcome: pi.zod.enum(["done", "abort"]).describe("'done' = graceful wrap-up then soft cancel; 'abort' = immediate cancel.")
+  });
+  pi.registerTool({
+    name: CREW_STOP_TOOL_NAME,
+    label: "Crew Stop",
+    description: "Use to stop a worker. outcome 'done' sends a wrap-up follow-up then cancels softly (the worker finishes its current turn); outcome 'abort' cancels the run immediately. Cleanup (workspace release) is never automatic -- the leader does that.",
+    parameters: params,
+    approval: "exec",
+    async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
+      const client = await ctx.getClient(extCtx);
+      if (input.outcome === "abort") {
+        return callOrchestration(client, "run/cancel", { runId: input.runId });
+      }
+      await callOrchestration(client, "message/send", {
+        runId: input.runId,
+        kind: "followUp",
+        payload: "Wrap-up: stopping this run per leader instruction."
+      });
+      return callOrchestration(client, "run/cancel", { runId: input.runId, mode: "soft" });
+    }
+  });
+}
+function registerFinishTool(pi, ctx) {
+  const params = pi.zod.object({
+    op: pi.zod.enum(["finish"]).describe("Cancel the remaining live runs of a plan."),
+    runIds: pi.zod.array(pi.zod.string()).describe("The run ids to cancel (the subtask runs you spawned from the plan).")
+  });
+  pi.registerTool({
+    name: CREW_FINISH_TOOL_NAME,
+    label: "Crew Finish",
+    description: "Use to cancel the remaining live runs of a plan once the leader is done. Takes the explicit run ids you spawned (the run->plan linkage that would enumerate them automatically lands in WP19). Workspace release is left to the leader -- never automatic.",
+    parameters: params,
+    approval: "exec",
+    async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
+      const client = await ctx.getClient(extCtx);
+      const cancelled = [];
+      const failed = [];
+      for (const runId of input.runIds) {
+        const result = await callOrchestration(client, "run/cancel", { runId });
+        if (result.isError === true) {
+          failed.push({ runId, error: result.details });
+        } else {
+          cancelled.push(runId);
+        }
+      }
+      return {
+        content: [{ type: "text", text: `crew_finish: cancelled ${cancelled.length}, failed ${failed.length}.` }],
+        details: { cancelled, failed }
+      };
+    }
+  });
+}
+function registerLeaderTools(pi, ctx) {
+  registerSpawnTool(pi, ctx);
+  registerSendTool(pi, ctx);
+  registerStatusTool(pi, ctx);
+  registerTranscriptTool(pi, ctx);
+  registerStopTool(pi, ctx);
+  registerFinishTool(pi, ctx);
+}
+
 // src/tools/messages.ts
 var MESSAGE_KINDS = ["assign", "steer", "followUp", "question", "answer", "peerMessage", "approvalDecision", "cancel", "shutdown"];
 var CREW_MESSAGE_TOOL_NAME = "crew_message";
@@ -11893,6 +12101,121 @@ function registerMessageTool(pi, ctx) {
         });
       }
       return callOrchestration(client, "message/list", { runId: input.runId });
+    }
+  });
+}
+
+// src/tools/plan.ts
+import { existsSync as existsSync5, readFileSync as readFileSync4 } from "fs";
+import { homedir as homedir4 } from "os";
+import { join as join6 } from "path";
+var CREW_PLAN_TOOL_NAME = "crew_plan";
+var APPROVAL_DIALOG_TIMEOUT_MS2 = 5 * 60 * 1000;
+function resolveApprovalMode(repoCwd) {
+  const candidates = [join6(homedir4(), ".omp", "crew.json"), join6(repoCwd, ".omp", "crew.json")];
+  let mode;
+  for (const path of candidates) {
+    if (!existsSync5(path))
+      continue;
+    try {
+      const parsed = JSON.parse(readFileSync4(path, "utf8"));
+      if (parsed.approval === "always" || parsed.approval === "never" || parsed.approval === "auto") {
+        mode = parsed.approval;
+      }
+    } catch {}
+  }
+  return mode ?? "auto";
+}
+function needsHumanGate(mode, subtasks) {
+  if (mode === "always")
+    return true;
+  if (mode === "auto")
+    return subtasks.some((s) => s.writes === true);
+  return false;
+}
+function registerPlanTool(pi, ctx) {
+  const params = pi.zod.object({
+    op: pi.zod.enum(["propose", "get"]).describe("Which plan operation to perform."),
+    runId: pi.zod.string().describe("The run this plan is proposed for or read from (required for both ops)."),
+    taskText: pi.zod.string().optional().describe("Required for propose: the leader's task description."),
+    subtasks: pi.zod.array(pi.zod.object({
+      id: pi.zod.string().describe("Stable subtask id, referenced by crew_spawn."),
+      description: pi.zod.string().describe("The instruction this subtask executes."),
+      adapter: pi.zod.string().describe("The adapter (claude, codex, copilot, ompNative) that executes this subtask."),
+      writes: pi.zod.boolean().optional().describe("Whether this subtask may write to the repository (drives the approval gate)."),
+      turnBudget: pi.zod.number().int().optional().describe("Optional per-subtask turn budget (enforced by WP19).")
+    })).optional().describe("Required for propose: the decomposition.")
+  });
+  pi.registerTool({
+    name: CREW_PLAN_TOOL_NAME,
+    label: "Crew Plan",
+    description: "Use to decompose a run into subtasks the leader will spawn with crew_spawn. Use op 'propose' to persist a plan (ownerClientInstanceId is the connected instance) and run the approval gate (human decision required when config approval=always, or approval=auto with any writes:true subtask); op 'get' to read a previously proposed plan and its decision. A plan is leader intent, not a task graph -- OMP owns routing.",
+    parameters: params,
+    approval: (args) => typeof args === "object" && args !== null && ("op" in args) && args.op === "propose" ? "exec" : "read",
+    async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
+      const client = await ctx.getClient(extCtx);
+      if (input.op === "get") {
+        return callOrchestration(client, "plan/get", { runId: input.runId });
+      }
+      const subtasks = input.subtasks ?? [];
+      const propose = await callOrchestration(client, "plan/propose", {
+        runId: input.runId,
+        ownerClientInstanceId: extCtx.sessionManager.getSessionId(),
+        taskText: input.taskText ?? "",
+        plan: { subtasks }
+      });
+      if (propose.isError === true) {
+        return propose;
+      }
+      const mode = resolveApprovalMode(extCtx.cwd);
+      if (!needsHumanGate(mode, subtasks)) {
+        return callOrchestration(client, "plan/decide", {
+          runId: input.runId,
+          approved: true,
+          decidedBy: "model"
+        });
+      }
+      if (!extCtx.hasUI) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Plan ${input.runId} requires a human approval decision and no interactive UI is available; it remains proposed.`
+            }
+          ],
+          details: { runId: input.runId, outcome: "proposed", reason: "humanRequiredWithoutUi" },
+          isError: true
+        };
+      }
+      const rendered = `Plan for run ${input.runId}:
+` + subtasks.map((s) => `- [${s.id}] ${s.description} (${s.adapter}${s.writes ? ", writes" : ""})`).join(`
+`);
+      extCtx.ui.notify(rendered, "info");
+      const selection = await extCtx.ui.select(`Approve plan ${input.runId}?`, ["Approve", "Reject"], {
+        timeout: APPROVAL_DIALOG_TIMEOUT_MS2
+      });
+      if (selection === undefined) {
+        return {
+          content: [{ type: "text", text: `Plan ${input.runId} approval dialog timed out; it remains proposed.` }],
+          details: { runId: input.runId, outcome: "proposed" }
+        };
+      }
+      const approved = selection === "Approve";
+      const reason = await extCtx.ui.input(approved ? "Reason for approving" : "Reason for rejecting", "", {
+        timeout: APPROVAL_DIALOG_TIMEOUT_MS2
+      });
+      if (reason === undefined) {
+        return {
+          content: [{ type: "text", text: `Plan ${input.runId} approval dialog timed out; it remains proposed.` }],
+          details: { runId: input.runId, outcome: "proposed" }
+        };
+      }
+      return callOrchestration(client, "plan/decide", {
+        runId: input.runId,
+        approved,
+        reason,
+        decidedBy: "human"
+      });
     }
   });
 }
@@ -12180,6 +12503,122 @@ function registerOrchestrationTools(pi, ctx) {
   registerMessageTool(pi, ctx);
   registerApprovalTool(pi, ctx);
   registerReconcileTool(pi, ctx);
+  registerPlanTool(pi, ctx);
+  registerLeaderTools(pi, ctx);
+}
+
+// src/milestones.ts
+var TERMINAL_STATES = {
+  succeeded: true,
+  failed: true,
+  cancelled: true,
+  lost: true
+};
+var QUESTION_TRIAGE = "Answer via crew_send if run context suffices; escalate to the user only for genuinely human decisions.";
+var TWO_FAILURES_RULE = "Two consecutive failures on the same task require escalation to the user.";
+function capitalize(s) {
+  return s.length === 0 ? s : `${s[0].toUpperCase()}${s.slice(1)}`;
+}
+function lookupKey(e) {
+  return e.runId ?? undefined;
+}
+
+class MilestoneTracker {
+  #sawWorking = new Set;
+  isMilestone(e) {
+    const event = e.event;
+    switch (event.type) {
+      case "runEvent": {
+        const state = event.payload.state;
+        if (state in TERMINAL_STATES) {
+          return true;
+        }
+        if (state === "working") {
+          const runId = event.payload.runId;
+          if (this.#sawWorking.has(runId)) {
+            return false;
+          }
+          this.#sawWorking.add(runId);
+          return true;
+        }
+        return false;
+      }
+      case "workerQuestion":
+      case "workerTimeout":
+      case "budgetExceeded":
+      case "escalationRaised":
+        return true;
+      default:
+        return false;
+    }
+  }
+}
+function formatDigest(e, lookup) {
+  const event = e.event;
+  const runId = lookupKey(e);
+  const row = runId !== undefined ? lookup[runId] : undefined;
+  const who = row !== undefined ? `run ${runId} (${row.adapter || "unknown"} adapter) for task ${row.taskId || "unknown"}` : `run ${runId ?? "unknown"}`;
+  switch (event.type) {
+    case "runEvent": {
+      const state = event.payload.state;
+      if (state === "failed") {
+        const reason = row?.latestActivity ?? "see runtime";
+        return `${capitalize(who)} FAILED: ${reason}. ${TWO_FAILURES_RULE}`;
+      }
+      if (state === "succeeded") {
+        return `${capitalize(who)} succeeded.`;
+      }
+      if (state === "cancelled") {
+        return `${capitalize(who)} was cancelled.`;
+      }
+      if (state === "lost") {
+        return `${capitalize(who)} was lost (worker process died).`;
+      }
+      if (state === "working") {
+        return `${capitalize(who)} started working.`;
+      }
+      return;
+    }
+    case "workerQuestion": {
+      const question = event.payload.question ?? "(no question text captured)";
+      return `Worker question on ${who}: ${question}. ${QUESTION_TRIAGE}`;
+    }
+    case "workerTimeout": {
+      const kind = event.payload.kind ?? "inactivity";
+      return `${capitalize(who)} hit a worker ${kind} timeout. The runtime reports; the leader decides: ` + `give it more time via crew_run { op: "timeoutAck", runId, decision: "extend" }, ` + `redirect it via crew_send (the nudge), or stop it via crew_run { op: "timeoutAck", decision: "abort" }.`;
+    }
+    case "budgetExceeded":
+      return `${capitalize(who)} exceeded its turn budget. Escalate to the user or raise the budget via the plan.`;
+    case "escalationRaised": {
+      const reason = event.payload.reason;
+      return `Escalation raised on ${who}: ${reason}.`;
+    }
+    default:
+      return;
+  }
+}
+function attachMilestoneBridge(pi, monitor) {
+  const tracker = new MilestoneTracker;
+  const send = pi.sendMessage;
+  return monitor.subscribeEvents((e) => {
+    if (!tracker.isMilestone(e)) {
+      return;
+    }
+    try {
+      const rows = monitor.getState().rows;
+      const digest = formatDigest(e, rows);
+      if (digest === undefined) {
+        return;
+      }
+      if (typeof send === "function") {
+        send.call(pi, digest, { deliverAs: "followUp", triggerTurn: true });
+      }
+    } catch (err) {
+      pi.logger.error("crew milestone bridge: digest injection failed", {
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  });
 }
 
 // src/monitor/model.ts
@@ -12548,14 +12987,24 @@ class MonitorController {
   #state = EMPTY_MONITOR_STATE;
   #unsubscribe;
   #onUpdate;
+  #eventListeners = new Set;
   getState() {
     return this.#state;
+  }
+  subscribeEvents(listener) {
+    this.#eventListeners.add(listener);
+    return () => {
+      this.#eventListeners.delete(listener);
+    };
   }
   start(client, fromSequence, onUpdate) {
     this.#onUpdate = onUpdate;
     this.#unsubscribe = client.subscribe(fromSequence, (event) => {
       this.#state = reduceEvent(this.#state, event);
       this.#onUpdate?.();
+      for (const listener of this.#eventListeners) {
+        listener(event);
+      }
     });
   }
   stop() {
@@ -12570,6 +13019,7 @@ class MonitorController {
 }
 function registerMonitor(pi, ctx) {
   const controller = new MonitorController;
+  attachMilestoneBridge(pi, controller);
   let subscribedClient;
   function refresh(extCtx, force = false) {
     const state = controller.getState();

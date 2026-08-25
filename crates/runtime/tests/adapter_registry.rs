@@ -134,6 +134,7 @@ fn ctx(
         crew_runtime::config::NestedViolationAction::default(),
     ));
     RunDriverContext {
+        activity: Arc::new(crew_runtime::adapter::ActivityClock::new()),
         db,
         project_id,
         run_id,

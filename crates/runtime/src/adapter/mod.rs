@@ -4,6 +4,7 @@
 //! boundary every adapter operation returns through, and the event sink
 //! adapters push normalized telemetry through rather than writing
 //! [`crate::domain::DomainRepository`] directly.
+mod activity;
 mod capability;
 pub mod claude;
 pub mod codex;
@@ -24,6 +25,7 @@ pub mod tui;
 use std::future::Future;
 use std::pin::Pin;
 
+pub use activity::{ActivityClock, due_timeouts, millis_since};
 pub use capability::{
     AdapterCapabilities, ApprovalsCapability, CAPABILITY_FIELD_NAMES, DurabilityCapability,
     NativeViewCapability, NestedCapability, ProtocolKind, ResumeCapability, SteeringCapability,

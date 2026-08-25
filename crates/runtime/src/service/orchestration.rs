@@ -11,15 +11,15 @@ use std::sync::Arc;
 
 use crew_protocol::{
     ApprovalId, ApprovalRequest, CrewMethod, DeliveryState, EventEnvelope, IsolationKind,
-    LeaseMode, MessageId, MessageKind, ProjectId, Run, RunFlags, RunId, RunMessage, RunSpec,
-    RunState, TaskId, TaskRef, Timestamp, Worker, WorkerId, WorkerProfileRef, error_code,
+    LeaseMode, MessageId, MessageKind, PlanSpec, ProjectId, Run, RunFlags, RunId, RunMessage,
+    RunSpec, RunState, TaskId, TaskRef, Timestamp, Worker, WorkerId, WorkerProfileRef, error_code,
 };
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
 use crate::db::DatabaseHandle;
 use crate::domain::{
-    DomainError, DomainRepository, TransitionError, embed_envelope, take_envelope,
+    DomainError, DomainRepository, TransitionError, broadcast_committed, embed_envelope,
 };
 use crate::ipc::ClientPrincipal;
 
@@ -57,6 +57,7 @@ impl ServiceError {
     /// (`crate::adapter::copilot::client`), rather than inventing a new
     /// refusal shape; the message text (not the code) is what
     /// distinguishes "not yet implemented" from "unknown or out of role".
+    #[allow(dead_code)] // retained for future method stubs (WP22+)
     fn not_yet_implemented(method_name: &str) -> Self {
         Self {
             code: error_code::METHOD_NOT_FOUND,
@@ -107,6 +108,16 @@ impl From<DomainError> for ServiceError {
                 code: error_code::POLICY_QUARANTINED,
                 message: format!(
                     "run {run_id} is quarantined by an undecided policy violation; decide it via policy/violation/decide"
+                ),
+            },
+            DomainError::BudgetExceeded {
+                run_id,
+                turns_used,
+                turn_limit,
+            } => Self {
+                code: error_code::BUDGET_EXCEEDED,
+                message: format!(
+                    "run {run_id} exceeded its turn budget: {turns_used}/{turn_limit} turns used"
                 ),
             },
             other => Self::internal(other.to_string()),
@@ -202,6 +213,14 @@ pub struct OrchestrationService {
     /// Resolved once per `run/submit` against the caller's
     /// `displayPreference`, so an adapter never re-probes.
     display: Arc<crate::display::DisplayRegistry>,
+    /// The default per-subtask turn budget (WP19): `config
+    /// limits.turnBudgetPerSubtask`, snapshotted into a run's budgets row
+    /// at submit when its plan subtask carries no explicit `turnBudget`.
+    turn_budget_default: u32,
+    /// The shared liveness clock every started run's sink touches and
+    /// lifecycle's timeout sweep reads -- the same instance the registry's
+    /// sinks use, so one run has exactly one clock.
+    activity: Arc<crate::adapter::ActivityClock>,
 }
 
 /// The outcome of [`OrchestrationService::abandon_lease`]: what
@@ -232,6 +251,8 @@ impl OrchestrationService {
         lease_service: Arc<crate::workspace::LeaseService>,
         artifact_store: Arc<crate::workspace::ArtifactStore>,
         repository: std::path::PathBuf,
+        turn_budget_default: u32,
+        activity: Arc<crate::adapter::ActivityClock>,
     ) -> Self {
         let approval = Arc::new(crate::approval::ApprovalService::new(
             db.clone(),
@@ -254,6 +275,8 @@ impl OrchestrationService {
             display: Arc::new(crate::display::DisplayRegistry::with_default_backends(
                 crew_protocol::DisplayConfig::default(),
             )),
+            turn_budget_default,
+            activity,
         }
     }
 
@@ -282,14 +305,14 @@ impl OrchestrationService {
         self.policy = Some(policy);
         self
     }
-
     /// Broadcasts the envelope embedded by a mutation's `run_domain_op`
     /// closure to live subscribers, if present, then strips it so the
-    /// caller's JSON-RPC response never carries the internal key.
+    /// caller's JSON-RPC response never carries the internal key. Routes
+    /// through the single canonical [`broadcast_committed`] helper so the
+    /// take-then-send behavior lives in exactly one place
+    /// (`docs/architecture.md` §18 item 3).
     fn broadcast(&self, value: &mut Value) {
-        if let Some(envelope) = take_envelope(value) {
-            let _ = self.events_tx.send(envelope);
-        }
+        broadcast_committed(&self.events_tx, value);
     }
 
     /// Dispatches one already role-authorized orchestration method.
@@ -347,15 +370,12 @@ impl OrchestrationService {
             CrewMethod::WorkspaceApply => self.workspace_apply(principal, params).await,
             CrewMethod::ArtifactList => self.artifact_list(principal, params).await,
             CrewMethod::ArtifactFetch => self.artifact_fetch(principal, params).await,
-            // Stubs: the daemon accepts these `ompExtension`-only methods
-            // (they are in the role table -- see
-            // `crate::ipc::ClientPrincipal::allowed_methods`) but refuses
-            // every one of them until a later work package (crew v2
-            // gap-closure WP17/WP21) lands its real handler.
-            CrewMethod::PlanPropose => Err(ServiceError::not_yet_implemented("plan/propose")),
-            CrewMethod::PlanDecide => Err(ServiceError::not_yet_implemented("plan/decide")),
-            CrewMethod::PlanGet => Err(ServiceError::not_yet_implemented("plan/get")),
-            CrewMethod::RunTimeoutAck => Err(ServiceError::not_yet_implemented("run/timeoutAck")),
+            // `plan/*` landed in WP17; `run/timeoutAck` is the WP21
+            // leader-decision surface.
+            CrewMethod::PlanPropose => self.plan_propose(principal, params).await,
+            CrewMethod::PlanDecide => self.plan_decide(principal, params).await,
+            CrewMethod::PlanGet => self.plan_get(params).await,
+            CrewMethod::RunTimeoutAck => self.run_timeout_ack(principal, params).await,
             _ => Err(ServiceError::internal(
                 "method is not routed through OrchestrationService",
             )),
@@ -793,6 +813,7 @@ impl OrchestrationService {
             prompt,
             events_tx: self.events_tx.clone(),
             violation_service: Arc::clone(&self.violation),
+            activity: Arc::clone(&self.activity),
             workspace_path: workspace_path.as_ref().map(|(path, _)| path.clone()),
             policy,
             display,
@@ -855,6 +876,67 @@ impl OrchestrationService {
             .and_then(Value::as_str)
             .map(str::to_string);
 
+        // Turn-budget snapshot (WP19): an optional `planRef {planId,
+        // subtaskId}` names the approved plan subtask this run executes.
+        // Its `turnBudget` wins; the config default fills the gap. The
+        // provenance is stored on the run row (WP20's writes guard reads
+        // it) and the limit into the budgets row, in the same domain op as
+        // submission. A malformed reference is the caller's error.
+        let plan_ref = params.get("planRef");
+        let (plan_ref_json, turn_limit) = if let Some(plan_ref) = plan_ref {
+            let plan_id = parse_run_id(plan_ref.get("planId")).map_err(|_| {
+                ServiceError::invalid_params("planRef.planId is not a valid run id")
+            })?;
+            let subtask_id = plan_ref
+                .get("subtaskId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ServiceError::invalid_params("planRef.subtaskId is required"))?
+                .to_string();
+            // Read the referenced plan to snapshot its limit. A missing,
+            // undecided, or rejected plan is the caller's error: the leader
+            // must approve a plan before spawning runs from it.
+            let project_id = self.project_id;
+            let result = self
+                .db
+                .run_domain_op(Box::new(move |conn| {
+                    DomainRepository::new(conn, project_id)
+                        .get_plan(plan_id)
+                        .map(|r| serde_json::to_value(r).expect("PlanGetResult serializes"))
+                }))
+                .await
+                .map_err(ServiceError::from)?;
+            let subtasks = result
+                .pointer("/plan/subtasks")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    ServiceError::invalid_params(format!("run {} has no proposed plan", plan_id))
+                })?;
+            if result.get("approved").and_then(Value::as_bool) != Some(true) {
+                return Err(ServiceError::invalid_params(format!(
+                    "plan {} has not been approved; the leader must decide it before spawning from it",
+                    plan_id
+                )));
+            }
+            let subtask_id_str = subtask_id.as_str();
+            let turn_budget = subtasks
+                .iter()
+                .find(|s| s.get("id").and_then(Value::as_str) == Some(subtask_id_str))
+                .ok_or_else(|| {
+                    ServiceError::invalid_params(format!(
+                        "subtask {subtask_id} not found in plan {plan_id}"
+                    ))
+                })?
+                .get("turnBudget")
+                .and_then(Value::as_u64)
+                .map(|v| u32::try_from(v).unwrap_or(u32::MAX));
+            (
+                Some(json!({ "planId": plan_id.to_string(), "subtaskId": subtask_id }).to_string()),
+                turn_budget.unwrap_or(self.turn_budget_default),
+            )
+        } else {
+            (None, self.turn_budget_default)
+        };
+
         // Re-merge this run's own `policyOverrides` on top of the startup
         // layers, so the run is authorized against -- and fingerprinted
         // with -- exactly the policy it asked for. Without overrides (or
@@ -894,11 +976,6 @@ impl OrchestrationService {
 
         // The task must exist. `task_get_op` selects by task id alone,
         // with no project-id predicate -- and neither does any of the
-        // owner-arbitration queries this fix adds below (S2). That is
-        // correct, not merely convenient: each runtime process owns
-        // exactly one project's database, so "task id" and "task id in
-        // this project" already coincide; there is no cross-project
-        // rejection to perform here.
         self.db
             .run_domain_op(query::task_get_op(task_id))
             .await
@@ -925,8 +1002,18 @@ impl OrchestrationService {
             .db
             .run_domain_op(Box::new(move |conn| {
                 let mut repo = DomainRepository::new(conn, project_id);
-                repo.submit_run(&run, fingerprint.as_deref(), Some(&principal_instance_id))
-                    .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                let committed =
+                    repo.submit_run(&run, fingerprint.as_deref(), Some(&principal_instance_id))?;
+                // Snapshot the budget in the same actor closure as
+                // submission. Two transactions, one closure: a crash between
+                // them leaves a run with no budgets row, which the guard
+                // treats as "no explicit budget" -- unlimited, never
+                // spuriously refused.
+                repo.attach_turn_budget(run.run_id, run.task_id, plan_ref_json, turn_limit)?;
+                Ok(embed_envelope(
+                    json!({ "sequence": committed.sequence }),
+                    &committed.envelope,
+                ))
             }))
             .await
             .map_err(ServiceError::from)?;
@@ -2026,6 +2113,7 @@ impl OrchestrationService {
             .map_err(|_| ServiceError::invalid_params("replyTo is not a valid id"))?;
 
         let follow_up_payload = payload.clone();
+        let follow_up_kind = kind.clone();
         let message_id = MessageId::new();
         let message = RunMessage {
             message_id,
@@ -2043,7 +2131,7 @@ impl OrchestrationService {
         };
         let project_id = self.project_id;
         let principal_instance_id = principal.instance_id.clone();
-        let mut sequence = self
+        let submit_outcome = self
             .db
             .run_domain_op(Box::new(move |conn| {
                 let mut repo = DomainRepository::new(conn, project_id);
@@ -2055,13 +2143,70 @@ impl OrchestrationService {
                 // OMP may journal a message against a run in any state --
                 // the delivery diagnostic path already handles a run with
                 // no live adapter (R94 gates only the worker-MCP broker
-                // writes whose doc promises liveness).
-                repo.record_message(&message, Some(&principal_instance_id), true, false)
-                    .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                // writes whose doc promises liveness). The turn-budget
+                // guard (WP19) sits in that same transaction.
+                let (committed, answered) =
+                    repo.record_message(&message, Some(&principal_instance_id), true, false)?;
+                Ok(embed_envelope(
+                    json!({ "sequence": committed.sequence, "answered": answered }),
+                    &committed.envelope,
+                ))
             }))
             .await
-            .map_err(ServiceError::from)?;
+            .map_err(ServiceError::from);
+        let answered;
+        let mut sequence = match submit_outcome {
+            Ok(mut value) => {
+                answered = value
+                    .get("answered")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if let Some(obj) = value.as_object_mut() {
+                    obj.remove("answered");
+                }
+                value
+            }
+            Err(err) => {
+                // A typed budget refusal must still journal -- and
+                // broadcast -- its durable `BudgetExceeded` fact (WP19):
+                // monitors see the cap trip even though no message row was
+                // written. The refusal itself is then returned as-is with
+                // its `BUDGET_EXCEEDED` code.
+                if err.code == error_code::BUDGET_EXCEEDED {
+                    let mut exceeded = self
+                        .db
+                        .run_domain_op(Box::new(move |conn| {
+                            DomainRepository::new(conn, project_id)
+                                .journal_budget_exceeded(run_id)
+                                .map(|c| {
+                                    embed_envelope(json!({ "sequence": c.sequence }), &c.envelope)
+                                })
+                        }))
+                        .await
+                        .map_err(ServiceError::from)?;
+                    self.broadcast(&mut exceeded);
+                }
+                return Err(err);
+            }
+        };
         self.broadcast(&mut sequence);
+
+        // WP20: this Answer resolved the run's open question escalation --
+        // journal (and broadcast) the durable `EscalationAnswered` fact as
+        // its own committed mutation, exactly like every other follow-up
+        // fact this handler emits.
+        if answered {
+            let mut answered_event = self
+                .db
+                .run_domain_op(Box::new(move |conn| {
+                    DomainRepository::new(conn, project_id)
+                        .journal_escalation_answered(run_id, crew_protocol::AnsweredBy::Leader)
+                        .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                }))
+                .await
+                .map_err(ServiceError::from)?;
+            self.broadcast(&mut answered_event);
+        }
 
         // Best-effort live delivery to an already-running adapter. A
         // missing driver, a `queued`/not-yet-started run (the normal case
@@ -2074,7 +2219,13 @@ impl OrchestrationService {
         // exactly the deliveryState inversion this branch exists to avoid.
         if let Some(driver) = self.run_driver.clone() {
             match driver
-                .send_follow_up(run_id, task_id, sender_worker_id, follow_up_payload)
+                .send_follow_up(
+                    run_id,
+                    task_id,
+                    sender_worker_id,
+                    follow_up_payload,
+                    follow_up_kind,
+                )
                 .await
             {
                 Ok(()) => {
@@ -2250,6 +2401,176 @@ impl OrchestrationService {
             response["quarantineCleared"] = json!(cleared);
         }
         Ok(response)
+    }
+
+    /// `plan/propose`: persists a leader's proposed decomposition of a run
+    /// into subtasks, appending a `PlanProposed` event. The owning
+    /// `ompExtension` instance must present its own `instance_id` as
+    /// `ownerClientInstanceId` (param validation against the authenticated
+    /// connection, not the race-safe ownership guard -- the run's task is
+    /// always owned by the connected extension). The plan is keyed 1:1 by
+    /// `run_id`; re-proposing an existing plan is refused by the domain op.
+    async fn plan_propose(
+        &self,
+        principal: &crate::ipc::ClientPrincipal,
+        params: &Value,
+    ) -> Result<Value, ServiceError> {
+        let run_id = params
+            .get("runId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ServiceError::invalid_params("runId is required"))
+            .and_then(|s| {
+                RunId::parse(s).map_err(|_| ServiceError::invalid_params("runId is not a valid id"))
+            })?;
+        let owner = str_field(params, "ownerClientInstanceId")?;
+        if owner != principal.instance_id {
+            return Err(ServiceError::invalid_params(format!(
+                "ownerClientInstanceId {owner} must match the connected instance {} -- \
+                 plan/propose cannot bind a plan to another instance",
+                principal.instance_id
+            )));
+        }
+        let task_text = str_field(params, "taskText")?;
+        let plan: PlanSpec = serde_json::from_value(
+            params
+                .get("plan")
+                .cloned()
+                .ok_or_else(|| ServiceError::invalid_params("plan is required"))?,
+        )
+        .map_err(|e| ServiceError::invalid_params(format!("plan is invalid: {e}")))?;
+
+        let project_id = self.project_id;
+        let mut result = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                let mut repo = DomainRepository::new(conn, project_id);
+                repo.propose_plan(run_id, &owner, &task_text, &plan)
+                    .map(|c| {
+                        embed_envelope(
+                            json!({ "runId": run_id.to_string(), "sequence": c.sequence }),
+                            &c.envelope,
+                        )
+                    })
+            }))
+            .await
+            .map_err(ServiceError::from)?;
+        self.broadcast(&mut result);
+        Ok(result)
+    }
+
+    /// `plan/decide`: approves or rejects a previously proposed plan for a
+    /// run, appending a `PlanDecided` event. Ownership and the
+    /// already-decided guard both live inside the domain op's guarded write
+    /// (R71) -- this handler only forwards the authenticated principal.
+    async fn plan_decide(
+        &self,
+        principal: &crate::ipc::ClientPrincipal,
+        params: &Value,
+    ) -> Result<Value, ServiceError> {
+        let run_id = params
+            .get("runId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ServiceError::invalid_params("runId is required"))
+            .and_then(|s| {
+                RunId::parse(s).map_err(|_| ServiceError::invalid_params("runId is not a valid id"))
+            })?;
+        let approved = params
+            .get("approved")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| ServiceError::invalid_params("approved (bool) is required"))?;
+        let reason = params
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+
+        let project_id = self.project_id;
+        let principal_id = principal.instance_id.clone();
+        let mut result = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                let mut repo = DomainRepository::new(conn, project_id);
+                repo.decide_plan(run_id, &principal_id, approved, reason.as_deref())
+                    .map(|c| {
+                        embed_envelope(
+                            json!({ "runId": run_id.to_string(), "sequence": c.sequence }),
+                            &c.envelope,
+                        )
+                    })
+            }))
+            .await
+            .map_err(ServiceError::from)?;
+        self.broadcast(&mut result);
+        Ok(result)
+    }
+
+    /// `plan/get`: open read (ADR-0024) of the most recently proposed plan
+    /// for a run and its decision, if any. No event is persisted or
+    /// broadcast -- it is a pure projection read.
+    /// `run/timeoutAck`: the leader's decision surface for a
+    /// [`RuntimeEvent::WorkerTimeout`] fact (WP21, spec §7.5 -- the runtime
+    /// reports; the leader decides).
+    ///
+    /// * `extend` re-arms BOTH of the run's liveness deadlines with a fresh
+    ///   window (the same shared clock WP19's sweep reads).
+    /// * `nudge` is deliberately a no-op server-side: nudging means the
+    ///   leader follows up with `crew_send`/`message/send`, which carries
+    ///   its own budget/journal semantics -- double-writing it here would
+    ///   consume a turn behind the leader's back.
+    /// * `abort` delegates to `run/cancel`.
+    async fn run_timeout_ack(
+        &self,
+        principal: &ClientPrincipal,
+        params: &Value,
+    ) -> Result<Value, ServiceError> {
+        let run_id = parse_run_id(params.get("runId"))?;
+        let decision = str_field(params, "decision")?;
+        match decision.as_str() {
+            "extend" => {
+                self.activity.extend(&run_id, std::time::Instant::now());
+                Ok(json!({
+                    "runId": run_id.to_string(),
+                    "decision": "extend",
+                    "rearmed": true,
+                }))
+            }
+            "nudge" => Ok(json!({
+                "runId": run_id.to_string(),
+                "decision": "nudge",
+                "note": "server-side no-op: follow up with message/send (crew_send) to nudge the worker",
+            })),
+            "abort" => {
+                let cancel_params = json!({ "runId": run_id.to_string(), "scope": "worker" });
+                let mut result = self.run_cancel(principal, &cancel_params).await?;
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("decision".to_string(), json!("abort"));
+                }
+                Ok(result)
+            }
+            other => Err(ServiceError::invalid_params(format!(
+                "decision must be extend, nudge, or abort; got {other:?}"
+            ))),
+        }
+    }
+
+    async fn plan_get(&self, params: &Value) -> Result<Value, ServiceError> {
+        let run_id = params
+            .get("runId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ServiceError::invalid_params("runId is required"))
+            .and_then(|s| {
+                RunId::parse(s).map_err(|_| ServiceError::invalid_params("runId is not a valid id"))
+            })?;
+        let project_id = self.project_id;
+        let result = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                let repo = DomainRepository::new(conn, project_id);
+                repo.get_plan(run_id)
+                    .map(|r| serde_json::to_value(r).expect("PlanGetResult serializes"))
+            }))
+            .await
+            .map_err(ServiceError::from)?;
+        Ok(result)
     }
 
     /// `policy/violation/list`: the discovery surface for which violation

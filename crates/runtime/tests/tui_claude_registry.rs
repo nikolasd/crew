@@ -181,6 +181,7 @@ fn ctx_with_display(
     ));
     (
         RunDriverContext {
+            activity: std::sync::Arc::new(crew_runtime::adapter::ActivityClock::new()),
             db,
             project_id,
             run_id,
@@ -286,6 +287,7 @@ fn own_ctx(
     ));
     (
         RunDriverContext {
+            activity: std::sync::Arc::new(crew_runtime::adapter::ActivityClock::new()),
             db: Arc::clone(&db),
             project_id,
             run_id,

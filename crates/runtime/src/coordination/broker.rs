@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
 use crate::db::DatabaseHandle;
-use crate::domain::{DomainRepository, embed_envelope, take_envelope};
+use crate::domain::{DomainRepository, broadcast_committed, embed_envelope};
 
 use super::rate_limit::RateLimiter;
 
@@ -120,9 +120,7 @@ impl CoordinationBroker {
     /// closure to live subscribers, if present, then strips it so the
     /// caller's JSON-RPC response never carries the internal key.
     fn broadcast(&self, value: &mut Value) {
-        if let Some(envelope) = take_envelope(value) {
-            let _ = self.events_tx.send(envelope);
-        }
+        broadcast_committed(&self.events_tx, value);
     }
 
     /// Rejects any worker-safe operation against a run that has already
@@ -310,7 +308,7 @@ impl CoordinationBroker {
             .run_domain_op(Box::new(move |conn| {
                 let mut repo = DomainRepository::new(conn, project_id);
                 repo.record_message(&message, None, false, true)
-                    .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                    .map(|(c, _)| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
             }))
             .await?;
         self.broadcast(&mut recorded_sequence);
@@ -625,12 +623,13 @@ impl CoordinationBroker {
                 // quarantined worker from being charged rate budget; a
                 // quarantine landing between that read and this write is
                 // refused here, inside the guarded transaction.
-                repo.record_message(&message, None, true, true).map(|c| {
-                    embed_envelope(
-                        json!({ "sequence": c.sequence, "artifactRef": artifact_ref }),
-                        &c.envelope,
-                    )
-                })
+                repo.record_message(&message, None, true, true)
+                    .map(|(c, _)| {
+                        embed_envelope(
+                            json!({ "sequence": c.sequence, "artifactRef": artifact_ref }),
+                            &c.envelope,
+                        )
+                    })
             }))
             .await
             .map_err(CoordinationError::from)?;

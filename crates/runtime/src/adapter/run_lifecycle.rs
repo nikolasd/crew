@@ -53,6 +53,7 @@ use crate::domain::{DomainError, DomainRepository, embed_envelope, take_envelope
 use crate::service::query::run_state_op;
 
 use super::AdapterFuture;
+use super::activity::ActivityClock;
 use super::event_sink::{AdapterEvent, AdapterEventPayload, AdapterEventSink};
 
 /// The evidence-driven lifecycle edges for one run. Each run's
@@ -210,7 +211,49 @@ impl RunLifecycle {
         exit_code: Option<i32>,
         signal: Option<&str>,
     ) {
-        self.walk_to(&terminal_state_for(exit_code, signal)).await;
+        let terminal = terminal_state_for(exit_code, signal);
+        self.walk_to(&terminal).await;
+        // WP20 repeated-failure escalation: a run that just failed for the
+        // same task whose previous run also failed raises the leader's
+        // attention fact. Committed as its own mutation and broadcast here
+        // (invariant 7) -- never folded into the transition commit, since
+        // escalation projection is not evidence for lifecycle edges.
+        if terminal == state("failed") {
+            self.raise_repeated_failure_if_second().await;
+        }
+    }
+
+    /// Journals `EscalationRaised{reason: "repeated_failure"}` when this
+    /// run's task has already seen another failed run. Best-effort: a
+    /// failed detection is logged, never fatal -- the milestone digest
+    /// already instructs the leader to ask the human.
+    async fn raise_repeated_failure_if_second(&self) {
+        let project_id = self.project_id;
+        let run_id = self.run_id;
+        let result = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                let mut repo = DomainRepository::new(conn, project_id);
+                if repo.previous_run_for_task_also_failed(run_id) {
+                    repo.record_escalation_raised(run_id, "repeated_failure", None)
+                        .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                } else {
+                    Ok(json!(null))
+                }
+            }))
+            .await;
+        match result {
+            Ok(mut value) => {
+                crate::domain::broadcast_committed(&self.events_tx, &mut value);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    run_id = %self.run_id,
+                    "failed to record repeated-failure escalation"
+                );
+            }
+        }
     }
 }
 
@@ -223,6 +266,9 @@ pub struct RunLifecycleSink {
     /// past `working`): a chatty run then pays no state read for the rest of
     /// its lifetime.
     working_observed: AtomicBool,
+    /// The shared liveness clock (WP19): every journaled non-exit event is
+    /// activity, re-arming the inactivity deadline the timeout sweep reads.
+    activity: Arc<ActivityClock>,
 }
 
 impl RunLifecycleSink {
@@ -235,6 +281,7 @@ impl RunLifecycleSink {
         project_id: ProjectId,
         events_tx: broadcast::Sender<EventEnvelope>,
         run_id: RunId,
+        activity: Arc<ActivityClock>,
     ) -> Arc<dyn AdapterEventSink> {
         Arc::new(Self {
             inner,
@@ -245,6 +292,7 @@ impl RunLifecycleSink {
                 run_id,
             },
             working_observed: AtomicBool::new(false),
+            activity,
         })
     }
 }
@@ -261,19 +309,30 @@ impl AdapterEventSink for RunLifecycleSink {
             _ => None,
         };
         let process_started = matches!(&event.payload, AdapterEventPayload::ProcessStarted { .. });
+        let run_id = self.lifecycle.run_id;
+        let activity = Arc::clone(&self.activity);
         Box::pin(async move {
             let result = self.inner.emit(event).await;
             if result.is_ok() {
                 if let Some((exit_code, signal)) = exit {
+                    // The run is settling: drop its liveness clock so a
+                    // later resume starts fresh deadlines (WP19).
+                    activity.forget(&run_id);
                     self.lifecycle
                         .observe_process_exited(exit_code, signal.as_deref())
                         .await;
-                } else if process_started {
-                    self.lifecycle.observe_process_started().await;
-                } else if !self.working_observed.load(Ordering::Relaxed)
-                    && self.lifecycle.observe_vendor_activity().await
-                {
-                    self.working_observed.store(true, Ordering::Relaxed);
+                } else {
+                    // Any other journaled evidence is vendor activity:
+                    // re-arm the inactivity deadline before the lifecycle
+                    // edge work so the sweep never sees a stale stamp.
+                    activity.touch(&run_id, std::time::Instant::now());
+                    if process_started {
+                        self.lifecycle.observe_process_started().await;
+                    } else if !self.working_observed.load(Ordering::Relaxed)
+                        && self.lifecycle.observe_vendor_activity().await
+                    {
+                        self.working_observed.store(true, Ordering::Relaxed);
+                    }
                 }
             }
             result
@@ -523,8 +582,14 @@ mod tests {
         let project_id = ProjectId::new();
         let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
         let (tx, _rx) = broadcast::channel(64);
-        let sink =
-            RunLifecycleSink::wrap(Arc::new(StubSink), Arc::clone(&db), project_id, tx, run_id);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
 
         sink.emit(AdapterEvent {
             run_id,
@@ -554,8 +619,14 @@ mod tests {
         let project_id = ProjectId::new();
         let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
         let (tx, mut rx) = broadcast::channel(64);
-        let sink =
-            RunLifecycleSink::wrap(Arc::new(StubSink), Arc::clone(&db), project_id, tx, run_id);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
 
         sink.emit(AdapterEvent {
             run_id,
@@ -607,8 +678,14 @@ mod tests {
         let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
         drive_to_state(&db, project_id, run_id, "working").await;
         let (tx, _rx) = broadcast::channel(64);
-        let sink =
-            RunLifecycleSink::wrap(Arc::new(StubSink), Arc::clone(&db), project_id, tx, run_id);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
 
         sink.emit(AdapterEvent {
             run_id,
@@ -647,8 +724,14 @@ mod tests {
         let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
         drive_to_state(&db, project_id, run_id, "working").await;
         let (tx, _rx) = broadcast::channel(64);
-        let sink =
-            RunLifecycleSink::wrap(Arc::new(StubSink), Arc::clone(&db), project_id, tx, run_id);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
 
         sink.emit(AdapterEvent {
             run_id,
@@ -683,8 +766,14 @@ mod tests {
         let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
         drive_to_state(&db, project_id, run_id, "working").await;
         let (tx, _rx) = broadcast::channel(64);
-        let sink =
-            RunLifecycleSink::wrap(Arc::new(StubSink), Arc::clone(&db), project_id, tx, run_id);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
 
         sink.emit(AdapterEvent {
             run_id,
@@ -718,8 +807,14 @@ mod tests {
         let project_id = ProjectId::new();
         let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
         let (tx, _rx) = broadcast::channel(64);
-        let sink =
-            RunLifecycleSink::wrap(Arc::new(StubSink), Arc::clone(&db), project_id, tx, run_id);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
 
         sink.emit(AdapterEvent {
             run_id,
@@ -756,8 +851,14 @@ mod tests {
         drive_to_state(&db, project_id, run_id, "cancelled").await;
         let before = run_states(&db, run_id).await;
         let (tx, _rx) = broadcast::channel(64);
-        let sink =
-            RunLifecycleSink::wrap(Arc::new(StubSink), Arc::clone(&db), project_id, tx, run_id);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
 
         sink.emit(AdapterEvent {
             run_id,
@@ -788,8 +889,14 @@ mod tests {
         let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
         drive_to_state(&db, project_id, run_id, "waitingUser").await;
         let (tx, _rx) = broadcast::channel(64);
-        let sink =
-            RunLifecycleSink::wrap(Arc::new(StubSink), Arc::clone(&db), project_id, tx, run_id);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
 
         sink.emit(AdapterEvent {
             run_id,
@@ -829,8 +936,14 @@ mod tests {
         drive_to_state(&db, project_id, run_id, "waitingUser").await;
         let before = run_states(&db, run_id).await;
         let (tx, _rx) = broadcast::channel(64);
-        let sink =
-            RunLifecycleSink::wrap(Arc::new(StubSink), Arc::clone(&db), project_id, tx, run_id);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
 
         sink.emit(AdapterEvent {
             run_id,
@@ -873,6 +986,7 @@ mod tests {
             project_id,
             tx,
             run_id,
+            Arc::new(ActivityClock::new()),
         );
 
         let err = sink

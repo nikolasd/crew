@@ -112,6 +112,7 @@ fn ctx(
         events_tx,
         prompt: None,
         violation_service,
+        activity: Arc::new(crew_runtime::adapter::ActivityClock::new()),
         workspace_path: None,
         policy: None,
         display: None,

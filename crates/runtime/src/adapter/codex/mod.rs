@@ -66,7 +66,14 @@ struct RunState {
     client: Arc<CodexRpcClient>,
     thread_id: String,
     current_turn_id: Option<String>,
-    pending_approvals: HashMap<String, PendingApproval>,
+    /// Shared with the notification pump by construction (`Arc` clone of
+    /// the same allocation `start`/`resume` hand the pump): an approval
+    /// filed mid-run must be visible to `respond_to_approval` and
+    /// `snapshot` immediately. An earlier version tried
+    /// `Arc::try_unwrap` here and silently fell back to an empty map
+    /// whenever the pump still held its clone -- i.e. always -- losing
+    /// every approval for the run's whole lifetime.
+    pending_approvals: Arc<std::sync::Mutex<HashMap<String, PendingApproval>>>,
     pump: JoinHandle<()>,
 }
 
@@ -420,12 +427,7 @@ impl Adapter for CodexAdapter {
                 client,
                 thread_id,
                 current_turn_id,
-                pending_approvals: Arc::try_unwrap(pending_approvals)
-                    .map(|m| {
-                        m.into_inner()
-                            .expect("pending approvals mutex never poisoned")
-                    })
-                    .unwrap_or_default(),
+                pending_approvals: Arc::clone(&pending_approvals),
                 pump,
             });
             Ok(())
@@ -506,12 +508,7 @@ impl Adapter for CodexAdapter {
                 client,
                 thread_id: session.0,
                 current_turn_id: None,
-                pending_approvals: Arc::try_unwrap(pending_approvals)
-                    .map(|m| {
-                        m.into_inner()
-                            .expect("pending approvals mutex never poisoned")
-                    })
-                    .unwrap_or_default(),
+                pending_approvals: Arc::clone(&pending_approvals),
                 pump,
             });
             Ok(())
@@ -520,8 +517,8 @@ impl Adapter for CodexAdapter {
 
     fn send(&self, message: AdapterMessage) -> AdapterFuture<'_, ()> {
         Box::pin(async move {
-            let run_guard = self.run.lock().await;
-            let Some(run) = run_guard.as_ref() else {
+            let mut run_guard = self.run.lock().await;
+            let Some(run) = run_guard.as_mut() else {
                 return Err(AdapterError::invalid_vendor_state(
                     KIND,
                     "send",
@@ -551,13 +548,25 @@ impl Adapter for CodexAdapter {
                     Ok(())
                 }
                 AdapterMessage::FollowUp { text } => {
-                    run.client
+                    let response = run
+                        .client
                         .call(
                             "turn/start",
                             json!({"threadId": run.thread_id, "input": [{"type": "text", "text": text}]}),
                         )
                         .await
                         .map_err(|e| client_error(e, "send"))?;
+                    // The follow-up STARTS A NEW TURN: the id captured at
+                    // `turn/start` in `start()` is stale the moment this
+                    // succeeds, and a later Steer/Cancel(Turn) targeting it
+                    // would address a finished turn. Track the latest.
+                    if let Some(turn_id) = response
+                        .get("turn")
+                        .and_then(|t| t.get("id"))
+                        .and_then(Value::as_str)
+                    {
+                        run.current_turn_id = Some(turn_id.to_string());
+                    }
                     Ok(())
                 }
                 AdapterMessage::Answer { .. } | AdapterMessage::PeerMessage { .. } => {
@@ -579,7 +588,12 @@ impl Adapter for CodexAdapter {
                     "no active run",
                 ));
             };
-            let Some(approval) = run.pending_approvals.remove(&approval_id) else {
+            let Some(approval) = run
+                .pending_approvals
+                .lock()
+                .expect("pending approvals mutex never poisoned")
+                .remove(&approval_id)
+            else {
                 return Err(AdapterError::invalid_vendor_state(
                     KIND,
                     "respondToApproval",
@@ -649,6 +663,8 @@ impl Adapter for CodexAdapter {
             };
             let artifacts: Vec<serde_json::Value> = run
                 .pending_approvals
+                .lock()
+                .expect("pending approvals mutex never poisoned")
                 .values()
                 .map(|approval| {
                     serde_json::json!({
@@ -779,6 +795,65 @@ mod pump_exit_tests {
             ),
             "expected ProcessExited {{ exit_code: Some(3), signal: None }}, got {:?}",
             exited[0]
+        );
+    }
+}
+
+#[cfg(test)]
+mod pump_approval_tests {
+    use crew_protocol::{RunId, TaskId, WorkerId};
+
+    use super::*;
+
+    /// Regression (WP20): the pump must file server-request approvals into
+    /// the *same* map allocation `start`/`resume` hand to `RunState`. The
+    /// old code tried `Arc::try_unwrap` there and silently fell back to an
+    /// empty map whenever the pump still held its clone -- i.e. always --
+    /// so every approval was lost for the run's whole lifetime. With the
+    /// map now shared by construction, this asserts the pump's half of
+    /// that sharing end to end through a real unbounded channel.
+    #[tokio::test]
+    async fn the_pump_files_approvals_into_the_map_run_state_shares() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let shared: Arc<std::sync::Mutex<HashMap<String, PendingApproval>>> =
+            Arc::new(std::sync::Mutex::new(HashMap::new()));
+
+        struct NoopSink;
+        impl crate::adapter::AdapterEventSink for NoopSink {
+            fn emit(&self, _event: AdapterEvent) -> AdapterFuture<'_, u64> {
+                Box::pin(async { Ok(0) })
+            }
+        }
+
+        let pump = CodexAdapter::spawn_pump(
+            rx,
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            Arc::new(NoopSink) as Arc<dyn crate::adapter::AdapterEventSink>,
+            Arc::clone(&shared),
+            None,
+        );
+
+        tx.send(InboundMessage::Request {
+            id: serde_json::json!(7),
+            method: "execCommandApproval".to_string(),
+            params: serde_json::json!({ "callId": "call-1", "command": ["ls"] }),
+        })
+        .expect("channel open");
+        // Dropping the sender ends the driver loop; the pump drains the
+        // queued request before it observes the close.
+        drop(tx);
+        pump.await.expect("pump completed");
+
+        let filed = shared
+            .lock()
+            .expect("pending approvals mutex never poisoned")
+            .contains_key("call-1");
+        assert!(
+            filed,
+            "an approval sent while the run is live must be visible in \
+             the very map RunState shares with respond_to_approval/snapshot"
         );
     }
 }

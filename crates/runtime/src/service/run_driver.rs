@@ -48,6 +48,10 @@ pub struct RunDriverContext {
     /// attached without probing the registry a second time. `None` when no
     /// backend was available (headless) or the run never reached selection.
     pub display: Option<crew_protocol::DisplaySelection>,
+    /// The shared per-run liveness clock (WP19) this run's lifecycle sink
+    /// touches on every journaled event, so lifecycle's timeout sweep sees
+    /// fresh activity. The same instance lifecycle's sweep task reads.
+    pub activity: std::sync::Arc<crate::adapter::ActivityClock>,
 }
 
 /// The typed success of [`RunDriver::cancel_run`]: an absent adapter is
@@ -88,14 +92,19 @@ pub trait RunDriver: Send + Sync {
     /// commands), rather than returning a single terminal result.
     fn start(&self, ctx: RunDriverContext) -> AdapterFuture<'static, Result<(), String>>;
 
-    /// Sends a follow-up message to an already-started run. Returns [`RegistryError::NoRunningAdapter`]
-    /// if no adapter is currently driving the run.
+    /// Sends a coordination message of `kind` to an already-started run.
+    /// Returns [`RegistryError::NoRunningAdapter`] if no adapter is
+    /// currently driving the run. The registry dispatches `Steer` to
+    /// adapters' real interrupt-and-redirect paths where they have one;
+    /// other kinds map to their natural adapter message (answers and peer
+    /// messages included), with plain follow-up semantics as the default.
     fn send_follow_up(
         &self,
         run_id: RunId,
         task_id: TaskId,
         worker_id: WorkerId,
         prompt: String,
+        kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>>;
 
     /// Returns the adapter currently running for `run_id`, if any.
@@ -143,6 +152,7 @@ impl RunDriver for FakeRunDriver {
         _task_id: TaskId,
         _worker_id: WorkerId,
         _prompt: String,
+        _kind: crew_protocol::MessageKind,
     ) -> AdapterFuture<'static, Result<(), String>> {
         Box::pin(async move {
             Err(format!(

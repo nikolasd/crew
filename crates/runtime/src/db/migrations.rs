@@ -230,6 +230,76 @@ UPDATE approvals SET decided_by = SUBSTR(decided_by, 2, LENGTH(decided_by) - 2)
 const MIGRATION_10: &str = "
 ALTER TABLE runs ADD COLUMN transcript_cursor TEXT;
 ";
+/// Migration 11: the persisted leader plan layer. A plan is proposed for a
+/// run (`plan/propose` -> `PlanProposed`) and later approved or rejected
+/// (`plan/decide` -> `PlanDecided`). The daemon stores and enforces
+/// nothing about *routing* -- OMP owns the task graph; a plan is persisted
+/// leader intent plus the `writes`/`turn_budget` metadata a later work
+/// package reads when it builds the subtask graph.
+///
+/// The `PlanProposed`/`PlanDecided` events carry `run_id`/`task_id`/
+/// `worker_id`, so those are persisted here too (the brief's table
+/// omitted them; they are required to reconstruct the broadcast envelope
+/// and to let `plan/get` resolve the run's task/worker). The plan is
+/// keyed 1:1 by `run_id`: at most one plan row exists per run, and
+/// `plan/propose` refuses to overwrite an existing one.
+const MIGRATION_11: &str = "
+CREATE TABLE plans (
+  plan_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  worker_id TEXT NOT NULL,
+  owner_client_instance_id TEXT NOT NULL,
+  task_text TEXT NOT NULL,
+  subtasks_json TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  decided_at TEXT,
+  decided_reason TEXT
+);
+";
+
+/// Migration 12: per-run turn budgets (WP19) plus the `runs.plan_ref`
+/// provenance column. A budget row is snapshotted once at `run/submit` --
+/// limit resolved from the referenced plan subtask's `turnBudget`, else
+/// the config's `limits.turnBudgetPerSubtask` -- and incremented by every
+/// turn-consuming leader message; the guard inside
+/// [`crate::domain::DomainRepository::record_message`] refuses at the cap.
+/// `plan_ref` carries the `{planId, subtaskId}` JSON a run was spawned
+/// from, so WP20's writes-flag guard can resolve subtask metadata without
+/// re-deriving it.
+const MIGRATION_12: &str = "
+CREATE TABLE budgets (
+  run_id TEXT PRIMARY KEY REFERENCES runs(run_id),
+  task_id TEXT NOT NULL,
+  turns_used INTEGER NOT NULL DEFAULT 0,
+  turn_limit INTEGER NOT NULL
+);
+ALTER TABLE runs ADD COLUMN plan_ref TEXT;
+";
+
+/// Migration 13: worker escalations (WP20). A row is opened in the same
+/// transaction that journals its triggering fact -- a `WorkerQuestion`
+/// event opens a `question` escalation; the write-violation and
+/// repeated-failure detectors open their kinds alongside their
+/// `EscalationRaised` events. `message/send {kind:"answer"}` resolves the
+/// run's open question escalation inside the guarded write (`decided_at`,
+/// `answered_by`, `answer`) and the resolution is journaled as
+/// `EscalationAnswered`. Nullable decision columns: an open escalation has
+/// none, and is never backfilled with a fabricated one.
+const MIGRATION_13: &str = "
+CREATE TABLE escalations (
+  escalation_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  kind TEXT NOT NULL,
+  question TEXT,
+  answered_by TEXT,
+  answer TEXT,
+  created_at TEXT NOT NULL,
+  decided_at TEXT
+);
+";
 
 /// Opens `path` as a private (mode `0600`) SQLite database, configures its
 /// PRAGMAs (`journal_mode=WAL`, `foreign_keys=ON`, `busy_timeout=5000`,
@@ -268,6 +338,9 @@ fn migration_list() -> Migrations<'static> {
         M::up(MIGRATION_8),
         M::up(MIGRATION_9),
         M::up(MIGRATION_10),
+        M::up(MIGRATION_11),
+        M::up(MIGRATION_12),
+        M::up(MIGRATION_13),
     ])
 }
 

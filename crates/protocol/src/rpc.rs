@@ -211,6 +211,11 @@ pub mod error_code {
     /// -- messages, artifact publication, and workspace apply are blocked
     /// until the owning `ompExtension` client resolves the violation.
     pub const POLICY_QUARANTINED: i32 = -32101;
+    /// A run's turn budget is exhausted: a leader-originated steering
+    /// message was refused by the guard inside `message/send`'s guarded
+    /// write (WP19). The durable `BudgetExceeded` fact is journaled (and
+    /// broadcast) alongside this refusal.
+    pub const BUDGET_EXCEEDED: i32 = -32102;
 }
 
 /// The fixed `jsonrpc` version string used on every envelope.

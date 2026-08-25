@@ -92,6 +92,7 @@ impl crew_runtime::service::RunDriver for FixedCountDriver {
         _task_id: TaskId,
         _worker_id: WorkerId,
         _prompt: String,
+        _kind: crew_protocol::MessageKind,
     ) -> crew_runtime::service::AdapterFuture<'static, Result<(), String>> {
         Box::pin(async { Ok(()) })
     }

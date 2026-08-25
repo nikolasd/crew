@@ -1155,6 +1155,15 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                     "no active run",
                 ));
             };
+            // A Steer interrupts the in-flight turn before composing: the
+            // leader is REDIRECTING work, not queueing more of it (WP20).
+            // Every other kind queues after the current turn.
+            if matches!(message, AdapterMessage::Steer { .. }) {
+                run.pty
+                    .write_input(&self.vendor.interrupt_sequence())
+                    .await
+                    .map_err(|e| AdapterError::process(self.kind(), "send", e.to_string()))?;
+            }
             let text = match message {
                 AdapterMessage::Steer { text }
                 | AdapterMessage::FollowUp { text }
