@@ -493,14 +493,46 @@ impl RecoveryCoordinator {
                 .map(|c| embed_envelope(serde_json::json!({ "sequence": c.sequence }), &c.envelope))
         });
 
-        let mut value = self.db.run_domain_op(closure).await.map_err(|err| {
-            RecoveryError::TransitionFailed {
-                run_id: run_id.to_string(),
-                from_state: stuck_run.current_state.to_string(),
-                to_state: target.to_string(),
-                reason: err.to_string(),
+        let mut value = match self.db.run_domain_op(closure).await {
+            Ok(value) => value,
+            Err(err) => {
+                // The resume attempt's own failure path (an adapter
+                // fail_start) may already have transitioned the run to the
+                // terminal target while it unwound. The recovery goal --
+                // the run is terminal -- is then already achieved; treat
+                // the re-transition as satisfied instead of failing on the
+                // illegal working->failed-after-failed edge.
+                let run_id_string = run_id.to_string();
+                let current = self
+                    .db
+                    .run_domain_op(Box::new(move |conn| {
+                        let state: String = conn.query_row(
+                            "SELECT status FROM runs WHERE run_id = ?1",
+                            [&run_id_string],
+                            |row| row.get(0),
+                        )?;
+                        Ok(serde_json::json!({ "status": state }))
+                    }))
+                    .await
+                    .map_err(|read_err| RecoveryError::TransitionFailed {
+                        run_id: run_id.to_string(),
+                        from_state: stuck_run.current_state.to_string(),
+                        to_state: target.to_string(),
+                        reason: format!("{err}; state re-read also failed: {read_err}"),
+                    })?;
+                let current = current["status"].as_str().unwrap_or_default();
+                if current == target.to_string() {
+                    serde_json::json!({ "sequence": null, "alreadyTerminal": true })
+                } else {
+                    return Err(RecoveryError::TransitionFailed {
+                        run_id: run_id.to_string(),
+                        from_state: stuck_run.current_state.to_string(),
+                        to_state: target.to_string(),
+                        reason: format!("{err}; run is now {current}, not the expected {target}"),
+                    });
+                }
             }
-        })?;
+        };
         // A domain mutation commits its event AND broadcasts the same
         // envelope. The seam-less path has no broadcast to fan out on and
         // keeps its historical no-broadcast behavior exactly.
@@ -622,10 +654,17 @@ impl RecoveryCoordinator {
                 new_state,
                 last_activity: stuck.last_activity.clone(),
                 success: true,
-                error: None,
+                // The run is safely terminal, but the resume attempt did
+                // not succeed -- surface WHY so operators (and CI) see the
+                // root cause, not just the fallback outcome.
+                error: Some(reason),
                 outcome: RecoveredOutcome::Terminalized,
             },
-            Err(err) => failed_entry(stuck, err.to_string(), RecoveredOutcome::LeftUntouched),
+            Err(err) => failed_entry(
+                stuck,
+                format!("resume failed ({reason}); then terminalization also failed: {err}"),
+                RecoveredOutcome::LeftUntouched,
+            ),
         }
     }
 
