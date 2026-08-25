@@ -167,13 +167,29 @@ impl Server {
         // `Server::coordination_broker`. `config.run_driver` is already
         // available (constructed by the caller before `bind`), so this
         // has no construction-order cycle with `AdapterRegistry`.
-        let violation_service = Arc::new(crate::policy::ViolationService::new(
-            db.clone(),
-            project_id,
-            events_tx.clone(),
-            config.run_driver.clone(),
-            config.nested_violation_action,
-        ));
+        let violation_service = {
+            // WP26: the service's cancellation intents and acknowledgements
+            // are durable journal text, so they get the full configured
+            // Redactor -- built-in rules plus the compiled
+            // `security.patterns` -- never a built-ins-only instance. The
+            // same patterns already failed closed at startup (lifecycle),
+            // so a compile error here can only be a bug.
+            let org_patterns = config
+                .policy
+                .as_ref()
+                .map(|(_, policy)| policy.org_security_patterns.clone())
+                .unwrap_or_default();
+            let redactor = crate::security::redaction::Redactor::with_org_rules(&org_patterns)
+                .map_err(IpcError::Configuration)?;
+            Arc::new(crate::policy::ViolationService::new(
+                db.clone(),
+                project_id,
+                events_tx.clone(),
+                config.run_driver.clone(),
+                config.nested_violation_action,
+                redactor,
+            ))
+        };
 
         let pane_reopen = config.pane_reopen.as_ref().map(|support| {
             (

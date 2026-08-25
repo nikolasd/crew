@@ -9,6 +9,13 @@ use rusqlite_migration::{M, Migrations};
 use super::actor::DbError;
 
 /// Migration 1: the durable event journal and the operation-intent table.
+///
+/// Known-dead columns (WP26, documented by policy -- never rebuilt away,
+/// SQLite table rebuilds are not worth two vestigial columns):
+/// `events.parent_worker_id` and `events.vendor_event_ref` have had no
+/// writer or reader since the crew rename; every journaled event's
+/// worker linkage lives inside `event_json`, and these columns are always
+/// NULL.
 const MIGRATION_1: &str = "
 CREATE TABLE events (
   sequence INTEGER PRIMARY KEY,
@@ -301,6 +308,15 @@ CREATE TABLE escalations (
 );
 ";
 
+/// Migration 14 (WP26): indexes the journal's two hot read/delete paths.
+/// Retention pruning (`audit/retention.rs`) full-scanned `events` for its
+/// age cutoff and per-run deletes; recovery and stale-run sweeps filtered
+/// by `(run_id, sequence)`. The explorer found zero indexes anywhere.
+const MIGRATION_14: &str = "
+CREATE INDEX idx_events_run_seq ON events(run_id, sequence);
+CREATE INDEX idx_events_timestamp ON events(timestamp);
+";
+
 /// Opens `path` as a private (mode `0600`) SQLite database, configures its
 /// PRAGMAs (`journal_mode=WAL`, `foreign_keys=ON`, `busy_timeout=5000`,
 /// `synchronous=FULL`), and migrates it to the latest schema. Migrations
@@ -341,6 +357,7 @@ fn migration_list() -> Migrations<'static> {
         M::up(MIGRATION_11),
         M::up(MIGRATION_12),
         M::up(MIGRATION_13),
+        M::up(MIGRATION_14),
     ])
 }
 

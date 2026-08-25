@@ -379,4 +379,9 @@ pub enum IpcError {
     /// The durable database could not be opened or written.
     #[error(transparent)]
     Db(#[from] crate::db::DbError),
+    /// A policy-derived value failed to compile during server setup --
+    /// fail closed rather than serving with degraded security (WP26: the
+    /// violation service's configured Redactor).
+    #[error("policy configuration error: {0}")]
+    Configuration(String),
 }

@@ -1088,6 +1088,7 @@ mod run_state_tests {
             events_tx.clone(),
             None,
             NestedViolationAction::default(),
+            crew_runtime::security::redaction::Redactor::new(),
         ));
         let domain_sink = Arc::new(
             DomainAdapterEventSink::new(

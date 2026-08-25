@@ -200,6 +200,35 @@ fn startup_options_pass_through_supported_cli_flags_and_omit_unsupported_max_tur
 }
 
 #[test]
+fn profile_model_becomes_the_claude_model_flag() {
+    let options = ClaudeStartupOptions {
+        model: Some("claude-sonnet-4-5".to_string()),
+        ..Default::default()
+    };
+    let spec = StartSpec {
+        run_id: crew_protocol::RunId::new(),
+        task_id: crew_protocol::TaskId::new(),
+        worker_id: crew_protocol::WorkerId::new(),
+        prompt: "go".to_string(),
+        resume: None,
+    };
+    let args = command::build_args(&options, &spec, &uuid::Uuid::now_v7());
+    let model_idx = args
+        .iter()
+        .position(|a| a == "--model")
+        .expect("expected --model in args");
+    assert_eq!(args[model_idx + 1], "claude-sonnet-4-5");
+
+    // And no model configured means no flag at all.
+    let args = command::build_args(
+        &ClaudeStartupOptions::default(),
+        &spec,
+        &uuid::Uuid::now_v7(),
+    );
+    assert!(!args.iter().any(|a| a == "--model"));
+}
+
+#[test]
 fn stdin_user_message_is_newline_delimited_stream_json() {
     let bytes = command::build_stdin_user_message("do the thing");
     assert!(bytes.ends_with(b"\n"), "must be newline-delimited");

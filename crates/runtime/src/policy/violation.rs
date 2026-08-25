@@ -130,6 +130,12 @@ pub struct ViolationService {
     /// violation this daemon instance records (a single runtime-policy
     /// value, not per-run).
     action: NestedViolationAction,
+    /// The full configured Redactor -- built-in rules PLUS the compiled
+    /// `security.patterns` (WP26). Cancellation intents and their
+    /// acknowledgements are durable journal text and must pass through the
+    /// same redaction every other journaled mutation gets, never a
+    /// built-ins-only instance that would silently skip org patterns.
+    redactor: Redactor,
 }
 
 impl ViolationService {
@@ -140,6 +146,7 @@ impl ViolationService {
         events_tx: broadcast::Sender<EventEnvelope>,
         run_driver: Option<Arc<dyn RunDriver>>,
         action: NestedViolationAction,
+        redactor: Redactor,
     ) -> Self {
         Self {
             db,
@@ -147,6 +154,7 @@ impl ViolationService {
             events_tx,
             run_driver,
             action,
+            redactor,
         }
     }
 
@@ -387,7 +395,7 @@ impl ViolationService {
             "vendorParentRef": vendor_parent_ref,
             "reason": reason,
         });
-        let sanitized = Redactor::new().sanitize_json(&intent);
+        let sanitized = self.redactor.sanitize_json(&intent);
         let operation_id = OperationId::new();
         self.db
             .record_operation_intent(
@@ -463,7 +471,7 @@ impl ViolationService {
             Err(err) => (Err(err), None),
         };
         if let (Some(operation_id), Some(ack)) = (operation_id, ack) {
-            let sanitized = Redactor::new().sanitize_json(&ack);
+            let sanitized = self.redactor.sanitize_json(&ack);
             if let Err(ack_err) = self.db.acknowledge_operation(operation_id, sanitized).await {
                 tracing::warn!(
                     error = %ack_err,

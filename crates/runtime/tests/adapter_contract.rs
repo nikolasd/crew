@@ -382,6 +382,7 @@ async fn nested_worker_observed_emits_without_upgrading_declared_capability() {
         events_tx.clone(),
         None,
         crew_runtime::config::NestedViolationAction::default(),
+        crew_runtime::security::redaction::Redactor::new(),
     ));
     let sink = crew_runtime::adapter::DomainAdapterEventSink::new(
         harness.db.clone(),
@@ -737,6 +738,7 @@ async fn a_sink_with_invalid_org_patterns_fails_closed() {
         events_tx.clone(),
         None,
         crew_runtime::config::NestedViolationAction::default(),
+        crew_runtime::security::redaction::Redactor::new(),
     ));
     let result = crew_runtime::adapter::DomainAdapterEventSink::new(
         harness.db.clone(),

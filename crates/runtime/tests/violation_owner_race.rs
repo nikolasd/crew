@@ -178,6 +178,7 @@ fn service(db: Arc<DatabaseHandle>, project_id: ProjectId) -> ViolationService {
         broadcast::channel(64).0,
         None,
         NestedViolationAction::Quarantine,
+        crew_runtime::security::redaction::Redactor::new(),
     )
 }
 

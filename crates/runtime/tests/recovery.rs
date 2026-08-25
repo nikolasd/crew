@@ -728,6 +728,7 @@ async fn resume_registry(
             events_tx.clone(),
             None,
             NestedViolationAction::default(),
+            crew_runtime::security::redaction::Redactor::new(),
         )),
         events_tx: events_tx.clone(),
     }));

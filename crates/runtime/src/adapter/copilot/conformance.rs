@@ -103,6 +103,28 @@ async fn call_named<T>(
         .map_err(|err| format!("{what} failed: {err}"))
 }
 
+/// Whether the installed `copilot --help` advertises `--model` (WP26).
+/// `None` when the question cannot be asked: the kill switch forbids the
+/// spawn, or the CLI is missing, or the help run failed/timed out -- an
+/// unanswerable check must never deny anything.
+async fn model_flag_supported() -> Option<bool> {
+    if crew_runtime::conformance::vendor_cli_invocation_disabled() {
+        return None;
+    }
+    let output = timeout(
+        Duration::from_secs(5),
+        tokio::task::spawn_blocking(|| Command::new("copilot").arg("--help").output().ok()),
+    )
+    .await
+    .ok()?
+    .ok()??;
+    if !output.status.success() {
+        return None;
+    }
+    let help = String::from_utf8(output.stdout).ok()?;
+    Some(help.contains("--model"))
+}
+
 pub async fn probe_scenario() -> (
     ScenarioResult,
     Option<String>,
@@ -118,17 +140,28 @@ pub async fn probe_scenario() -> (
         );
     }
     match adapter.probe().await {
-        Ok(result) => (
-            ScenarioResult::pass(
-                scenario::PROBE,
-                format!(
-                    "copilot --version reported {:?}; authReady={}",
-                    result.version, result.auth_ready
+        Ok(result) => {
+            // WP26: when the installed CLI does not advertise `--model`,
+            // say so with the typed prefix operators grep for, without
+            // turning an availability proof into a disproof.
+            let model_note = match model_flag_supported().await {
+                Some(true) | None => String::new(),
+                Some(false) => "; capability_unsupported: this copilot CLI does not \
+                    advertise a --model flag; profile.model will be refused at launch"
+                    .to_string(),
+            };
+            (
+                ScenarioResult::pass(
+                    scenario::PROBE,
+                    format!(
+                        "copilot --version reported {:?}; authReady={}{}",
+                        result.version, result.auth_ready, model_note
+                    ),
                 ),
-            ),
-            result.version,
-            declared_capabilities,
-        ),
+                result.version,
+                declared_capabilities,
+            )
+        }
         Err(err) => (
             ScenarioResult::fail(scenario::PROBE, format!("probe failed: {err}")),
             None,

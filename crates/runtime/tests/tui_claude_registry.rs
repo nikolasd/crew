@@ -178,6 +178,7 @@ fn ctx_with_display(
         events_tx.clone(),
         None,
         crew_runtime::config::NestedViolationAction::default(),
+        crew_runtime::security::redaction::Redactor::new(),
     ));
     (
         RunDriverContext {
@@ -284,6 +285,7 @@ fn own_ctx(
         events_tx.clone(),
         None,
         crew_runtime::config::NestedViolationAction::default(),
+        crew_runtime::security::redaction::Redactor::new(),
     ));
     (
         RunDriverContext {
@@ -362,6 +364,7 @@ async fn resume_registry(
             events_tx.clone(),
             None,
             crew_runtime::config::NestedViolationAction::default(),
+            crew_runtime::security::redaction::Redactor::new(),
         )),
         events_tx,
     }));
@@ -923,6 +926,7 @@ async fn resume_run_tolerates_exactly_one_duplicate_tool_started_at_the_crash_bo
             tokio::sync::broadcast::channel(16).0,
             None,
             crew_runtime::config::NestedViolationAction::default(),
+            crew_runtime::security::redaction::Redactor::new(),
         ));
         db.run_domain_op(Box::new(move |conn| {
             let mut repo = crew_runtime::domain::DomainRepository::new(conn, project_id);

@@ -145,6 +145,16 @@ impl CodexAdapter {
             args.push("-c".to_string());
             args.push(override_kv.clone());
         }
+        // WP26: the profile's model selector rides the same config-override
+        // channel -- codex has no dedicated model flag. The value is TOML,
+        // so the string is quoted exactly like a hand-written
+        // `config_overrides` entry (`-c model="gpt-5.1-codex"`).
+        if let Some(model) = &self.startup_options.model
+            && !model.is_empty()
+        {
+            args.push("-c".to_string());
+            args.push(format!("model=\"{model}\""));
+        }
         if let Some((context, token)) = mcp_injection {
             args.extend(codex_mcp_overrides(context));
             env.extend(coordination_mcp_env(token));

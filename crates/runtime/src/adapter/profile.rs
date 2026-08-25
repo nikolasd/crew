@@ -198,6 +198,11 @@ pub struct ClaudeStartupOptions {
     pub allowed_tools: Option<Vec<String>>,
     pub permission_mode: Option<String>,
     pub max_turns: Option<u32>,
+    /// Model selector resolved from the worker profile (`profile.model`);
+    /// `Some` only when the profile carried a non-empty model. Headless
+    /// launches turn this into `--model`; TUI launches read their own
+    /// config layer instead (WP13/WP27).
+    pub model: Option<String>,
     #[serde(default)]
     pub mode: AdapterMode,
 }
@@ -208,16 +213,22 @@ pub struct CodexStartupOptions {
     pub sandbox_mode: Option<String>,
     pub approval_policy: Option<String>,
     pub config_overrides: Option<Vec<String>>,
+    /// Model selector from the worker profile; headless launches turn it
+    /// into a `model` config override (`-c model=...`) -- codex has no
+    /// dedicated model flag (WP26).
+    pub model: Option<String>,
     #[serde(default)]
     pub mode: AdapterMode,
 }
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CopilotStartupOptions {
     pub allow_tool: Option<Vec<String>>,
     pub deny_tool: Option<Vec<String>>,
     pub log_level: Option<String>,
+    /// Model selector from the worker profile; headless launches turn it
+    /// into `--model=<model>` (WP26).
+    pub model: Option<String>,
     #[serde(default)]
     pub mode: AdapterMode,
 }

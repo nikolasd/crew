@@ -121,9 +121,17 @@ impl VendorUnavailable {
     }
 }
 
+/// How many times a fixture suite actually ran (WP26's cache must collapse
+/// repeated submits onto one run). Test-only observability.
+#[cfg(test)]
+pub(crate) static FIXTURE_SUITE_RUNS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// Runs one adapter kind's full fixture conformance suite (never a model
 /// call) and returns its report.
 pub async fn run_fixture_conformance(kind: AdapterKind) -> ConformanceReport {
+    #[cfg(test)]
+    FIXTURE_SUITE_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     match kind {
         AdapterKind::Claude => crate::adapter::claude::conformance::fixture_report().await,
         AdapterKind::Codex => crate::adapter::codex::conformance::fixture_report().await,
@@ -154,14 +162,15 @@ pub async fn run_live_conformance(kind: AdapterKind) -> Result<ConformanceReport
 /// authenticating a CLI is picked up without restarting the daemon.
 const PROBE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Caches [`probe_availability`] results by adapter kind. Mirrors
+/// Caches [`probe_availability`] results -- and the vendor-CLI version the
+/// probe observed -- by adapter kind. Mirrors
 /// `crate::display::herdr::HerdrDisplay::probe`'s cache exactly: the guard
 /// is dropped before the `await` and re-taken to store, so it is never held
 /// across a suspension point.
+type ProbeCacheEntry = (std::time::Instant, ScenarioResult, Option<String>);
+
 static PROBE_CACHE: std::sync::LazyLock<
-    parking_lot::Mutex<
-        std::collections::HashMap<AdapterKind, (std::time::Instant, ScenarioResult)>,
-    >,
+    parking_lot::Mutex<std::collections::HashMap<AdapterKind, ProbeCacheEntry>>,
 > = std::sync::LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
 
 /// Probes the installed vendor CLI for `kind` -- version handshake only,
@@ -171,25 +180,31 @@ static PROBE_CACHE: std::sync::LazyLock<
 /// Honors [`DISABLE_VENDOR_CLI_ENV`] **permissively**: when the switch is
 /// set this returns an honest *skipped* result without spawning anything,
 /// and does not cache it. A skip rather than a fail is deliberate -- the
-/// switch is a development and CI convenience, and only a real disproof
-/// (an actual failed probe) may deny; a skip never does. A skip rather
-/// than a pass is equally deliberate: a probe that never ran is no
-/// evidence the CLI works.
 pub async fn probe_availability(kind: AdapterKind) -> ScenarioResult {
+    probe_availability_with_version(kind).await.0
+}
+
+/// [`probe_availability`] plus the vendor-CLI version the probe (or a
+/// fresh-enough cached probe) observed -- the stamp
+/// `crate::adapter::registry`'s fixture-suite cache validates against.
+/// `None` under the kill switch (nothing was spawned, nothing observed).
+pub async fn probe_availability_with_version(
+    kind: AdapterKind,
+) -> (ScenarioResult, Option<String>) {
     if vendor_cli_invocation_disabled() {
-        return vendor_cli_skipped_probe();
+        return (vendor_cli_skipped_probe(), None);
     }
 
     {
         let cache = PROBE_CACHE.lock();
-        if let Some((observed_at, result)) = cache.get(&kind)
+        if let Some((observed_at, result, version)) = cache.get(&kind)
             && observed_at.elapsed() < PROBE_CACHE_TTL
         {
-            return result.clone();
+            return (result.clone(), version.clone());
         }
     }
 
-    let (result, _version, _capabilities): (ScenarioResult, Option<String>, AdapterCapabilities) =
+    let (result, version, _capabilities): (ScenarioResult, Option<String>, AdapterCapabilities) =
         match kind {
             AdapterKind::Claude => crate::adapter::claude::conformance::probe_scenario().await,
             AdapterKind::Codex => crate::adapter::codex::conformance::probe_scenario().await,
@@ -197,10 +212,11 @@ pub async fn probe_availability(kind: AdapterKind) -> ScenarioResult {
             AdapterKind::OmpRpc => crate::adapter::omp_rpc::conformance::probe().await,
         };
 
-    PROBE_CACHE
-        .lock()
-        .insert(kind, (std::time::Instant::now(), result.clone()));
-    result
+    PROBE_CACHE.lock().insert(
+        kind,
+        (std::time::Instant::now(), result.clone(), version.clone()),
+    );
+    (result, version)
 }
 
 #[cfg(test)]

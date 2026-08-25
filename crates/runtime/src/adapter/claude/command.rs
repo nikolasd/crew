@@ -66,6 +66,12 @@ pub fn build_args(
         args.push("--permission-mode".to_string());
         args.push(mode.clone());
     }
+    if let Some(model) = &options.model
+        && !model.is_empty()
+    {
+        args.push("--model".to_string());
+        args.push(model.clone());
+    }
     // `options.max_turns` is intentionally never turned into a flag --
     // see the module doc.
 
