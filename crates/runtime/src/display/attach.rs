@@ -393,7 +393,13 @@ async fn serve_viewer(
                     Ok(n) => {
                         let bytes = buf[..n].to_vec();
                         on_user_input(bytes.clone());
-                        let _ = target.write_input(bytes).await;
+                        // A failed keystroke delivery is degraded control,
+                        // never silence: the viewer typed and nothing
+                        // reached the vendor process (WP8 deferred minor).
+                        if let Err(err) = target.write_input(bytes).await {
+                            tracing::warn!(error = %err, "attach write_input failed; \
+                                keystrokes may not reach the vendor process");
+                        }
                     }
                 }
             }
