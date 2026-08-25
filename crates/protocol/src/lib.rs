@@ -15,6 +15,7 @@ mod ids;
 mod message;
 mod method;
 mod plan;
+mod retention;
 mod rpc;
 mod run;
 mod schema;
@@ -31,6 +32,7 @@ pub use coordination::{
     CoordinationPublishArtifactParams, CoordinationReportBlockedParams,
     CoordinationRequestChildParams, CoordinationSendParams, CoordinationTaskParams,
 };
+pub use display::PaneReopenResult;
 pub use display::{
     DisplayBackend, DisplayConfig, DisplayPlacement, DisplayPreference, DisplaySelection,
     DisplayStatus,
@@ -47,6 +49,7 @@ pub use ids::{
 pub use message::{DeliveryState, MessageKind, RunMessage};
 pub use method::CrewMethod;
 pub use plan::{PlanDecideResult, PlanGetResult, PlanProposeResult, RunTimeoutAckResult};
+pub use retention::RetentionCleanResult;
 pub use rpc::{
     BinarySource, ClientAuth, ClientCapabilities, ClientInfo, ClientPrincipalSummary, ClientRole,
     EVENTS_EVENT_METHOD, InitializeParams, InitializeResult, JSONRPC_VERSION, JsonRpcError,

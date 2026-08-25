@@ -286,6 +286,22 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         policy: Some((config_paths.clone(), Arc::clone(&policy))),
         turn_budget_default: crew_config.limits.turn_budget_per_subtask,
         activity_clock: Some(Arc::clone(&activity_clock)),
+        retention: Some(crate::audit::Retention::new(
+            policy.retention.clone(),
+            crew_config.retention.max_runs,
+        )),
+        pane_reopen: current_exe.as_ref().ok().map(|crewd_path| {
+            crate::ipc::PaneReopenConfig {
+                panes_dir: paths.panes.clone(),
+                state_dir: paths.root.clone(),
+                crewd_path: crewd_path.clone(),
+                // Match the TUI adapter's own default backend registry so
+                // a reopened pane resolves exactly like a submit-time pane.
+                display_registry: Arc::new(crate::display::DisplayRegistry::with_default_backends(
+                    crew_protocol::DisplayConfig::default(),
+                )),
+            }
+        }),
         ..ServerConfig::default()
     };
     let server = Server::bind(
@@ -401,7 +417,8 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     // which is the whole point of a retention period. A prune failure is
     // never fatal -- an oversized journal is recoverable, a daemon that
     // refuses to start is not.
-    let retention = crate::audit::Retention::new(policy.retention.clone());
+    let retention =
+        crate::audit::Retention::new(policy.retention.clone(), crew_config.retention.max_runs);
     if let Err(err) = retention.prune(&db).await {
         tracing::warn!(error = %err, "retention_prune_failed");
     }
@@ -411,8 +428,16 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         ticker.tick().await; // fires immediately; the startup prune above already ran
         loop {
             ticker.tick().await;
-            if let Err(err) = retention.prune(&retention_db).await {
-                tracing::warn!(error = %err, "retention_prune_failed");
+            match retention.prune(&retention_db).await {
+                Ok(report) if report.deleted_events > 0 => {
+                    tracing::info!(
+                        deleted_events = report.deleted_events,
+                        runs_pruned = report.runs_pruned,
+                        "retention_pruned"
+                    );
+                }
+                Ok(_) => {}
+                Err(err) => tracing::warn!(error = %err, "retention_prune_failed"),
             }
         }
     });

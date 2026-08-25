@@ -58,6 +58,13 @@ async fn seed_run(db: &DatabaseHandle, project_id: ProjectId) -> crew_protocol::
             completed_at: None,
         };
         repo.submit_run(&run, None, None)?;
+        // WP19/WP20 projections the dashboard snapshot must now surface.
+        repo.attach_turn_budget(run_id, task_id, None, 10)?;
+        repo.record_escalation_raised(
+            run_id,
+            "question",
+            Some("why did the run stall?".to_string()),
+        )?;
         Ok(serde_json::json!({}))
     }))
     .await
@@ -168,10 +175,28 @@ async fn api_state_returns_seeded_runs_and_workers() {
         Some(1),
         "the seeded worker must be visible: {state}"
     );
-    // Budgets and escalations land with WP19/WP20; the shape is already
-    // stable so the page never has to change.
-    assert!(state["budgets"].is_array());
-    assert!(state["pendingEscalations"].is_array());
+    // WP19/WP20 projections: the seeded run's budget and its open
+    // question escalation must surface, not just be present as arrays.
+    let budgets = state["budgets"].as_array().expect("budgets array");
+    assert!(
+        budgets.iter().any(|b| {
+            b["runId"].as_str() == Some(&run_id.to_string())
+                && b["turnsUsed"].as_i64() == Some(0)
+                && b["turnLimit"].as_i64() == Some(10)
+        }),
+        "the seeded run's turn budget must be visible: {state}"
+    );
+    let escalations = state["pendingEscalations"]
+        .as_array()
+        .expect("pendingEscalations array");
+    assert!(
+        escalations.iter().any(|e| {
+            e["runId"].as_str() == Some(&run_id.to_string())
+                && e["kind"].as_str() == Some("question")
+                && e["question"].as_str() == Some("why did the run stall?")
+        }),
+        "the seeded open escalation must be visible: {state}"
+    );
 
     harness.server.stop();
 }

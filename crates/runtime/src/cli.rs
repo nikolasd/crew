@@ -461,6 +461,7 @@ async fn run_lease_release(
     use crew_runtime::paths::RuntimePaths;
     use crew_runtime::security::redaction::Redactor;
     use crew_runtime::workspace::{LeaseError, LeaseService, WorkspaceMaterializer};
+    use std::path::Path;
 
     let state_root = match resolve_state_dir(state_dir) {
         Ok(dir) => dir,
@@ -522,7 +523,29 @@ async fn run_lease_release(
         Ok(handle) => std::sync::Arc::new(handle),
         Err(err) => return fail(&err),
     };
-    let redactor = Redactor::new();
+    // The intent is durable journal text: sanitize it with the full
+    // configured Redactor (built-ins plus `security.patterns` from the
+    // user and repo crew.json layers, same precedence `serve` uses) when
+    // a config is readable (WP26). This command is crash recovery, so a
+    // broken or absent config degrades to built-in rules with a visible
+    // warning instead of blocking the operator's cleanup.
+    let mut layer_files: Vec<PathBuf> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        layer_files.push(PathBuf::from(home).join(".omp").join("crew.json"));
+    }
+    layer_files.push(repo.join(".omp").join("crew.json"));
+    layer_files.retain(|p| p.is_file());
+    let layer_refs: Vec<&Path> = layer_files.iter().map(PathBuf::as_path).collect();
+    let redactor = match crew_runtime::config::crew::load_layers(&layer_refs, None) {
+        Ok(config) => Redactor::with_org_rules(&config.security.patterns).unwrap_or_else(|e| {
+            eprintln!("warning: invalid security.patterns ({e}); using built-in redaction only");
+            Redactor::new()
+        }),
+        Err(e) => {
+            eprintln!("warning: could not read crew.json ({e}); using built-in redaction only");
+            Redactor::new()
+        }
+    };
     let operation_id = OperationId::new();
     let intent = redactor.sanitize_json(&serde_json::json!({
         "kind": "cli.lease.release",

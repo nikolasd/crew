@@ -485,6 +485,42 @@ fn spawn_spec_with_no_mcp_config_injects_nothing() {
 }
 
 #[test]
+fn profile_model_becomes_a_quoted_model_config_override() {
+    let adapter = CodexAdapter::with_binary(
+        "codex",
+        std::env::temp_dir(),
+        CodexStartupOptions {
+            model: Some("gpt-5.1-codex".to_string()),
+            ..CodexStartupOptions::default()
+        },
+        Vec::new(),
+        None,
+    );
+    let spec = adapter.spawn_spec(None);
+    let idx = spec
+        .args
+        .iter()
+        .position(|a| a == "model=\"gpt-5.1-codex\"")
+        .expect("expected the quoted model config override");
+    assert_eq!(spec.args[idx - 1], "-c");
+
+    // No model configured means no extra override.
+    let bare = CodexAdapter::with_binary(
+        "codex",
+        std::env::temp_dir(),
+        CodexStartupOptions::default(),
+        Vec::new(),
+        None,
+    )
+    .spawn_spec(None);
+    assert!(
+        !bare.args.iter().any(|a| a.starts_with("model=")),
+        "no model override without a profile model: {:?}",
+        bare.args
+    );
+}
+
+#[test]
 fn spawn_spec_injects_crew_mcp_overrides_alongside_existing_config_overrides() {
     let startup_options = CodexStartupOptions {
         config_overrides: Some(vec!["model=\"o3\"".to_string()]),

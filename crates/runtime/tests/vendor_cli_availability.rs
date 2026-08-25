@@ -102,6 +102,7 @@ fn ctx(
         events_tx.clone(),
         None,
         crew_runtime::config::NestedViolationAction::default(),
+        crew_runtime::security::redaction::Redactor::new(),
     ));
     RunDriverContext {
         db,

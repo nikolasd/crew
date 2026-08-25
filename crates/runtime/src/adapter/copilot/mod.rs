@@ -160,6 +160,15 @@ impl CopilotAdapter {
             args.push("--log-level".to_string());
             args.push(level.clone());
         }
+        // WP26: the profile's model selector. A copilot CLI too old to
+        // know `--model` rejects the flag at launch with its own error;
+        // the probe scenario carries the typed capability_unsupported
+        // note so operators learn before submitting.
+        if let Some(model) = &self.startup_options.model
+            && !model.is_empty()
+        {
+            args.push(format!("--model={model}"));
+        }
         args
     }
 

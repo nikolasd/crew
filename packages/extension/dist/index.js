@@ -6975,6 +6975,14 @@ var crew_schema_default = {
     runTimeoutAckResult: {
       description: "`run/timeoutAck` result payload.",
       $ref: "#/$defs/RunTimeoutAckResult"
+    },
+    retentionCleanResult: {
+      description: "`retention/clean` result payload.",
+      $ref: "#/$defs/RetentionCleanResult"
+    },
+    paneReopenResult: {
+      description: "`pane/reopen` result payload.",
+      $ref: "#/$defs/PaneReopenResult"
     }
   },
   required: [
@@ -7000,7 +7008,9 @@ var crew_schema_default = {
     "planProposeResult",
     "planDecideResult",
     "planGetResult",
-    "runTimeoutAckResult"
+    "runTimeoutAckResult",
+    "retentionCleanResult",
+    "paneReopenResult"
   ],
   $defs: {
     InitializeParams: {
@@ -7419,6 +7429,20 @@ if any.`,
           description: "The leader acknowledges a `WorkerTimeout` event, resolving how the\nrun proceeds.",
           type: "string",
           const: "run/timeoutAck"
+        },
+        {
+          description: `Runs the retention prune once, on demand: removes the events of
+terminal (or unassociated) runs past the configured age cutoff and
+beyond the \`retention.maxRuns\` recency cap. Never touches active
+runs or run rows.`,
+          type: "string",
+          const: "retention/clean"
+        },
+        {
+          description: `Re-creates a live run's display pane around its still-running
+attach socket (the pane was closed by the user or a backend).`,
+          type: "string",
+          const: "pane/reopen"
         }
       ]
     },
@@ -10458,6 +10482,48 @@ child at all (a cost ceiling does not).`,
         "runId",
         "sequence"
       ]
+    },
+    RetentionCleanResult: {
+      description: "Result of `retention/clean`: what one on-demand prune pass removed.\n\n`deleted_events` counts journal rows removed by BOTH policies (age\ncutoff and `maxRuns` recency cap). `runs_pruned` counts distinct\nterminal runs beyond `retention.maxRuns` whose events were removed by\nthe recency cap alone; age-based deletions are not attributed to runs.",
+      type: "object",
+      properties: {
+        deletedEvents: {
+          type: "integer",
+          format: "uint64",
+          minimum: 0
+        },
+        runsPruned: {
+          type: "integer",
+          format: "uint64",
+          minimum: 0
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "deletedEvents",
+        "runsPruned"
+      ]
+    },
+    PaneReopenResult: {
+      description: "Result of `pane/reopen`: the pane freshly created for a live run's\nattach socket. `pane_ref` is empty exactly when the resolved backend\nwas `Hidden` (nothing visible to reopen onto) -- not an error, mirroring\nthe submit-time pane semantics.",
+      type: "object",
+      properties: {
+        runId: {
+          $ref: "#/$defs/RunId"
+        },
+        backend: {
+          $ref: "#/$defs/DisplayBackend"
+        },
+        paneRef: {
+          type: "string"
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "runId",
+        "backend",
+        "paneRef"
+      ]
     }
   }
 };
@@ -10490,6 +10556,8 @@ var validateInspectResult = def("InspectResult");
 var validateApplyResult = def("ApplyResult");
 var validateWorkspaceInfo = def("WorkspaceInfo");
 var validatePolicyViolationListResult = def("PolicyViolationListResult");
+var validateRetentionCleanResult = def("RetentionCleanResult");
+var validatePaneReopenResult = def("PaneReopenResult");
 var validateEventEnvelope = def("EventEnvelope");
 var validateJsonRpcResponse = def("JsonRpcResponse");
 var validateJsonRpcErrorResponse = def("JsonRpcErrorResponse");
@@ -10532,7 +10600,9 @@ var RESULT_VALIDATORS = {
   "workspace/apply": validateApplyResult,
   "workspace/get": validateWorkspaceInfo,
   "policy/violation/list": validatePolicyViolationListResult,
-  "run/result": validateRunResultResult
+  "run/result": validateRunResultResult,
+  "retention/clean": validateRetentionCleanResult,
+  "pane/reopen": validatePaneReopenResult
 };
 
 class JsonRpcRemoteError extends Error {
@@ -12507,6 +12577,10 @@ function registerOrchestrationTools(pi, ctx) {
   registerLeaderTools(pi, ctx);
 }
 
+// src/monitor/controller.ts
+import { mkdir, writeFile } from "fs/promises";
+import { join as join8 } from "path";
+
 // src/milestones.ts
 var TERMINAL_STATES = {
   succeeded: true,
@@ -12621,6 +12695,57 @@ function attachMilestoneBridge(pi, monitor) {
   });
 }
 
+// src/monitor/compat.ts
+import { existsSync as existsSync6, readFileSync as readFileSync5 } from "fs";
+import { dirname as dirname2, join as join7 } from "path";
+function installedPiCodingAgentVersion() {
+  let dir = import.meta.dir;
+  for (;; ) {
+    const candidate = join7(dir, "node_modules", "@oh-my-pi", "pi-coding-agent", "package.json");
+    if (existsSync6(candidate)) {
+      return JSON.parse(readFileSync5(candidate, "utf8")).version;
+    }
+    const parent = dirname2(dir);
+    if (parent === dir) {
+      throw new Error("could not locate an installed @oh-my-pi/pi-coding-agent/package.json");
+    }
+    dir = parent;
+  }
+}
+var SUPPORTED_PI_CODING_AGENT_RANGE = { min: "17.0.7", maxExclusive: "18.0.0" };
+
+class PiCodingAgentVersionError extends Error {
+  installedVersion;
+  constructor(installedVersion) {
+    super(`@oh-my-pi/pi-coding-agent@${installedVersion} is outside the supported range ` + `[${SUPPORTED_PI_CODING_AGENT_RANGE.min}, ${SUPPORTED_PI_CODING_AGENT_RANGE.maxExclusive}) ` + "the embedded monitor's pi.appendEntry/ctx.ui.setWidget usage is pinned to.");
+    this.name = "PiCodingAgentVersionError";
+    this.installedVersion = installedVersion;
+  }
+}
+function parseVersion(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+  if (match === null) {
+    throw new PiCodingAgentVersionError(version);
+  }
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+function compareVersions(a, b) {
+  for (let i = 0;i < 3; i++) {
+    if (a[i] !== b[i]) {
+      return a[i] - b[i];
+    }
+  }
+  return 0;
+}
+function assertCompatiblePiCodingAgentVersion(installedVersion = installedPiCodingAgentVersion()) {
+  const installed = parseVersion(installedVersion);
+  const min = parseVersion(SUPPORTED_PI_CODING_AGENT_RANGE.min);
+  const maxExclusive = parseVersion(SUPPORTED_PI_CODING_AGENT_RANGE.maxExclusive);
+  if (compareVersions(installed, min) < 0 || compareVersions(installed, maxExclusive) >= 0) {
+    throw new PiCodingAgentVersionError(installedVersion);
+  }
+}
+
 // src/monitor/model.ts
 var EMPTY_FLAGS = {
   degradedControl: false,
@@ -12672,6 +12797,26 @@ function reduceEvent(state, envelope) {
   return {
     rows: { ...state.rows, [patch.runId]: updated },
     lastSequence
+  };
+}
+function enrichWorker(state, runId, adapter, model) {
+  const row = state.rows[runId];
+  if (row === undefined) {
+    return state;
+  }
+  return {
+    rows: { ...state.rows, [runId]: { ...row, adapter, model } },
+    lastSequence: state.lastSequence
+  };
+}
+function enrichWorkspaceMode(state, runId, workspaceMode) {
+  const row = state.rows[runId];
+  if (row === undefined) {
+    return state;
+  }
+  return {
+    rows: { ...state.rows, [runId]: { ...row, workspaceMode } },
+    lastSequence: state.lastSequence
   };
 }
 function applyViolationPatch(open, patch) {
@@ -13002,10 +13147,28 @@ class MonitorController {
     this.#unsubscribe = client.subscribe(fromSequence, (event) => {
       this.#state = reduceEvent(this.#state, event);
       this.#onUpdate?.();
+      if (event.event.type === "runEvent") {
+        this.enrichRun(client, event.event.payload.runId, event.event.payload.workerId);
+      }
       for (const listener of this.#eventListeners) {
         listener(event);
       }
     });
+  }
+  async enrichRun(client, runId, workerId) {
+    try {
+      const [worker, run] = await Promise.all([client.request("worker/get", { workerId }), client.request("run/get", { runId })]);
+      const adapter = worker.profileRef?.adapter;
+      const model = worker.profileRef?.model;
+      if (adapter !== undefined && model !== undefined) {
+        this.#state = enrichWorker(this.#state, runId, adapter, model);
+      }
+      const workspaceMode = run.workspace?.mode;
+      if (workspaceMode !== undefined) {
+        this.#state = enrichWorkspaceMode(this.#state, runId, workspaceMode);
+      }
+      this.#onUpdate?.();
+    } catch {}
   }
   stop() {
     this.#unsubscribe?.();
@@ -13037,6 +13200,13 @@ function registerMonitor(pi, ctx) {
     }
     const fromSequence = Math.max(lastPersistedSequence(extCtx.sessionManager.getEntries()), Number(controller.getState().lastSequence));
     try {
+      try {
+        assertCompatiblePiCodingAgentVersion();
+      } catch (err) {
+        pi.logger.warn("crew monitor: Pi compatibility warning", {
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
       const client = await ctx.getClient(extCtx);
       controller.start(client, fromSequence, () => refresh(extCtx));
       subscribedClient = client;
@@ -13053,7 +13223,7 @@ function registerMonitor(pi, ctx) {
     }
   });
   pi.registerCommand(MONITOR_COMMAND_NAME, {
-    description: "Opens or refreshes the embedded Crew worker monitor. `/crew status <runId>` shows full details.",
+    description: "Opens the Crew monitor. Subcommands: status <runId>, runs, export [runId], clean, reopen <runId>.",
     handler: async (args, cmdCtx) => {
       const [sub, runId] = args.trim().split(/\s+/, 2);
       if (sub === "status" && runId !== undefined && runId.length > 0) {
@@ -13062,6 +13232,45 @@ function registerMonitor(pi, ctx) {
         return;
       }
       await connect(cmdCtx);
+      const client = subscribedClient;
+      if (client === undefined) {
+        cmdCtx.ui.notify("Crew runtime is unavailable.", "warning");
+        return;
+      }
+      if (sub === "runs") {
+        const result = await client.request("run/list", {});
+        const runs = result.runs ?? [];
+        cmdCtx.ui.notify(runs.length === 0 ? "No Crew runs recorded." : runs.map((run) => `${run.runId ?? "(unknown)"}  ${run.state ?? "unknown"}  worker ${run.workerId ?? "unknown"}`).join(`
+`), "info");
+        return;
+      }
+      if (sub === "export") {
+        const replay = await client.request("events/replay", {});
+        const events = runId === undefined ? replay : replay.filter((event) => event.runId === runId);
+        const exportId = runId ?? "all";
+        const directory = join8(cmdCtx.cwd, ".omp", "crew");
+        const output = join8(directory, `export-${exportId}.jsonl`);
+        await mkdir(directory, { recursive: true });
+        await writeFile(output, events.map((event) => JSON.stringify(event)).join(`
+`) + (events.length > 0 ? `
+` : ""));
+        cmdCtx.ui.notify(`Exported ${events.length} Crew events to ${output}.`, "info");
+        return;
+      }
+      if (sub === "clean") {
+        const result = await client.request("retention/clean", {});
+        cmdCtx.ui.notify(`Retention clean removed ${result.deletedEvents} events across ${result.runsPruned} maxRuns-pruned runs.`, "info");
+        return;
+      }
+      if (sub === "reopen") {
+        if (runId === undefined || runId.length === 0) {
+          cmdCtx.ui.notify("Usage: /crew reopen <runId>", "warning");
+          return;
+        }
+        const result = await client.request("pane/reopen", { runId });
+        cmdCtx.ui.notify(result.paneRef.length === 0 ? `No visible backend is available for ${runId}.` : `Reopened ${runId} in ${result.backend}: ${result.paneRef}`, "info");
+        return;
+      }
       refresh(cmdCtx, true);
     }
   });

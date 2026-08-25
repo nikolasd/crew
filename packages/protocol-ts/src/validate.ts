@@ -65,6 +65,10 @@ export const validateApplyResult = def("ApplyResult");
 export const validateWorkspaceInfo = def("WorkspaceInfo");
 /** Validates a `policy/violation/list` result payload. */
 export const validatePolicyViolationListResult = def("PolicyViolationListResult");
+/** Validates an on-demand `retention/clean` result payload. */
+export const validateRetentionCleanResult = def("RetentionCleanResult");
+/** Validates a `pane/reopen` result payload. */
+export const validatePaneReopenResult = def("PaneReopenResult");
 /** Validates a single durable event envelope. */
 export const validateEventEnvelope = def("EventEnvelope");
 /** Validates a JSON-RPC success response envelope. */

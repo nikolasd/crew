@@ -1,69 +1,51 @@
 ---
 name: crew-orchestration
 description: >-
-  Use when the user wants to run code with an external AI worker on its own adapter/model
-  (Claude, Codex, Copilot, or an OMP-RPC worker) — this is the mechanism for a specific
-  vendor or model, not the in-process `task` subagent tool. Also covers hand work off to
-  an agent, run tasks in parallel, check on a run, retry or cancel a task.
-  Fires on "run this with Claude", "spawn a Claude", "spawn a Codex", "spawn a Copilot",
-  "spawn a worker", "run with Sonnet/Opus/Haiku/GPT", "use model X", "delegate this to Claude/Codex/Copilot",
-  "hand this off", "run these in parallel", "retry it", "check on that run".
+  Use when a user asks Crew to delegate work to Claude, Codex, Copilot, or an OMP-RPC worker;
+  plan multi-worker work; triage a worker timeout; or inspect, message, stop, or finish Crew runs.
 ---
 
-## How Crew tools work
+# Crew orchestration
 
-Two facts are invisible from the tool schemas but essential for correct use:
+Crew executes durable worker runs. OMP owns the task graph and the leader's decisions; Crew persists, supervises, and replays the work.
 
-- **Crew stores no task text of its own.** The `prompt` argument must be supplied on every `run/submit` **and every `run/retry`**. Retry does not remember the prior prompt — you must pass it again.
-- **Every Crew tool returns the daemon's JSON result verbatim under `details`.** Read ids (`taskId`, `workerId`, `runId`, `leaseId`, etc.) from there. Never invent or guess them.
+## Leader flow
 
-## The canonical call sequence
+1. `crew_plan { op: "propose", runId, subtasks }` proposes a decomposition. The configured approval gate decides whether it may proceed; a write-capable plan can remain proposed for a human decision.
+2. `crew_spawn { planId, subtaskId, prompt }` starts one approved subtask. It reuses a compatible idle worker or creates one, then links the submitted run to the plan.
+3. Read milestone digests from `/crew`. The monitor is the live projection and reports questions, timeouts, budgets, escalations, and terminal edges; request `result` only after its terminal milestone.
+4. `crew_send { runId, text, kind }` steers, answers, or follows up. Use one communication channel: Crew messages for worker coordination, never the same instruction through a vendor CLI, pane, and another agent channel.
+5. `crew_stop { runId, outcome: "done" | "abort" }` ends one run. `crew_finish { runIds }` closes only the named plan runs; it never releases a workspace lease behind the leader's back.
 
-To run a task on an AI worker, follow this chain — each step reads an id from the previous response's `details`:
+## Routing profiles
 
-1. **Find or create a worker.** Call `crew_worker { op: "list" }` and reuse a `workers[].workerId` whose `profileRef.adapter` and `profileRef.model` match what the user asked for. If none matches, create one with `crew_worker { op: "create", fingerprint, adapter, model }` and read the new `workerId` from the response.
+`adapters.*.profile` is the routing profile the model sees: adapter, model, permission envelope, and mode. Reuse a worker only when its resolved profile matches the requested adapter/model. A vendor name never implies a model or permission level.
 
-2. **Create a task.** Call `crew_task { op: "upsert" }` and read the `taskId` from the response. This is a persistent unit of work stored in the SQLite journal. Crew stores no task text — the instruction the worker executes is passed to `crew_run` as `prompt` in the next step.
+Crew stores task identity, not task prose. Pass the full instruction as `prompt` on every submit and retry; read every returned id from `details`, never invent one.
 
-3. **Submit the run.** Call `crew_run { op: "submit", taskId, workerId, prompt }` and read the `runId` from the response. The `prompt` is the full instruction text the worker will execute — pass it exactly as the user stated (or as you refined it).
+## Budgets and timeouts
+
+- Each linked subtask snapshots its `turnBudget` or the configured default. Leader-originated messages consume it; at the limit `crew_send` returns `BUDGET_EXCEEDED` and journals the fact.
+- A `WorkerTimeout` is a fact, not an automatic kill. Decide once: `crew_run { op: "timeoutAck", runId, decision: "extend" }` grants a fresh window; nudge with `crew_send`; or abort with `crew_run { op: "timeoutAck", runId, decision: "abort" }`.
+- Worker questions and policy violations remain explicit leader/human decisions. Use `crew-approvals`; do not guess a human-required approval.
 
 ## Workspace modes
 
-When the user specifies where the work should happen, translate their words into `workspaceMode` on `run/submit`:
+| Situation | `workspaceMode` |
+|---|---|
+| Default; one writer or read-only work | `shared` |
+| Parallel writers in a Git repository | `isolated` (git worktree) |
+| Work outside Git or a disposable filesystem copy | `copy` |
 
-- **"in its own worktree"** or **"don't touch my files"** → `workspaceMode: "isolated"` (a per-run git worktree)
-- **"on a copy"** → `workspaceMode: "copy"` (a per-run copy of the repository)
-- **default or unstated** → `workspaceMode: "shared"` (the repository itself)
+Shared writes serialize. Use a worktree when parallel writers need independent files, not merely to avoid reading the plan.
 
-Any other value is rejected by the runtime.
+## Read surfaces
 
-## Monitoring runs
-
-- **Preferred approach:** Tell the user to open `/crew` — the live monitor shows all runs, their state, flags, and latest activity in real time.
-- **Programmatic polling:** Call `crew_run { op: "get", runId }` and report `state` plus any `true` entries in `flags` (like `degradedControl`, `needsReconciliation`, `policyQuarantined`, `workspaceDirty`, `childrenActive`).
-- **Reading a finished run's output:** Call `crew_run { op: "result", runId }` once the run is
-  terminal — it returns `resultText` (the worker's final message), `usage` (tokens; `null` when
-  the adapter reports none, e.g. Copilot), and `completedAt`. To chain work, pass `resultText`
-  into the next run's `prompt`. A run that isn't finished is refused — poll `op: "get"` until
-  `state` is terminal first.
-
-## Parallel work
-
-To run multiple tasks concurrently on separate workers:
-
-- Acquire one `crew_workspace { op: "acquire", runId, mode: "write", requestedIsolation: "gitWorktree" }` lease **per worker** before submitting its run.
-- Isolated leases (gitWorktree or copy) never conflict with each other — each gets its own directory. A shared-mode write lease is exclusive project-wide, so only one can exist at a time.
-- Release each lease with `crew_workspace { op: "release", leaseId }` once its run finishes.
+- `/crew` — live monitor; `runs`, `status <runId>`, `export [runId]`, `clean`, and `reopen <runId>`.
+- `crew_status` — leader snapshot for tools.
+- `crew_transcript` — bounded digest of replayed events.
+- `crew_run { op: "result" }` — terminal result only; a non-terminal result is refused.
 
 ## Recovery
 
-- **Retry:** `crew_run { op: "retry", priorRunId, workerId, prompt }` — requires both the `priorRunId` (from the failed run) **and the `prompt` again** (prompts are never remembered). Always returns a **new** `runId`.
-- **Cancel:** `crew_run { op: "cancel", runId }` stops a stuck or running run.
-
-## Trap: failed submits
-
-`run/submit`'s error response carries no `runId`. After a failed submit, find the run with `crew_run { op: "list", taskId }` rather than assuming an id came back.
-
-## Boundary
-
-This skill covers task execution, monitoring, and recovery. It never decides approvals or resolves policy violations — that is `crew-approvals`.
+Retry creates a new run: `crew_run { op: "retry", priorRunId, workerId, prompt }`. Cancel or retry only with an observed run id and state. This skill never decides approvals or violations; use `crew-approvals`.

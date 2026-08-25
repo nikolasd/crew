@@ -195,22 +195,6 @@ impl DisplayRegistry {
         &self.backends
     }
 
-    /// Selects the best available backend.
-    pub fn select_best(&self) -> Option<&dyn DisplayBackendTrait> {
-        self.backends
-            .iter()
-            .find(|b| b.is_available())
-            .map(|b| b.as_ref())
-    }
-
-    /// Returns a mutable reference to a backend by index.
-    pub fn backend_mut(
-        &mut self,
-        index: usize,
-    ) -> Option<&mut (dyn DisplayBackendTrait + 'static)> {
-        self.backends.get_mut(index).map(move |b| b.as_mut())
-    }
-
     /// Registers every display backend this runtime knows how to build, in
     /// descending capability order (Herdr, tmux, OS window, hidden).
     /// Availability is *not* probed here -- each backend answers
@@ -283,46 +267,6 @@ impl DisplayRegistry {
 impl Default for DisplayRegistry {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Display selector with ordered fallback.
-pub struct DisplaySelector {
-    preferred: Vec<DisplayBackend>,
-}
-
-impl DisplaySelector {
-    pub fn new(preferred: Vec<DisplayBackend>) -> Self {
-        DisplaySelector { preferred }
-    }
-
-    /// Selects the first available backend from the preferred list.
-    pub fn select<'a>(&self, registry: &'a DisplayRegistry) -> Option<&'a dyn DisplayBackendTrait> {
-        for backend in &self.preferred {
-            if let Some(registered) = registry
-                .backends()
-                .iter()
-                .find(|b| b.backend_name() == backend.to_string())
-                && registered.is_available()
-            {
-                return Some(registered.as_ref());
-            }
-        }
-        None
-    }
-
-    /// Returns the index of the first available backend from the preferred list.
-    pub fn select_index(&self, registry: &DisplayRegistry) -> Option<usize> {
-        for backend in &self.preferred {
-            if let Some(index) = registry
-                .backends
-                .iter()
-                .position(|b| b.backend_name() == backend.to_string() && b.is_available())
-            {
-                return Some(index);
-            }
-        }
-        None
     }
 }
 
@@ -435,85 +379,6 @@ mod tests {
         }));
 
         assert_eq!(registry.backends().len(), 2);
-        assert!(registry.select_best().is_some());
-        assert_eq!(registry.select_best().unwrap().backend_name(), "fake1");
-    }
-
-    #[test]
-    fn test_display_selector_ordered_fallback() {
-        let mut registry = DisplayRegistry::new();
-        // Register in reverse order: hidden, herdr, tmux
-        registry.register(Box::new(FakeBackend {
-            name: "hidden".to_string(),
-            available: true,
-            activate_result: Ok(()),
-        }));
-        registry.register(Box::new(FakeBackend {
-            name: "herdr".to_string(),
-            available: false, // herdr not available
-            activate_result: Err("not available".to_string()),
-        }));
-        registry.register(Box::new(FakeBackend {
-            name: "tmux".to_string(),
-            available: true,
-            activate_result: Ok(()),
-        }));
-
-        // Selector prefers tmux first, then herdr, then hidden
-        let selector = DisplaySelector::new(vec![
-            DisplayBackend::Tmux,
-            DisplayBackend::Herdr,
-            DisplayBackend::Hidden,
-        ]);
-
-        // Should select tmux (first in preferred list that's available)
-        let selected = selector.select(&registry);
-        assert!(selected.is_some());
-        assert_eq!(selected.unwrap().backend_name(), "tmux");
-    }
-
-    #[test]
-    fn test_display_selector_fallback_to_hidden() {
-        let mut registry = DisplayRegistry::new();
-        // Register only hidden (herdr/tmux not available)
-        registry.register(Box::new(FakeBackend {
-            name: "hidden".to_string(),
-            available: true,
-            activate_result: Ok(()),
-        }));
-
-        let selector = DisplaySelector::new(vec![
-            DisplayBackend::Tmux,
-            DisplayBackend::Herdr,
-            DisplayBackend::Hidden,
-        ]);
-
-        // Should fall back to hidden and activate it
-        let selected_index = selector.select_index(&registry);
-        assert!(selected_index.is_some());
-        let idx = selected_index.unwrap();
-        let result = registry.backend_mut(idx).unwrap().activate();
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_display_selector_no_backend_available() {
-        let mut registry = DisplayRegistry::new();
-        registry.register(Box::new(FakeBackend {
-            name: "fake".to_string(),
-            available: false,
-            activate_result: Err("not available".to_string()),
-        }));
-
-        let selector = DisplaySelector::new(vec![
-            DisplayBackend::Tmux,
-            DisplayBackend::Herdr,
-            DisplayBackend::Hidden,
-        ]);
-
-        // Should return None when no backend is available
-        let selected = selector.select(&registry);
-        assert!(selected.is_none());
     }
 
     #[test]

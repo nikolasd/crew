@@ -68,6 +68,21 @@ impl Fixture {
             .arg(self.repo_dir());
         cmd
     }
+    /// Builds `crewd status --wait-seconds <n>`: retries the full
+    /// init + `runtime/status` round-trip until the daemon has finished
+    /// registering its runtime (the socket accepts connections before
+    /// that point, so a bare connect is not enough).
+    fn status(&self, wait_seconds: u64) -> Command {
+        let mut cmd = Command::new(CREWD);
+        cmd.arg("status")
+            .arg("--state-dir")
+            .arg(self.state_dir())
+            .arg("--repo")
+            .arg(self.repo_dir())
+            .arg("--wait-seconds")
+            .arg(wait_seconds.to_string());
+        cmd
+    }
 }
 
 /// Scans `<state>/repos/*/runtime.sock` for the daemon's socket.
@@ -353,6 +368,17 @@ fn graceful_stop_removes_socket_only_after_journal_shutdown() {
 
     let mut server = fixture.serve(Some(30)).spawn().unwrap();
     let socket = wait_for_socket(fixture.state_dir(), Duration::from_secs(10));
+
+    // The socket file can exist before the daemon has finished registering
+    // its runtime, so a `stop` issued too early is answered with
+    // `NotRunning`. Wait for the daemon to actually be serving first via
+    // `crewd status --wait-seconds`, which polls the full init +
+    // `runtime/status` round-trip until the runtime is registered.
+    let status = fixture.status(30).status().unwrap();
+    assert!(
+        status.success(),
+        "crewd status should succeed once the daemon is serving"
+    );
 
     let status = fixture.stop().status().unwrap();
     assert!(status.success(), "crewd stop should exit 0");

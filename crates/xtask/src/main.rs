@@ -18,11 +18,11 @@ use crew_protocol::{
     CrewMethod, DiagnosticLevel, DisplayBackend, DisplayConfig, DisplayStatus, EventEnvelope,
     EventSource, InitializeParams, InitializeResult, InspectRequest, InspectResult, JsonRpcError,
     JsonRpcErrorResponse, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, LeaseRequest,
-    MessageId, MessageKind, OperationId, PlanDecideResult, PlanGetResult, PlanProposeResult,
-    PolicyViolationListResult, PolicyViolationSummary, ProjectId, ProtocolVersion, ReleaseRequest,
-    RepositoryIdentity, RequestId, RunId, RunResultResult, RunTimeoutAckResult, RunUsage,
-    RuntimeCapabilities, RuntimeEvent, RuntimeInfo, RuntimeStatus, TaskId, Timestamp, VersionRange,
-    WorkerId, WorkspaceInfo,
+    MessageId, MessageKind, OperationId, PaneReopenResult, PlanDecideResult, PlanGetResult,
+    PlanProposeResult, PolicyViolationListResult, PolicyViolationSummary, ProjectId,
+    ProtocolVersion, ReleaseRequest, RepositoryIdentity, RequestId, RetentionCleanResult, RunId,
+    RunResultResult, RunTimeoutAckResult, RunUsage, RuntimeCapabilities, RuntimeEvent, RuntimeInfo,
+    RuntimeStatus, TaskId, Timestamp, VersionRange, WorkerId, WorkspaceInfo,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -272,6 +272,8 @@ fn export_bindings(dir: &Path) -> Result<()> {
         PlanDecideResult,
         PlanGetResult,
         RunTimeoutAckResult,
+        RetentionCleanResult,
+        PaneReopenResult,
     );
 
     Ok(())

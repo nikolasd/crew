@@ -155,3 +155,41 @@ pub struct DisplaySelection {
     /// preferred one lost.
     pub attempts: Vec<DisplayBackend>,
 }
+
+// ---------------------------------------------------------------------------
+// PaneReopenResult
+// ---------------------------------------------------------------------------
+
+/// Result of `pane/reopen`: the pane freshly created for a live run's
+/// attach socket. `pane_ref` is empty exactly when the resolved backend
+/// was `Hidden` (nothing visible to reopen onto) -- not an error, mirroring
+/// the submit-time pane semantics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct PaneReopenResult {
+    #[serde(rename = "runId")]
+    pub run_id: crate::ids::RunId,
+    pub backend: DisplayBackend,
+    #[serde(rename = "paneRef")]
+    pub pane_ref: String,
+}
+
+#[cfg(test)]
+mod pane_reopen_tests {
+    use super::*;
+
+    #[test]
+    fn pane_reopen_result_is_camel_case() {
+        let result = PaneReopenResult {
+            run_id: crate::ids::RunId::new(),
+            backend: DisplayBackend::Tmux,
+            pane_ref: "session:0.1".to_string(),
+        };
+        let value = serde_json::to_value(&result).unwrap();
+        assert!(value["runId"].is_string());
+        assert_eq!(value["paneRef"], "session:0.1");
+        let parsed: PaneReopenResult = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed, result);
+    }
+}

@@ -66,6 +66,14 @@ jobs:
     # switch (see `crates/runtime/src/conformance/mod.rs`).
     env:
       CREW_DISABLE_VENDOR_CLI: "1"
+      # Run each test binary's cases serially. Many integration tests spawn
+      # a real `crewd`/PTY vendor process and assert on its lifecycle; under
+      # the default parallel `cargo test` they contend for CPU/PTY/sockets
+      # on a loaded runner, which intermittently breaks readiness gates and
+      # `crewd stop` exit-code assertions (rotating between tui/lifecycle
+      # tests run to run). cargo already runs binaries sequentially, so this
+      # only removes within-binary contention -- unit tests stay correct.
+      RUST_TEST_THREADS: "1"
     steps:
       - uses: actions/checkout@v4
 

@@ -77,6 +77,14 @@
     "runTimeoutAckResult": {
       "description": "`run/timeoutAck` result payload.",
       "$ref": "#/$defs/RunTimeoutAckResult"
+    },
+    "retentionCleanResult": {
+      "description": "`retention/clean` result payload.",
+      "$ref": "#/$defs/RetentionCleanResult"
+    },
+    "paneReopenResult": {
+      "description": "`pane/reopen` result payload.",
+      "$ref": "#/$defs/PaneReopenResult"
     }
   },
   "required": [
@@ -102,7 +110,9 @@
     "planProposeResult",
     "planDecideResult",
     "planGetResult",
-    "runTimeoutAckResult"
+    "runTimeoutAckResult",
+    "retentionCleanResult",
+    "paneReopenResult"
   ],
   "$defs": {
     "InitializeParams": {
@@ -511,6 +521,16 @@
           "description": "The leader acknowledges a `WorkerTimeout` event, resolving how the\nrun proceeds.",
           "type": "string",
           "const": "run/timeoutAck"
+        },
+        {
+          "description": "Runs the retention prune once, on demand: removes the events of\nterminal (or unassociated) runs past the configured age cutoff and\nbeyond the `retention.maxRuns` recency cap. Never touches active\nruns or run rows.",
+          "type": "string",
+          "const": "retention/clean"
+        },
+        {
+          "description": "Re-creates a live run's display pane around its still-running\nattach socket (the pane was closed by the user or a backend).",
+          "type": "string",
+          "const": "pane/reopen"
         }
       ]
     },
@@ -3522,6 +3542,48 @@
       "required": [
         "runId",
         "sequence"
+      ]
+    },
+    "RetentionCleanResult": {
+      "description": "Result of `retention/clean`: what one on-demand prune pass removed.\n\n`deleted_events` counts journal rows removed by BOTH policies (age\ncutoff and `maxRuns` recency cap). `runs_pruned` counts distinct\nterminal runs beyond `retention.maxRuns` whose events were removed by\nthe recency cap alone; age-based deletions are not attributed to runs.",
+      "type": "object",
+      "properties": {
+        "deletedEvents": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "runsPruned": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "deletedEvents",
+        "runsPruned"
+      ]
+    },
+    "PaneReopenResult": {
+      "description": "Result of `pane/reopen`: the pane freshly created for a live run's\nattach socket. `pane_ref` is empty exactly when the resolved backend\nwas `Hidden` (nothing visible to reopen onto) -- not an error, mirroring\nthe submit-time pane semantics.",
+      "type": "object",
+      "properties": {
+        "runId": {
+          "$ref": "#/$defs/RunId"
+        },
+        "backend": {
+          "$ref": "#/$defs/DisplayBackend"
+        },
+        "paneRef": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "runId",
+        "backend",
+        "paneRef"
       ]
     }
   }

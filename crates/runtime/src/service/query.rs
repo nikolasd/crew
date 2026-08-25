@@ -303,6 +303,59 @@ fn row_to_approval_json(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     }))
 }
 
+/// Lists every run's turn budget for `project_id` (WP19 rows, snapshotted
+/// at `run/submit`). Project-scoped through the run's task like
+/// [`run_list_op`] -- the `budgets` table itself carries no project column.
+pub fn budget_list_op(project_id: ProjectId) -> DomainClosure {
+    Box::new(move |conn| {
+        let mut stmt = conn.prepare(
+            "SELECT b.run_id, b.task_id, b.turns_used, b.turn_limit
+             FROM budgets b
+             JOIN runs r ON b.run_id = r.run_id
+             JOIN tasks t ON r.task_id = t.task_id
+             WHERE t.project_id = ?1 ORDER BY r.created_at",
+        )?;
+        let rows = stmt
+            .query_map([project_id.to_string()], |row| {
+                Ok(json!({
+                    "runId": row.get::<_, String>(0)?,
+                    "taskId": row.get::<_, String>(1)?,
+                    "turnsUsed": row.get::<_, i64>(2)?,
+                    "turnLimit": row.get::<_, i64>(3)?,
+                }))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(json!({ "budgets": rows }))
+    })
+}
+
+/// Lists every open (undecided) escalation for `project_id`, oldest first
+/// -- what the dashboard's Escalations section renders as pending. A
+/// resolved escalation has a non-null `decided_at` and is excluded.
+pub fn pending_escalation_list_op(project_id: ProjectId) -> DomainClosure {
+    Box::new(move |conn| {
+        let mut stmt = conn.prepare(
+            "SELECT e.escalation_id, e.run_id, e.kind, e.question, e.created_at
+             FROM escalations e
+             JOIN runs r ON e.run_id = r.run_id
+             JOIN tasks t ON r.task_id = t.task_id
+             WHERE t.project_id = ?1 AND e.decided_at IS NULL ORDER BY e.created_at",
+        )?;
+        let rows = stmt
+            .query_map([project_id.to_string()], |row| {
+                Ok(json!({
+                    "escalationId": row.get::<_, String>(0)?,
+                    "runId": row.get::<_, String>(1)?,
+                    "kind": row.get::<_, String>(2)?,
+                    "question": row.get::<_, Option<String>>(3)?,
+                    "createdAt": row.get::<_, String>(4)?,
+                }))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(json!({ "pendingEscalations": rows }))
+    })
+}
+
 /// Suppresses unused-import warnings for ids referenced only in signatures
 /// across the various `Option<T>` positions.
 #[allow(unused_imports)]

@@ -268,9 +268,9 @@ async fn handle_connection(
 }
 
 /// The `/api/state` snapshot, read through the same domain ops the RPC
-/// layer's `run/list` and `worker/list` use. `budgets` and
-/// `pendingEscalations` are part of the stable shape already; they fill
-/// in when the budgets (WP19) and escalations (WP20) tables land.
+/// layer's `run/list` and `worker/list` use. `budgets` (WP19) and
+/// `pendingEscalations` (WP20) come from their own list ops over the same
+/// handle -- never a second connection.
 async fn state_snapshot(deps: &DashboardDeps) -> Result<String, String> {
     let runs = deps
         .db
@@ -282,11 +282,24 @@ async fn state_snapshot(deps: &DashboardDeps) -> Result<String, String> {
         .run_domain_op(query::worker_list_op(deps.project_id))
         .await
         .map_err(|e| e.to_string())?;
+    let budgets = deps
+        .db
+        .run_domain_op(query::budget_list_op(deps.project_id))
+        .await
+        .map_err(|e| e.to_string())?;
+    let escalations = deps
+        .db
+        .run_domain_op(query::pending_escalation_list_op(deps.project_id))
+        .await
+        .map_err(|e| e.to_string())?;
     let state = serde_json::json!({
         "runs": runs.get("runs").cloned().unwrap_or_else(|| serde_json::json!([])),
         "workers": workers.get("workers").cloned().unwrap_or_else(|| serde_json::json!([])),
-        "budgets": [],
-        "pendingEscalations": [],
+        "budgets": budgets.get("budgets").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "pendingEscalations": escalations
+            .get("pendingEscalations")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
     });
     Ok(state.to_string())
 }

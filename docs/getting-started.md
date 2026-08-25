@@ -481,3 +481,16 @@ We welcome contributions! Please see the [CONTRIBUTING.md](../CONTRIBUTING.md) f
 ## License
 
 This project is licensed under the [MIT License](../LICENSE). See the LICENSE file for full terms.
+
+## Leading a Crew plan
+
+Crew v2 separates leader intent from daemon execution:
+
+```text
+crew_plan → configured approval gate → crew_spawn
+        → /crew milestone digest → crew_send / crew_stop / crew_finish
+```
+
+The routing profile in `adapters.*.profile` is the concrete adapter/model/permission context a worker receives. A plan subtask snapshots its turn budget when submitted. When the daemon reports a timeout, the leader chooses `extend`, one Crew-message nudge, or `abort`; it does not wait for a vendor process by polling.
+
+Start in `shared` workspace mode for ordinary work. Use a Git worktree for parallel writers; use `copy` for outside-Git or disposable directories. The monitor's `/crew runs`, `export`, `clean`, and `reopen` subcommands expose retained history, sanitized JSONL replay, retention maintenance, and a live pane reattachment respectively.

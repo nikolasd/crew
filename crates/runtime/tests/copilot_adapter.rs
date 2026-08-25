@@ -747,6 +747,49 @@ fn disable_builtin_mcps_is_never_added_regardless_of_mcp_config() {
 }
 
 #[test]
+fn profile_model_becomes_the_copilot_model_flag() {
+    let adapter = CopilotAdapter::new(
+        PathBuf::from("copilot"),
+        std::env::temp_dir(),
+        crew_runtime::adapter::CopilotStartupOptions {
+            model: Some("claude-sonnet-4-5".to_string()),
+            ..Default::default()
+        },
+        Vec::new(),
+        crew_protocol::RunId::new(),
+        crew_protocol::TaskId::new(),
+        crew_protocol::WorkerId::new(),
+        None,
+    );
+    let plan = adapter.spawn_plan();
+    assert!(
+        plan.args
+            .iter()
+            .any(|arg| arg == "--model=claude-sonnet-4-5"),
+        "the profile model must ride --model=<model>, got: {:?}",
+        plan.args
+    );
+
+    // No model configured means no flag at all.
+    let bare = CopilotAdapter::new(
+        PathBuf::from("copilot"),
+        std::env::temp_dir(),
+        crew_runtime::adapter::CopilotStartupOptions::default(),
+        Vec::new(),
+        crew_protocol::RunId::new(),
+        crew_protocol::TaskId::new(),
+        crew_protocol::WorkerId::new(),
+        None,
+    )
+    .spawn_plan();
+    assert!(
+        !bare.args.iter().any(|arg| arg.starts_with("--model=")),
+        "no --model without a profile model: {:?}",
+        bare.args
+    );
+}
+
+#[test]
 fn spawn_plan_is_unchanged_when_mcp_is_none() {
     let startup_options = crew_runtime::adapter::CopilotStartupOptions {
         allow_tool: Some(vec!["fs_read".to_string()]),

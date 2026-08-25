@@ -794,6 +794,7 @@ mod out_of_band_input_tests {
             events_tx.clone(),
             None,
             NestedViolationAction::QuarantineAndCancel,
+            Redactor::new(),
         ));
         DomainAdapterEventSink::new(
             db,
@@ -1011,6 +1012,7 @@ mod question_detected_tests {
             events_tx.clone(),
             None,
             NestedViolationAction::QuarantineAndCancel,
+            Redactor::new(),
         ));
         DomainAdapterEventSink::new(
             db,
@@ -1279,6 +1281,7 @@ mod crash_resume_tests {
             events_tx.clone(),
             None,
             NestedViolationAction::QuarantineAndCancel,
+            Redactor::new(),
         ));
         DomainAdapterEventSink::new(
             db,

@@ -6,11 +6,12 @@
 // tools.test.ts's fake-API pattern.
 
 import { expect, test } from "bun:test";
-
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-
-import type { CrewClient } from "../client";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { EventEnvelope } from "@nikolasd/crew-protocol";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { CrewClient } from "../client";
 import { registerMonitor } from "./controller";
 
 type SessionHandler = (event: unknown, extCtx: ExtensionContext) => Promise<void>;
@@ -216,4 +217,54 @@ test("a closed client is repaired on the next connect even without the shutdown 
 
   await handlers.get("session_start")?.(undefined, extCtx);
   expect(fake.subscribeCalls).toBe(2);
+});
+
+test("/crew runs, export, clean, and reopen invoke their scoped RPC contracts", async () => {
+  const { api, commands } = createFakeApi();
+  const fake = createFakeClient();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  (fake.client as unknown as { request(method: string, params?: unknown): Promise<unknown> }).request = async (method, params) => {
+    requests.push({ method, params });
+    switch (method) {
+      case "run/list":
+        return { runs: [{ runId: "run-1", state: "working", workerId: "worker-1" }] };
+      case "events/replay":
+        return [
+          { sequence: 1, runId: "run-1" },
+          { sequence: 2, runId: "other-run" },
+        ];
+      case "retention/clean":
+        return { deletedEvents: 4, runsPruned: 1 };
+      case "pane/reopen":
+        return { backend: "tmux", paneRef: "crew:0.1" };
+      default:
+        throw new Error(`unexpected ${method}`);
+    }
+  };
+  registerMonitor(api, { getClient: async () => fake.client });
+  const directory = await mkdtemp(join(tmpdir(), "crew-monitor-command-"));
+  const notifications: string[] = [];
+  const cmdCtx = {
+    ...fakeExtensionContext([]),
+    cwd: directory,
+    ui: {
+      ...fakeExtensionContext([]).ui,
+      notify(message: string) {
+        notifications.push(message);
+      },
+    },
+  } as unknown as ExtensionContext;
+  const command = commands.get("crew");
+  await command?.handler("runs", cmdCtx);
+  await command?.handler("export run-1", cmdCtx);
+  await command?.handler("clean", cmdCtx);
+  await command?.handler("reopen run-1", cmdCtx);
+
+  expect(requests.map((request) => request.method)).toEqual(["run/list", "events/replay", "retention/clean", "pane/reopen"]);
+  expect(requests[3]?.params).toEqual({ runId: "run-1" });
+  const jsonl = await readFile(join(directory, ".omp", "crew", "export-run-1.jsonl"), "utf8");
+  expect(jsonl).toContain('"runId":"run-1"');
+  expect(jsonl).not.toContain("other-run");
+  expect(notifications).toContain("Retention clean removed 4 events across 1 maxRuns-pruned runs.");
+  await rm(directory, { recursive: true, force: true });
 });

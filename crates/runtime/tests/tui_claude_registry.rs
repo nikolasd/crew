@@ -37,6 +37,12 @@ use crew_runtime::display::{DisplayBackendTrait, DisplayFuture, PaneHandle, Pane
 /// an "empty pane_ref" assertion able to catch a placeholder event
 /// leaking into a TUI run's stream at all (a `Hidden` backend's own
 /// legitimate refs are empty and would mask it).
+// Serializes the PTY-spawning integration tests within this binary so they
+// never contend for PTYs / CPU with each other under parallel `cargo test`.
+// These tests drive a real /bin/sh vendor over a real PTY and are sensitive
+// to scheduling jitter; running them one at a time makes them deterministic.
+static SERIAL_PTY: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
 struct FakePaneBackend;
 
 impl DisplayBackendTrait for FakePaneBackend {
@@ -178,6 +184,7 @@ fn ctx_with_display(
         events_tx.clone(),
         None,
         crew_runtime::config::NestedViolationAction::default(),
+        crew_runtime::security::redaction::Redactor::new(),
     ));
     (
         RunDriverContext {
@@ -284,6 +291,7 @@ fn own_ctx(
         events_tx.clone(),
         None,
         crew_runtime::config::NestedViolationAction::default(),
+        crew_runtime::security::redaction::Redactor::new(),
     ));
     (
         RunDriverContext {
@@ -362,6 +370,7 @@ async fn resume_registry(
             events_tx.clone(),
             None,
             crew_runtime::config::NestedViolationAction::default(),
+            crew_runtime::security::redaction::Redactor::new(),
         )),
         events_tx,
     }));
@@ -411,7 +420,14 @@ async fn stored_cursor(db: &Arc<DatabaseHandle>, run_id: RunId) -> Option<Cursor
 fn fast_timings() -> TuiTimings {
     TuiTimings {
         readiness_quiet: Duration::from_millis(80),
-        readiness_cap: Duration::from_secs(4),
+        // Generous headroom: under the parallel load of the full workspace
+        // suite a CI runner can take far longer than 4s for the fake
+        // /bin/sh vendor's first PTY output to be observed by the readiness
+        // gate. The readiness gate forces a proceed at the cap, so a tight
+        // cap turns a mere scheduling delay into a spurious
+        // "no output before the cap" abort (observed on ubuntu-latest). The
+        // resume/tail assertions below do not depend on the cap value.
+        readiness_cap: Duration::from_secs(20),
         discovery_timeout: Duration::from_secs(4),
         tailer_poll: Duration::from_millis(40),
         escalation: EscalationTimings {
@@ -423,6 +439,7 @@ fn fast_timings() -> TuiTimings {
 
 #[tokio::test]
 async fn submitting_a_tui_mode_claude_run_reaches_the_tui_path_and_emits_lifecycle_events() {
+    let _guard = SERIAL_PTY.lock().await;
     let (db, dir, project_id) = harness().await;
     let profile = claude_tui_profile();
     let (run_id, task_id, worker_id) = seed_worker_and_run(&db, project_id, &profile).await;
@@ -557,6 +574,7 @@ async fn submitting_a_tui_mode_claude_run_reaches_the_tui_path_and_emits_lifecyc
 /// whose end state this stream shape pins from the adapter side.
 #[tokio::test]
 async fn exactly_one_display_pane_detached_is_journaled_for_a_tui_run() {
+    let _guard = SERIAL_PTY.lock().await;
     let (db, dir, project_id) = harness().await;
     let profile = claude_tui_profile();
     let (run_id, task_id, worker_id) = seed_worker_and_run(&db, project_id, &profile).await;
@@ -717,6 +735,7 @@ where
 /// typed rejection.
 #[tokio::test]
 async fn resume_run_continues_a_crashed_tui_run_from_its_stored_cursor() {
+    let _guard = SERIAL_PTY.lock().await;
     let (db, dir, project_id) = harness().await;
     let profile = claude_tui_profile();
     let (run_id, task_id, worker_id) = seed_worker_and_run(&db, project_id, &profile).await;
@@ -891,6 +910,7 @@ async fn resume_run_continues_a_crashed_tui_run_from_its_stored_cursor() {
 /// double-journaling anything else.
 #[tokio::test]
 async fn resume_run_tolerates_exactly_one_duplicate_tool_started_at_the_crash_boundary() {
+    let _guard = SERIAL_PTY.lock().await;
     let (db, dir, project_id) = harness().await;
     let profile = claude_tui_profile();
     let (run_id, task_id, worker_id) = seed_worker_and_run(&db, project_id, &profile).await;
@@ -923,6 +943,7 @@ async fn resume_run_tolerates_exactly_one_duplicate_tool_started_at_the_crash_bo
             tokio::sync::broadcast::channel(16).0,
             None,
             crew_runtime::config::NestedViolationAction::default(),
+            crew_runtime::security::redaction::Redactor::new(),
         ));
         db.run_domain_op(Box::new(move |conn| {
             let mut repo = crew_runtime::domain::DomainRepository::new(conn, project_id);
@@ -1021,6 +1042,7 @@ async fn resume_run_tolerates_exactly_one_duplicate_tool_started_at_the_crash_bo
 /// process or reserve a running slot.
 #[tokio::test]
 async fn resume_run_refuses_without_support_for_unknown_runs_and_on_denial() {
+    let _guard = SERIAL_PTY.lock().await;
     let (db, dir, project_id) = harness().await;
     let profile = claude_tui_profile();
     let (run_id, task_id, worker_id) = seed_worker_and_run(&db, project_id, &profile).await;

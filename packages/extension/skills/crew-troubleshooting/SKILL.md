@@ -21,6 +21,14 @@ Follow this sequence to diagnose Crew problems:
 2. **`/crew-install`** — downloads and verifies the crewd binary if it's missing. This is the fix for `runtime-not-installed`.
 3. **`/crew-doctor`** — works even with no live daemon. Provides a detailed health check of the environment.
 
+
+## Live-control failures
+
+- Start with `/crew`, not a poll loop: `runs`, `status <runId>`, and `crew_transcript` expose the durable replay.
+- `BUDGET_EXCEEDED` means the subtask's snapshotted turn budget is exhausted. Do not resend; change the approved plan budget or stop/finish the run.
+- `WorkerTimeout` is not a daemon kill. Choose `run/timeoutAck` `extend`, `crew_send` a nudge, or `run/timeoutAck` `abort`.
+- `pane/reopen` only works for a live run with its attach socket still bound. A terminal run or absent socket is an honest refusal; use the transcript instead.
+- `/crew clean` prunes only terminal/unassociated event history under the configured retention period and `maxRuns`; it never deletes a live run or task row.
 ## Error codes and fixes
 
 Every Crew tool error has this shape: text `"<method> failed: <message>"`, `details: { code, message, data }`, `isError: true`. A JSON-RPC error uses code `-32602` for invalid arguments.
