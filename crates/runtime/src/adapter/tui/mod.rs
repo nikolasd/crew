@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crew_protocol::Classified;
 use serde::{Deserialize, Serialize};
 
-pub use adapter::{LaunchSpec, TuiAdapter, TuiTimings, TuiVendor, VersionVerdict};
+pub use adapter::{LaunchSpec, ResumeContext, TuiAdapter, TuiTimings, TuiVendor, VersionVerdict};
 pub use claude::ClaudeTuiVendor;
 pub use discovery::{DiscoveryError, find_transcript_by_nonce};
 pub use tailer::{TailerHandle, TranscriptTailer};

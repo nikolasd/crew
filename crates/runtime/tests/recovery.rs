@@ -18,15 +18,32 @@
 //! also spawn a thread for; keeping DB files per-test (via `TempDir`)
 //! already isolates them, but the crate-wide convention is one thread.
 
+use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crew_protocol::{
     ProjectId, Run, RunFlags, RunState, TaskId, TaskRef, Timestamp, WorkerId, WorkerProfileRef,
 };
+use crew_runtime::adapter::tui::TuiTimings;
+use crew_runtime::adapter::{
+    AdapterKind, AdapterMode as ProfileAdapterMode, AdapterRegistry, ClaudeStartupOptions,
+    FixtureAuthorization, ResumeSupport, StartupOptions, TuiSupport, WorkerProfile,
+};
+use crew_runtime::config::NestedViolationAction;
+use crew_runtime::config::crew::{
+    AdapterConfig, AdapterMode as CrewAdapterMode, CloseOnExit, PermissionMode,
+};
 use crew_runtime::db::DatabaseHandle;
+use crew_runtime::display::{DisplayRegistry, HiddenDisplay};
 use crew_runtime::doctor::{Doctor, DoctorResult};
 use crew_runtime::domain::DomainRepository;
-use crew_runtime::recovery::{DEFAULT_STALE_RUN_THRESHOLD, RecoveryConfig, RecoveryCoordinator};
+use crew_runtime::policy::ViolationService;
+use crew_runtime::recovery::{
+    DEFAULT_STALE_RUN_THRESHOLD, RecoveredOutcome, RecoveryConfig, RecoveryCoordinator,
+};
+use crew_runtime::supervisor::EscalationTimings;
 use tempfile::TempDir;
 
 /// Seeds one task + one worker + one run in `initial_state` against a real,
@@ -441,6 +458,7 @@ async fn the_doctors_stale_run_report_names_a_run_silent_past_the_threshold() {
     let (state_dir, db) = open_db().await;
     let project_id = ProjectId::new();
     let (_task_id, _worker_id, run_id) = seed_run(&db, project_id, "working").await;
+
     backdate_past_stale_threshold(&db, run_id).await;
 
     let db = Arc::new(db);
@@ -457,4 +475,664 @@ async fn the_doctors_stale_run_report_names_a_run_silent_past_the_threshold() {
         error.contains(&run_id.to_string()),
         "the report must name the offending run: {error}"
     );
+}
+
+// ------------------------------------------------------------ WP15: resume first
+
+/// The vendor session id the fake `claude` script below always establishes
+/// (mirrors `tests/tui_claude_registry.rs`'s own fixture).
+const SESSION_ID: &str = "11111111-1111-4111-8111-000000000099";
+
+fn claude_tui_profile_json() -> String {
+    let profile = WorkerProfile {
+        id: crew_runtime::adapter::ProfileId::new(),
+        adapter: AdapterKind::Claude.wire_name().to_string(),
+        model: String::new(),
+        permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
+        startup_options: StartupOptions::Claude(ClaudeStartupOptions {
+            mode: ProfileAdapterMode::Tui,
+            ..ClaudeStartupOptions::default()
+        }),
+        environment_allowlist: Vec::new(),
+        source: "test".to_string(),
+    };
+    serde_json::to_string(&profile).expect("WorkerProfile is a plain serializable type")
+}
+
+/// Seeds one task + worker + run exactly like [`seed_run`], but stores the
+/// given resolved profile JSON on the worker -- what `resume_run` re-derives
+/// the adapter kind and mode from.
+async fn seed_run_with_profile(
+    db: &DatabaseHandle,
+    project_id: ProjectId,
+    initial_state: &str,
+    resolved_profile_json: Option<String>,
+) -> (TaskId, WorkerId, crew_protocol::RunId) {
+    let task_id = TaskId::new();
+    let worker_id = WorkerId::new();
+    let run_id = crew_protocol::RunId::new();
+
+    db.run_domain_op(Box::new(move |conn| {
+        let mut repo = DomainRepository::new(conn, project_id);
+        repo.upsert_task(
+            task_id,
+            &TaskRef {
+                owner_client_instance_id: "omp-1".into(),
+                revision: 1,
+            },
+        )?;
+        let worker = crew_protocol::Worker {
+            worker_id,
+            profile_ref: WorkerProfileRef {
+                id: worker_id,
+                fingerprint: "sha256:fake".into(),
+                adapter: "claude".into(),
+                model: "test".into(),
+                permission_envelope: serde_json::json!({}),
+            },
+            parent_worker_id: None,
+            created_at: Timestamp::now(),
+        };
+        repo.create_worker_with_snapshot(&worker, resolved_profile_json)?;
+        let run = Run {
+            run_id,
+            task_id,
+            worker_id,
+            state: RunState::try_from("queued").expect("queued is a valid state"),
+            flags: RunFlags::default(),
+            vendor_session_id: None,
+            started_at: None,
+            completed_at: None,
+        };
+        repo.submit_run(&run, None, None)?;
+        Ok(serde_json::json!({}))
+    }))
+    .await
+    .expect("seed run with profile");
+
+    if initial_state != "queued" {
+        drive_to_state(db, project_id, run_id, initial_state).await;
+    }
+
+    (task_id, worker_id, run_id)
+}
+
+/// Writes the run's stored resume seam directly (`runs.vendor_session_id`
+/// and `runs.transcript_cursor`). Raw SQL on purpose: these columns are only
+/// ever written by an adapter event's own commit path, which a recovery test
+/// does not drive.
+async fn set_resume_state(
+    db: &DatabaseHandle,
+    run_id: crew_protocol::RunId,
+    vendor_session_id: Option<String>,
+) {
+    let run_id_string = run_id.to_string();
+    db.run_domain_op(Box::new(move |conn| {
+        Ok(conn
+            .execute(
+                "UPDATE runs SET vendor_session_id = ?1 WHERE run_id = ?2",
+                rusqlite::params![vendor_session_id, run_id_string],
+            )
+            .map(|_| serde_json::json!({}))?)
+    }))
+    .await
+    .expect("write resume state");
+}
+
+/// One journaled-event count for this run, matched by a raw substring of the
+/// stored `event_json` (same helper as `tests/tui_claude_registry.rs`).
+async fn journal_count(db: &DatabaseHandle, run_id: crew_protocol::RunId, marker: &str) -> usize {
+    let run_id = run_id.to_string();
+    let marker_owned = marker.to_string();
+    let value = db
+        .run_domain_op(Box::new(move |conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM events WHERE run_id = ?1 AND event_json LIKE ?2",
+                rusqlite::params![run_id, format!("%{marker_owned}%")],
+                |row| row.get(0),
+            )?;
+            Ok(serde_json::json!(count))
+        }))
+        .await
+        .expect("journal count query");
+    value.as_i64().expect("count is an integer") as usize
+}
+
+/// Polls until the given journal marker appears (or times out), for
+/// assertions about work the resumed VENDOR does asynchronously.
+async fn wait_for_journalled(
+    db: &Arc<DatabaseHandle>,
+    run_id: crew_protocol::RunId,
+    marker: &str,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while tokio::time::Instant::now() < deadline {
+        if journal_count(db, run_id, marker).await >= 1 {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
+}
+
+/// A fake `claude` binary that answers a fresh start AND resumes via
+/// `--resume <session>` without ever touching stdin on the resume path --
+/// never the real CLI (copied from `tests/tui_claude_registry.rs`'s
+/// fixture, minus the nonce-discovery branch this sweep never exercises).
+fn write_fake_claude_script(
+    scripts_dir: &std::path::Path,
+    session_dir: &std::path::Path,
+) -> std::path::PathBuf {
+    let script = format!(
+        r#"#!/bin/sh
+echo "Welcome to Claude Code!"
+SESSION_ID="11111111-1111-4111-8111-000000000099"
+TRANSCRIPT="{session_dir}/$SESSION_ID.jsonl"
+if [ "$1" = "--resume" ]; then
+  (
+    sleep 0.3
+    printf '%s\n' '{{"type":"assistant","sessionId":"'"$SESSION_ID"'","timestamp":"2026-01-01T00:00:30Z","message":{{"content":[{{"type":"text","text":"post-resume answer"}}]}}}}' >> "$TRANSCRIPT"
+  ) &
+  while IFS= read -r line; do :; done
+  exit 0
+fi
+while IFS= read -r line; do
+  :
+done
+"#,
+        session_dir = session_dir.display(),
+    );
+    let path = scripts_dir.join("fake-claude.sh");
+    std::fs::write(&path, script).expect("write fake claude script");
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&path, perms).unwrap();
+    path
+}
+
+fn fast_timings() -> TuiTimings {
+    TuiTimings {
+        readiness_quiet: Duration::from_millis(80),
+        readiness_cap: Duration::from_secs(4),
+        discovery_timeout: Duration::from_secs(4),
+        tailer_poll: Duration::from_millis(40),
+        escalation: EscalationTimings {
+            sigint_to_sigterm: Duration::from_millis(150),
+            sigterm_to_sigkill: Duration::from_millis(150),
+        },
+    }
+}
+
+/// The full WP15 registry fixture: real `AdapterRegistry`, optional
+/// `TuiSupport` pointed at the fake script (`false` models an adapter whose
+/// TUI support is unavailable in this daemon), and `ResumeSupport` wired to
+/// the same db/project/event channel. Returns the broadcast sender so the
+/// coordinator can fan out its journaled envelopes.
+async fn resume_registry(
+    db: &Arc<DatabaseHandle>,
+    dir: &TempDir,
+    project_id: ProjectId,
+    script_path: &std::path::Path,
+    session_dir: &std::path::Path,
+    with_tui_support: bool,
+) -> (
+    Arc<AdapterRegistry>,
+    tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
+) {
+    let mut adapters = BTreeMap::new();
+    adapters.insert(
+        "claude".to_string(),
+        AdapterConfig {
+            enabled: true,
+            bin: script_path.to_string_lossy().into_owned(),
+            mode: CrewAdapterMode::Tui,
+            permission_mode: PermissionMode::Default,
+            model: None,
+            profile: "test".to_string(),
+            session_dir: Some(session_dir.to_string_lossy().into_owned()),
+            extra_args: Vec::new(),
+        },
+    );
+    let panes_dir = dir.path().join("panes");
+    std::fs::create_dir_all(&panes_dir).expect("create panes dir");
+
+    let registry = AdapterRegistry::new(
+        Arc::new(FixtureAuthorization { allow: true }),
+        dir.path().to_path_buf(),
+        None,
+        vec![],
+    );
+    if with_tui_support {
+        let mut display_registry = DisplayRegistry::new();
+        display_registry.register(Box::new(HiddenDisplay::new(
+            crew_protocol::DisplayConfig::default(),
+        )));
+        registry.set_tui_support(Arc::new(TuiSupport {
+            display_registry: Arc::new(display_registry),
+            panes_dir,
+            crewd_path: dir.path().join("crewd"),
+            state_dir: dir.path().to_path_buf(),
+            close_on_exit: CloseOnExit::Always,
+            forced_backend: None,
+            adapters,
+            timings: fast_timings(),
+        }));
+    }
+    let (events_tx, _rx) = tokio::sync::broadcast::channel(256);
+    registry.set_resume_support(Arc::new(ResumeSupport {
+        db: Arc::clone(db),
+        project_id,
+        violation_service: Arc::new(ViolationService::new(
+            Arc::clone(db),
+            project_id,
+            events_tx.clone(),
+            None,
+            NestedViolationAction::default(),
+        )),
+        events_tx: events_tx.clone(),
+    }));
+    (Arc::new(registry), events_tx)
+}
+
+/// One fully-wired resumable scenario: a `working` run whose worker carries
+/// a Claude `mode: "tui"` profile, whose vendor session id is stored, and
+/// whose deterministic transcript file exists.
+struct ResumableScenario {
+    _state_dir: TempDir,
+    db: Arc<DatabaseHandle>,
+    project_id: ProjectId,
+    registry: Arc<AdapterRegistry>,
+    events_tx: tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
+    run_id: crew_protocol::RunId,
+}
+
+async fn seed_resumable_run(with_tui_support: bool) -> ResumableScenario {
+    // Under /tmp, not the default temp root: a resumed TUI run attaches its
+    // pane over a unix socket under this directory, and macOS's default
+    // per-user temp root exceeds the platform sun_path limit.
+    let state_dir = tempfile::Builder::new()
+        .prefix("bat-recovery-wp15-")
+        .tempdir_in("/tmp")
+        .expect("create state dir");
+    let db = Arc::new(
+        DatabaseHandle::start(state_dir.path().join("runtime.db"))
+            .await
+            .unwrap(),
+    );
+    let project_id = ProjectId::new();
+    let (_task_id, _worker_id, run_id) =
+        seed_run_with_profile(&db, project_id, "working", Some(claude_tui_profile_json())).await;
+
+    let session_dir = state_dir.path().join("sessions");
+    std::fs::create_dir_all(&session_dir).expect("create session dir");
+    // The transcript must EXIST for eligibility; empty keeps the tailer
+    // quiet until the resumed fixture appends its post-resume entry.
+    std::fs::write(session_dir.join(format!("{SESSION_ID}.jsonl")), "")
+        .expect("write empty transcript");
+    set_resume_state(&db, run_id, Some(SESSION_ID.to_string())).await;
+
+    let script_path = write_fake_claude_script(state_dir.path(), &session_dir);
+    let (registry, events_tx) = resume_registry(
+        &db,
+        &state_dir,
+        project_id,
+        &script_path,
+        &session_dir,
+        with_tui_support,
+    )
+    .await;
+    ResumableScenario {
+        _state_dir: state_dir,
+        db,
+        project_id,
+        registry,
+        events_tx,
+        run_id,
+    }
+}
+
+/// A coordinator wired for the resume-first boot sweep.
+fn resume_coordinator(scenario: &ResumableScenario) -> RecoveryCoordinator {
+    RecoveryCoordinator::with_resume(
+        Arc::clone(&scenario.db),
+        scenario.project_id,
+        RecoveryConfig::default(),
+        Arc::clone(&scenario.registry),
+        scenario.events_tx.clone(),
+    )
+}
+
+/// The headline contract: a stuck run with a live vendor session, an
+/// available adapter, and an existing transcript RESUMES -- same run, prior
+/// state, no terminal edge -- and the resumed vendor actually continues
+/// producing journaled output under this daemon.
+#[tokio::test]
+async fn a_resumable_working_run_is_resumed_and_stays_non_terminal() {
+    let scenario = seed_resumable_run(true).await;
+    let result = resume_coordinator(&scenario)
+        .recover()
+        .await
+        .expect("sweep");
+
+    assert_eq!(result.recovered_runs.len(), 1, "{result:?}");
+    assert_eq!(
+        result.recovered_runs[0].outcome,
+        RecoveredOutcome::Resumed,
+        "error: {:?}",
+        result.recovered_runs[0].error
+    );
+    assert!(result.recovered_runs[0].success);
+    assert_eq!(result.recovered_runs[0].new_state.to_string(), "working");
+    assert_eq!(
+        run_state(&scenario.db, scenario.run_id).await,
+        "working",
+        "the resumed run continues in its prior state"
+    );
+    assert_eq!(
+        journal_count(
+            &scenario.db,
+            scenario.run_id,
+            "\"code\":\"resume_attempted\""
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        journal_count(
+            &scenario.db,
+            scenario.run_id,
+            "\"code\":\"resume_succeeded\""
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        journal_count(&scenario.db, scenario.run_id, "\"code\":\"resume_failed\"").await,
+        0
+    );
+    assert!(
+        wait_for_journalled(&scenario.db, scenario.run_id, "post-resume answer").await,
+        "the resumed vendor must actually continue and journal fresh output"
+    );
+    assert_eq!(
+        scenario.registry.running_count(),
+        1,
+        "this daemon now owns the continued session"
+    );
+
+    let _ = scenario
+        .registry
+        .running_adapter(scenario.run_id)
+        .unwrap()
+        .dispose()
+        .await;
+    scenario.db.shutdown().await.expect("shutdown database");
+}
+
+/// No vendor session was ever established: the attempt is announced and
+/// fails, `resume_failed` is journaled BEFORE the failed edge, and the run
+/// takes the existing terminalize fallback.
+#[tokio::test]
+async fn a_missing_vendor_session_journals_resume_failed_then_fails_the_run() {
+    let scenario = seed_resumable_run(true).await;
+    set_resume_state(&scenario.db, scenario.run_id, None).await;
+    let result = resume_coordinator(&scenario)
+        .recover()
+        .await
+        .expect("sweep");
+
+    assert_eq!(result.recovered_runs.len(), 1, "{result:?}");
+    assert_eq!(
+        result.recovered_runs[0].outcome,
+        RecoveredOutcome::Terminalized
+    );
+    assert!(result.recovered_runs[0].success);
+    assert_eq!(
+        run_state(&scenario.db, scenario.run_id).await,
+        "failed",
+        "ineligibility falls through to the existing terminalize path"
+    );
+    assert_eq!(
+        journal_count(
+            &scenario.db,
+            scenario.run_id,
+            "\"code\":\"resume_attempted\""
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        journal_count(&scenario.db, scenario.run_id, "\"code\":\"resume_failed\"").await,
+        1
+    );
+    assert_eq!(
+        journal_count(
+            &scenario.db,
+            scenario.run_id,
+            "\"code\":\"resume_succeeded\""
+        )
+        .await,
+        0
+    );
+    assert!(
+        journal_count(
+            &scenario.db,
+            scenario.run_id,
+            "no vendor session was ever established"
+        )
+        .await
+            >= 1,
+        "resume_failed names its reason"
+    );
+    scenario.db.shutdown().await.expect("shutdown database");
+}
+
+/// An unavailable adapter (here: no TUI support supplied to the registry at
+/// all, even though session and transcript are fine) reads exactly like any
+/// other failed resume.
+#[tokio::test]
+async fn an_unavailable_adapter_journals_resume_failed_then_fails_the_run() {
+    let scenario = seed_resumable_run(false).await;
+    let result = resume_coordinator(&scenario)
+        .recover()
+        .await
+        .expect("sweep");
+
+    assert_eq!(result.recovered_runs.len(), 1, "{result:?}");
+    assert_eq!(
+        result.recovered_runs[0].outcome,
+        RecoveredOutcome::Terminalized
+    );
+    assert_eq!(run_state(&scenario.db, scenario.run_id).await, "failed");
+    assert_eq!(
+        journal_count(
+            &scenario.db,
+            scenario.run_id,
+            "\"code\":\"resume_attempted\""
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        journal_count(&scenario.db, scenario.run_id, "\"code\":\"resume_failed\"").await,
+        1
+    );
+    assert!(
+        journal_count(
+            &scenario.db,
+            scenario.run_id,
+            "has no TUI support in this daemon"
+        )
+        .await
+            >= 1,
+        "resume_failed names the unavailability"
+    );
+    scenario.db.shutdown().await.expect("shutdown database");
+}
+
+/// Runs recover independently in one mixed sweep: the resumable one
+/// continues, the ineligible one terminalizes, neither blocks the other.
+#[tokio::test]
+async fn a_mixed_sweep_recovers_each_run_independently() {
+    let scenario = seed_resumable_run(true).await;
+    let (_t2, _w2, ineligible) =
+        seed_run_with_profile(&scenario.db, scenario.project_id, "working", None).await;
+
+    let result = resume_coordinator(&scenario)
+        .recover()
+        .await
+        .expect("sweep");
+    assert_eq!(result.recovered_runs.len(), 2, "{result:?}");
+
+    let resumed = result
+        .recovered_runs
+        .iter()
+        .find(|r| r.run_id == scenario.run_id)
+        .expect("resumable run swept");
+    assert_eq!(resumed.outcome, RecoveredOutcome::Resumed);
+
+    let terminalized = result
+        .recovered_runs
+        .iter()
+        .find(|r| r.run_id == ineligible)
+        .expect("ineligible run swept");
+    assert_eq!(terminalized.outcome, RecoveredOutcome::Terminalized);
+
+    assert_eq!(run_state(&scenario.db, scenario.run_id).await, "working");
+    assert_eq!(run_state(&scenario.db, ineligible).await, "failed");
+
+    let _ = scenario
+        .registry
+        .running_adapter(scenario.run_id)
+        .unwrap()
+        .dispose()
+        .await;
+    scenario.db.shutdown().await.expect("shutdown database");
+}
+
+/// Idempotence: a second boot over the same journal adds nothing. The
+/// resumed run is skipped because THIS process already owns its adapter;
+/// the terminalized one is skipped because it is terminal; every
+/// `resume_attempted` count stays at one.
+#[tokio::test]
+async fn a_second_boot_does_not_double_journal() {
+    let scenario = seed_resumable_run(true).await;
+    let (_t2, _w2, ineligible) =
+        seed_run_with_profile(&scenario.db, scenario.project_id, "working", None).await;
+    let coordinator = resume_coordinator(&scenario);
+
+    let first = coordinator.recover().await.expect("first sweep");
+    let second = coordinator.recover().await.expect("second sweep");
+    drop(coordinator);
+
+    assert_eq!(first.recovered_runs.len(), 2);
+    assert!(
+        second.recovered_runs.is_empty(),
+        "a second boot must find nothing left to decide: {:?}",
+        second.recovered_runs
+    );
+    assert_eq!(
+        journal_count(
+            &scenario.db,
+            scenario.run_id,
+            "\"code\":\"resume_attempted\""
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        journal_count(
+            &scenario.db,
+            scenario.run_id,
+            "\"code\":\"resume_succeeded\""
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        journal_count(&scenario.db, ineligible, "\"code\":\"resume_attempted\"").await,
+        1
+    );
+    assert_eq!(run_state(&scenario.db, scenario.run_id).await, "working");
+    assert_eq!(run_state(&scenario.db, ineligible).await, "failed");
+
+    let _ = scenario
+        .registry
+        .running_adapter(scenario.run_id)
+        .unwrap()
+        .dispose()
+        .await;
+    scenario.db.shutdown().await.expect("shutdown database");
+}
+
+/// `waitingUser` runs are resume CANDIDATES even under the default config
+/// -- but when the resume fails they keep today's conservative skip (never
+/// terminalized), and a second boot does not re-attempt them either.
+#[tokio::test]
+async fn a_waiting_user_resume_failure_keeps_the_conservative_skip_and_is_not_retried() {
+    let scenario = seed_resumable_run(false).await;
+    // seed_resumable_run left the run in `working`; one more legal edge.
+    let to = RunState::try_from("waitingUser").expect("waitingUser is a valid state");
+    let run_id = scenario.run_id;
+    let project_id = scenario.project_id;
+    scenario
+        .db
+        .run_domain_op(Box::new(move |conn| {
+            let mut repo = DomainRepository::new(conn, project_id);
+            repo.transition_run(run_id, &to, None)
+                .map(|_| serde_json::json!({}))
+        }))
+        .await
+        .expect("drive to waitingUser");
+    let coordinator = resume_coordinator(&scenario);
+
+    let first = coordinator.recover().await.expect("first sweep");
+    drop(coordinator);
+
+    assert_eq!(first.recovered_runs.len(), 1, "{first:?}");
+    assert_eq!(
+        first.recovered_runs[0].outcome,
+        RecoveredOutcome::LeftUntouched
+    );
+    assert!(!first.recovered_runs[0].success);
+    assert_eq!(
+        run_state(&scenario.db, scenario.run_id).await,
+        "waitingUser",
+        "the conservative default survives a failed waiting-run resume"
+    );
+    assert_eq!(
+        journal_count(
+            &scenario.db,
+            scenario.run_id,
+            "\"code\":\"resume_attempted\""
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        journal_count(&scenario.db, scenario.run_id, "\"code\":\"resume_failed\"").await,
+        1
+    );
+
+    // A second boot finds the previous failure already decided: nothing new.
+    let scenario_ref = &scenario;
+    let second = resume_coordinator(scenario_ref)
+        .recover()
+        .await
+        .expect("second sweep");
+    assert!(second.recovered_runs.is_empty(), "{second:?}");
+    assert_eq!(
+        journal_count(
+            &scenario.db,
+            scenario.run_id,
+            "\"code\":\"resume_attempted\""
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        run_state(&scenario.db, scenario.run_id).await,
+        "waitingUser"
+    );
+    scenario.db.shutdown().await.expect("shutdown database");
 }

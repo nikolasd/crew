@@ -49,7 +49,7 @@ use crate::conformance::{ConformanceMode, ConformanceReport, ScenarioResult, sce
 use crate::db::DatabaseHandle;
 use crate::display::{DisplayRegistry, HiddenDisplay, PaneCoordinator};
 
-use super::adapter::{TuiAdapter, TuiTimings};
+use super::adapter::{ResumeContext, TuiAdapter, TuiTimings};
 use super::claude::ClaudeTuiVendor;
 
 fn adapter_config(bin: PathBuf, session_dir: PathBuf) -> AdapterConfig {
@@ -82,7 +82,7 @@ fn declared_capabilities(harness: &Harness) -> AdapterCapabilities {
         None,
         CloseOnExit::Never,
         TuiTimings::default(),
-        None,
+        ResumeContext::default(),
     )
     .capabilities()
 }
@@ -473,7 +473,7 @@ async fn mock_process_scenarios(harness: &Harness) -> Vec<ScenarioResult> {
         None,
         CloseOnExit::Always,
         fast_timings(),
-        None,
+        ResumeContext::default(),
     );
     let sink = Arc::new(CollectingSink::default());
 
@@ -608,7 +608,10 @@ async fn resume_scenarios(harness: &Harness, break_resume: bool) -> Vec<Scenario
         None,
         CloseOnExit::Always,
         fast_timings(),
-        Some(transcript_path),
+        ResumeContext {
+            transcript_path: Some(transcript_path),
+            cursor: None,
+        },
     );
     let sink = Arc::new(CollectingSink::default());
     let result = adapter

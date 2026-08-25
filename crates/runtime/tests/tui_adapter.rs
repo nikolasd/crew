@@ -22,8 +22,8 @@ use crew_protocol::{
     ProjectId, RunId, RuntimeEvent, RuntimeEventKind, TaskId, WorkerId,
 };
 use crew_runtime::adapter::tui::{
-    Cursor, LaunchSpec, TranscriptFormat, TuiAdapter, TuiEvent, TuiTimings, TuiVendor,
-    VersionVerdict, parse_jsonl_chunk,
+    Cursor, LaunchSpec, ResumeContext, TranscriptFormat, TuiAdapter, TuiEvent, TuiTimings,
+    TuiVendor, VersionVerdict, parse_jsonl_chunk,
 };
 use crew_runtime::adapter::{
     Adapter, AdapterEvent, AdapterEventPayload, AdapterEventSink, AdapterFuture, AdapterMessage,
@@ -487,6 +487,21 @@ impl TuiVendor for MockTuiVendor {
         self.session_dir.clone()
     }
 
+    /// The mock's own layout: every session's transcript *is*
+    /// `<session_dir>/session.jsonl`, whatever the session id -- so this
+    /// override is what lets the deterministic-derivation tests below
+    /// prove the trait default's contract end-to-end without renaming
+    /// files mid-test.
+    fn transcript_path_for_session(
+        &self,
+        _session: &VendorSessionRef,
+        spec: &StartSpec,
+        cfg: &AdapterConfig,
+    ) -> PathBuf {
+        let _ = (spec, cfg);
+        self.transcript_path()
+    }
+
     fn format(&self) -> Arc<dyn TranscriptFormat> {
         Arc::new(MockFormat)
     }
@@ -566,7 +581,7 @@ fn build_adapter(
     task_id: TaskId,
     worker_id: WorkerId,
     timings: TuiTimings,
-    resume_transcript_path: Option<PathBuf>,
+    resume: ResumeContext,
 ) -> TuiAdapter<MockTuiVendor> {
     TuiAdapter::new(
         vendor,
@@ -580,7 +595,7 @@ fn build_adapter(
         None,
         CloseOnExit::Always,
         timings,
-        resume_transcript_path,
+        resume,
     )
 }
 
@@ -604,7 +619,7 @@ async fn full_lifecycle_event_order_question_and_tool_mapping() {
         task_id,
         worker_id,
         fast_timings(),
-        None,
+        ResumeContext::default(),
     );
 
     let sink = RecordingSink::new();
@@ -716,7 +731,15 @@ async fn readiness_gate_injects_only_after_the_quiet_window() {
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let worker_id = WorkerId::new();
-    let adapter = build_adapter(vendor, &harness, run_id, task_id, worker_id, timings, None);
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        timings,
+        ResumeContext::default(),
+    );
 
     let sink = RecordingSink::new();
 
@@ -774,7 +797,15 @@ async fn discovery_failure_fails_the_run_tears_down_the_pty_and_closes_the_pane(
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let worker_id = WorkerId::new();
-    let adapter = build_adapter(vendor, &harness, run_id, task_id, worker_id, timings, None);
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        timings,
+        ResumeContext::default(),
+    );
 
     let sink = RecordingSink::new();
 
@@ -847,7 +878,7 @@ async fn send_writes_the_composed_bytes_to_the_pty() {
         task_id,
         worker_id,
         fast_timings(),
-        None,
+        ResumeContext::default(),
     );
 
     let sink = RecordingSink::new();
@@ -906,7 +937,7 @@ async fn cancel_turn_writes_the_interrupt_sequence_to_the_pty() {
         task_id,
         worker_id,
         fast_timings(),
-        None,
+        ResumeContext::default(),
     );
 
     let sink = RecordingSink::new();
@@ -947,7 +978,7 @@ async fn cancel_turn_with_no_active_run_is_a_no_op_success() {
         TaskId::new(),
         WorkerId::new(),
         fast_timings(),
-        None,
+        ResumeContext::default(),
     );
 
     adapter
@@ -976,7 +1007,7 @@ async fn pane_attach_is_journaled_with_the_real_pane_ref_from_the_fake_backend()
         task_id,
         worker_id,
         fast_timings(),
-        None,
+        ResumeContext::default(),
     );
 
     let sink = RecordingSink::new();
@@ -1030,7 +1061,7 @@ async fn out_of_band_input_is_journaled_when_a_viewer_types_into_the_attached_pa
         task_id,
         worker_id,
         fast_timings(),
-        None,
+        ResumeContext::default(),
     );
 
     let sink = RecordingSink::new();
@@ -1126,7 +1157,10 @@ async fn resume_journals_under_constructor_ids_with_no_injection_and_no_discover
         task_id,
         worker_id,
         fast_timings(),
-        Some(transcript_path),
+        ResumeContext {
+            transcript_path: Some(transcript_path),
+            cursor: None,
+        },
     );
 
     let sink = RecordingSink::new();
@@ -1209,6 +1243,221 @@ async fn resume_journals_under_constructor_ids_with_no_injection_and_no_discover
     harness.shutdown().await;
 }
 
+// ------------------------------------------------------------------ WP14
+
+#[tokio::test]
+async fn resume_without_a_known_path_derives_the_transcript_from_the_vendor_root_and_session_id() {
+    let harness = harness().await;
+    let work_dir = tempfile::Builder::new()
+        .prefix("bat-tui-mock-derive-")
+        .tempdir_in("/tmp")
+        .expect("mock work dir");
+    let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Reactive);
+    let control_log = vendor.control_log.clone();
+
+    // Pre-existing transcript AT the vendor's own deterministic layout
+    // (`transcript_root()/session.jsonl` via the mock's override), written
+    // long enough ago that nonce discovery structurally cannot find it:
+    // `find_transcript_by_nonce` only scans files touched after the
+    // discovery window opened. A passing test is therefore proof the path
+    // was *derived* from `transcript_root()` + the session id (the WP11
+    // honest gap, closed in WP14), not that discovery happened to win a
+    // race it cannot even enter.
+    let transcript = vendor.transcript_path();
+    fs::write(
+        &transcript,
+        "{\"type\":\"session\",\"id\":\"sess-mock\"}\n\
+         {\"type\":\"assistant\",\"text\":\"derived path works\",\"question\":false}\n",
+    )
+    .expect("seed a pre-existing transcript");
+
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let worker_id = WorkerId::new();
+    // Empty ResumeContext: no known path, no stored cursor -- exactly what
+    // a registry that knows only the session id can supply.
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        fast_timings(),
+        ResumeContext::default(),
+    );
+
+    let sink = RecordingSink::new();
+    adapter
+        .resume(VendorSessionRef("sess-mock".to_string()), sink.clone())
+        .await
+        .expect("resume must succeed by deriving the transcript path");
+
+    let tailed = wait_until(
+        || {
+            sink.payloads().iter().any(|p| matches!(
+                p,
+                AdapterEventPayload::MessageFinal { text, .. } if text.value == "derived path works"
+            ))
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(tailed, "the derived transcript must have been tailed");
+
+    // No prompt injection on the derived-path resume either.
+    assert!(
+        read_control_log(&control_log).is_empty(),
+        "resume must never inject a prompt"
+    );
+
+    adapter.dispose().await.expect("dispose");
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn resume_tails_from_the_stored_cursor_so_journaled_events_are_not_re_emitted() {
+    let harness = harness().await;
+    let work_dir = tempfile::Builder::new()
+        .prefix("bat-tui-mock-cursor-")
+        .tempdir_in("/tmp")
+        .expect("mock work dir");
+    let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Reactive);
+
+    // A three-entry pre-crash transcript. Everything up to and including
+    // the "first half" entry stands for events the crashed run already
+    // journaled (its cursor covered them); only "second half" was never
+    // durably consumed.
+    let line1 = "{\"type\":\"session\",\"id\":\"sess-mock\"}\n";
+    let line2 = "{\"type\":\"assistant\",\"text\":\"first half\",\"question\":false}\n";
+    let line3 = "{\"type\":\"assistant\",\"text\":\"second half\",\"question\":false}\n";
+    fs::write(vendor.transcript_path(), format!("{line1}{line2}{line3}")).expect("seed transcript");
+
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let worker_id = WorkerId::new();
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        fast_timings(),
+        ResumeContext {
+            transcript_path: None,
+            cursor: Some(Cursor {
+                offset: (line1.len() + line2.len()) as u64,
+                last_entry_id: None,
+            }),
+        },
+    );
+
+    let sink = RecordingSink::new();
+    adapter
+        .resume(VendorSessionRef("sess-mock".to_string()), sink.clone())
+        .await
+        .expect("resume from the stored cursor");
+
+    let settled =
+        wait_until(
+            || {
+                sink.payloads().iter().any(|p| matches!(
+                p,
+                AdapterEventPayload::MessageFinal { text, .. } if text.value == "second half"
+            ))
+            },
+            Duration::from_secs(5),
+        )
+        .await;
+    assert!(settled, "the post-cursor entry must be tailed");
+
+    // The whole point of the stored cursor: everything at or before the
+    // cursor was already durable when the run died and must not be
+    // re-journaled.
+    assert!(
+        !sink.payloads().iter().any(|p| matches!(
+            p,
+            AdapterEventPayload::MessageFinal { text, .. } if text.value == "first half"
+        )),
+        "events covered by the stored cursor must never be re-emitted"
+    );
+    assert_eq!(
+        sink.payloads()
+            .iter()
+            .filter(|p| matches!(p, AdapterEventPayload::MessageFinal { text, .. } if text.value == "second half"))
+            .count(),
+        1,
+        "exactly one emission past the cursor"
+    );
+
+    adapter.dispose().await.expect("dispose");
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn start_with_a_resume_spec_continues_the_session_instead_of_injecting() {
+    let harness = harness().await;
+    let work_dir = tempfile::Builder::new()
+        .prefix("bat-tui-mock-specresume-")
+        .tempdir_in("/tmp")
+        .expect("mock work dir");
+    let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Reactive);
+    let control_log = vendor.control_log.clone();
+
+    // Pre-existing transcript at the vendor's deterministic layout, with an
+    // old mtime so discovery cannot find it -- only the derived path works.
+    fs::write(
+        vendor.transcript_path(),
+        "{\"type\":\"session\",\"id\":\"sess-mock\"}\n\
+         {\"type\":\"assistant\",\"text\":\"spec resume works\",\"question\":false}\n",
+    )
+    .expect("seed a pre-existing transcript");
+
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let worker_id = WorkerId::new();
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        fast_timings(),
+        ResumeContext::default(),
+    );
+
+    // A StartSpec that carries a session ref: the WP14 wiring makes this a
+    // continuation, not a fresh launch with a flag. The prompt must never
+    // be injected into the continued session.
+    let mut spec = spec(run_id, task_id, worker_id, "say hi");
+    spec.resume = Some(VendorSessionRef("sess-mock".to_string()));
+
+    let sink = RecordingSink::new();
+    adapter
+        .start(spec, sink.clone())
+        .await
+        .expect("start-with-resume must succeed");
+
+    let tailed = wait_until(
+        || {
+            sink.payloads().iter().any(|p| matches!(
+                p,
+                AdapterEventPayload::MessageFinal { text, .. } if text.value == "spec resume works"
+            ))
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(tailed, "the continued session's transcript must be tailed");
+
+    assert!(
+        read_control_log(&control_log).is_empty(),
+        "start-with-resume must never inject the prompt"
+    );
+
+    adapter.dispose().await.expect("dispose");
+    harness.shutdown().await;
+}
+
 #[tokio::test]
 async fn readiness_gate_sees_output_produced_before_a_slow_pane_attach_resolves() {
     // A pane attach slow enough to expose the bug this guards against:
@@ -1235,7 +1484,15 @@ async fn readiness_gate_sees_output_produced_before_a_slow_pane_attach_resolves(
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let worker_id = WorkerId::new();
-    let adapter = build_adapter(vendor, &harness, run_id, task_id, worker_id, timings, None);
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        timings,
+        ResumeContext::default(),
+    );
 
     let sink = RecordingSink::new();
     let start = tokio::time::Instant::now();
@@ -1283,7 +1540,7 @@ async fn cancel_worker_preserves_the_real_termination_signal_when_escalated_to_s
         task_id,
         worker_id,
         fast_timings(),
-        None,
+        ResumeContext::default(),
     );
 
     let sink = RecordingSink::new();
