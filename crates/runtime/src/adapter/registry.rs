@@ -40,6 +40,7 @@ use parking_lot::Mutex;
 use crew_protocol::{DisplayPlacement, RunId, TaskId, WorkerId};
 use tokio::sync::oneshot;
 
+use super::activity::ActivityClock;
 use super::capability::{AdapterCapabilities, NestedCapability};
 use super::event_sink::{AdapterEventSink, DomainAdapterEventSink, SettlementSink};
 use super::mcp_config::AdapterMcpConfig;
@@ -204,6 +205,12 @@ pub struct AdapterRegistry {
     running: Arc<Mutex<HashMap<RunId, Arc<dyn Adapter>>>>,
     /// Org security patterns for redaction.
     org_security_patterns: Vec<String>,
+    /// Per-run liveness clocks (WP19): touched by every event flowing
+    /// through each run's [`RunLifecycleSink::wrap`], read by lifecycle's
+    /// timeout sweep. Defaults to an empty clock -- a caller that never
+    /// calls [`Self::set_activity_clock`] (chiefly tests) simply never
+    /// has timeouts to sweep.
+    activity: Mutex<Option<Arc<ActivityClock>>>,
 }
 
 impl AdapterRegistry {
@@ -222,6 +229,7 @@ impl AdapterRegistry {
             broker: Mutex::new(None),
             tui: Mutex::new(None),
             resume_support: Mutex::new(None),
+            activity: Mutex::new(None),
             running: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -257,6 +265,28 @@ impl AdapterRegistry {
     /// already be handed to [`crate::ipc::ServerConfig::run_driver`].
     pub fn set_resume_support(&self, support: Arc<ResumeSupport>) {
         *self.resume_support.lock() = Some(support);
+    }
+
+    /// Supplies the shared [`ActivityClock`] every run's lifecycle sink
+    /// touches and lifecycle's timeout sweep reads. A post-construction
+    /// setter -- exactly like `set_broker` -- because the clock must be
+    /// the *same* instance the sweep task is handed, and that task is
+    /// spawned by `lifecycle::serve` after this registry is already
+    /// running. Unset (tests) means an empty clock: sinks touch it, the
+    /// sweep has nothing to read.
+    pub fn set_activity_clock(&self, activity: Arc<ActivityClock>) {
+        *self.activity.lock() = Some(activity);
+    }
+
+    /// The clock to hand a run's lifecycle sink: the shared instance when
+    /// [`Self::set_activity_clock`] was called, else a fresh empty one
+    /// whose touches nothing ever reads.
+    #[must_use]
+    pub fn activity_clock(&self) -> Arc<ActivityClock> {
+        self.activity
+            .lock()
+            .clone()
+            .unwrap_or_else(|| Arc::new(ActivityClock::new()))
     }
 
     /// The adapter instance currently running for `run_id`, if any --
@@ -445,6 +475,7 @@ impl AdapterRegistry {
             support.project_id,
             support.events_tx.clone(),
             run_id,
+            self.activity_clock(),
         );
         let (sink, settled) = SettlementSink::wrap(sink);
         if let Err(err) = adapter.resume(session, sink).await {
@@ -746,6 +777,7 @@ async fn run_one(
         ctx.project_id,
         ctx.events_tx.clone(),
         ctx.run_id,
+        Arc::clone(&ctx.activity),
     );
     let (sink, settled) = SettlementSink::wrap(sink);
     if let Err(err) = adapter

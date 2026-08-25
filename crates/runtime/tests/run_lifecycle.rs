@@ -185,7 +185,14 @@ fn production_sink_chain(
         )
         .expect("built-in patterns always compile"),
     );
-    RunLifecycleSink::wrap(domain_sink, Arc::clone(db), project_id, events_tx, run_id)
+    RunLifecycleSink::wrap(
+        domain_sink,
+        Arc::clone(db),
+        project_id,
+        events_tx,
+        run_id,
+        std::sync::Arc::new(crew_runtime::adapter::ActivityClock::new()),
+    )
 }
 
 /// Reads a run's current projected state directly, for assertions.

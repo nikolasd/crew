@@ -2868,6 +2868,141 @@ async fn plan_decide_is_refused_for_a_non_owning_client() {
     assert_eq!(get["result"]["approved"], Value::Null);
 }
 
+/// WP19: spawning a run from an approved plan subtask snapshots its
+/// `turnBudget`; steering sends consume turns; the send at the cap is
+/// refused with the typed `BUDGET_EXCEEDED` code AND journals (hence
+/// broadcasts) the durable `budgetExceeded` fact; the refused message row
+/// is never written.
+#[tokio::test]
+async fn turn_budget_refuses_at_cap_and_journals_budget_exceeded() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let (_task_id, _worker_id, leader_run) = submit_run_with_driver(&mut client, "omp-1").await;
+
+    // The leader's plan caps its subtask at ONE turn.
+    let plan = json!({
+        "subtasks": [
+            { "id": "s1", "description": "do the work", "adapter": "fake", "writes": true, "turnBudget": 1 }
+        ]
+    });
+    let propose = client
+        .call(
+            2,
+            "plan/propose",
+            json!({
+                "runId": leader_run,
+                "ownerClientInstanceId": "omp-1",
+                "taskText": "t",
+                "plan": plan
+            }),
+        )
+        .await;
+    assert!(
+        propose.get("error").is_none(),
+        "propose failed: {propose:?}"
+    );
+    let decide = client
+        .call(
+            3,
+            "plan/decide",
+            json!({ "runId": leader_run, "approved": true }),
+        )
+        .await;
+    assert!(decide.get("error").is_none(), "decide failed: {decide:?}");
+
+    // Spawn the worker's own run from the approved subtask.
+    let task = client
+        .call(
+            4,
+            "task/upsert",
+            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
+        )
+        .await;
+    let task_b = task["result"]["taskId"].as_str().unwrap().to_string();
+    let worker = client
+        .call(
+            5,
+            "worker/create",
+            json!({ "fingerprint": "sha256:g", "adapter": "fake", "model": "m" }),
+        )
+        .await;
+    let worker_b = worker["result"]["workerId"].as_str().unwrap().to_string();
+    let submit = client
+        .call(
+            6,
+            "run/submit",
+            json!({
+                "taskId": task_b,
+                "workerId": worker_b,
+                "planRef": { "planId": leader_run, "subtaskId": "s1" }
+            }),
+        )
+        .await;
+    assert!(
+        submit.get("error").is_none(),
+        "submit with planRef failed: {submit:?}"
+    );
+    let run_b = submit["result"]["runId"].as_str().unwrap().to_string();
+
+    // First steering send consumes the single budgeted turn.
+    let first = client
+        .call(
+            7,
+            "message/send",
+            json!({
+                "runId": run_b,
+                "senderWorkerId": worker_b,
+                "taskId": task_b,
+                "kind": "followUp",
+                "payload": "go"
+            }),
+        )
+        .await;
+    assert!(first.get("error").is_none(), "first send failed: {first:?}");
+
+    // Second hits the cap: typed refusal.
+    let refused = client
+        .call(
+            8,
+            "message/send",
+            json!({
+                "runId": run_b,
+                "senderWorkerId": worker_b,
+                "taskId": task_b,
+                "kind": "steer",
+                "payload": "more"
+            }),
+        )
+        .await;
+    assert_eq!(
+        refused["error"]["code"],
+        i64::from(crew_protocol::error_code::BUDGET_EXCEEDED),
+        "the send at cap must be refused with BUDGET_EXCEEDED: {refused:?}"
+    );
+
+    // The durable fact was journaled (and broadcast) despite the refusal.
+    let replay = client
+        .call(9, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    let exceeded = replay["result"]
+        .as_array()
+        .expect("events/replay returns an array")
+        .iter()
+        .find(|e| e["event"]["type"] == "budgetExceeded")
+        .expect("the BudgetExceeded fact must be journaled");
+    assert_eq!(exceeded["event"]["payload"]["turnsUsed"], 1);
+    assert_eq!(exceeded["event"]["payload"]["turnLimit"], 1);
+
+    // The refused message itself was never recorded.
+    let list = client
+        .call(10, "message/list", json!({ "runId": run_b }))
+        .await;
+    assert_eq!(list["result"]["messages"].as_array().unwrap().len(), 1);
+}
+
 #[tokio::test]
 async fn plan_propose_and_decide_are_observed_by_events_subscribe() {
     // Every plan mutation must broadcast its committed envelope to live

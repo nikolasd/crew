@@ -109,6 +109,16 @@ impl From<DomainError> for ServiceError {
                     "run {run_id} is quarantined by an undecided policy violation; decide it via policy/violation/decide"
                 ),
             },
+            DomainError::BudgetExceeded {
+                run_id,
+                turns_used,
+                turn_limit,
+            } => Self {
+                code: error_code::BUDGET_EXCEEDED,
+                message: format!(
+                    "run {run_id} exceeded its turn budget: {turns_used}/{turn_limit} turns used"
+                ),
+            },
             other => Self::internal(other.to_string()),
         }
     }
@@ -202,6 +212,14 @@ pub struct OrchestrationService {
     /// Resolved once per `run/submit` against the caller's
     /// `displayPreference`, so an adapter never re-probes.
     display: Arc<crate::display::DisplayRegistry>,
+    /// The default per-subtask turn budget (WP19): `config
+    /// limits.turnBudgetPerSubtask`, snapshotted into a run's budgets row
+    /// at submit when its plan subtask carries no explicit `turnBudget`.
+    turn_budget_default: u32,
+    /// The shared liveness clock every started run's sink touches and
+    /// lifecycle's timeout sweep reads -- the same instance the registry's
+    /// sinks use, so one run has exactly one clock.
+    activity: Arc<crate::adapter::ActivityClock>,
 }
 
 /// The outcome of [`OrchestrationService::abandon_lease`]: what
@@ -232,6 +250,8 @@ impl OrchestrationService {
         lease_service: Arc<crate::workspace::LeaseService>,
         artifact_store: Arc<crate::workspace::ArtifactStore>,
         repository: std::path::PathBuf,
+        turn_budget_default: u32,
+        activity: Arc<crate::adapter::ActivityClock>,
     ) -> Self {
         let approval = Arc::new(crate::approval::ApprovalService::new(
             db.clone(),
@@ -254,6 +274,8 @@ impl OrchestrationService {
             display: Arc::new(crate::display::DisplayRegistry::with_default_backends(
                 crew_protocol::DisplayConfig::default(),
             )),
+            turn_budget_default,
+            activity,
         }
     }
 
@@ -790,6 +812,7 @@ impl OrchestrationService {
             prompt,
             events_tx: self.events_tx.clone(),
             violation_service: Arc::clone(&self.violation),
+            activity: Arc::clone(&self.activity),
             workspace_path: workspace_path.as_ref().map(|(path, _)| path.clone()),
             policy,
             display,
@@ -852,6 +875,67 @@ impl OrchestrationService {
             .and_then(Value::as_str)
             .map(str::to_string);
 
+        // Turn-budget snapshot (WP19): an optional `planRef {planId,
+        // subtaskId}` names the approved plan subtask this run executes.
+        // Its `turnBudget` wins; the config default fills the gap. The
+        // provenance is stored on the run row (WP20's writes guard reads
+        // it) and the limit into the budgets row, in the same domain op as
+        // submission. A malformed reference is the caller's error.
+        let plan_ref = params.get("planRef");
+        let (plan_ref_json, turn_limit) = if let Some(plan_ref) = plan_ref {
+            let plan_id = parse_run_id(plan_ref.get("planId")).map_err(|_| {
+                ServiceError::invalid_params("planRef.planId is not a valid run id")
+            })?;
+            let subtask_id = plan_ref
+                .get("subtaskId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ServiceError::invalid_params("planRef.subtaskId is required"))?
+                .to_string();
+            // Read the referenced plan to snapshot its limit. A missing,
+            // undecided, or rejected plan is the caller's error: the leader
+            // must approve a plan before spawning runs from it.
+            let project_id = self.project_id;
+            let result = self
+                .db
+                .run_domain_op(Box::new(move |conn| {
+                    DomainRepository::new(conn, project_id)
+                        .get_plan(plan_id)
+                        .map(|r| serde_json::to_value(r).expect("PlanGetResult serializes"))
+                }))
+                .await
+                .map_err(ServiceError::from)?;
+            let subtasks = result
+                .pointer("/plan/subtasks")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    ServiceError::invalid_params(format!("run {} has no proposed plan", plan_id))
+                })?;
+            if result.get("approved").and_then(Value::as_bool) != Some(true) {
+                return Err(ServiceError::invalid_params(format!(
+                    "plan {} has not been approved; the leader must decide it before spawning from it",
+                    plan_id
+                )));
+            }
+            let subtask_id_str = subtask_id.as_str();
+            let turn_budget = subtasks
+                .iter()
+                .find(|s| s.get("id").and_then(Value::as_str) == Some(subtask_id_str))
+                .ok_or_else(|| {
+                    ServiceError::invalid_params(format!(
+                        "subtask {subtask_id} not found in plan {plan_id}"
+                    ))
+                })?
+                .get("turnBudget")
+                .and_then(Value::as_u64)
+                .map(|v| u32::try_from(v).unwrap_or(u32::MAX));
+            (
+                Some(json!({ "planId": plan_id.to_string(), "subtaskId": subtask_id }).to_string()),
+                turn_budget.unwrap_or(self.turn_budget_default),
+            )
+        } else {
+            (None, self.turn_budget_default)
+        };
+
         // Re-merge this run's own `policyOverrides` on top of the startup
         // layers, so the run is authorized against -- and fingerprinted
         // with -- exactly the policy it asked for. Without overrides (or
@@ -891,11 +975,6 @@ impl OrchestrationService {
 
         // The task must exist. `task_get_op` selects by task id alone,
         // with no project-id predicate -- and neither does any of the
-        // owner-arbitration queries this fix adds below (S2). That is
-        // correct, not merely convenient: each runtime process owns
-        // exactly one project's database, so "task id" and "task id in
-        // this project" already coincide; there is no cross-project
-        // rejection to perform here.
         self.db
             .run_domain_op(query::task_get_op(task_id))
             .await
@@ -922,8 +1001,18 @@ impl OrchestrationService {
             .db
             .run_domain_op(Box::new(move |conn| {
                 let mut repo = DomainRepository::new(conn, project_id);
-                repo.submit_run(&run, fingerprint.as_deref(), Some(&principal_instance_id))
-                    .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                let committed =
+                    repo.submit_run(&run, fingerprint.as_deref(), Some(&principal_instance_id))?;
+                // Snapshot the budget in the same actor closure as
+                // submission. Two transactions, one closure: a crash between
+                // them leaves a run with no budgets row, which the guard
+                // treats as "no explicit budget" -- unlimited, never
+                // spuriously refused.
+                repo.attach_turn_budget(run.run_id, run.task_id, plan_ref_json, turn_limit)?;
+                Ok(embed_envelope(
+                    json!({ "sequence": committed.sequence }),
+                    &committed.envelope,
+                ))
             }))
             .await
             .map_err(ServiceError::from)?;
@@ -2040,7 +2129,7 @@ impl OrchestrationService {
         };
         let project_id = self.project_id;
         let principal_instance_id = principal.instance_id.clone();
-        let mut sequence = self
+        let submit_outcome = self
             .db
             .run_domain_op(Box::new(move |conn| {
                 let mut repo = DomainRepository::new(conn, project_id);
@@ -2052,12 +2141,38 @@ impl OrchestrationService {
                 // OMP may journal a message against a run in any state --
                 // the delivery diagnostic path already handles a run with
                 // no live adapter (R94 gates only the worker-MCP broker
-                // writes whose doc promises liveness).
+                // writes whose doc promises liveness). The turn-budget
+                // guard (WP19) sits in that same transaction.
                 repo.record_message(&message, Some(&principal_instance_id), true, false)
                     .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
             }))
             .await
-            .map_err(ServiceError::from)?;
+            .map_err(ServiceError::from);
+        let mut sequence = match submit_outcome {
+            Ok(value) => value,
+            Err(err) => {
+                // A typed budget refusal must still journal -- and
+                // broadcast -- its durable `BudgetExceeded` fact (WP19):
+                // monitors see the cap trip even though no message row was
+                // written. The refusal itself is then returned as-is with
+                // its `BUDGET_EXCEEDED` code.
+                if err.code == error_code::BUDGET_EXCEEDED {
+                    let mut exceeded = self
+                        .db
+                        .run_domain_op(Box::new(move |conn| {
+                            DomainRepository::new(conn, project_id)
+                                .journal_budget_exceeded(run_id)
+                                .map(|c| {
+                                    embed_envelope(json!({ "sequence": c.sequence }), &c.envelope)
+                                })
+                        }))
+                        .await
+                        .map_err(ServiceError::from)?;
+                    self.broadcast(&mut exceeded);
+                }
+                return Err(err);
+            }
+        };
         self.broadcast(&mut sequence);
 
         // Best-effort live delivery to an already-running adapter. A

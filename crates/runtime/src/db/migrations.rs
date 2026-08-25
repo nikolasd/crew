@@ -260,6 +260,25 @@ CREATE TABLE plans (
 );
 ";
 
+/// Migration 12: per-run turn budgets (WP19) plus the `runs.plan_ref`
+/// provenance column. A budget row is snapshotted once at `run/submit` --
+/// limit resolved from the referenced plan subtask's `turnBudget`, else
+/// the config's `limits.turnBudgetPerSubtask` -- and incremented by every
+/// turn-consuming leader message; the guard inside
+/// [`crate::domain::DomainRepository::record_message`] refuses at the cap.
+/// `plan_ref` carries the `{planId, subtaskId}` JSON a run was spawned
+/// from, so WP20's writes-flag guard can resolve subtask metadata without
+/// re-deriving it.
+const MIGRATION_12: &str = "
+CREATE TABLE budgets (
+  run_id TEXT PRIMARY KEY REFERENCES runs(run_id),
+  task_id TEXT NOT NULL,
+  turns_used INTEGER NOT NULL DEFAULT 0,
+  turn_limit INTEGER NOT NULL
+);
+ALTER TABLE runs ADD COLUMN plan_ref TEXT;
+";
+
 /// Opens `path` as a private (mode `0600`) SQLite database, configures its
 /// PRAGMAs (`journal_mode=WAL`, `foreign_keys=ON`, `busy_timeout=5000`,
 /// `synchronous=FULL`), and migrates it to the latest schema. Migrations
@@ -298,6 +317,7 @@ fn migration_list() -> Migrations<'static> {
         M::up(MIGRATION_9),
         M::up(MIGRATION_10),
         M::up(MIGRATION_11),
+        M::up(MIGRATION_12),
     ])
 }
 

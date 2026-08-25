@@ -91,6 +91,19 @@ pub enum DomainError {
     /// doctrine to the quarantine gates).
     #[error("run {run_id} is quarantined by an undecided policy violation")]
     PolicyQuarantined { run_id: String },
+    /// A leader-originated steering message was refused because the run's
+    /// turn budget is exhausted (`turns_used >= turn_limit`). Checked
+    /// inside [`DomainRepository::record_message`]'s own guarded
+    /// transaction (WP19) -- never a caller-side pre-check. The typed
+    /// refusal travels to the RPC caller as `BUDGET_EXCEEDED`; the
+    /// durable `BudgetExceeded` fact is journaled (and broadcast) by a
+    /// follow-up commit, not inside this rolled-back one.
+    #[error("run {run_id} exceeded its turn budget: {turns_used}/{turn_limit} turns used")]
+    BudgetExceeded {
+        run_id: String,
+        turns_used: u32,
+        turn_limit: u32,
+    },
     /// A serialization step failed.
     #[error("failed to serialize event: {0}")]
     Serialize(#[from] serde_json::Error),
@@ -1195,6 +1208,35 @@ impl<'c> DomainRepository<'c> {
                         });
                     }
                 }
+                // Turn budget guard (WP19): leader-originated steering
+                // kinds consume a worker turn. Checked inside this same
+                // guarded transaction -- a caller-side pre-check would
+                // read a snapshot another send could land behind. A run
+                // with no budgets row (submitted before WP19, or via
+                // retry) has no explicit budget and is never refused.
+                if is_turn_consuming(&message.kind) {
+                    let row: Option<(i64, i64)> = tx
+                        .query_row(
+                            "SELECT turns_used, turn_limit FROM budgets WHERE run_id = ?1",
+                            [message.run_id.to_string()],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
+                        )
+                        .optional()?;
+                    if let Some((turns_used, turn_limit)) = row {
+                        let (turns_used, turn_limit) = (u32::try_from(turns_used).unwrap_or(u32::MAX), u32::try_from(turn_limit).unwrap_or(0));
+                        if turns_used >= turn_limit {
+                            return Err(DomainError::BudgetExceeded {
+                                run_id: message.run_id.to_string(),
+                                turns_used,
+                                turn_limit,
+                            });
+                        }
+                        tx.execute(
+                            "UPDATE budgets SET turns_used = turns_used + 1 WHERE run_id = ?1",
+                            [message.run_id.to_string()],
+                        )?;
+                    }
+                }
                 tx.execute(
                     "INSERT INTO messages (message_id, run_id, sender_worker_id, recipient_worker_id,
                        task_id, kind, payload, delivery_state, created_at, sent_at, acknowledged_at, reply_to)
@@ -1237,6 +1279,157 @@ impl<'c> DomainRepository<'c> {
             message: message.into(),
         };
         self.append_and_apply(&event, None, None, Some(run_id), |_tx| Ok(()))
+    }
+
+    /// Snapshots a run's turn budget (WP19): records the plan provenance on
+    /// the run row and creates its `budgets` row with the resolved limit.
+    /// Projection-only bookkeeping -- the `RunQueued` event already
+    /// committed the submission fact; a budget is a *limit* the leader's
+    /// plan and config imply for the run, and the durable facts are the
+    /// later `BudgetExceeded` and turn-consuming message events that
+    /// reference it. Written once at submit; a run whose row already
+    /// exists keeps it.
+    ///
+    /// # Errors
+    /// Returns [`DomainError`] if either projection write fails.
+    pub fn attach_turn_budget(
+        &mut self,
+        run_id: RunId,
+        task_id: TaskId,
+        plan_ref: Option<String>,
+        turn_limit: u32,
+    ) -> Result<(), DomainError> {
+        if let Some(plan_ref) = &plan_ref {
+            self.conn.execute(
+                "UPDATE runs SET plan_ref = ?1 WHERE run_id = ?2",
+                rusqlite::params![plan_ref, run_id.to_string()],
+            )?;
+        }
+        self.conn.execute(
+            "INSERT INTO budgets (run_id, task_id, turns_used, turn_limit) VALUES (?1, ?2, 0, ?3)",
+            rusqlite::params![
+                run_id.to_string(),
+                task_id.to_string(),
+                i64::from(turn_limit)
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Journals the durable `BudgetExceeded` fact for a run whose guard
+    /// just refused a steering message (WP19). Reads the current counter
+    /// and the run's correlating ids here rather than trusting
+    /// caller-carried numbers, so the event always matches the row the
+    /// refusal saw. The caller broadcasts the returned envelope; the RPC
+    /// answer itself carries the typed `BUDGET_EXCEEDED` code.
+    ///
+    /// # Errors
+    /// Returns [`DomainError::NotFound`] when the run or its budget row is
+    /// missing, plus the usual append failures.
+    pub fn journal_budget_exceeded(&mut self, run_id: RunId) -> Result<Committed, DomainError> {
+        let (task_id, worker_id): (String, String) = self
+            .conn
+            .query_row(
+                "SELECT task_id, worker_id FROM runs WHERE run_id = ?1",
+                [run_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(DomainError::NotFound {
+                kind: "run",
+                id: run_id.to_string(),
+            })?;
+        let (turns_used, turn_limit): (i64, i64) = self
+            .conn
+            .query_row(
+                "SELECT turns_used, turn_limit FROM budgets WHERE run_id = ?1",
+                [run_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(DomainError::NotFound {
+                kind: "budget",
+                id: run_id.to_string(),
+            })?;
+        let task_id = TaskId::parse(&task_id).map_err(|_| DomainError::NotFound {
+            kind: "task",
+            id: task_id.clone(),
+        })?;
+        let worker_id = WorkerId::parse(&worker_id).map_err(|_| DomainError::NotFound {
+            kind: "worker",
+            id: worker_id.clone(),
+        })?;
+        let event = RuntimeEvent::BudgetExceeded {
+            run_id,
+            task_id,
+            worker_id,
+            turns_used: u32::try_from(turns_used).unwrap_or(u32::MAX),
+            turn_limit: u32::try_from(turn_limit).unwrap_or(0),
+        };
+        self.append_and_apply(
+            &event,
+            Some(task_id),
+            Some(worker_id),
+            Some(run_id),
+            |_tx| Ok(()),
+        )
+    }
+
+    /// Journals a `WorkerTimeout` liveness report for `run_id` (WP19),
+    /// unless the run has settled or is unknown -- the sweep snapshots the
+    /// clock before this check, so a run that terminated between snapshot
+    /// and commit must not receive a timeout fact. Returns the committed
+    /// envelope for broadcast, or `None` when there was nothing to report.
+    ///
+    /// # Errors
+    /// Returns [`DomainError`] for the usual append failures.
+    pub fn record_worker_timeout_if_live(
+        &mut self,
+        run_id: RunId,
+        kind: crew_protocol::TimeoutKind,
+        since_ms: u64,
+    ) -> Result<Option<Committed>, DomainError> {
+        let Some((task_id, worker_id, state)): Option<(String, String, String)> = self
+            .conn
+            .query_row(
+                "SELECT task_id, worker_id, state FROM runs WHERE run_id = ?1",
+                [run_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let parsed_state =
+            RunState::try_from(state.as_str()).map_err(|_| DomainError::NotFound {
+                kind: "run-state",
+                id: state.clone(),
+            })?;
+        if parsed_state.is_terminal() {
+            return Ok(None);
+        }
+        let task_id = TaskId::parse(&task_id).map_err(|_| DomainError::NotFound {
+            kind: "task",
+            id: task_id.clone(),
+        })?;
+        let worker_id = WorkerId::parse(&worker_id).map_err(|_| DomainError::NotFound {
+            kind: "worker",
+            id: worker_id.clone(),
+        })?;
+        let event = RuntimeEvent::WorkerTimeout {
+            run_id,
+            task_id,
+            worker_id,
+            kind,
+            since_ms,
+        };
+        Ok(Some(self.append_and_apply(
+            &event,
+            Some(task_id),
+            Some(worker_id),
+            Some(run_id),
+            |_tx| Ok(()),
+        )?))
     }
 
     /// Updates a message's delivery state. Emits the matching `Message*`
@@ -2520,6 +2713,25 @@ fn message_kind_str(kind: &crew_protocol::MessageKind) -> &'static str {
     }
 }
 
+/// Whether a message kind originates from (or acts for) the leader and
+/// therefore consumes one of the run's budgeted worker turns (WP19). The
+/// directives that make a worker take another turn -- assignment, steering,
+/// follow-ups, leader questions, approval decisions resuming a blocked turn
+/// -- consume; worker-side kinds (`answer`, `peerMessage`) and the
+/// run-terminating kinds (`cancel`, `shutdown`, which end work rather than
+/// request more) do not.
+fn is_turn_consuming(kind: &crew_protocol::MessageKind) -> bool {
+    use crew_protocol::MessageKind;
+    matches!(
+        kind,
+        MessageKind::Assign
+            | MessageKind::Steer
+            | MessageKind::FollowUp
+            | MessageKind::Question
+            | MessageKind::ApprovalDecision
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2863,6 +3075,184 @@ mod tests {
         assert_eq!(
             event_count, 1,
             "exactly one policyViolationRecorded event must be journaled"
+        );
+    }
+
+    // ------------------------------------------------- WP19 turn budgets
+
+    /// Seeds a task + worker + queued run with a budgets row of the given
+    /// limit, returning the ids.
+    fn seed_budgeted_run(
+        conn: &mut Connection,
+        project_id: ProjectId,
+        turn_limit: u32,
+    ) -> (RunId, TaskId, WorkerId) {
+        let (task_id, worker_id) = seed_worker(conn, project_id);
+        let run_id = RunId::new();
+        let run = Run {
+            run_id,
+            task_id,
+            worker_id,
+            state: RunState::try_from("queued").unwrap(),
+            flags: RunFlags::default(),
+            vendor_session_id: None,
+            started_at: None,
+            completed_at: None,
+        };
+        let mut repo = DomainRepository::new(conn, project_id);
+        repo.submit_run(&run, None, None)
+            .expect("submit_run commits");
+        repo.attach_turn_budget(run_id, task_id, None, turn_limit)
+            .expect("attach_turn_budget");
+        (run_id, task_id, worker_id)
+    }
+
+    fn leader_message(
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        kind: crew_protocol::MessageKind,
+    ) -> RunMessage {
+        RunMessage {
+            message_id: crew_protocol::MessageId::new(),
+            run_id,
+            sender_worker_id: worker_id,
+            recipient_worker_id: None,
+            task_id,
+            kind,
+            payload: "next step".into(),
+            delivery_state: crew_protocol::DeliveryState::Recorded,
+            created_at: Timestamp::now(),
+            sent_at: None,
+            acknowledged_at: None,
+            reply_to: None,
+        }
+    }
+
+    #[test]
+    fn budget_guard_increments_then_refuses_at_cap() {
+        let mut conn = open_test_db();
+        let project_id = ProjectId::new();
+        let (run_id, task_id, worker_id) = seed_budgeted_run(&mut conn, project_id, 1);
+        let committed: crate::domain::Committed;
+        {
+            let mut repo = DomainRepository::new(&mut conn, project_id);
+
+            // First steering message consumes the single budgeted turn.
+            let first = leader_message(
+                run_id,
+                task_id,
+                worker_id,
+                crew_protocol::MessageKind::FollowUp,
+            );
+            repo.record_message(&first, Some("omp-1"), true, false)
+                .expect("first send within budget");
+
+            // Second is refused with the typed error; no message row written.
+            let second = leader_message(
+                run_id,
+                task_id,
+                worker_id,
+                crew_protocol::MessageKind::Steer,
+            );
+            let err = repo
+                .record_message(&second, Some("omp-1"), true, false)
+                .expect_err("send at cap must be refused");
+            match err {
+                DomainError::BudgetExceeded {
+                    turns_used,
+                    turn_limit,
+                    ..
+                } => {
+                    assert_eq!((turns_used, turn_limit), (1, 1));
+                }
+                other => panic!("expected BudgetExceeded, got {other:?}"),
+            }
+
+            // The refusal's durable fact journals with the row's own numbers.
+            committed = repo.journal_budget_exceeded(run_id).expect("journal");
+        }
+        let message_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE run_id = ?1",
+                [run_id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // The refusal's durable fact journals with the row's own numbers.
+        assert_eq!(message_rows, 1, "the refused message must not be recorded");
+        match committed.envelope.event {
+            RuntimeEvent::BudgetExceeded {
+                turns_used,
+                turn_limit,
+                ..
+            } => {
+                assert_eq!((turns_used, turn_limit), (1, 1));
+            }
+            other => panic!("expected BudgetExceeded event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn worker_side_kinds_never_consume_the_budget() {
+        let mut conn = open_test_db();
+        let project_id = ProjectId::new();
+        let (run_id, task_id, worker_id) = seed_budgeted_run(&mut conn, project_id, 1);
+        let mut repo = DomainRepository::new(&mut conn, project_id);
+
+        for _ in 0..3 {
+            let answer = leader_message(
+                run_id,
+                task_id,
+                worker_id,
+                crew_protocol::MessageKind::Answer,
+            );
+            repo.record_message(&answer, Some("omp-1"), true, false)
+                .expect("worker-side kinds bypass the guard");
+        }
+        let turns_used: i64 = conn
+            .query_row(
+                "SELECT turns_used FROM budgets WHERE run_id = ?1",
+                [run_id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(turns_used, 0, "answers must not consume turns");
+    }
+
+    #[test]
+    fn timeout_facts_skip_terminal_runs_but_journal_for_live_ones() {
+        let mut conn = open_test_db();
+        let project_id = ProjectId::new();
+        let (run_id, _task_id, _worker_id) = seed_budgeted_run(&mut conn, project_id, 10);
+        let mut repo = DomainRepository::new(&mut conn, project_id);
+
+        // Live (queued) run: the timeout fact journals and carries the kind.
+        let committed = repo
+            .record_worker_timeout_if_live(run_id, crew_protocol::TimeoutKind::Inactivity, 300_000)
+            .expect("live run journals")
+            .expect("Some(Committed) for a live run");
+        match committed.envelope.event {
+            RuntimeEvent::WorkerTimeout { kind, since_ms, .. } => {
+                assert_eq!(kind, crew_protocol::TimeoutKind::Inactivity);
+                assert_eq!(since_ms, 300_000);
+            }
+            other => panic!("expected WorkerTimeout event, got {other:?}"),
+        }
+
+        // Terminal run: nothing to report. Edges are walked, never jumped:
+        // queued -> starting -> working -> succeeded.
+        for state in ["starting", "working", "succeeded"] {
+            let target = RunState::try_from(state).unwrap();
+            repo.transition_run(run_id, &target, None)
+                .expect("legal edge");
+        }
+        let none = repo
+            .record_worker_timeout_if_live(run_id, crew_protocol::TimeoutKind::Total, 60_000)
+            .expect("terminal run is not an error");
+        assert!(
+            none.is_none(),
+            "a settled run must never receive a timeout fact"
         );
     }
 }

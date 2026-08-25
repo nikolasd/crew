@@ -185,6 +185,11 @@ impl Server {
             lease_service.clone(),
             artifact_store.clone(),
             config.repository.clone(),
+            config.turn_budget_default,
+            config
+                .activity_clock
+                .clone()
+                .unwrap_or_else(|| std::sync::Arc::new(crate::adapter::ActivityClock::new())),
         );
         if let Some((config_paths, policy)) = config.policy.clone() {
             orchestration = orchestration.with_policy(config_paths, policy);

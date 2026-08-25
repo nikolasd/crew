@@ -978,7 +978,9 @@ mod run_state_tests {
         EventEnvelope, ProjectId, Run, RunFlags, RunId, RunState, RuntimeEvent, TaskId, TaskRef,
         Timestamp, Worker, WorkerId, WorkerProfileRef,
     };
-    use crew_runtime::adapter::{AdapterEventSink, DomainAdapterEventSink, RunLifecycleSink};
+    use crew_runtime::adapter::{
+        ActivityClock, AdapterEventSink, DomainAdapterEventSink, RunLifecycleSink,
+    };
     use crew_runtime::config::NestedViolationAction;
     use crew_runtime::db::DatabaseHandle;
     use crew_runtime::domain::DomainRepository;
@@ -1098,7 +1100,14 @@ mod run_state_tests {
             )
             .expect("built-in patterns always compile"),
         );
-        RunLifecycleSink::wrap(domain_sink, Arc::clone(db), project_id, events_tx, run_id)
+        RunLifecycleSink::wrap(
+            domain_sink,
+            Arc::clone(db),
+            project_id,
+            events_tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        )
     }
 
     /// Reads a run's current projected state directly, for assertions.

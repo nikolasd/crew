@@ -48,6 +48,10 @@ pub struct RunDriverContext {
     /// attached without probing the registry a second time. `None` when no
     /// backend was available (headless) or the run never reached selection.
     pub display: Option<crew_protocol::DisplaySelection>,
+    /// The shared per-run liveness clock (WP19) this run's lifecycle sink
+    /// touches on every journaled event, so lifecycle's timeout sweep sees
+    /// fresh activity. The same instance lifecycle's sweep task reads.
+    pub activity: std::sync::Arc<crate::adapter::ActivityClock>,
 }
 
 /// The typed success of [`RunDriver::cancel_run`]: an absent adapter is
