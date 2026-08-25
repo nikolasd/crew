@@ -299,6 +299,7 @@ impl CopilotAdapter {
                                     task_id,
                                     worker_id,
                                     payload,
+                                    cursor: None,
                                 })
                                 .await;
                         }
@@ -319,6 +320,7 @@ impl CopilotAdapter {
                                 task_id,
                                 worker_id,
                                 payload: AdapterEventPayload::ProcessExited { exit_code, signal },
+                                cursor: None,
                             })
                             .await;
                         if let Some(mcp) = &mcp {
@@ -349,6 +351,7 @@ impl CopilotAdapter {
                 task_id,
                 worker_id,
                 payload,
+                cursor: None,
             })
             .await?;
         }
@@ -436,6 +439,7 @@ impl Adapter for CopilotAdapter {
                 payload: AdapterEventPayload::ProcessStarted {
                     pid: client.pid() as u32,
                 },
+                cursor: None,
             })
             .await?;
             sink.emit(AdapterEvent {
@@ -445,6 +449,7 @@ impl Adapter for CopilotAdapter {
                 payload: AdapterEventPayload::VendorSessionEstablished {
                     vendor_session_id: session_id.clone(),
                 },
+                cursor: None,
             })
             .await?;
 
@@ -484,6 +489,7 @@ impl Adapter for CopilotAdapter {
                 payload: AdapterEventPayload::VendorSessionEstablished {
                     vendor_session_id: session.0,
                 },
+                cursor: None,
             })
             .await?;
 

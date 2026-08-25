@@ -337,6 +337,7 @@ impl ViolationTriggeringRunDriver {
                 vendor_child_id: vendor_child_id.to_string(),
                 vendor_parent_ref: vendor_parent_ref.to_string(),
             },
+            cursor: None,
         })
         .await
         .map_err(|e| e.to_string())
@@ -368,6 +369,7 @@ impl RunDriver for ViolationTriggeringRunDriver {
                     vendor_child_id: "child-vendor-1".to_string(),
                     vendor_parent_ref: "parent-vendor-1".to_string(),
                 },
+                cursor: None,
             })
             .await
             .map_err(|e| e.to_string())?;
@@ -430,6 +432,7 @@ impl RunDriver for ConfigurableCancelViolationDriver {
                     vendor_child_id: "child-vendor-1".to_string(),
                     vendor_parent_ref: "parent-vendor-1".to_string(),
                 },
+                cursor: None,
             })
             .await
             .map_err(|e| e.to_string())?;
@@ -957,6 +960,91 @@ async fn run_submit_journals_the_display_pane_it_attached() {
     );
 }
 
+/// A `mode: "tui"` run whose owning adapter journals its own real pane
+/// events (the `TuiAdapter`'s `PaneCoordinator`) receives **no**
+/// submit-time placeholder `DisplayPaneAttached` at all -- journaling it
+/// would leave the stream with two attaches against one detach, a pane
+/// consumers see attach but never release. Backend *resolution* still
+/// runs and still echoes on the submit response; only the placeholder
+/// event is skipped. The headless sibling above pins the unchanged
+/// placeholder behavior for every other run.
+#[tokio::test]
+async fn run_submit_skips_the_placeholder_pane_for_a_tui_owned_run() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+
+    let task = client
+        .call(
+            2,
+            "task/upsert",
+            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
+        )
+        .await;
+    let task_id = task["result"]["taskId"].as_str().unwrap().to_string();
+    let register = client
+        .call(
+            3,
+            "profile/register",
+            json!({
+                "adapter": "claude",
+                "model": "claude-sonnet-4-5",
+                "permissionEnvelope": { "fullAuto": false },
+                "startupOptions": { "claude": { "mode": "tui" } },
+                "environmentAllowlist": [],
+                "source": "orchestration-rpc-test"
+            }),
+        )
+        .await;
+    assert!(
+        register.get("error").is_none(),
+        "profile/register failed: {register:?}"
+    );
+    let profile_id = register["result"]["profileId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let worker = client
+        .call(4, "worker/create", json!({ "profileId": profile_id }))
+        .await;
+    assert!(
+        worker.get("error").is_none(),
+        "worker/create failed: {worker:?}"
+    );
+    let worker_id = worker["result"]["workerId"].as_str().unwrap().to_string();
+
+    let submit = client
+        .call(
+            5,
+            "run/submit",
+            json!({
+                "taskId": task_id,
+                "workerId": worker_id,
+                "displayPreference": { "ordered": ["hidden"], "placement": "embedded" },
+            }),
+        )
+        .await;
+    assert!(
+        submit.get("error").is_none(),
+        "run/submit failed: {submit:?}"
+    );
+    assert_eq!(
+        submit["result"]["display"]["selected"], "hidden",
+        "backend resolution itself is untouched for a TUI-owned run"
+    );
+
+    let replay = client
+        .call(6, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    let attached = pane_events(&replay, "displayPaneAttached");
+    assert!(
+        attached.is_empty(),
+        "a TUI-owned run must get no submit-time placeholder attach: {attached:?}"
+    );
+}
+
 /// Every `displayEvent` payload of `kind` in a replay response.
 fn pane_events<'a>(replay: &'a Value, kind: &str) -> Vec<&'a Value> {
     replay["result"]
@@ -1270,21 +1358,31 @@ async fn workspace_apply_on_a_quarantined_run_is_refused_and_journals_no_apply_s
     );
 }
 
-/// R79: two CONCURRENT cancelling observations -- both journaled before
-/// either transition commits, so both read `already_actioned = false` --
-/// must both report success. The loser's transition fails because the
-/// winner terminalized the run; that is the idempotent success the doc
-/// comment always promised, acknowledged as `superseded` in the audited
-/// `operations` table rather than surfacing as an error.
+/// R79: two CONCURRENT cancelling observations must both report success.
+/// The loser's transition fails because the winner terminalized the run;
+/// that is the idempotent success the doc comment always promised,
+/// acknowledged as `superseded` in the audited `operations` table rather
+/// than surfacing as an error.
 ///
-/// `current_thread` flavor on purpose: `join!` then alternates the two
-/// emit futures at every await, so their database-actor submissions
-/// interleave A-journal, B-journal, A-intent, B-intent, A-transition,
-/// B-transition (FIFO actor queue) -- deterministically producing the
-/// race. On the multi-thread runtime the observations can serialize
-/// (B journals after A's transition), which is the *other*, pre-existing
-/// idempotency path already covered by
-/// `second_nested_worker_observed_on_an_already_actioned_run_never_double_cancels`.
+/// `current_thread` flavor alternates the two emit futures at every await
+/// *within this task*, but each observation's chain (journal read, intent
+/// append, transition) runs over the db actor -- a real thread behind a
+/// bounded mpsc -- so `join!` cannot pin the interleaving across that
+/// boundary. Two outcomes are legal, and this test accepts exactly that
+/// set:
+///
+/// 1. Both observations journal their violation reading
+///    `already_actioned = false` before either transition commits: two
+///    audited intents, one `cancelled`, one `superseded`.
+/// 2. Observation A's full chain completes before B's journal read: B
+///    short-circuits via `already_actioned`/is-terminal and never records
+///    an intent -- one `cancelled` intent, and policy_violations rows for
+///    both observations.
+///
+/// Shape 2 is the pre-existing idempotency path also covered by
+/// `second_nested_worker_observed_on_an_already_actioned_run_never_double_cancels`;
+/// it is not a failure of this test's premise, only of its former
+/// over-tight assertion.
 #[tokio::test(flavor = "current_thread")]
 async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
     /// Captures the driver context in `start` WITHOUT emitting, so the
@@ -1363,6 +1461,7 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
                     vendor_child_id: child.to_string(),
                     vendor_parent_ref: parent.to_string(),
                 },
+                cursor: None,
             })
             .await
         }
@@ -1382,8 +1481,10 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
     let get = client.call(6, "run/get", json!({ "runId": run_id })).await;
     assert_eq!(get["result"]["state"], "cancelled");
 
-    // The audited trail is honest: two policyViolationCancel intents, one
-    // acknowledged cancelled, one superseded.
+    // The audited trail is honest under BOTH legal interleavings (see the
+    // doc comment): either two intents (one cancelled, one superseded) or
+    // one cancelled intent plus a short-circuited second observation --
+    // which must still have journaled its violation row.
     let conn = rusqlite::Connection::open(&harness.database).unwrap();
     let acks: Vec<Option<String>> = conn
         .prepare("SELECT acknowledgement_json FROM operations WHERE kind = 'policyViolationCancel' ORDER BY requested_at")
@@ -1392,7 +1493,6 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    assert_eq!(acks.len(), 2, "both observations persist an audited intent");
     let outcomes: Vec<String> = acks
         .iter()
         .map(|a| {
@@ -1403,13 +1503,27 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
                 .to_string()
         })
         .collect();
-    let mut sorted = outcomes.clone();
-    sorted.sort_unstable();
-    assert_eq!(
-        sorted,
-        ["cancelled", "superseded"],
-        "one intent cancelled, one superseded: {outcomes:?}"
-    );
+    let outcomes: Vec<&str> = outcomes.iter().map(String::as_str).collect();
+    match outcomes.as_slice() {
+        ["cancelled", "superseded"] | ["superseded", "cancelled"] => {}
+        ["cancelled"] => {
+            let violations: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM policy_violations WHERE run_id = ?1",
+                    rusqlite::params![run_id.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                violations, 2,
+                "the short-circuited second observation must still have journaled \
+                 its violation: {outcomes:?}"
+            );
+        }
+        other => {
+            panic!("impossible outcome set for two concurrent cancelling observations: {other:?}")
+        }
+    }
 }
 
 // --------------------------------------------------------------- harness

@@ -225,11 +225,12 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     // after this process started); when it does, workers still start --
     // just without worker-coordination MCP tools -- rather than failing
     // the whole daemon. Never guessed: only a real resolved path is used.
-    let mcp = match std::env::current_exe() {
+    let current_exe = std::env::current_exe();
+    let mcp = match &current_exe {
         Ok(crewd_path) => Some(AdapterMcpConfig {
             scope_tokens: Arc::clone(&scope_tokens),
             project_id: paths.project_id,
-            crewd_path,
+            crewd_path: crewd_path.clone(),
             state_dir: paths.root.clone(),
             repository: repo_root.clone(),
         }),
@@ -263,6 +264,28 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         mcp,
         org_security_patterns,
     ));
+    // TUI-mode support (WP13): only supplied when this runtime's own
+    // binary path resolved (mirroring `mcp`'s own reasoning exactly --
+    // `PaneCoordinator`'s pane command runs `<crewd_path> attach ...`,
+    // so a guessed path would launch a pane pointed at a binary that may
+    // not exist). Its absence means every `mode: "tui"` profile keeps
+    // getting `RegistryError::TuiModeUnavailable` instead of a pane
+    // command this daemon could not have verified.
+    if let Ok(crewd_path) = &current_exe {
+        let display_registry = Arc::new(crate::display::DisplayRegistry::with_default_backends(
+            crew_protocol::DisplayConfig::default(),
+        ));
+        registry.set_tui_support(Arc::new(crate::adapter::TuiSupport {
+            display_registry,
+            panes_dir: paths.panes.clone(),
+            crewd_path: crewd_path.clone(),
+            state_dir: paths.root.clone(),
+            close_on_exit: crew_config.display.close_on_exit,
+            forced_backend: crate::config::protocol_display_backend(crew_config.display.backend),
+            adapters: crew_config.adapters.clone(),
+            timings: crate::adapter::tui::TuiTimings::default(),
+        }));
+    }
     // The artifact store persists under the state root so a journaled
     // `patch_artifact_id` survives a daemon restart -- `workspace/apply`
     // after a restart must still find its patch. Failing to open it is a

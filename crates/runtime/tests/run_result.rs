@@ -243,6 +243,7 @@ impl RunDriver for SeedingRunDriver {
                     task_id: ctx.task_id,
                     worker_id: ctx.worker_id,
                     payload,
+                    cursor: None,
                 })
                 .await
                 .map_err(|e| e.to_string())?;

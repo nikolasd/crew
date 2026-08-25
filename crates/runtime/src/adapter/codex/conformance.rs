@@ -251,6 +251,7 @@ fn transcript_scenarios() -> (ScenarioResult, ScenarioResult) {
             task_id,
             worker_id,
             payload,
+            cursor: None,
         })
         .collect();
 

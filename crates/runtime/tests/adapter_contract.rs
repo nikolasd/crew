@@ -402,6 +402,7 @@ async fn nested_worker_observed_emits_without_upgrading_declared_capability() {
                 vendor_child_id: "child-vendor-1".to_string(),
                 vendor_parent_ref: "parent-vendor-1".to_string(),
             },
+            cursor: None,
         })
         .await
         .expect("emitting a NestedWorkerObserved event must succeed");

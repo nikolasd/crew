@@ -249,6 +249,7 @@ impl Adapter for TerminalAdapter {
                     exit_code: None,
                     signal: Some("cancelled".to_string()),
                 },
+                cursor: None,
             })
             .await
             .map_err(|e| {

@@ -68,19 +68,30 @@ struct WriteJob {
     ack: oneshot::Sender<std::io::Result<()>>,
 }
 
-/// Wrapper asserting that a MasterPty is safe to share across threads.
-/// The underlying PTY file descriptor is thread-safe at the OS level.
+/// Wrapper exposing only the fd-safe subset of `MasterPty` still needed
+/// after construction (`resize`), so a [`PtyProcess`] can be shared
+/// across threads (e.g. behind an `Arc`, as [`super::PtyProcess`]'s own
+/// callers do to hand the same instance to an attach server and an exit
+/// watcher). Deliberately *not* a blanket `Deref<Target = dyn
+/// MasterPty>`: `MasterPty::take_writer`/`try_clone_reader` return
+/// `RefCell`-backed handles that are not safe to call concurrently, and a
+/// blanket `Deref` would make both reachable from any thread holding a
+/// `&SyncMasterPty`.
 struct SyncMasterPty(Box<dyn MasterPty + Send>);
 
-// SAFETY: PTY file descriptors are managed by the OS kernel which
-// serializes concurrent access, making them inherently thread-safe.
+// SAFETY: only the narrow, fd-safe `resize` method below is reachable
+// through this wrapper (an `ioctl(TIOCSWINSZ)` on the underlying fd, with
+// no interior mutability of its own). The `RefCell`-backed methods that
+// would make concurrent access through this wrapper unsound
+// (`take_writer`, `try_clone_reader`) are called directly on the
+// unwrapped `Box<dyn MasterPty + Send>` in `PtyProcess::spawn`, before
+// this wrapper is ever constructed and before any other thread can
+// observe the master at all -- they are not reachable here.
 unsafe impl Sync for SyncMasterPty {}
 
-impl std::ops::Deref for SyncMasterPty {
-    type Target = dyn MasterPty + Send;
-
-    fn deref(&self) -> &Self::Target {
-        &*self.0
+impl SyncMasterPty {
+    fn resize(&self, size: PtySize) -> anyhow::Result<()> {
+        self.0.resize(size)
     }
 }
 
@@ -306,9 +317,11 @@ impl PtyProcess {
     }
 
     /// Waits for the process to exit on its own, without signaling.
-    /// Equivalent to `exit_watcher().await` but takes `&mut self` for API
-    /// symmetry with the pipe-based supervisor's `wait`.
-    pub async fn wait(&mut self) -> ExitStatus {
+    /// Equivalent to `exit_watcher().await`; takes `&self` (not `&mut
+    /// self`, despite the pipe-based supervisor's `wait` needing
+    /// exclusive access) because it does nothing but delegate to
+    /// `exit_watcher`, which itself only clones a `watch::Receiver`.
+    pub async fn wait(&self) -> ExitStatus {
         self.exit_watcher().await
     }
 
@@ -342,8 +355,12 @@ impl PtyProcess {
     /// SIGINT -> SIGTERM -> SIGKILL group-wide, mirroring
     /// [`super::process::ManagedProcess::terminate`]'s discipline: a
     /// leader observed already exited is never signaled at all, and each
-    /// later signal is guarded by a fresh group liveness probe.
-    pub async fn terminate(&mut self) -> TerminationOutcome {
+    /// later signal is guarded by a fresh group liveness probe. Takes
+    /// `&self` (not `&mut self`): nothing below mutates a field, only
+    /// signals the process and reads the reaper thread's `watch` channel,
+    /// so a shared `Arc<PtyProcess>` (e.g. one also handed to an attach
+    /// server as its `AttachTarget`) can call this directly.
+    pub async fn terminate(&self) -> TerminationOutcome {
         if let Some(status) = self.try_exit() {
             return TerminationOutcome::Exited {
                 code: Some(status.exit_code() as i32),
@@ -390,7 +407,7 @@ impl PtyProcess {
     /// leader's exit is reported as the final outcome; otherwise the
     /// remaining window is honored so a live descendant gets its grace
     /// period before the caller escalates.
-    async fn wait_out_step(&mut self, duration: Duration) -> Option<TerminationOutcome> {
+    async fn wait_out_step(&self, duration: Duration) -> Option<TerminationOutcome> {
         let deadline = tokio::time::Instant::now() + duration;
         let mut leader_outcome = None;
         while tokio::time::Instant::now() < deadline {

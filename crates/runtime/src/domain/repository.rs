@@ -2148,12 +2148,34 @@ impl<'c> DomainRepository<'c> {
     /// `FakeRunDriver` already uses. The one exception is
     /// `AdapterVendorSessionEvent`, which also records the run's vendor
     /// session id in the same transaction.
+    ///
+    /// `transcript_cursor` (WP12) is `Some(json)` when the caller is a TUI
+    /// adapter's transcript tailer reporting the durable position reached
+    /// by the batch this event belongs to (`crate::adapter::tui::Cursor`,
+    /// serialized by the sink); it is written to `runs.transcript_cursor`
+    /// in this same transaction, so a crash between the event commit and a
+    /// separate cursor write can never leave the journal and the resume
+    /// position disagreeing. `None` (a non-TUI adapter, or a TUI batch
+    /// that produced no cursor-bearing event) leaves the column exactly as
+    /// it was -- never cleared to NULL, which would otherwise force a full
+    /// re-tail from the transcript's start on the next resume.
+    ///
+    /// This layer takes the already-serialized JSON text, not
+    /// `crate::adapter::tui::Cursor` itself -- it stores the column's
+    /// declared `TEXT` type verbatim and has no compile-time dependency on
+    /// that adapter-local type. That tolerance is additive-only: `Cursor`
+    /// deliberately stays forward-compatible with a *new field* a future
+    /// version might add (see its own doc comment), but this layer cannot
+    /// paper over a *renamed or removed* field or a changed type -- that
+    /// would still fail whatever later reads the column back as `Cursor`,
+    /// same as any other persisted JSON shape.
     pub fn record_adapter_event(
         &mut self,
         event: &RuntimeEvent,
         task_id: TaskId,
         worker_id: WorkerId,
         run_id: RunId,
+        transcript_cursor: Option<String>,
     ) -> Result<Committed, DomainError> {
         let vendor_session_id = match event {
             RuntimeEvent::AdapterVendorSessionEvent {
@@ -2171,6 +2193,12 @@ impl<'c> DomainRepository<'c> {
                     tx.execute(
                         "UPDATE runs SET vendor_session_id = ?1 WHERE run_id = ?2",
                         rusqlite::params![vendor_session_id, run_id.to_string()],
+                    )?;
+                }
+                if let Some(cursor) = transcript_cursor {
+                    tx.execute(
+                        "UPDATE runs SET transcript_cursor = ?1 WHERE run_id = ?2",
+                        rusqlite::params![cursor, run_id.to_string()],
                     )?;
                 }
                 Ok(())
@@ -2321,6 +2349,137 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
             .unwrap();
         assert_eq!(event_count, 4);
+    }
+
+    /// WP12: `record_adapter_event` given a cursor updates
+    /// `runs.transcript_cursor` in the same transaction as the event
+    /// insert -- the idempotency anchor a crashed daemon reads to re-tail
+    /// without duplicating already-journaled events.
+    #[test]
+    fn record_adapter_event_with_cursor_updates_transcript_cursor_atomically() {
+        let mut conn = open_test_db();
+        let project_id = ProjectId::new();
+        let (task_id, worker_id) = seed_worker(&mut conn, project_id);
+        let run_id = RunId::new();
+        let run = Run {
+            run_id,
+            task_id,
+            worker_id,
+            state: RunState::try_from("queued").unwrap(),
+            flags: RunFlags::default(),
+            vendor_session_id: None,
+            started_at: None,
+            completed_at: None,
+        };
+        let mut repo = DomainRepository::new(&mut conn, project_id);
+        repo.submit_run(&run, None, None).unwrap();
+
+        let event = RuntimeEvent::AdapterMessageEvent {
+            kind: RuntimeEventKind::AdapterMessageFinal,
+            run_id,
+            task_id,
+            worker_id,
+            role: "assistant".to_string(),
+            text: Some("hello".to_string()),
+        };
+        let cursor_json = "{\"offset\":10,\"lastEntryId\":null}".to_string();
+        let committed = repo
+            .record_adapter_event(
+                &event,
+                task_id,
+                worker_id,
+                run_id,
+                Some(cursor_json.clone()),
+            )
+            .expect("record_adapter_event with cursor commits");
+
+        let stored_cursor: Option<String> = conn
+            .query_row(
+                "SELECT transcript_cursor FROM runs WHERE run_id = ?1",
+                [run_id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_cursor, Some(cursor_json));
+
+        // The event itself is durable in the very same commit.
+        let event_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE sequence = ?1",
+                [committed.sequence],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(event_count, 1);
+    }
+
+    /// `record_adapter_event` with no cursor (a non-TUI adapter, or a TUI
+    /// batch that advanced nothing recordable) leaves `transcript_cursor`
+    /// untouched rather than overwriting it with NULL.
+    #[test]
+    fn record_adapter_event_without_cursor_leaves_transcript_cursor_untouched() {
+        let mut conn = open_test_db();
+        let project_id = ProjectId::new();
+        let (task_id, worker_id) = seed_worker(&mut conn, project_id);
+        let run_id = RunId::new();
+        let run = Run {
+            run_id,
+            task_id,
+            worker_id,
+            state: RunState::try_from("queued").unwrap(),
+            flags: RunFlags::default(),
+            vendor_session_id: None,
+            started_at: None,
+            completed_at: None,
+        };
+        let mut repo = DomainRepository::new(&mut conn, project_id);
+        repo.submit_run(&run, None, None).unwrap();
+
+        let first_cursor = "{\"offset\":10,\"lastEntryId\":null}".to_string();
+        repo.record_adapter_event(
+            &RuntimeEvent::AdapterMessageEvent {
+                kind: RuntimeEventKind::AdapterMessageFinal,
+                run_id,
+                task_id,
+                worker_id,
+                role: "assistant".to_string(),
+                text: Some("hello".to_string()),
+            },
+            task_id,
+            worker_id,
+            run_id,
+            Some(first_cursor.clone()),
+        )
+        .expect("first record_adapter_event commits");
+
+        repo.record_adapter_event(
+            &RuntimeEvent::AdapterMessageEvent {
+                kind: RuntimeEventKind::AdapterMessageFinal,
+                run_id,
+                task_id,
+                worker_id,
+                role: "assistant".to_string(),
+                text: Some("again".to_string()),
+            },
+            task_id,
+            worker_id,
+            run_id,
+            None,
+        )
+        .expect("second record_adapter_event commits without a cursor");
+
+        let stored_cursor: Option<String> = conn
+            .query_row(
+                "SELECT transcript_cursor FROM runs WHERE run_id = ?1",
+                [run_id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stored_cursor,
+            Some(first_cursor),
+            "a cursor-less commit must never clobber the previously stored cursor"
+        );
     }
 
     /// An illegal transition through the real repository API commits

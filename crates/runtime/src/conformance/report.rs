@@ -178,6 +178,23 @@ impl From<crate::adapter::AdapterKind> for AdapterKindLabel {
     }
 }
 
+impl AdapterKindLabel {
+    /// A label for a conformance suite outside the four reserved
+    /// `AdapterKind`s -- e.g. a per-vendor TUI-mode suite (`"claude-tui"`),
+    /// which `run_fixture_conformance`/`run_live_conformance`/
+    /// `probe_availability` (all `AdapterKind`-keyed, no `mode` axis) and
+    /// the `crewd conformance`/`adapters --json` CLI surfaces built on
+    /// them do not dispatch to at all -- see
+    /// `crates/runtime/src/adapter/tui/claude_conformance.rs`'s own doc
+    /// comment for why that suite is a deliberately separate, additive
+    /// report rather than a fifth case squeezed into that closed
+    /// dispatch.
+    #[must_use]
+    pub fn custom(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+}
+
 /// Downgrades each gated capability to its most restrictive variant when
 /// the scenario that proves it was *disproved*. A *skipped* scenario --
 /// one never attempted -- is not a disproof: it leaves the capability

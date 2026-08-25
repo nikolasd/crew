@@ -56,6 +56,23 @@ pub struct RunDriverContext {
 /// settled, or never started an adapter) -- a clean outcome, not an error
 /// (R13: stringifying `NoRunningAdapter` into the `Err` channel made it
 /// indistinguishable from a real kill failure).
+///
+/// `Cancelled` means the vendor was *signalled*, not that teardown has
+/// finished. This is deliberately weaker for `CancelScope::Worker`/
+/// `Subtree` than it sounds: `TuiAdapter::cancel` (and every other
+/// adapter's own `cancel`) sends the termination signal and returns as
+/// soon as it is accepted, fire-and-forget, rather than awaiting the
+/// exit watcher's full teardown (stop tailer/attach, pane detach,
+/// `ProcessExited` journal) the way `dispose()` does. Blocking the
+/// `cancel_run` RPC response on that teardown would hold it open for the
+/// whole SIGINT->SIGTERM->SIGKILL escalation window on a stubborn
+/// process -- worse for a caller than a prompt "signal accepted"
+/// followed by the real settlement arriving as its own later
+/// `ProcessExited` event, which every caller already has to watch for
+/// regardless (a run is never actually over just because `cancel_run`
+/// returned). `dispose()` awaits instead because it runs from
+/// `watch_settlement`'s own detached background task, where there is no
+/// RPC caller waiting on it at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CancelOutcome {
     Cancelled,

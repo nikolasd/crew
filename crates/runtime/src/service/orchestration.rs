@@ -619,7 +619,42 @@ impl OrchestrationService {
         // never sees a pane attach to a run it has not seen created. No
         // available backend means no event at all -- headless is a normal
         // outcome, not a failure.
-        if let Some(backend) = display.as_ref().and_then(|s| s.selected) {
+        //
+        // A run whose owning adapter journals its own real pane events
+        // (today only Claude's `mode: "tui"`, through its `TuiAdapter`'s
+        // `PaneCoordinator`) is skipped here: journaling the placeholder
+        // would leave its stream with two attaches against one detach.
+        // The decision reads the same resolved-profile snapshot
+        // `resolve_profile` reads inside the driver, so both sides answer
+        // from one source of truth; an unreadable snapshot falls back to
+        // journaling the placeholder, exactly as before -- the driver's
+        // own start fails on that same snapshot moments later anyway.
+        let pane_owned_by_adapter = self
+            .db
+            .run_domain_op(Box::new({
+                let project_id = self.project_id;
+                move |conn| {
+                    let repo = DomainRepository::new(conn, project_id);
+                    let snapshot = repo
+                        .resolved_profile_snapshot(worker_id)?
+                        .unwrap_or_default();
+                    let profile: crate::adapter::WorkerProfile = serde_json::from_str(&snapshot)
+                        .map_err(|err| DomainError::NotFound {
+                            kind: "resolved worker profile",
+                            id: err.to_string(),
+                        })?;
+                    Ok(json!(
+                        crate::adapter::registry::pane_lifecycle_owned_by_adapter(
+                            &profile.startup_options
+                        )
+                    ))
+                }
+            }))
+            .await
+            .ok()
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        if !pane_owned_by_adapter && let Some(backend) = display.as_ref().and_then(|s| s.selected) {
             let placement = display_placement;
             let project_id = self.project_id;
             let mut attached = self

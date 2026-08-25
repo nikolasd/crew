@@ -500,6 +500,7 @@ impl Adapter for OmpRpcAdapter {
                 task_id: spec.task_id,
                 worker_id: spec.worker_id,
                 payload: AdapterEventPayload::ProcessStarted { pid: pid as u32 },
+                cursor: None,
             })
             .await
             .map_err(|e| AdapterError::process(self.kind(), "start", e.to_string()))?;
@@ -554,6 +555,7 @@ impl Adapter for OmpRpcAdapter {
                             task_id: spec.task_id,
                             worker_id: spec.worker_id,
                             payload,
+                            cursor: None,
                         })
                         .await;
                 }
@@ -783,7 +785,7 @@ async fn run_pump(
                                 run_id,
                                 task_id,
                                 worker_id,
-                                payload: AdapterEventPayload::ProcessExited { exit_code, signal },
+                                payload: AdapterEventPayload::ProcessExited { exit_code, signal }, cursor: None,
                             })
                             .await;
                         return;
@@ -809,7 +811,7 @@ async fn run_pump(
                         for payload in normalize_frame(&value) {
                             record_shared_state(&shared, &payload);
                             let _ = sink
-                                .emit(AdapterEvent { run_id, task_id, worker_id, payload })
+                                .emit(AdapterEvent { run_id, task_id, worker_id, payload, cursor: None })
                                 .await;
                         }
                     }
@@ -820,7 +822,7 @@ async fn run_pump(
                                 run_id,
                                 task_id,
                                 worker_id,
-                                payload: AdapterEventPayload::ProcessExited { exit_code, signal },
+                                payload: AdapterEventPayload::ProcessExited { exit_code, signal }, cursor: None,
                             })
                             .await;
                         return;
