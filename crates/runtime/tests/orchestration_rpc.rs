@@ -5384,3 +5384,47 @@ async fn workspace_apply_by_the_owning_instance_reaches_artifact_resolution() {
          proving the gate did not refuse it: {replay:?}"
     );
 }
+
+#[tokio::test]
+async fn retention_clean_and_pane_reopen_are_omp_only_and_route_to_daemon_support() {
+    // The ordinary harness deliberately leaves daemon-only retention/pane
+    // support absent. This pins protocol routing and the typed refusal; the
+    // positive retention policy is exercised against a real DB in audit.rs.
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut omp = omp_client(&harness, "omp-1").await;
+    let clean = omp.call(1, "retention/clean", json!({})).await;
+    assert_eq!(clean["error"]["code"], -32603, "{clean:?}");
+    assert!(
+        clean["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("retention/clean")
+    );
+
+    let reopen = omp
+        .call(2, "pane/reopen", json!({ "runId": RunId::new() }))
+        .await;
+    assert_eq!(reopen["error"]["code"], -32602, "{reopen:?}");
+    assert!(
+        reopen["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("own")
+    );
+
+    let (_task, _worker, owned_run) = submit_run_with_driver(&mut omp, "omp-1").await;
+    let mut other = omp_client(&harness, "omp-2").await;
+    let foreign = other
+        .call(3, "pane/reopen", json!({ "runId": owned_run }))
+        .await;
+    assert_eq!(foreign["error"]["code"], -32602, "{foreign:?}");
+    assert!(
+        foreign["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("own")
+    );
+}

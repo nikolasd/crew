@@ -13,9 +13,10 @@
 // once `initialize` succeeds.
 
 import { createConnection, type Socket } from "node:net";
-
+import type { EventEnvelope, InitializeParams, InitializeResult } from "@nikolasd/crew-protocol";
 import {
   assertValid,
+  type ValidateFunction,
   ValidationError,
   validateApplyResult,
   validateArtifactFetchResult,
@@ -27,13 +28,13 @@ import {
   validateJsonRpcErrorResponse,
   validateJsonRpcNotification,
   validateJsonRpcResponse,
+  validatePaneReopenResult,
   validatePolicyViolationListResult,
+  validateRetentionCleanResult,
   validateRunResultResult,
   validateRuntimeStatus,
   validateWorkspaceInfo,
-  type ValidateFunction,
 } from "@nikolasd/crew-protocol/validate";
-import type { EventEnvelope, InitializeParams, InitializeResult } from "@nikolasd/crew-protocol";
 
 /** The 4 MiB bootstrap frame limit applied before `initialize` completes. */
 const BOOTSTRAP_MAX_FRAME_BYTES = 4 * 1024 * 1024;
@@ -54,6 +55,8 @@ const RESULT_VALIDATORS: Record<string, ValidateFunction> = {
   "workspace/get": validateWorkspaceInfo,
   "policy/violation/list": validatePolicyViolationListResult,
   "run/result": validateRunResultResult,
+  "retention/clean": validateRetentionCleanResult,
+  "pane/reopen": validatePaneReopenResult,
 };
 
 /** Removes a subscription registered with {@link CrewClient.subscribe}. */

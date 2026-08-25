@@ -167,6 +167,80 @@ impl PaneCoordinator {
         }
     }
 
+    /// Reopens a pane for an OMP-owned run. Unlike [`Self::attach`], the
+    /// durable `DisplayPaneAttached` write verifies task ownership IN its
+    /// transaction, so a reconcile rebind cannot interleave after a caller
+    /// precheck and let a stale instance journal a pane event.
+    pub async fn attach_owned(
+        &self,
+        req: PaneAttachRequest,
+        owner_instance_id: String,
+    ) -> Result<PaneAttachOutcome, crate::domain::DomainError> {
+        let selection = self.registry.resolve(&crew_protocol::DisplayPreference {
+            ordered: ordered_candidates(req.forced_backend),
+            placement: req.placement,
+        });
+        let Some(backend) = selection.selected else {
+            self.journal_attach_guarded(
+                req.run_id,
+                DisplayBackend::Hidden,
+                req.placement,
+                String::new(),
+                owner_instance_id,
+            )
+            .await?;
+            return Ok(PaneAttachOutcome {
+                run_id: req.run_id,
+                backend: DisplayBackend::Hidden,
+                placement: req.placement,
+                pane_ref: String::new(),
+                handle: None,
+            });
+        };
+        let Some(display) = self.registry.find(backend) else {
+            self.journal_attach_guarded(
+                req.run_id,
+                DisplayBackend::Hidden,
+                req.placement,
+                String::new(),
+                owner_instance_id,
+            )
+            .await?;
+            return Ok(PaneAttachOutcome {
+                run_id: req.run_id,
+                backend: DisplayBackend::Hidden,
+                placement: req.placement,
+                pane_ref: String::new(),
+                handle: None,
+            });
+        };
+        match display.create_pane(self.pane_request(&req)).await {
+            Ok(handle) => {
+                let pane_ref = handle.pane_ref.clone();
+                self.journal_attach_guarded(
+                    req.run_id,
+                    backend,
+                    req.placement,
+                    pane_ref.clone(),
+                    owner_instance_id,
+                )
+                .await?;
+                Ok(PaneAttachOutcome {
+                    run_id: req.run_id,
+                    backend,
+                    placement: req.placement,
+                    pane_ref,
+                    handle: Some(handle),
+                })
+            }
+            Err(err) => Err(crate::domain::DomainError::Sqlite(
+                rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(format!(
+                    "pane creation on {backend} failed: {err}"
+                )))),
+            )),
+        }
+    }
+
     /// Honors `close_on_exit` for a settled run: closes the pane (if
     /// any real one exists) and journals `DisplayPaneDetached` with the
     /// real ref, or leaves the pane alone for `Never`. A close failure
@@ -259,6 +333,46 @@ impl PaneCoordinator {
             .await;
         self.commit_and_broadcast(committed, "DisplayPaneAttached")
             .await;
+    }
+
+    async fn journal_attach_guarded(
+        &self,
+        run_id: RunId,
+        backend: DisplayBackend,
+        placement: DisplayPlacement,
+        pane_ref: String,
+        owner_instance_id: String,
+    ) -> Result<(), crate::domain::DomainError> {
+        let project_id = self.project_id;
+        let mut value = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                let (task_id, owner): (String, String) = conn.query_row(
+                    "SELECT t.task_id, t.owner_client_instance_id
+                     FROM runs r JOIN tasks t ON t.task_id = r.task_id
+                     WHERE r.run_id = ?1",
+                    [run_id.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                if owner != owner_instance_id {
+                    return Err(crate::domain::DomainError::NotOwner {
+                        task_id,
+                        instance_id: owner_instance_id,
+                    });
+                }
+                let mut repo = DomainRepository::new(conn, project_id);
+                repo.record_display_event(
+                    crew_protocol::RuntimeEventKind::DisplayPaneAttached,
+                    run_id,
+                    backend,
+                    placement,
+                    pane_ref,
+                )
+                .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+            }))
+            .await?;
+        let _ = broadcast_committed(&self.events_tx, &mut value);
+        Ok(())
     }
 
     async fn journal_detach(

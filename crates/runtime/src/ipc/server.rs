@@ -175,6 +175,21 @@ impl Server {
             config.nested_violation_action,
         ));
 
+        let pane_reopen = config.pane_reopen.as_ref().map(|support| {
+            (
+                std::sync::Arc::new(crate::display::PaneCoordinator::new(
+                    std::sync::Arc::clone(&support.display_registry),
+                    db.clone(),
+                    project_id,
+                    events_tx.clone(),
+                    support.crewd_path.clone(),
+                    support.state_dir.clone(),
+                    config.repository.clone(),
+                )),
+                support.panes_dir.clone(),
+            )
+        });
+
         let mut orchestration = crate::service::OrchestrationService::new(
             db.clone(),
             project_id,
@@ -193,6 +208,12 @@ impl Server {
         );
         if let Some((config_paths, policy)) = config.policy.clone() {
             orchestration = orchestration.with_policy(config_paths, policy);
+        }
+        if let Some(retention) = config.retention.clone() {
+            orchestration = orchestration.with_retention(retention);
+        }
+        if let Some((coordinator, panes_dir)) = pane_reopen {
+            orchestration = orchestration.with_pane_reopen(coordinator, panes_dir);
         }
         let orchestration = Arc::new(orchestration);
         let coordination = Arc::new(crate::coordination::CoordinationBroker::new(

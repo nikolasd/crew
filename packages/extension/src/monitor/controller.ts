@@ -3,11 +3,15 @@
 // continuous widget updates as events arrive, and the `/crew` /
 // `/crew status <runId>` commands.
 
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { EventEnvelope } from "@nikolasd/crew-protocol";
+
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { CrewClient } from "../client";
 import { attachMilestoneBridge } from "../milestones";
-import { EMPTY_MONITOR_STATE, hasVisibleRows, type MonitorState, reduceEvent } from "./model";
+import { assertCompatiblePiCodingAgentVersion } from "./compat";
+import { EMPTY_MONITOR_STATE, enrichWorker, enrichWorkspaceMode, hasVisibleRows, type MonitorState, reduceEvent } from "./model";
 import { renderRowDetails, renderWidgetBox } from "./render";
 
 /** The custom session-entry type the last-rendered sequence is persisted under. */
@@ -92,10 +96,35 @@ export class MonitorController {
     this.#unsubscribe = client.subscribe(fromSequence, (event) => {
       this.#state = reduceEvent(this.#state, event);
       this.#onUpdate?.();
+      if (event.event.type === "runEvent") {
+        void this.enrichRun(client, event.event.payload.runId, event.event.payload.workerId);
+      }
       for (const listener of this.#eventListeners) {
         listener(event);
       }
     });
+  }
+
+  /** Hydrates a row's worker profile and active workspace mode from the
+   * canonical read RPCs after a `runEvent` introduces it. The event remains
+   * the source of lifecycle truth; reads only fill display metadata. */
+  async enrichRun(client: CrewClient, runId: string, workerId: string): Promise<void> {
+    try {
+      const [worker, run] = (await Promise.all([client.request("worker/get", { workerId }), client.request("run/get", { runId })])) as [{ profileRef?: { adapter?: string; model?: string } }, { workspace?: { mode?: string } }];
+      const adapter = worker.profileRef?.adapter;
+      const model = worker.profileRef?.model;
+      if (adapter !== undefined && model !== undefined) {
+        this.#state = enrichWorker(this.#state, runId, adapter, model);
+      }
+      const workspaceMode = run.workspace?.mode;
+      if (workspaceMode !== undefined) {
+        this.#state = enrichWorkspaceMode(this.#state, runId, workspaceMode);
+      }
+      this.#onUpdate?.();
+    } catch {
+      // Metadata is best-effort: a run may settle between the event and
+      // these reads, but its reduced lifecycle row remains correct.
+    }
   }
 
   /** Unsubscribes from the runtime. Call on `session_shutdown`. */
@@ -152,6 +181,13 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
     // so overlapping replay is a no-op rather than a double-count.
     const fromSequence = Math.max(lastPersistedSequence(extCtx.sessionManager.getEntries() as SessionEntryLike[]), Number(controller.getState().lastSequence));
     try {
+      try {
+        assertCompatiblePiCodingAgentVersion();
+      } catch (err) {
+        pi.logger.warn("crew monitor: Pi compatibility warning", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       const client = await ctx.getClient(extCtx);
       controller.start(client, fromSequence, () => refresh(extCtx));
       subscribedClient = client;
@@ -173,7 +209,7 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
   });
 
   pi.registerCommand(MONITOR_COMMAND_NAME, {
-    description: "Opens or refreshes the embedded Crew worker monitor. `/crew status <runId>` shows full details.",
+    description: "Opens the Crew monitor. Subcommands: status <runId>, runs, export [runId], clean, reopen <runId>.",
     handler: async (args, cmdCtx) => {
       const [sub, runId] = args.trim().split(/\s+/, 2);
       if (sub === "status" && runId !== undefined && runId.length > 0) {
@@ -181,10 +217,49 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
         cmdCtx.ui.notify(details ?? `No Crew run found for ${runId}.`, details === undefined ? "warning" : "info");
         return;
       }
+      await connect(cmdCtx);
+      const client = subscribedClient;
+      if (client === undefined) {
+        cmdCtx.ui.notify("Crew runtime is unavailable.", "warning");
+        return;
+      }
+      if (sub === "runs") {
+        const result = (await client.request("run/list", {})) as { runs?: Array<{ runId?: string; state?: string; workerId?: string }> };
+        const runs = result.runs ?? [];
+        cmdCtx.ui.notify(runs.length === 0 ? "No Crew runs recorded." : runs.map((run) => `${run.runId ?? "(unknown)"}  ${run.state ?? "unknown"}  worker ${run.workerId ?? "unknown"}`).join("\n"), "info");
+        return;
+      }
+      if (sub === "export") {
+        // `events/replay` is intentionally sequence-oriented; its daemon
+        // params do not include a run filter. Filter the already validated
+        // envelopes here so `/crew export <runId>` cannot leak other runs.
+        const replay = (await client.request("events/replay", {})) as Array<{ runId?: string | null }>;
+        const events = runId === undefined ? replay : replay.filter((event) => event.runId === runId);
+        const exportId = runId ?? "all";
+        const directory = join(cmdCtx.cwd, ".omp", "crew");
+        const output = join(directory, `export-${exportId}.jsonl`);
+        await mkdir(directory, { recursive: true });
+        await writeFile(output, events.map((event) => JSON.stringify(event)).join("\n") + (events.length > 0 ? "\n" : ""));
+        cmdCtx.ui.notify(`Exported ${events.length} Crew events to ${output}.`, "info");
+        return;
+      }
+      if (sub === "clean") {
+        const result = (await client.request("retention/clean", {})) as { deletedEvents: number; runsPruned: number };
+        cmdCtx.ui.notify(`Retention clean removed ${result.deletedEvents} events across ${result.runsPruned} maxRuns-pruned runs.`, "info");
+        return;
+      }
+      if (sub === "reopen") {
+        if (runId === undefined || runId.length === 0) {
+          cmdCtx.ui.notify("Usage: /crew reopen <runId>", "warning");
+          return;
+        }
+        const result = (await client.request("pane/reopen", { runId })) as { backend: string; paneRef: string };
+        cmdCtx.ui.notify(result.paneRef.length === 0 ? `No visible backend is available for ${runId}.` : `Reopened ${runId} in ${result.backend}: ${result.paneRef}`, "info");
+        return;
+      }
       // Deliberately asymmetric with session_start's auto-hide: an explicit
       // user command renders unconditionally, so /crew against an empty or
       // dead runtime still shows the (empty) monitor box rather than nothing.
-      await connect(cmdCtx);
       refresh(cmdCtx, true);
     },
   });

@@ -155,6 +155,18 @@ pub enum CrewMethod {
     /// run proceeds.
     #[serde(rename = "run/timeoutAck")]
     RunTimeoutAck,
+
+    // Operator/maintenance surface (`/crew clean`, `/crew reopen`).
+    /// Runs the retention prune once, on demand: removes the events of
+    /// terminal (or unassociated) runs past the configured age cutoff and
+    /// beyond the `retention.maxRuns` recency cap. Never touches active
+    /// runs or run rows.
+    #[serde(rename = "retention/clean")]
+    RetentionClean,
+    /// Re-creates a live run's display pane around its still-running
+    /// attach socket (the pane was closed by the user or a backend).
+    #[serde(rename = "pane/reopen")]
+    PaneReopen,
 }
 
 #[cfg(test)]
@@ -168,6 +180,8 @@ mod tests {
             (CrewMethod::PlanDecide, "plan/decide"),
             (CrewMethod::PlanGet, "plan/get"),
             (CrewMethod::RunTimeoutAck, "run/timeoutAck"),
+            (CrewMethod::RetentionClean, "retention/clean"),
+            (CrewMethod::PaneReopen, "pane/reopen"),
         ];
         for (method, wire_name) in cases {
             assert_eq!(serde_json::to_value(method).unwrap(), wire_name);

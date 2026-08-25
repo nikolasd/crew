@@ -135,6 +135,17 @@ impl WorkerCredentialVerifier for RejectAllWorkerVerifier {
     }
 }
 
+/// Dependencies for `pane/reopen`. The daemon supplies these only when it
+/// resolved its own executable (the same prerequisite TUI adapters require);
+/// tests and embedded servers leave them absent and receive a typed refusal.
+#[derive(Clone)]
+pub struct PaneReopenConfig {
+    pub panes_dir: std::path::PathBuf,
+    pub state_dir: std::path::PathBuf,
+    pub crewd_path: std::path::PathBuf,
+    pub display_registry: std::sync::Arc<crate::display::DisplayRegistry>,
+}
+
 /// Configuration for a [`Server`]. All fields have sensible foundation
 /// defaults; tests override the injectable readers/verifiers and the frame
 /// bounds.
@@ -191,6 +202,12 @@ pub struct ServerConfig {
     /// sink and read by lifecycle's timeout sweep. `None` (tests, embeddings)
     /// gives the service a fresh empty clock nothing sweeps.
     pub activity_clock: Option<std::sync::Arc<crate::adapter::ActivityClock>>,
+    /// Optional support for `pane/reopen`; absent in test/embedded servers
+    /// that do not own a verified `crewd` executable or pane socket root.
+    pub pane_reopen: Option<PaneReopenConfig>,
+    /// Effective retention policy for `retention/clean`. The daemon sets
+    /// this from `crew.json`; absent test/embedded servers refuse the RPC.
+    pub retention: Option<crate::audit::Retention>,
 }
 
 impl Default for ServerConfig {
@@ -210,6 +227,8 @@ impl Default for ServerConfig {
             artifact_store: None,
             turn_budget_default: crate::config::crew::Limits::default().turn_budget_per_subtask,
             activity_clock: None,
+            pane_reopen: None,
+            retention: None,
         }
     }
 }
@@ -246,11 +265,11 @@ impl ClientPrincipal {
             CoordinationChildList, CoordinationPeerWorkspace, CoordinationPeers,
             CoordinationPublishArtifact, CoordinationReportBlocked, CoordinationRequestChild,
             CoordinationSend, CoordinationTask, EventsReplay, EventsSubscribe, MessageList,
-            MessageSend, PlanDecide, PlanGet, PlanPropose, PolicyViolationDecide,
-            PolicyViolationList, ProfileRegister, ReconcileOmp, RunCancel, RunGet, RunList,
-            RunResult, RunRetry, RunSubmit, RunTimeoutAck, RuntimeShutdown, RuntimeStatus, TaskGet,
-            TaskUpsert, WorkerCreate, WorkerGet, WorkerList, WorkspaceAcquire, WorkspaceApply,
-            WorkspaceGet, WorkspaceInspect, WorkspaceRelease,
+            MessageSend, PaneReopen, PlanDecide, PlanGet, PlanPropose, PolicyViolationDecide,
+            PolicyViolationList, ProfileRegister, ReconcileOmp, RetentionClean, RunCancel, RunGet,
+            RunList, RunResult, RunRetry, RunSubmit, RunTimeoutAck, RuntimeShutdown, RuntimeStatus,
+            TaskGet, TaskUpsert, WorkerCreate, WorkerGet, WorkerList, WorkspaceAcquire,
+            WorkspaceApply, WorkspaceGet, WorkspaceInspect, WorkspaceRelease,
         };
         match self.role {
             ClientRole::OmpExtension => vec![
@@ -290,6 +309,8 @@ impl ClientPrincipal {
                 PlanDecide,
                 PlanGet,
                 RunTimeoutAck,
+                RetentionClean,
+                PaneReopen,
             ],
             ClientRole::Display => {
                 vec![

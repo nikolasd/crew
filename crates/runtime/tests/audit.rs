@@ -65,7 +65,7 @@ async fn retention_prunes_old_events() {
     ])
     .await;
 
-    Retention::new("30d").prune(&db).await.unwrap();
+    Retention::new("30d", 20).prune(&db).await.unwrap();
 
     let surviving: Vec<String> = db
         .replay_events(0)
@@ -171,5 +171,56 @@ async fn export_filters_by_timestamp() {
     assert!(
         serde_json::to_string(&lines[0]).unwrap().contains("inside"),
         "only the in-range event is exported: {lines:?}"
+    );
+}
+
+#[tokio::test]
+async fn retention_prunes_terminal_events_beyond_max_runs_but_keeps_recent_history() {
+    let (db, _dir) = seeded_db(Vec::new()).await;
+    db.run_domain_op(Box::new(|conn| {
+        conn.execute(
+            "INSERT INTO worker_profiles (id, fingerprint, adapter, model, permission_envelope) VALUES ('p', 'fp', 'claude', 'test', '{}')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO tasks (task_id, project_id, owner_client_instance_id, revision, created_at, updated_at) VALUES ('t', '018f0000-0000-7000-8000-0000000000aa', 'owner', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO workers (worker_id, project_id, profile_id, created_at) VALUES ('w', '018f0000-0000-7000-8000-0000000000aa', 'p', '2026-01-01T00:00:00Z')",
+            [],
+        )?;
+        for run_id in [
+            "018f0000-0000-7000-8000-000000000001",
+            "018f0000-0000-7000-8000-000000000002",
+            "018f0000-0000-7000-8000-000000000003",
+        ] {
+            conn.execute(
+                "INSERT INTO runs (run_id, task_id, worker_id, state, created_at) VALUES (?1, 't', 'w', 'succeeded', '2026-01-01T00:00:00Z')",
+                [run_id],
+            )?;
+            conn.execute(
+                "INSERT INTO events (timestamp, project_id, run_id, event_json) VALUES ('2026-01-01T00:00:00Z', '018f0000-0000-7000-8000-0000000000aa', ?1, '{}')",
+                [run_id],
+            )?;
+        }
+        Ok(Value::Null)
+    }))
+    .await
+    .unwrap();
+
+    // A century cutoff keeps every event by age; only maxRuns may prune.
+    let report = Retention::new("100y", 1).prune(&db).await.unwrap();
+    assert_eq!(report.deleted_events, 2);
+    assert_eq!(report.runs_pruned, 2);
+    let survivors = db.replay_events(0).await.unwrap();
+    assert_eq!(survivors.len(), 1);
+    assert_eq!(
+        survivors[0]
+            .run_id
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("018f0000-0000-7000-8000-000000000003")
     );
 }

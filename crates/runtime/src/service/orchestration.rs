@@ -187,6 +187,14 @@ fn lease_error_to_service_error(err: crate::workspace::LeaseError) -> ServiceErr
     }
 }
 
+/// Runtime-only support that lets `pane/reopen` re-create a visible pane
+/// around a live run's existing attach socket.
+#[derive(Clone)]
+struct PaneReopenDeps {
+    coordinator: Arc<crate::display::PaneCoordinator>,
+    panes_dir: std::path::PathBuf,
+}
+
 /// Routes every orchestration method to the domain repository. Holds no
 /// mutable state itself; every command borrows the shared
 /// [`DatabaseHandle`] and commits on the actor thread.
@@ -221,6 +229,10 @@ pub struct OrchestrationService {
     /// lifecycle's timeout sweep reads -- the same instance the registry's
     /// sinks use, so one run has exactly one clock.
     activity: Arc<crate::adapter::ActivityClock>,
+    /// The daemon's effective retention policy; absent only in lean
+    /// test/embedded servers, where `retention/clean` fails explicitly.
+    retention: Option<crate::audit::Retention>,
+    pane_reopen: Option<PaneReopenDeps>,
 }
 
 /// The outcome of [`OrchestrationService::abandon_lease`]: what
@@ -277,7 +289,30 @@ impl OrchestrationService {
             )),
             turn_budget_default,
             activity,
+            retention: None,
+            pane_reopen: None,
         }
+    }
+
+    /// Enables the configured, on-demand retention maintenance RPC.
+    #[must_use]
+    pub fn with_retention(mut self, retention: crate::audit::Retention) -> Self {
+        self.retention = Some(retention);
+        self
+    }
+
+    /// Enables `pane/reopen` for a daemon that owns pane sockets.
+    #[must_use]
+    pub fn with_pane_reopen(
+        mut self,
+        coordinator: Arc<crate::display::PaneCoordinator>,
+        panes_dir: std::path::PathBuf,
+    ) -> Self {
+        self.pane_reopen = Some(PaneReopenDeps {
+            coordinator,
+            panes_dir,
+        });
+        self
     }
 
     /// Attaches the merged startup policy and the config layer paths it
@@ -376,6 +411,8 @@ impl OrchestrationService {
             CrewMethod::PlanDecide => self.plan_decide(principal, params).await,
             CrewMethod::PlanGet => self.plan_get(params).await,
             CrewMethod::RunTimeoutAck => self.run_timeout_ack(principal, params).await,
+            CrewMethod::RetentionClean => self.retention_clean().await,
+            CrewMethod::PaneReopen => self.pane_reopen(principal, params).await,
             _ => Err(ServiceError::internal(
                 "method is not routed through OrchestrationService",
             )),
@@ -820,7 +857,11 @@ impl OrchestrationService {
         };
         // Orchestration-test-scope: awaited synchronously so the caller
         // observes the final committed state deterministically.
-        if let Err(err) = driver.start(ctx).await.map_err(ServiceError::internal) {
+        if let Err(err) = driver
+            .start(ctx)
+            .await
+            .map_err(|err| ServiceError::internal(err.to_string()))
+        {
             // The run never started, so nothing else will ever release this
             // lease or remove its worktree -- `run/retry` would simply
             // allocate a second one on top. `LeaseRequested`/`LeaseAcquired`
@@ -2506,6 +2547,127 @@ impl OrchestrationService {
     /// `plan/get`: open read (ADR-0024) of the most recently proposed plan
     /// for a run and its decision, if any. No event is persisted or
     /// broadcast -- it is a pure projection read.
+    /// `retention/clean`: runs one configured retention pass on demand.
+    /// The policy is the daemon's own `crew.json` effective config; callers
+    /// cannot bypass its period or max-runs bounds through RPC parameters.
+    async fn retention_clean(&self) -> Result<Value, ServiceError> {
+        let retention = self.retention.as_ref().ok_or_else(|| {
+            ServiceError::internal("retention/clean is unavailable without daemon retention config")
+        })?;
+        let report = retention
+            .prune(&self.db)
+            .await
+            .map_err(|err| ServiceError::internal(err.to_string()))?;
+        serde_json::to_value(crew_protocol::RetentionCleanResult {
+            deleted_events: report.deleted_events,
+            runs_pruned: report.runs_pruned,
+        })
+        .map_err(|err| ServiceError::internal(err.to_string()))
+    }
+
+    /// `pane/reopen`: creates a new Crew-owned pane around a LIVE run's
+    /// already-bound attach socket. The pane is intentionally additive: a
+    /// user may have closed the old pane, and closing an unknown backend pane
+    /// first would risk killing a still-useful surface.
+    async fn pane_reopen(
+        &self,
+        principal: &ClientPrincipal,
+        params: &Value,
+    ) -> Result<Value, ServiceError> {
+        let run_id = parse_run_id(params.get("runId"))?;
+        // Pane creation journals DisplayPaneAttached, so this is a run
+        // mutation and MUST share the OMP task-owner boundary. Check it
+        // before environment support so a second instance never learns
+        // whether the target has a live pane backend/socket.
+        self.db
+            .run_domain_op(query::run_owner_op(run_id, principal.instance_id.clone()))
+            .await
+            .map_err(|err| match err {
+                crate::domain::DomainError::NotOwner { .. }
+                | crate::domain::DomainError::NotFound { .. } => {
+                    ServiceError::invalid_params("runId is not a run you own")
+                }
+                other => ServiceError::internal(other.to_string()),
+            })?;
+        let deps = self.pane_reopen.as_ref().ok_or_else(|| {
+            ServiceError::internal("pane/reopen is unavailable without daemon pane support")
+        })?;
+        let project_id = self.project_id;
+        let run_id_string = run_id.to_string();
+        let facts = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                conn.query_row(
+                    "SELECT r.state, r.worker_id, p.adapter
+                     FROM runs r
+                     JOIN workers w ON w.worker_id = r.worker_id
+                     JOIN worker_profiles p ON p.id = w.profile_id
+                     WHERE r.run_id = ?1 AND w.project_id = ?2",
+                    rusqlite::params![run_id_string, project_id.to_string()],
+                    |row| {
+                        Ok(serde_json::json!({
+                            "state": row.get::<_, String>(0)?,
+                            "workerId": row.get::<_, String>(1)?,
+                            "adapter": row.get::<_, String>(2)?,
+                        }))
+                    },
+                )
+                .map_err(crate::domain::DomainError::from)
+            }))
+            .await
+            .map_err(ServiceError::from)?;
+        let state = facts["state"]
+            .as_str()
+            .ok_or_else(|| ServiceError::internal("pane/reopen read malformed run state"))?;
+        if matches!(state, "succeeded" | "failed" | "cancelled" | "lost") {
+            return Err(ServiceError::invalid_params(format!(
+                "cannot reopen pane for terminal run {run_id} ({state})"
+            )));
+        }
+        let socket = deps.panes_dir.join(format!("{run_id}.sock"));
+        if !socket.exists() {
+            return Err(ServiceError::invalid_params(format!(
+                "run {run_id} has no live attach socket"
+            )));
+        }
+        let worker_id = crew_protocol::WorkerId::parse(
+            facts["workerId"]
+                .as_str()
+                .ok_or_else(|| ServiceError::internal("pane/reopen read malformed worker id"))?,
+        )
+        .map_err(|_| ServiceError::internal("pane/reopen read invalid worker id"))?;
+        let adapter = facts["adapter"]
+            .as_str()
+            .ok_or_else(|| ServiceError::internal("pane/reopen read malformed adapter"))?
+            .to_string();
+        let outcome = deps
+            .coordinator
+            .attach_owned(
+                crate::display::PaneAttachRequest {
+                    run_id,
+                    worker_id,
+                    adapter,
+                    placement: crew_protocol::DisplayPlacement::SplitRight,
+                    forced_backend: None,
+                },
+                principal.instance_id.clone(),
+            )
+            .await
+            .map_err(|err| match err {
+                crate::domain::DomainError::NotOwner { .. }
+                | crate::domain::DomainError::NotFound { .. } => {
+                    ServiceError::invalid_params("runId is not a run you own")
+                }
+                other => ServiceError::internal(other.to_string()),
+            })?;
+        serde_json::to_value(crew_protocol::PaneReopenResult {
+            run_id,
+            backend: outcome.backend,
+            pane_ref: outcome.pane_ref,
+        })
+        .map_err(|err| ServiceError::internal(err.to_string()))
+    }
+
     /// `run/timeoutAck`: the leader's decision surface for a
     /// [`RuntimeEvent::WorkerTimeout`] fact (WP21, spec §7.5 -- the runtime
     /// reports; the leader decides).

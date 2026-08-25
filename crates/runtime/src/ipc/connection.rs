@@ -524,7 +524,9 @@ async fn dispatch(
         CrewMethod::PlanPropose
         | CrewMethod::PlanDecide
         | CrewMethod::PlanGet
-        | CrewMethod::RunTimeoutAck => {
+        | CrewMethod::RunTimeoutAck
+        | CrewMethod::RetentionClean
+        | CrewMethod::PaneReopen => {
             let resolved = method.expect("allowed implies a known method");
             let params = message.get("params").cloned().unwrap_or(Value::Null);
             match shared
