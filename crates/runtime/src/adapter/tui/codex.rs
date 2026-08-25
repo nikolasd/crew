@@ -269,7 +269,7 @@ pub fn session_id_from_rollout_filename(filename: &str) -> Option<String> {
 /// "turn_context" | "event_msg"`, payloads carrying the conversation
 /// facts (`response_item.payload.{type,message,function_call,...}`,
 /// `event_msg.payload.type == "task_complete"` ending a turn).
-struct CodexRolloutFormat;
+pub(super) struct CodexRolloutFormat;
 
 impl TranscriptFormat for CodexRolloutFormat {
     fn parse(&self, raw: &[u8], cursor: &Cursor) -> (Vec<TuiEvent>, Cursor) {

@@ -1537,50 +1537,45 @@ mod build_adapter_tests {
     }
 
     /// `mode: "tui"` on Codex/Copilot still refuses even *with*
-    /// `TuiSupport` supplied -- only Claude has a real `TuiVendor` impl
-    /// (WP13); the other two still have none.
+    /// `TuiSupport` supplied -- claude (WP13) and codex (WP27) have real
+    /// `TuiVendor` impls; copilot still has none.
     #[tokio::test]
-    async fn tui_mode_on_codex_and_copilot_still_refuses_even_with_tui_support_supplied() {
+    async fn tui_mode_on_copilot_still_refuses_even_with_tui_support_supplied() {
         let (db, _dir, events_tx) = db_and_events().await;
-        for options in [
-            StartupOptions::Codex(CodexStartupOptions {
-                mode: crate::adapter::profile::AdapterMode::Tui,
-                ..CodexStartupOptions::default()
-            }),
-            StartupOptions::Copilot(CopilotStartupOptions {
-                mode: crate::adapter::profile::AdapterMode::Tui,
-                ..CopilotStartupOptions::default()
-            }),
-        ] {
-            let expected_kind = profile(options.clone())
-                .startup_options
-                .adapter_kind()
-                .expect("reserved kind")
-                .wire_name()
-                .to_string();
-            let profile = profile(options);
-            let result = build_adapter(
-                &profile,
-                std::path::Path::new("/tmp"),
-                RunId::new(),
-                TaskId::new(),
-                WorkerId::new(),
-                None,
-                None,
-                Some(test_tui_support()),
-                Arc::clone(&db),
-                crew_protocol::ProjectId::new(),
-                events_tx.clone(),
-                None,
-                None,
-            );
-            match result {
-                Ok(_) => panic!("{expected_kind}: mode: tui must still refuse (no TuiVendor impl)"),
-                Err(err) => assert!(
-                    matches!(err, RegistryError::TuiModeUnavailable(ref kind) if *kind == expected_kind),
-                    "{expected_kind}: expected TuiModeUnavailable, got: {err}"
-                ),
-            }
+        // WP27 landed codex's TuiVendor, so codex now constructs a real
+        // adapter (asserted separately below); copilot still has none.
+        let options = StartupOptions::Copilot(CopilotStartupOptions {
+            mode: crate::adapter::profile::AdapterMode::Tui,
+            ..CopilotStartupOptions::default()
+        });
+        let expected_kind = profile(options.clone())
+            .startup_options
+            .adapter_kind()
+            .expect("reserved kind")
+            .wire_name()
+            .to_string();
+        let profile = profile(options);
+        let result = build_adapter(
+            &profile,
+            std::path::Path::new("/tmp"),
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            None,
+            None,
+            Some(test_tui_support()),
+            Arc::clone(&db),
+            crew_protocol::ProjectId::new(),
+            events_tx.clone(),
+            None,
+            None,
+        );
+        match result {
+            Ok(_) => panic!("{expected_kind}: mode: tui must still refuse (no TuiVendor impl)"),
+            Err(err) => assert!(
+                matches!(err, RegistryError::TuiModeUnavailable(ref kind) if *kind == expected_kind),
+                "{expected_kind}: expected TuiModeUnavailable, got: {err}"
+            ),
         }
     }
 
@@ -1618,6 +1613,41 @@ mod build_adapter_tests {
 
         let adapter = result.expect("Claude TUI mode must construct with TuiSupport supplied");
         assert_eq!(adapter.kind(), "claude");
+        assert_eq!(
+            adapter.capabilities().protocol,
+            crate::adapter::capability::ProtocolKind::Terminal
+        );
+    }
+
+    /// WP27: `mode: "tui"` on Codex now constructs a real
+    /// `TuiAdapter<CodexTuiVendor>` the same way claude does.
+    #[tokio::test]
+    async fn codex_tui_mode_with_tui_support_constructs_a_real_tui_adapter() {
+        let options = CodexStartupOptions {
+            mode: crate::adapter::profile::AdapterMode::Tui,
+            ..CodexStartupOptions::default()
+        };
+        let profile = profile(StartupOptions::Codex(options));
+        let (db, _dir, events_tx) = db_and_events().await;
+
+        let result = build_adapter(
+            &profile,
+            std::path::Path::new("/tmp"),
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            None,
+            None,
+            Some(test_tui_support()),
+            db,
+            crew_protocol::ProjectId::new(),
+            events_tx,
+            None,
+            None,
+        );
+
+        let adapter = result.expect("Codex TUI mode must construct with TuiSupport supplied");
+        assert_eq!(adapter.kind(), "codex");
         assert_eq!(
             adapter.capabilities().protocol,
             crate::adapter::capability::ProtocolKind::Terminal
