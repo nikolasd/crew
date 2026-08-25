@@ -817,3 +817,22 @@ ownership gates *mutation*. Rationale and the one exception (`workspace/get`) in
 | Workspace lease operations are gated by task ownership | `crates/runtime/tests/orchestration_rpc.rs` |
 
 Run with a test-runner timeout if you suspect a new mutation has regressed the broadcast invariant — the bug manifests as an infinite hang, not a clean failure.
+
+## Crew v2 TUI control plane
+
+```mermaid
+flowchart LR
+  OMP[OMP leader / extension] -->|plan, spawn, send, timeoutAck| RPC[crewd JSON-RPC]
+  RPC --> DB[(SQLite journal)]
+  RPC --> REG[Adapter registry]
+  REG --> W[Vendor worker / PTY]
+  W --> RED[Redaction + lifecycle sink]
+  RED --> DB
+  DB --> EVT[Committed EventEnvelope broadcast]
+  EVT --> MON[/crew widget + milestone digests]
+  EVT --> DASH[localhost read-only dashboard]
+  REG --> ATTACH[Per-run attach socket]
+  ATTACH --> PANE[tmux / herdr / terminal pane]
+```
+
+The daemon persists intent before execution and redacts content before journal durability. OMP retains the task graph and all leader decisions: plan approval, timeout disposition, budget escalation, and merge/finish decisions. A pane is a view over a live attach socket, not a second worker-control channel.

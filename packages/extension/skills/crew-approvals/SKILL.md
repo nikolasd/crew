@@ -28,6 +28,12 @@ A policy violation quarantines a run — it makes no further progress until ever
 - Call `crew_violation { op: "list" }` (optionally with `runId`) to see every recorded violation and its decision state. An entry with `resolution: null` on a quarantined run is the one holding the quarantine.
 - Call `crew_violation { op: "decide", violationId, resolution }` to decide one violation. The `resolution` is exactly `"release"` (resume the quarantined run) or `"cancel"` (end it). A "release" only lifts quarantine if this was the *last* unresolved violation on the run — the result's `quarantineCleared` field (`true`/`false`, absent for `cancel` or an already-decided replay) says whether it did; `false` means a different violation is still open — find it with `op: "list"`.
 
+## Plans, budgets, and timeouts
+
+- A proposed plan is not a run authorization. Decide the plan gate before `crew_spawn`; never bypass a human-required write-plan decision.
+- `BUDGET_EXCEEDED` is an observed limit, not an invitation to retry the same message. Escalate for a higher planned budget or finish/stop the run.
+- A `WorkerTimeout` gives the leader exactly three choices: `run/timeoutAck` `extend`, `crew_send` a nudge, or `run/timeoutAck` `abort`. Do not poll the worker or send duplicate instructions through a vendor pane.
+
 ## Child spawn requests
 
 When a worker wants to spawn a nested child, it records the intent — nothing happens until you decide.

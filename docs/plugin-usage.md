@@ -679,3 +679,21 @@ Moved to [`getting-started.md` § How the extension finds and starts `crewd`](ge
 socket answers; otherwise `OMP_CREW_BINARY` (developer override) or the checksum-verified
 `<state root>/bin/<version>/crewd` cache is spawned, and `crew_health` reports which one as
 "Binary source".
+
+## Crew v2 leader control plane
+
+Use `/crew` as the live projection. It receives milestone digests from the daemon; do not poll a run until it becomes terminal.
+
+1. Propose a decomposition with `crew_plan`; the configured approval gate decides whether it may execute.
+2. Start approved subtasks with `crew_spawn`. The selected worker's resolved `adapters.*.profile` is the adapter/model/permission routing context the worker sees.
+3. Triage from the monitor: use `crew_send` for one Crew message channel, `crew_stop` for one outcome, and `crew_finish` for explicitly named plan runs.
+
+`/crew runs` lists retained run history. `/crew export [runId]` writes replayed event JSONL under `.omp/crew/`. `/crew clean` applies configured event retention (period plus `maxRuns`) only to terminal/unassociated history. `/crew reopen <runId>` opens another pane only while the live attach socket exists.
+
+### Timeout and budget facts
+
+A `WorkerTimeout` is a leader decision, never an automatic daemon kill: acknowledge `extend`, send one nudge with `crew_send`, or acknowledge `abort`. A `BUDGET_EXCEEDED` result means the subtask's snapshotted turn budget is exhausted; do not resend the same message. Escalate for a plan/budget decision instead.
+
+### Workspace choice
+
+Use `shared` by default. Use an isolated Git worktree for parallel writers. Use `copy` only for work outside Git or a disposable filesystem copy. Shared writes serialize; worktrees solve actual concurrent file ownership, not planning uncertainty.

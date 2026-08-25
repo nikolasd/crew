@@ -32,6 +32,7 @@ agreed. Read [../journal.md](../journal.md) for the story each of these was extr
 | [0022](0022-github-release-download-cache-replaces-npm-leaf-packages.md) | GitHub Release download-cache replaces npm optional leaf packages | Accepted |
 | [0023](0023-run-state-edges-from-adapter-evidence.md) | Run-state edges derive from adapter evidence; an unobservable exit is `lost` | Accepted |
 | [0024](0024-project-scoped-reads-are-open-ownership-gates-writes.md) | Project-scoped reads are open; ownership gates writes | Accepted |
+| [0025](0025-crew-v2-tui-control-plane.md) | Crew v2 TUI control plane | Accepted |
 
 ## When to add one
 
