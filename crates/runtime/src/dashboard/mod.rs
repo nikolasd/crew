@@ -17,9 +17,10 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use crew_protocol::{EventEnvelope, ProjectId};
+use std::sync::Arc as StdArc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Notify, broadcast};
+use tokio::net::TcpListener;
+use tokio::sync::{broadcast, watch};
 
 use crate::db::DatabaseHandle;
 use crate::service::query;
@@ -37,9 +38,18 @@ pub struct DashboardDeps {
 /// lifecycle stops it before the journal drain on shutdown.
 pub struct DashboardServer {
     local_addr: SocketAddr,
-    shutdown: Arc<Notify>,
+    /// WP22 minor, closed: a `watch` channel rather than `Notify`, so a
+    /// connection task spawned AFTER `stop()` still observes the shutdown
+    /// (a `notify_waiters` race left exactly that leak window).
+    shutdown: watch::Sender<bool>,
     accept_task: tokio::task::JoinHandle<()>,
 }
+
+/// Ceiling on concurrently open dashboard connections. Each held
+/// connection (an SSE viewer especially) pins a task and a socket;
+/// unbounded viewers would let one curious browser tab-farm exhaust the
+/// daemon's task budget.
+const MAX_CONNECTIONS: usize = 64;
 
 impl DashboardServer {
     /// Binds `127.0.0.1:<port>` (never a routable interface; `0` picks an
@@ -68,20 +78,37 @@ impl DashboardServer {
     ) -> std::io::Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
         let local_addr = listener.local_addr()?;
-        let shutdown = Arc::new(Notify::new());
-        let accept_shutdown = Arc::clone(&shutdown);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut accept_shutdown = shutdown_rx.clone();
+        let permits = StdArc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
         let accept_task = tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    () = accept_shutdown.notified() => break,
+                    _ = accept_shutdown.changed() => break,
                     accepted = listener.accept() => {
                         let Ok((stream, _peer)) = accepted else { continue };
                         let deps = deps.clone();
-                        let shutdown = Arc::clone(&accept_shutdown);
+                        let mut shutdown = shutdown_rx.clone();
+                        let permit = match permits.clone().acquire_owned().await {
+                            // A capped-out dashboard drops the new
+                            // connection instead of piling tasks; the
+                            // permit returns when the connection task ends.
+                            Ok(permit) => permit,
+                            Err(_) => continue,
+                        };
                         tokio::spawn(async move {
-                            let _ =
-                                handle_connection(stream, deps, shutdown, header_read_timeout)
-                                    .await;
+                            let (read_half, write_half) = stream.into_split();
+                            // Hold the cap permit for the connection's
+                            // whole lifetime; dropping releases the slot.
+                            let _permit = permit;
+                            let _ = handle_connection(
+                                read_half,
+                                write_half,
+                                deps,
+                                &mut shutdown,
+                                header_read_timeout,
+                            )
+                            .await;
                         });
                     }
                 }
@@ -89,7 +116,7 @@ impl DashboardServer {
         });
         Ok(Self {
             local_addr,
-            shutdown,
+            shutdown: shutdown_tx,
             accept_task,
         })
     }
@@ -102,7 +129,7 @@ impl DashboardServer {
 
     /// Stops accepting and closes live SSE streams.
     pub fn stop(&self) {
-        self.shutdown.notify_waiters();
+        let _ = self.shutdown.send(true);
         self.accept_task.abort();
     }
 }
@@ -148,7 +175,10 @@ struct RequestHead {
 /// the *next* line (already buffered by one `read` syscall) are never
 /// discarded, and so the cap is enforced as bytes arrive rather than only
 /// once a full line has been buffered.
-async fn read_bounded_line(reader: &mut BufReader<TcpStream>) -> Result<String, HeadReadError> {
+async fn read_bounded_line<R>(reader: &mut R) -> Result<String, HeadReadError>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
     let mut collected: Vec<u8> = Vec::new();
     loop {
         let buf = reader.fill_buf().await?;
@@ -176,14 +206,14 @@ async fn read_bounded_line(reader: &mut BufReader<TcpStream>) -> Result<String, 
 /// Reads the request line and drains (and ignores -- the dashboard needs
 /// none) the headers that follow, bounding each line's size. Callers wrap
 /// this in a [`tokio::time::timeout`]; it applies no timeout itself.
-async fn read_request_head(
-    reader: &mut BufReader<TcpStream>,
-) -> Result<RequestHead, HeadReadError> {
+async fn read_request_head<R>(reader: &mut R) -> Result<RequestHead, HeadReadError>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
     let request_line = read_bounded_line(reader).await?;
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or_default().to_string();
     let path = parts.next().unwrap_or_default().to_string();
-
     for _ in 0..MAX_HEADER_COUNT {
         let header = read_bounded_line(reader).await?;
         if header == "\r\n" || header == "\n" {
@@ -195,18 +225,21 @@ async fn read_request_head(
 }
 
 async fn handle_connection(
-    stream: TcpStream,
+    read_half: tokio::net::tcp::OwnedReadHalf,
+    write_half: tokio::net::tcp::OwnedWriteHalf,
     deps: DashboardDeps,
-    shutdown: Arc<Notify>,
+    shutdown: &mut watch::Receiver<bool>,
     header_read_timeout: std::time::Duration,
 ) -> std::io::Result<()> {
-    let mut reader = BufReader::new(stream);
+    // The caller holds the connection-cap permit for this task's lifetime.
+    let mut reader = BufReader::new(read_half);
 
     let head = match tokio::time::timeout(header_read_timeout, read_request_head(&mut reader)).await
     {
         Ok(Ok(head)) => head,
         Ok(Err(HeadReadError::TooLong)) => {
-            let mut stream = reader.into_inner();
+            let mut stream = write_half;
+            let _ = reader;
             return write_simple(
                 &mut stream,
                 "431 Request Header Fields Too Large",
@@ -221,7 +254,7 @@ async fn handle_connection(
         Ok(Err(HeadReadError::Io)) | Err(_) => return Ok(()),
     };
 
-    let mut stream = reader.into_inner();
+    let mut stream = write_half;
     if head.method != "GET" {
         return write_simple(
             &mut stream,
@@ -254,7 +287,7 @@ async fn handle_connection(
                 .await
             }
         },
-        "/events" => serve_sse(&mut stream, &deps, &shutdown).await,
+        "/events" => serve_sse(&mut stream, &deps, shutdown).await,
         _ => {
             write_simple(
                 &mut stream,
@@ -309,9 +342,9 @@ async fn state_snapshot(deps: &DashboardDeps) -> Result<String, String> {
 /// subscription skips ahead -- a dashboard that misses frames re-fetches
 /// state; it must never exert backpressure on the daemon.
 async fn serve_sse(
-    stream: &mut TcpStream,
+    stream: &mut (impl tokio::io::AsyncWrite + Unpin),
     deps: &DashboardDeps,
-    shutdown: &Notify,
+    shutdown: &mut watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     stream
         .write_all(
@@ -326,7 +359,7 @@ async fn serve_sse(
     let mut rx = deps.events_tx.subscribe();
     loop {
         tokio::select! {
-            () = shutdown.notified() => return Ok(()),
+            _ = shutdown.changed() => return Ok(()),
             received = rx.recv() => match received {
                 Ok(envelope) => {
                     let json = serde_json::to_string(&envelope)
@@ -341,12 +374,15 @@ async fn serve_sse(
     }
 }
 
-async fn write_simple(
-    stream: &mut TcpStream,
+async fn write_simple<W>(
+    stream: &mut W,
     status: &str,
     content_type: &str,
     body: &str,
-) -> std::io::Result<()> {
+) -> std::io::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
     let head = format!(
         "HTTP/1.1 {status}\r\n\
          content-type: {content_type}\r\n\

@@ -50,7 +50,9 @@ use super::profile::{
 };
 use super::run_lifecycle::RunLifecycleSink;
 use super::r#trait::{Adapter, AdapterMessage, StartSpec, VendorSessionRef};
-use super::tui::{ClaudeTuiVendor, Cursor, ResumeContext, TuiAdapter, TuiSupport, TuiVendor};
+use super::tui::{
+    ClaudeTuiVendor, CodexTuiVendor, Cursor, ResumeContext, TuiAdapter, TuiSupport, TuiVendor,
+};
 use crate::adapter::CancelScope;
 use crate::config::crew::{AdapterConfig, AdapterMode as CrewAdapterMode, PermissionMode};
 use crate::conformance;
@@ -1144,22 +1146,50 @@ fn build_adapter(
             .startup_options
             .adapter_kind()
             .expect("Tui mode only applies to a startup_options variant with an AdapterKind");
-        if kind == super::AdapterKind::Claude
-            && let Some(tui) = tui
-        {
-            return Ok(build_claude_tui_adapter(
-                &tui,
-                repo_root,
-                run_id,
-                task_id,
-                worker_id,
-                db,
-                project_id,
-                events_tx,
-                display,
-                profile.environment_allowlist.clone(),
-                resume_cursor,
-            ));
+        if let Some(tui) = tui {
+            match kind {
+                super::AdapterKind::Claude => {
+                    return Ok(build_tui_adapter(
+                        ClaudeTuiVendor::new(
+                            repo_root.to_path_buf(),
+                            profile.environment_allowlist.clone(),
+                        ),
+                        "claude",
+                        &tui,
+                        repo_root,
+                        run_id,
+                        task_id,
+                        worker_id,
+                        db,
+                        project_id,
+                        events_tx,
+                        display,
+                        resume_cursor,
+                    ));
+                }
+                super::AdapterKind::Codex => {
+                    return Ok(build_tui_adapter(
+                        CodexTuiVendor::new(
+                            repo_root.to_path_buf(),
+                            profile.environment_allowlist.clone(),
+                        ),
+                        "codex",
+                        &tui,
+                        repo_root,
+                        run_id,
+                        task_id,
+                        worker_id,
+                        db,
+                        project_id,
+                        events_tx,
+                        display,
+                        resume_cursor,
+                    ));
+                }
+                // Every other reserved kind (no vendor impl yet) keeps
+                // the typed refusal below.
+                _ => {}
+            }
         }
         return Err(RegistryError::TuiModeUnavailable(
             kind.wire_name().to_string(),
@@ -1235,7 +1265,9 @@ fn build_adapter(
 /// previous incarnation stopped; the transcript path itself is derived
 /// deterministically inside the adapter from the vendor's own layout.
 #[allow(clippy::too_many_arguments)]
-fn build_claude_tui_adapter(
+fn build_tui_adapter<V: TuiVendor>(
+    vendor: V,
+    vendor_key: &str,
     tui: &Arc<TuiSupport>,
     repo_root: &std::path::Path,
     run_id: RunId,
@@ -1245,14 +1277,15 @@ fn build_claude_tui_adapter(
     project_id: crew_protocol::ProjectId,
     events_tx: tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
     display: Option<crew_protocol::DisplaySelection>,
-    environment_allowlist: Vec<String>,
     resume_cursor: Option<Cursor>,
 ) -> Arc<dyn Adapter> {
-    let cfg = tui
-        .adapters
-        .get("claude")
-        .cloned()
-        .unwrap_or_else(default_claude_tui_config);
+    let cfg = tui.adapters.get(vendor_key).cloned().unwrap_or_else(|| {
+        if vendor_key == "codex" {
+            default_codex_tui_config()
+        } else {
+            default_claude_tui_config()
+        }
+    });
     let pane_coordinator = Arc::new(PaneCoordinator::new(
         Arc::clone(&tui.display_registry),
         db,
@@ -1266,7 +1299,6 @@ fn build_claude_tui_adapter(
         .as_ref()
         .map(|selection| selection.placement)
         .unwrap_or(DisplayPlacement::SplitRight);
-    let vendor = ClaudeTuiVendor::new(repo_root.to_path_buf(), environment_allowlist);
     Arc::new(TuiAdapter::new(
         vendor,
         cfg,
@@ -1292,6 +1324,19 @@ fn build_claude_tui_adapter(
 /// that supplies TUI support at all is expected to also supply this, but
 /// falling back rather than panicking keeps a misconfigured deployment
 /// merely under-configured, never crashed.
+fn default_codex_tui_config() -> AdapterConfig {
+    AdapterConfig {
+        enabled: true,
+        bin: "codex".to_string(),
+        mode: CrewAdapterMode::Tui,
+        permission_mode: PermissionMode::Max,
+        model: None,
+        profile: "complex analysis, investigation, deep debugging".to_string(),
+        session_dir: None,
+        extra_args: Vec::new(),
+    }
+}
+
 fn default_claude_tui_config() -> AdapterConfig {
     AdapterConfig {
         enabled: true,
@@ -1492,50 +1537,45 @@ mod build_adapter_tests {
     }
 
     /// `mode: "tui"` on Codex/Copilot still refuses even *with*
-    /// `TuiSupport` supplied -- only Claude has a real `TuiVendor` impl
-    /// (WP13); the other two still have none.
+    /// `TuiSupport` supplied -- claude (WP13) and codex (WP27) have real
+    /// `TuiVendor` impls; copilot still has none.
     #[tokio::test]
-    async fn tui_mode_on_codex_and_copilot_still_refuses_even_with_tui_support_supplied() {
+    async fn tui_mode_on_copilot_still_refuses_even_with_tui_support_supplied() {
         let (db, _dir, events_tx) = db_and_events().await;
-        for options in [
-            StartupOptions::Codex(CodexStartupOptions {
-                mode: crate::adapter::profile::AdapterMode::Tui,
-                ..CodexStartupOptions::default()
-            }),
-            StartupOptions::Copilot(CopilotStartupOptions {
-                mode: crate::adapter::profile::AdapterMode::Tui,
-                ..CopilotStartupOptions::default()
-            }),
-        ] {
-            let expected_kind = profile(options.clone())
-                .startup_options
-                .adapter_kind()
-                .expect("reserved kind")
-                .wire_name()
-                .to_string();
-            let profile = profile(options);
-            let result = build_adapter(
-                &profile,
-                std::path::Path::new("/tmp"),
-                RunId::new(),
-                TaskId::new(),
-                WorkerId::new(),
-                None,
-                None,
-                Some(test_tui_support()),
-                Arc::clone(&db),
-                crew_protocol::ProjectId::new(),
-                events_tx.clone(),
-                None,
-                None,
-            );
-            match result {
-                Ok(_) => panic!("{expected_kind}: mode: tui must still refuse (no TuiVendor impl)"),
-                Err(err) => assert!(
-                    matches!(err, RegistryError::TuiModeUnavailable(ref kind) if *kind == expected_kind),
-                    "{expected_kind}: expected TuiModeUnavailable, got: {err}"
-                ),
-            }
+        // WP27 landed codex's TuiVendor, so codex now constructs a real
+        // adapter (asserted separately below); copilot still has none.
+        let options = StartupOptions::Copilot(CopilotStartupOptions {
+            mode: crate::adapter::profile::AdapterMode::Tui,
+            ..CopilotStartupOptions::default()
+        });
+        let expected_kind = profile(options.clone())
+            .startup_options
+            .adapter_kind()
+            .expect("reserved kind")
+            .wire_name()
+            .to_string();
+        let profile = profile(options);
+        let result = build_adapter(
+            &profile,
+            std::path::Path::new("/tmp"),
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            None,
+            None,
+            Some(test_tui_support()),
+            Arc::clone(&db),
+            crew_protocol::ProjectId::new(),
+            events_tx.clone(),
+            None,
+            None,
+        );
+        match result {
+            Ok(_) => panic!("{expected_kind}: mode: tui must still refuse (no TuiVendor impl)"),
+            Err(err) => assert!(
+                matches!(err, RegistryError::TuiModeUnavailable(ref kind) if *kind == expected_kind),
+                "{expected_kind}: expected TuiModeUnavailable, got: {err}"
+            ),
         }
     }
 
@@ -1573,6 +1613,41 @@ mod build_adapter_tests {
 
         let adapter = result.expect("Claude TUI mode must construct with TuiSupport supplied");
         assert_eq!(adapter.kind(), "claude");
+        assert_eq!(
+            adapter.capabilities().protocol,
+            crate::adapter::capability::ProtocolKind::Terminal
+        );
+    }
+
+    /// WP27: `mode: "tui"` on Codex now constructs a real
+    /// `TuiAdapter<CodexTuiVendor>` the same way claude does.
+    #[tokio::test]
+    async fn codex_tui_mode_with_tui_support_constructs_a_real_tui_adapter() {
+        let options = CodexStartupOptions {
+            mode: crate::adapter::profile::AdapterMode::Tui,
+            ..CodexStartupOptions::default()
+        };
+        let profile = profile(StartupOptions::Codex(options));
+        let (db, _dir, events_tx) = db_and_events().await;
+
+        let result = build_adapter(
+            &profile,
+            std::path::Path::new("/tmp"),
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            None,
+            None,
+            Some(test_tui_support()),
+            db,
+            crew_protocol::ProjectId::new(),
+            events_tx,
+            None,
+            None,
+        );
+
+        let adapter = result.expect("Codex TUI mode must construct with TuiSupport supplied");
+        assert_eq!(adapter.kind(), "codex");
         assert_eq!(
             adapter.capabilities().protocol,
             crate::adapter::capability::ProtocolKind::Terminal
