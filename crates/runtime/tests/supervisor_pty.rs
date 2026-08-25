@@ -180,7 +180,10 @@ async fn env_allowlist_is_honored_pty_child_never_inherits_unlisted_vars() {
     .expect("spawn env probe on a pty");
 
     let mut rx = process.subscribe_output();
-    let seen = collect_output_until(&mut rx, Duration::from_secs(5), |acc| {
+    // 15s: on a loaded CI runner the pty child's first echo can take
+    // well past 5s to arrive; an empty accumulation here would fail the
+    // assertion with a confusing "" before the allowlist is even tested.
+    let seen = collect_output_until(&mut rx, Duration::from_secs(15), |acc| {
         String::from_utf8_lossy(acc).contains("PROBE=[")
     })
     .await;

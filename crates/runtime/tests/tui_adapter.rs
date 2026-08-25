@@ -716,7 +716,14 @@ async fn readiness_gate_injects_only_after_the_quiet_window() {
 
     let mut timings = fast_timings();
     timings.readiness_quiet = Duration::from_millis(200);
-    timings.readiness_cap = Duration::from_secs(3);
+    // 10s, not a tighter "fast" cap: on a loaded CI runner the mock's
+    // first PTY output can take longer than a tight cap to traverse the
+    // pty -> broadcast -> readiness path, and wait_for_readiness then
+    // errors with "no output observed before the cap" BEFORE injection
+    // ever happens (observed on macos-latest). Production's cap is 8s;
+    // the elapsed assertions below still distinguish correct quiet-window
+    // gating (~520ms) from a cap-forced proceed (>= this cap).
+    timings.readiness_cap = Duration::from_secs(10);
     // Give discovery time even though this test never satisfies it --
     // discovery runs after injection and this test does not wait for it.
     timings.discovery_timeout = Duration::from_millis(300);
