@@ -745,9 +745,14 @@ async fn readiness_gate_injects_only_after_the_quiet_window() {
         .start(spec(run_id, task_id, worker_id, "hello"), sink.clone())
         .await;
 
+    // Generous ceiling: CI runners run this suite alongside dozens of
+    // other tests, and tokio timer lag under that load can push a correct
+    // quiet-window injection well past any tight bound (observed >5s on a
+    // macos-latest runner). A genuine gating regression still fails fast
+    // in the elapsed assertions below; this wait only bounds the poll.
     let injected = wait_until(
         || !read_control_log(&control_log).trim().is_empty(),
-        Duration::from_secs(5),
+        Duration::from_secs(30),
     )
     .await;
     assert!(injected, "the composed prompt must eventually be written");

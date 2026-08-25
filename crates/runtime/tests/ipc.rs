@@ -237,10 +237,18 @@ impl Client {
         let _ = self.writer.flush().await;
     }
 
-    /// Reads one NDJSON frame, or `None` at end of stream (connection closed).
+    /// Reads one NDJSON frame, or `None` at end of stream (connection
+    /// closed). On Linux a server-side close while this client still has
+    /// unread bytes queued surfaces as ECONNRESET rather than clean EOF;
+    /// both mean "the peer closed the connection", so both read as
+    /// end-of-stream here.
     async fn recv(&mut self) -> Option<Value> {
         let mut line = String::new();
-        let n = self.reader.read_line(&mut line).await.unwrap();
+        let n = match self.reader.read_line(&mut line).await {
+            Ok(n) => n,
+            Err(err) if err.kind() == std::io::ErrorKind::ConnectionReset => 0,
+            Err(err) => panic!("ipc test client read failed: {err}"),
+        };
         if n == 0 {
             return None;
         }
