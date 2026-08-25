@@ -50,7 +50,9 @@ use super::profile::{
 };
 use super::run_lifecycle::RunLifecycleSink;
 use super::r#trait::{Adapter, AdapterMessage, StartSpec, VendorSessionRef};
-use super::tui::{ClaudeTuiVendor, Cursor, ResumeContext, TuiAdapter, TuiSupport, TuiVendor};
+use super::tui::{
+    ClaudeTuiVendor, CodexTuiVendor, Cursor, ResumeContext, TuiAdapter, TuiSupport, TuiVendor,
+};
 use crate::adapter::CancelScope;
 use crate::config::crew::{AdapterConfig, AdapterMode as CrewAdapterMode, PermissionMode};
 use crate::conformance;
@@ -1144,22 +1146,50 @@ fn build_adapter(
             .startup_options
             .adapter_kind()
             .expect("Tui mode only applies to a startup_options variant with an AdapterKind");
-        if kind == super::AdapterKind::Claude
-            && let Some(tui) = tui
-        {
-            return Ok(build_claude_tui_adapter(
-                &tui,
-                repo_root,
-                run_id,
-                task_id,
-                worker_id,
-                db,
-                project_id,
-                events_tx,
-                display,
-                profile.environment_allowlist.clone(),
-                resume_cursor,
-            ));
+        if let Some(tui) = tui {
+            match kind {
+                super::AdapterKind::Claude => {
+                    return Ok(build_tui_adapter(
+                        ClaudeTuiVendor::new(
+                            repo_root.to_path_buf(),
+                            profile.environment_allowlist.clone(),
+                        ),
+                        "claude",
+                        &tui,
+                        repo_root,
+                        run_id,
+                        task_id,
+                        worker_id,
+                        db,
+                        project_id,
+                        events_tx,
+                        display,
+                        resume_cursor,
+                    ));
+                }
+                super::AdapterKind::Codex => {
+                    return Ok(build_tui_adapter(
+                        CodexTuiVendor::new(
+                            repo_root.to_path_buf(),
+                            profile.environment_allowlist.clone(),
+                        ),
+                        "codex",
+                        &tui,
+                        repo_root,
+                        run_id,
+                        task_id,
+                        worker_id,
+                        db,
+                        project_id,
+                        events_tx,
+                        display,
+                        resume_cursor,
+                    ));
+                }
+                // Every other reserved kind (no vendor impl yet) keeps
+                // the typed refusal below.
+                _ => {}
+            }
         }
         return Err(RegistryError::TuiModeUnavailable(
             kind.wire_name().to_string(),
@@ -1235,7 +1265,9 @@ fn build_adapter(
 /// previous incarnation stopped; the transcript path itself is derived
 /// deterministically inside the adapter from the vendor's own layout.
 #[allow(clippy::too_many_arguments)]
-fn build_claude_tui_adapter(
+fn build_tui_adapter<V: TuiVendor>(
+    vendor: V,
+    vendor_key: &str,
     tui: &Arc<TuiSupport>,
     repo_root: &std::path::Path,
     run_id: RunId,
@@ -1245,14 +1277,15 @@ fn build_claude_tui_adapter(
     project_id: crew_protocol::ProjectId,
     events_tx: tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
     display: Option<crew_protocol::DisplaySelection>,
-    environment_allowlist: Vec<String>,
     resume_cursor: Option<Cursor>,
 ) -> Arc<dyn Adapter> {
-    let cfg = tui
-        .adapters
-        .get("claude")
-        .cloned()
-        .unwrap_or_else(default_claude_tui_config);
+    let cfg = tui.adapters.get(vendor_key).cloned().unwrap_or_else(|| {
+        if vendor_key == "codex" {
+            default_codex_tui_config()
+        } else {
+            default_claude_tui_config()
+        }
+    });
     let pane_coordinator = Arc::new(PaneCoordinator::new(
         Arc::clone(&tui.display_registry),
         db,
@@ -1266,7 +1299,6 @@ fn build_claude_tui_adapter(
         .as_ref()
         .map(|selection| selection.placement)
         .unwrap_or(DisplayPlacement::SplitRight);
-    let vendor = ClaudeTuiVendor::new(repo_root.to_path_buf(), environment_allowlist);
     Arc::new(TuiAdapter::new(
         vendor,
         cfg,
@@ -1292,6 +1324,19 @@ fn build_claude_tui_adapter(
 /// that supplies TUI support at all is expected to also supply this, but
 /// falling back rather than panicking keeps a misconfigured deployment
 /// merely under-configured, never crashed.
+fn default_codex_tui_config() -> AdapterConfig {
+    AdapterConfig {
+        enabled: true,
+        bin: "codex".to_string(),
+        mode: CrewAdapterMode::Tui,
+        permission_mode: PermissionMode::Max,
+        model: None,
+        profile: "complex analysis, investigation, deep debugging".to_string(),
+        session_dir: None,
+        extra_args: Vec::new(),
+    }
+}
+
 fn default_claude_tui_config() -> AdapterConfig {
     AdapterConfig {
         enabled: true,

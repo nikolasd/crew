@@ -13,6 +13,8 @@
 mod adapter;
 pub mod claude;
 pub mod claude_conformance;
+pub mod codex;
+pub use codex::CodexTuiVendor;
 mod discovery;
 mod tailer;
 
