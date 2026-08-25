@@ -733,8 +733,17 @@ async fn readiness_gate_injects_only_after_the_quiet_window() {
     // a cap-forced proceed only by bounding against this cap, so keep it
     // far above any realistic scheduling delay.
     timings.readiness_cap = Duration::from_secs(60);
-    // Give discovery time even though this test never satisfies it --
-    timings.discovery_timeout = Duration::from_millis(300);
+    // Give discovery time even though this test never satisfies it. The
+    // Bursty mock only writes its control log once it has *consumed* the
+    // injected line in its post-burst read loop; discovery's timeout is
+    // what triggers the PTY teardown (fail_start). On a loaded CI runner
+    // the freshly-spawned script can be CPU-starved and needs far longer
+    // than 300ms to get a slice to read+append the injected prompt before
+    // teardown kills the PTY. A generous timeout decouples the teardown
+    // race from the consumption path; discovery still legitimately times
+    // out (no transcript is ever created), and the lower-bound elapsed
+    // assertion still verifies quiet-window gating.
+    timings.discovery_timeout = Duration::from_secs(10);
 
     let run_id = RunId::new();
     let task_id = TaskId::new();
