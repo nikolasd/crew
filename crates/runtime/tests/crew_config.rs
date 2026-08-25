@@ -45,7 +45,7 @@ fn defaults_match_spec_with_headless_mode_override() {
             panic!("expected default adapter '{name}'");
         });
         assert!(adapter.enabled);
-        let expected_mode = if name == "claude" {
+        let expected_mode = if name == "claude" || name == "codex" {
             AdapterMode::Tui
         } else {
             AdapterMode::Headless
