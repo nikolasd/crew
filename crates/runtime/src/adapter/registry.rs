@@ -1029,7 +1029,7 @@ pub(crate) fn requested_mode(
 }
 
 /// Whether the startup options select a mode whose owning adapter
-/// journals its own real pane attach/detach pair -- today Claude's and
+/// journals its own real pane attach/detach pair -- today Claude's and Codex's
 /// `mode: "tui"`, whose [`super::tui::TuiAdapter`] attaches through its
 /// `PaneCoordinator`. Such a run must never also receive the submit-time
 /// placeholder pane events `start_queued_run` journals for every other
