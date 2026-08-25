@@ -59,26 +59,7 @@ test("registers exactly the eighteen orchestration tools, in the order the model
       throw new Error("not exercised in this test");
     },
   });
-  expect([...tools.keys()]).toEqual([
-    "crew_task",
-    "crew_worker",
-    "crew_profile",
-    "crew_run",
-    "crew_workspace",
-    "crew_artifact",
-    "crew_child",
-    "crew_violation",
-    "crew_message",
-    "crew_approval",
-    "crew_reconcile",
-    "crew_plan",
-    "crew_spawn",
-    "crew_send",
-    "crew_status",
-    "crew_transcript",
-    "crew_stop",
-    "crew_finish",
-  ]);
+  expect([...tools.keys()]).toEqual(["crew_task", "crew_worker", "crew_profile", "crew_run", "crew_workspace", "crew_artifact", "crew_child", "crew_violation", "crew_message", "crew_approval", "crew_reconcile", "crew_plan", "crew_spawn", "crew_send", "crew_status", "crew_transcript", "crew_stop", "crew_finish"]);
 });
 
 test("read-only ops resolve to tier read, mutating worker/run ops resolve to tier exec", () => {

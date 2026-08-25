@@ -720,6 +720,7 @@ async fn readiness_gate_injects_only_after_the_quiet_window() {
     // Give discovery time even though this test never satisfies it --
     // discovery runs after injection and this test does not wait for it.
     timings.discovery_timeout = Duration::from_millis(300);
+    let readiness_cap = timings.readiness_cap;
 
     let run_id = RunId::new();
     let task_id = TaskId::new();
@@ -762,8 +763,13 @@ async fn readiness_gate_injects_only_after_the_quiet_window() {
         elapsed >= Duration::from_millis(350),
         "injection happened too early to have waited for quiet: {elapsed:?}"
     );
+    // The distinguishing boundary is the CAP itself: a run that waited
+    // out the whole readiness_cap lands at >= 3s. Scheduling jitter under
+    // a loaded CI box can legitimately push correct quiet-window gating
+    // past any fixed midpoint (observed 2.6s locally while the suite ran
+    // in parallel), so bound against the cap, not an arbitrary fraction.
     assert!(
-        elapsed < Duration::from_millis(2500),
+        elapsed < readiness_cap,
         "injection happened too late -- looks like it waited out the whole cap: {elapsed:?}"
     );
 
