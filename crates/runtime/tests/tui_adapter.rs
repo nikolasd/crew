@@ -734,9 +734,7 @@ async fn readiness_gate_injects_only_after_the_quiet_window() {
     // far above any realistic scheduling delay.
     timings.readiness_cap = Duration::from_secs(60);
     // Give discovery time even though this test never satisfies it --
-    // discovery runs after injection and this test does not wait for it.
     timings.discovery_timeout = Duration::from_millis(300);
-    let readiness_cap = timings.readiness_cap;
 
     let run_id = RunId::new();
     let task_id = TaskId::new();
@@ -757,25 +755,29 @@ async fn readiness_gate_injects_only_after_the_quiet_window() {
     // Discovery will time out (the bursty script never reacts to
     // input), so `start()` itself returns `Err` -- this test only cares
     // about *when* the injected line was written, which the failure
-    // path still does before discovery even begins.
-    let _ = adapter
+    // path still does before discovery even begins. We capture the
+    // result so a CI failure reports the actual error instead of an
+    // opaque "prompt never written".
+    let start_result = adapter
         .start(spec(run_id, task_id, worker_id, "hello"), sink.clone())
         .await;
 
-    // Generous ceiling: CI runners run this suite alongside dozens of
-    // other tests, and tokio timer lag under that load can push a correct
-    // quiet-window injection well past any tight bound (observed >5s on a
-    // macos-latest runner). A genuine gating regression still fails fast
-    // in the elapsed assertions below; this wait only bounds the poll.
-    // Generous ceiling: matches the 60s readiness cap above -- on a loaded
-    // runner the quiet-window injection can land well past any tight bound,
-    // and this wait only bounds the poll for the control-log write.
+    // Generous ceiling: the readiness cap is 60s and a loaded macos CI
+    // runner can be very slow to surface the first PTY output, so we
+    // poll up to 90s for the control-log write (the script appends it
+    // the instant it reads the injected line).
     let injected = wait_until(
         || !read_control_log(&control_log).trim().is_empty(),
         Duration::from_secs(90),
     )
     .await;
-    assert!(injected, "the composed prompt must eventually be written");
+    assert!(
+        injected,
+        "the composed prompt must eventually be written. start() result = {start_result:?}, \
+         control_log path = {control_log:?}, control_log exists = {}, control_log len = {}",
+        control_log.exists(),
+        read_control_log(&control_log).len(),
+    );
     let elapsed = start.elapsed();
 
     // The contract under test: the readiness gate withholds injection

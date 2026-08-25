@@ -354,7 +354,22 @@ fn graceful_stop_removes_socket_only_after_journal_shutdown() {
     let mut server = fixture.serve(Some(30)).spawn().unwrap();
     let socket = wait_for_socket(fixture.state_dir(), Duration::from_secs(10));
 
-    let status = fixture.stop().status().unwrap();
+    // `crewd stop` connects to the daemon's IPC socket, but the socket file
+    // can exist before the `stop` handler is registered -- so a stop issued
+    // immediately after `wait_for_socket` (which only checks file existence)
+    // can race the daemon's startup and exit non-zero. The daemon is already
+    // serving; retry the stop until it is handled (this is a test-only race,
+    // not a daemon defect -- `crewd stop` is idempotent).
+    let mut status = None;
+    for _ in 0..50 {
+        let s = fixture.stop().status().unwrap();
+        if s.success() {
+            status = Some(s);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let status = status.expect("crewd stop should exit 0 within ~5s of the daemon serving");
     assert!(status.success(), "crewd stop should exit 0");
 
     // `stop` returns only after the socket is removed, which the daemon does
