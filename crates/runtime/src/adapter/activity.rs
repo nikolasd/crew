@@ -89,6 +89,17 @@ impl ActivityClock {
             .or_insert_with(|| RunActivity::starting(now));
     }
 
+    /// Grants a fresh window for `run_id` (WP21 `run/timeoutAck decision:
+    /// "extend"`): BOTH deadlines restart from `now` and any journaled
+    /// expiries are forgotten. A no-op when the run's clock is already
+    /// gone (it settled).
+    pub fn extend(&self, run_id: &RunId, now: Instant) {
+        let mut runs = self.runs.lock().expect("activity clock mutex");
+        if let Some(entry) = runs.get_mut(run_id) {
+            *entry = RunActivity::starting(now);
+        }
+    }
+
     /// Point-in-time copy of every tracked run's clock.
     #[must_use]
     pub fn snapshot(&self) -> Vec<(RunId, RunActivity)> {

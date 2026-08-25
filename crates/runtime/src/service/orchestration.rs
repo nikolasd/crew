@@ -57,6 +57,7 @@ impl ServiceError {
     /// (`crate::adapter::copilot::client`), rather than inventing a new
     /// refusal shape; the message text (not the code) is what
     /// distinguishes "not yet implemented" from "unknown or out of role".
+    #[allow(dead_code)] // retained for future method stubs (WP22+)
     fn not_yet_implemented(method_name: &str) -> Self {
         Self {
             code: error_code::METHOD_NOT_FOUND,
@@ -369,12 +370,12 @@ impl OrchestrationService {
             CrewMethod::WorkspaceApply => self.workspace_apply(principal, params).await,
             CrewMethod::ArtifactList => self.artifact_list(principal, params).await,
             CrewMethod::ArtifactFetch => self.artifact_fetch(principal, params).await,
-            // `plan/*` lands here (WP17); `run/timeoutAck` is still a stub
-            // until WP21.
+            // `plan/*` landed in WP17; `run/timeoutAck` is the WP21
+            // leader-decision surface.
             CrewMethod::PlanPropose => self.plan_propose(principal, params).await,
             CrewMethod::PlanDecide => self.plan_decide(principal, params).await,
             CrewMethod::PlanGet => self.plan_get(params).await,
-            CrewMethod::RunTimeoutAck => Err(ServiceError::not_yet_implemented("run/timeoutAck")),
+            CrewMethod::RunTimeoutAck => self.run_timeout_ack(principal, params).await,
             _ => Err(ServiceError::internal(
                 "method is not routed through OrchestrationService",
             )),
@@ -2505,6 +2506,52 @@ impl OrchestrationService {
     /// `plan/get`: open read (ADR-0024) of the most recently proposed plan
     /// for a run and its decision, if any. No event is persisted or
     /// broadcast -- it is a pure projection read.
+    /// `run/timeoutAck`: the leader's decision surface for a
+    /// [`RuntimeEvent::WorkerTimeout`] fact (WP21, spec §7.5 -- the runtime
+    /// reports; the leader decides).
+    ///
+    /// * `extend` re-arms BOTH of the run's liveness deadlines with a fresh
+    ///   window (the same shared clock WP19's sweep reads).
+    /// * `nudge` is deliberately a no-op server-side: nudging means the
+    ///   leader follows up with `crew_send`/`message/send`, which carries
+    ///   its own budget/journal semantics -- double-writing it here would
+    ///   consume a turn behind the leader's back.
+    /// * `abort` delegates to `run/cancel`.
+    async fn run_timeout_ack(
+        &self,
+        principal: &ClientPrincipal,
+        params: &Value,
+    ) -> Result<Value, ServiceError> {
+        let run_id = parse_run_id(params.get("runId"))?;
+        let decision = str_field(params, "decision")?;
+        match decision.as_str() {
+            "extend" => {
+                self.activity.extend(&run_id, std::time::Instant::now());
+                Ok(json!({
+                    "runId": run_id.to_string(),
+                    "decision": "extend",
+                    "rearmed": true,
+                }))
+            }
+            "nudge" => Ok(json!({
+                "runId": run_id.to_string(),
+                "decision": "nudge",
+                "note": "server-side no-op: follow up with message/send (crew_send) to nudge the worker",
+            })),
+            "abort" => {
+                let cancel_params = json!({ "runId": run_id.to_string(), "scope": "worker" });
+                let mut result = self.run_cancel(principal, &cancel_params).await?;
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("decision".to_string(), json!("abort"));
+                }
+                Ok(result)
+            }
+            other => Err(ServiceError::invalid_params(format!(
+                "decision must be extend, nudge, or abort; got {other:?}"
+            ))),
+        }
+    }
+
     async fn plan_get(&self, params: &Value) -> Result<Value, ServiceError> {
         let run_id = params
             .get("runId")

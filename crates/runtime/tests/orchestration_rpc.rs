@@ -2728,18 +2728,71 @@ async fn omp_extension_plan_methods_reach_real_handlers_and_timeout_ack_stays_st
         );
     }
 
-    // run/timeoutAck is still a stub.
+    // WP21: run/timeoutAck reaches its handler too (invalid_params on
+    // empty params, never METHOD_NOT_FOUND / not-yet-implemented).
     let attempt = client.call(2, "run/timeoutAck", json!({})).await;
     assert_eq!(
-        attempt["error"]["code"], -32601,
-        "run/timeoutAck still stubbed: {attempt:?}"
+        attempt["error"]["code"], -32602,
+        "run/timeoutAck should reach its handler (invalid_params): {attempt:?}"
     );
-    assert!(
-        attempt["error"]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("not yet implemented"),
-        "run/timeoutAck should be refused as not-yet-implemented: {attempt:?}"
+}
+
+#[tokio::test]
+async fn run_timeout_ack_extend_rearms_nudge_noops_and_abort_cancels() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let (_task_id, _worker_id, run_id) = submit_run_with_driver(&mut client, "omp-1").await;
+
+    // extend re-arms the run's liveness clock.
+    let extend = client
+        .call(
+            2,
+            "run/timeoutAck",
+            json!({ "runId": run_id, "decision": "extend" }),
+        )
+        .await;
+    assert!(extend.get("error").is_none(), "extend failed: {extend:?}");
+    assert_eq!(extend["result"]["decision"], "extend");
+    assert_eq!(extend["result"]["rearmed"], true);
+
+    // nudge is a server-side no-op.
+    let nudge = client
+        .call(
+            3,
+            "run/timeoutAck",
+            json!({ "runId": run_id, "decision": "nudge" }),
+        )
+        .await;
+    assert!(nudge.get("error").is_none(), "nudge failed: {nudge:?}");
+    assert_eq!(nudge["result"]["decision"], "nudge");
+
+    // abort cancels the run.
+    let abort = client
+        .call(
+            4,
+            "run/timeoutAck",
+            json!({ "runId": run_id, "decision": "abort" }),
+        )
+        .await;
+    assert!(abort.get("error").is_none(), "abort failed: {abort:?}");
+    assert_eq!(abort["result"]["decision"], "abort");
+    let get = client.call(5, "run/get", json!({ "runId": run_id })).await;
+    assert_eq!(get["result"]["state"], "cancelled", "{get:?}");
+
+    // An unknown decision is the caller's error.
+    let bogus = client
+        .call(
+            6,
+            "run/timeoutAck",
+            json!({ "runId": run_id, "decision": "wiggle" }),
+        )
+        .await;
+    assert_eq!(
+        bogus["error"]["code"], -32602,
+        "unknown decision must be invalid_params: {bogus:?}"
     );
 }
 
