@@ -1029,7 +1029,7 @@ pub(crate) fn requested_mode(
 }
 
 /// Whether the startup options select a mode whose owning adapter
-/// journals its own real pane attach/detach pair -- today only Claude's
+/// journals its own real pane attach/detach pair -- today Claude's and
 /// `mode: "tui"`, whose [`super::tui::TuiAdapter`] attaches through its
 /// `PaneCoordinator`. Such a run must never also receive the submit-time
 /// placeholder pane events `start_queued_run` journals for every other
@@ -1039,7 +1039,10 @@ pub(crate) fn requested_mode(
 /// cannot drift apart.
 pub(crate) fn pane_lifecycle_owned_by_adapter(startup_options: &StartupOptions) -> bool {
     requested_mode(startup_options) == Some(super::profile::AdapterMode::Tui)
-        && startup_options.adapter_kind() == Some(super::AdapterKind::Claude)
+        && matches!(
+            startup_options.adapter_kind(),
+            Some(super::AdapterKind::Claude) | Some(super::AdapterKind::Codex)
+        )
 }
 
 /// The capabilities the given reserved adapter kind declares, read off a

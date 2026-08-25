@@ -678,7 +678,7 @@ impl OrchestrationService {
         // outcome, not a failure.
         //
         // A run whose owning adapter journals its own real pane events
-        // (today only Claude's `mode: "tui"`, through its `TuiAdapter`'s
+        // (today Claude's and Codex's `mode: "tui"`, through their `TuiAdapter`'s
         // `PaneCoordinator`) is skipped here: journaling the placeholder
         // would leave its stream with two attaches against one detach.
         // The decision reads the same resolved-profile snapshot

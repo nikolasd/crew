@@ -22,11 +22,11 @@
 //!
 //! Controller override (crew-v2 gap-closure WP4, ledgered): every
 //! adapter's `mode` defaults to `headless`, not the `tui` shown in the
-//! spec's example -- no TUI adapter exists yet. Later work packages flip
-//! each vendor's default to `tui` as its TUI adapter lands. WP13 lands
-//! Claude's, so `claude`'s own default flips to `tui` here; `codex`,
-//! `copilot`, and `omp` stay `headless` until their own TUI vendor impls
-//! land.
+//! spec's example -- no TUI adapter existed yet. Later work packages flip
+//! each vendor's default to `tui` as its TUI adapter lands. WP13 landed
+//! Claude's, WP27 landed Codex's (CodexTuiVendor passes fixture-mode
+//! conformance), so `claude` and `codex` default to `tui` here; `copilot`
+//! and `omp` stay `headless` until their own TUI vendor impls land (WP28).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -275,10 +275,10 @@ impl Default for CrewConfig {
     }
 }
 
-/// The four built-in adapters, per spec §10. `claude` defaults to
-/// `mode: tui` now that its TUI adapter has landed (WP13); the other
-/// three stay `mode: headless` until their own TUI vendor impls do (the
-/// WP4 controller override -- see module docs).
+/// The four built-in adapters, per spec §10. `claude` and `codex` default
+/// to `mode: tui` now that their TUI adapters have landed (WP13 / WP27);
+/// `copilot` and `omp` stay `mode: headless` until their own TUI vendor
+/// impls land (WP28) -- the WP4 controller override (see module docs).
 fn default_adapters() -> BTreeMap<String, AdapterConfig> {
     let mut adapters = BTreeMap::new();
     adapters.insert(
@@ -299,7 +299,7 @@ fn default_adapters() -> BTreeMap<String, AdapterConfig> {
         AdapterConfig {
             enabled: true,
             bin: "codex".to_string(),
-            mode: AdapterMode::Headless,
+            mode: AdapterMode::Tui,
             permission_mode: PermissionMode::Max,
             model: None,
             profile: "code review, finding defects".to_string(),
