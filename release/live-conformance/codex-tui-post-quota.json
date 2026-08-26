@@ -35,8 +35,8 @@
       },
       {
         "name": "read_only_start_and_progress",
-        "outcome": "pass",
-        "detail": "real codex spawned on a PTY, VendorSessionEstablished observed, and >=1 normalized assistant message tailed from the vendor's own transcript"
+        "outcome": "fail",
+        "detail": "start=Ok(()) started=true session=true first_message=false"
       },
       {
         "name": "follow_up",

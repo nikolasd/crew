@@ -130,8 +130,7 @@ restart; transcript recovery across a real restart is a separate e2e, tracked as
 | Adapter | Runnable pass | Notes |
 |---------|---------------|-------|
 | Claude  | 4 / 4 | fully green (TUI) |
-| OMP-RPC | 4 / 4 | fully green (TUI) |
-| Codex   | 3 / 4 | `follow_up` fails on out-of-credits; spawn→type→submit→discover proven |
+| Codex   | 3 / 4 | `follow_up` fails on out-of-credits; spawn→type→submit→discover proven. A ~40-min-later rerun ([`codex-tui-post-quota.json`](../release/live-conformance/codex-tui-post-quota.json)) could observe **no turns at all** — no typed vendor reason — consistent with full credit exhaustion |
 | Copilot | 2 / 4 | `read_only_start_and_progress` + `follow_up` fail on out-of-credits; probe + cancel proven |
 
 Version provenance: the live reports deliberately record **no** vendor version (`version: null`) —

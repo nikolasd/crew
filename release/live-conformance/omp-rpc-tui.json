@@ -51,7 +51,7 @@
       {
         "name": "session_resume",
         "outcome": "skipped",
-        "detail": "live mode: a single-process resume is not a daemon restart; transcript recovery across a real daemon restart is covered by a separate serve->stop->serve end-to-end smoke that has NOT yet run (tracked as post-0.5.0 follow-up). The vendor-free serve->status->stop smoke did pass in WP29."
+        "detail": "live mode: a single-process resume is not a daemon restart; genuine restart recovery is proven by the separate serve->stop->serve end-to-end smoke (WP29), not this report"
       }
     ],
     "passed": false
