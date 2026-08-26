@@ -19,9 +19,6 @@ crates/protocol/bindings/
 # platform leaf directory; they are release build staging, created on
 # demand, and never committed to source control.
 packages/crew-*/
-# Pre-rename staging dirs from a `batcave`-named build; keep ignoring any
-# left on disk from before the binary was renamed to `crewd`.
-packages/batman-*/
 
 # Generated fresh by release.yml on every run and uploaded as a CI artifact;
 # never committed to source control.
