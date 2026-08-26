@@ -14,6 +14,10 @@ use std::time::{Duration, Instant};
 
 use crew_runtime::lifecycle::should_idle_shutdown;
 use serde_json::Value;
+use serde_json::json;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::unix::OwnedWriteHalf;
+use tokio::net::UnixStream as AsyncUnixStream;
 
 const CREWD: &str = env!("CARGO_BIN_EXE_crewd");
 
@@ -474,4 +478,165 @@ fn idle_decision_ands_connections_and_active_runs() {
         Duration::from_millis(500),
         limit
     ));
+}
+
+// ------------------------------------------------------------------ IPC
+
+/// Minimal NDJSON JSON-RPC client over a Unix domain socket, mirrored from
+/// `tests/orchestration_rpc.rs`'s `Client` (each `tests/*.rs` is its own
+/// compilation unit, so the helper is duplicated here on purpose).
+struct IpcClient {
+    reader: BufReader<tokio::net::unix::OwnedReadHalf>,
+    writer: OwnedWriteHalf,
+}
+
+impl IpcClient {
+    async fn connect(path: &Path) -> Self {
+        let stream = AsyncUnixStream::connect(path).await.unwrap();
+        let (read, writer) = stream.into_split();
+        Self { reader: BufReader::new(read), writer }
+    }
+
+    async fn send(&mut self, value: &Value) {
+        let line = serde_json::to_string(value).unwrap();
+        self.writer.write_all(line.as_bytes()).await.unwrap();
+        self.writer.write_all(b"\n").await.unwrap();
+        self.writer.flush().await.unwrap();
+    }
+
+    async fn recv(&mut self) -> Value {
+        let mut line = String::new();
+        self.reader.read_line(&mut line).await.unwrap();
+        serde_json::from_str(line.trim_end()).unwrap()
+    }
+
+    async fn initialize(&mut self, instance_id: &str, repo: &Path) -> Value {
+        self.send(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "client": { "name": "@nikolasd/crew", "version": "0.1.0" },
+                "supported": { "min": { "major": 1, "minor": 0 }, "max": { "major": 1, "minor": 0 } },
+                "repository": {
+                    "canonicalPath": repo.to_str().unwrap(),
+                    "vcsRoot": repo.to_str().unwrap()
+                },
+                "auth": {
+                    "role": "ompExtension",
+                    "instanceId": instance_id,
+                    "agentDirectory": repo.to_str().unwrap()
+                },
+                "capabilities": { "eventReplay": true, "maxFrameBytes": 1048576 },
+                "lastSequence": null
+            }
+        }))
+        .await;
+        self.recv().await
+    }
+
+    async fn call(&mut self, id: i64, method: &str, params: Value) -> Value {
+        self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
+            .await;
+        self.recv().await
+    }
+}
+
+/// The last unproven integration seam from WP29: a *real* `crewd` OS process
+/// serves, an OMP client journals a task transcript over the real IPC socket,
+/// the process is gracefully stopped and a *fresh* `crewd` process is started
+/// on the same state dir (a genuine daemon restart), and a new IPC client can
+/// still read back the original task and its journaled transcript. This
+/// exercises the full process + socket + persistence + restart boundary that
+/// the in-process `recovery.rs` tests and the database-reopen test do not.
+#[tokio::test]
+async fn real_daemon_survives_serve_stop_serve_with_ipc_transcript() {
+    let fixture = Fixture::new();
+    let repo = std::fs::canonicalize(fixture.repo_dir()).unwrap();
+
+    // First serve: a real `crewd` OS process.
+    let mut server = fixture.serve(Some(30)).spawn().unwrap();
+    let socket = wait_for_socket(fixture.state_dir(), Duration::from_secs(10));
+
+    let mut client = IpcClient::connect(&socket).await;
+    let init = client.initialize("omp-1", &repo).await;
+    assert!(init.get("error").is_none(), "initialize failed: {init:?}");
+
+    let upsert = client
+        .call(
+            2,
+            "task/upsert",
+            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
+        )
+        .await;
+    assert!(upsert.get("error").is_none(), "task/upsert failed: {upsert:?}");
+    let task_id = upsert["result"]["taskId"].as_str().unwrap().to_string();
+    assert!(!task_id.is_empty());
+
+    let replay1 = client
+        .call(3, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    assert!(replay1.get("error").is_none(), "replay failed: {replay1:?}");
+    let events1 = replay1["result"].as_array().expect("events array");
+    assert!(!events1.is_empty(), "expected journaled events before restart");
+
+    // Graceful stop of the first daemon (real OS process).
+    assert!(
+        fixture.stop().status().unwrap().success(),
+        "crewd stop must exit 0"
+    );
+    assert_eq!(
+        wait_for_exit(&mut server, Duration::from_secs(10)),
+        Some(0),
+        "first daemon must exit 0 after stop"
+    );
+
+    // Second serve on the SAME state dir: a genuine restart.
+    let mut server2 = fixture.serve(Some(30)).spawn().unwrap();
+    let socket2 = wait_for_socket(fixture.state_dir(), Duration::from_secs(10));
+
+    let mut client2 = IpcClient::connect(&socket2).await;
+    let init2 = client2.initialize("omp-1", &repo).await;
+    assert!(init2.get("error").is_none(), "re-initialize failed: {init2:?}");
+
+    // The task registered through the first process must still exist.
+    let get = client2
+        .call(4, "task/get", json!({ "taskId": task_id }))
+        .await;
+    assert!(
+        get.get("error").is_none(),
+        "task/get after restart failed: {get:?}"
+    );
+    assert_eq!(
+        get["result"]["ownerClientInstanceId"], "omp-1",
+        "registered task must survive a real daemon restart"
+    );
+
+    // The journaled transcript must still be replayable and contain the
+    // original task event.
+    let replay2 = client2
+        .call(5, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    assert!(
+        replay2.get("error").is_none(),
+        "replay after restart failed: {replay2:?}"
+    );
+    let events2 = replay2["result"].as_array().expect("events array after restart");
+    assert!(
+        events2.len() >= events1.len(),
+        "journaled transcript must survive restart (before={}, after={})",
+        events1.len(),
+        events2.len()
+    );
+    let survived = events2.iter().any(|e| {
+        e["event"]["payload"]["taskId"].as_str() == Some(task_id.as_str())
+    });
+    assert!(
+        survived,
+        "task upsert event must survive restart in the journal: {events2:?}"
+    );
+
+    // Cleanup.
+    let _ = fixture.stop().status();
+    let _ = wait_for_exit(&mut server2, Duration::from_secs(10));
 }
