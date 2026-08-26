@@ -1,4 +1,5 @@
 {
+  "$schema": "./crew-config.schema.json",
   "approval": "always",
   "limits": {
     "maxConcurrentWorkers": 4,

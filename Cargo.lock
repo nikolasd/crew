@@ -210,6 +210,7 @@ dependencies = [
  "regex",
  "rusqlite",
  "rusqlite_migration",
+ "schemars",
  "serde",
  "serde_json",
  "serde_yaml_ng",

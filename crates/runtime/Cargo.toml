@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 crew-protocol = { path = "../protocol" }
+schemars.workspace = true
 clap.workspace = true
 futures-util.workspace = true
 hex.workspace = true
