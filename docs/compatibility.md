@@ -118,6 +118,25 @@ v1 field names.
 - **Live result**: 14 / 14 against `omp/17.2.7`, `passed: true`, reproduced on three consecutive
   runs with zero local providers in `omp`'s catalog.
 
+### TUI live conformance (0.5.0)
+
+WP29 added a TUI-mode live suite (`crewd conformance --live --mode tui`) that spawns the real
+vendor TUI on a PTY and drives it through the same injection path the runtime uses. It exercises
+`probe`, `read_only_start_and_progress`, `follow_up`, `cancellation_scope`, and `session_resume`.
+`session_resume` is **skipped** on every adapter (a single-process resume is not a daemon
+restart; transcript recovery across a real restart is a separate e2e, tracked as a follow-up).
+"runnable" below = the four non-resume scenarios.
+
+| Adapter | Runnable pass | Notes |
+|---------|---------------|-------|
+| Claude  | 4 / 4 | fully green (TUI) |
+| OMP-RPC | 4 / 4 | fully green (TUI) |
+| Codex   | 3 / 4 | `follow_up` fails on out-of-credits; spawn→type→submit→discover proven |
+| Copilot | 2 / 4 | `read_only_start_and_progress` + `follow_up` fail on out-of-credits; probe + cancel proven |
+
+Raw reports (verbatim, with an erratum on the overstated `session_resume` detail):
+[`release/live-conformance/`](../../release/live-conformance/).
+
 ## If a version isn't in either table
 
 Neither table is exhaustive by design — an untested CLI version isn't assumed compatible just

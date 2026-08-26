@@ -1,0 +1,59 @@
+[
+  {
+    "adapter": "copilot-tui",
+    "mode": "live",
+    "version": null,
+    "declaredCapabilities": {
+      "protocol": "terminal",
+      "resume": "session",
+      "steering": "activeTurn",
+      "approvals": "none",
+      "structuredResult": false,
+      "usage": "none",
+      "nested": "none",
+      "nativeView": "independentTui",
+      "workspaceControl": "write",
+      "durability": "vendorResumable"
+    },
+    "effectiveCapabilities": {
+      "protocol": "terminal",
+      "resume": "session",
+      "steering": "none",
+      "approvals": "none",
+      "structuredResult": false,
+      "usage": "none",
+      "nested": "none",
+      "nativeView": "independentTui",
+      "workspaceControl": "write",
+      "durability": "vendorResumable"
+    },
+    "scenarios": [
+      {
+        "name": "probe",
+        "outcome": "pass",
+        "detail": "probe reached the real copilot CLI; declared capabilities intact"
+      },
+      {
+        "name": "read_only_start_and_progress",
+        "outcome": "fail",
+        "detail": "start=Ok(()) started=true session=true first_message=false"
+      },
+      {
+        "name": "follow_up",
+        "outcome": "fail",
+        "detail": "send() result=Ok(()) saw_ack=false"
+      },
+      {
+        "name": "cancellation_scope",
+        "outcome": "pass",
+        "detail": "cancel(CancelScope::Worker) signalled termination and a ProcessExited was journaled once the exit watcher observed it"
+      },
+      {
+        "name": "session_resume",
+        "outcome": "skipped",
+        "detail": "live mode: a single-process resume is not a daemon restart; transcript recovery across a real daemon restart is covered by a separate serve->stop->serve end-to-end smoke that has NOT yet run (tracked as post-0.5.0 follow-up). The vendor-free serve->status->stop smoke did pass in WP29."
+      }
+    ],
+    "passed": false
+  }
+]

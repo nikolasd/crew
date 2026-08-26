@@ -4187,3 +4187,46 @@ deltas; Codex/OMP-RPC cumulative totals are last-wins; Copilot honestly `null`).
 crates/runtime/tests/run_result.rs (refusal for non-terminal/unknown runs, chunk fallback,
 redaction, per-adapter fold) and a client-side ValidationError test; manual scenario:
 docs/manual-testing.md §6.
+
+## Part XLV — WP29: live TUI smokes, keep/drop, and the build that wasn't deterministic
+
+Final gap-closure work (phase 10, PR #12, merged to main as 0.5.0-prep; tag held). Three threads:
+
+**Two-phase prompt delivery.** The live TUI smoke failed because the adapter wrote prompt text and
+its Enter as one atomic `text\r` at a fixed delay after spawn. Whether a vendor TUI processes that
+Enter depends on where its render loop is when bytes land — too early (stdin unwired) or mid-layout
+(the CR is swallowed) and the prompt renders but never submits, so no nonce transcript appears.
+Machine load shifts the timeline, which is why byte-identical injections sometimes submitted and
+sometimes didn't. Fix (`crates/runtime/src/adapter/tui/adapter.rs`): type TEXT at
+`max(first-output, INJECT_MIN_DELAY=500ms)` after spawn, then send the single Enter only after
+`ENTER_IDLE_MIN` (10s, configurable as `TuiTimings::submit_idle`) of PTY output silence. No submit
+byte exists before that silence, so no live turn is interrupted, and an idle TUI processes it like a
+human keystroke regardless of render speed. Queue-style `send()` is likewise idle-gated and splits
+text/Enter with a 150ms gap (codex swallows an atomic `text\r` whole). `Steer` stays exempt.
+
+**Per-vendor keep/drop (spec §4.6, user decision).** All four headless adapters KEPT; the built-in
+adapters' configured default mode is now TUI (`default_adapters()` in config/crew.rs sets
+`AdapterMode::Tui` for claude/codex/copilot/omp — `AdapterMode::default()` itself stays `Headless`
+for empty/legacy profiles) because all four TuiVendors pass fixture-mode conformance. The harness
+preserves `--mode headless` for the non-interactive live path.
+
+**Live results (raw reports in `release/live-conformance/`, with an erratum).** claude-tui and
+omp-rpc-tui: all runnable scenarios pass (probe, read_only, follow_up, cancellation). codex-tui:
+read_only passes but follow_up fails on `usageLimitExceeded` (out of credits). copilot-tui:
+read_only + follow_up both fail on the same out-of-credits error; only probe + cancellation pass.
+None of the four passes `session_resume` — it is *skipped* by design, because a single-process
+resume is not a daemon restart; the transcript-recovery-across-restart e2e is a separate, not-yet-run
+follow-up (the report's "proven by serve→stop→serve smoke" detail is overstated — that smoke was
+vendor-free).
+
+**Bundle determinism.** `bundle-check` failed because the committed `dist/index.js` embeds Bun's
+platform-specific module shim, and a darwin-arm64 rebuild diverges from CI's linux-x64 rebuild even
+at the same Bun 1.3.14. The fix: rebuild the committed bundle in CI's exact environment (the
+`refresh-bundle` workflow, or a linux-x64 container) — verified byte-identical to CI's own rebuild
+(git blob `ee775fd`). The per-vendor live reports were written verbatim with an adjacent erratum;
+they are not regenerated from edited JSON.
+
+**Flake, not regression.** `ownership.test.ts` failed once on macos with `SQLITE_BUSY`: it opens a
+second connection to the daemon-owned WAL `runtime.db` and writes directly. Added
+`PRAGMA busy_timeout = 5000` to match the daemon's own connection policy; the daemon sets the same
+pragma on that database. Verified locally (2 pass) and green on both CI OSes.
