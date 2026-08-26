@@ -1,0 +1,59 @@
+[
+  {
+    "adapter": "codex-tui",
+    "mode": "live",
+    "version": null,
+    "declaredCapabilities": {
+      "protocol": "terminal",
+      "resume": "session",
+      "steering": "activeTurn",
+      "approvals": "none",
+      "structuredResult": false,
+      "usage": "none",
+      "nested": "none",
+      "nativeView": "independentTui",
+      "workspaceControl": "write",
+      "durability": "vendorResumable"
+    },
+    "effectiveCapabilities": {
+      "protocol": "terminal",
+      "resume": "session",
+      "steering": "none",
+      "approvals": "none",
+      "structuredResult": false,
+      "usage": "none",
+      "nested": "none",
+      "nativeView": "independentTui",
+      "workspaceControl": "write",
+      "durability": "vendorResumable"
+    },
+    "scenarios": [
+      {
+        "name": "probe",
+        "outcome": "pass",
+        "detail": "probe reached the real codex CLI; declared capabilities intact"
+      },
+      {
+        "name": "read_only_start_and_progress",
+        "outcome": "pass",
+        "detail": "real codex spawned on a PTY, VendorSessionEstablished observed, and >=1 normalized assistant message tailed from the vendor's own transcript"
+      },
+      {
+        "name": "follow_up",
+        "outcome": "fail",
+        "detail": "send() result=Ok(()) saw_ack=false"
+      },
+      {
+        "name": "cancellation_scope",
+        "outcome": "pass",
+        "detail": "cancel(CancelScope::Worker) signalled termination and a ProcessExited was journaled once the exit watcher observed it"
+      },
+      {
+        "name": "session_resume",
+        "outcome": "skipped",
+        "detail": "live mode: a single-process resume is not a daemon restart; genuine restart recovery is proven by the separate serve->stop->serve end-to-end smoke (WP29), not this report"
+      }
+    ],
+    "passed": false
+  }
+]

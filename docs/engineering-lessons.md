@@ -393,3 +393,34 @@ must not assume that target is the daemon's own source tree, even when writing/t
 only ever happens inside that source tree. And a test asserting on a substring of an error message
 should treat a coincidental match as a red flag to investigate, not a green light — it can hide
 an entirely different bug behind the one being tested.
+
+## Live Adapter Prompting
+
+### A prompt injected as one atomic write is at the mercy of the vendor's render loop
+**Location:** `crates/runtime/src/adapter/tui/adapter.rs::run_pipeline`
+
+The TUI adapter wrote `prompt + "\r"` in a single `write_input` at a fixed delay after spawn. Whether
+the vendor TUI processes the Enter depends on where its render loop is when the bytes land; under load
+the timing shifts, so identical injections sometimes submit and sometimes render-but-never-send. The
+trap is treating "the prompt shows in the box" as "the prompt was submitted" — the transcript is the
+only proof. Fix: deliver text and Enter as two *phase-separated* writes (text at first output; Enter
+only after a measured idle window), so submission never depends on render timing.
+
+### Two writers to one WAL file must both set a busy timeout
+**Location:** `packages/extension/src/ownership.test.ts::seedTestData`
+
+The test opens a second connection to the daemon-owned `runtime.db` and writes directly. With no
+`busy_timeout`, a momentary lock held by the live daemon throws `SQLITE_BUSY`. The daemon itself sets
+`busy_timeout=5000` on that database; the test connection must match it. A second writer to a live
+WAL file without a busy timeout is a latent flake, not a logic bug.
+
+## Build Determinism
+
+### A committed build artifact can depend on the build host's platform
+**Location:** `packages/extension/dist/index.js`, CI `bundle-check`
+
+The bundle embeds Bun's platform-specific module shim; a darwin-arm64 rebuild diverges from a
+linux-x64 rebuild even at the same Bun version. `bundle-check`'s byte-exact contract is only
+satisfiable from CI's platform. Produce the committed artifact in CI's environment (`refresh-bundle`
+workflow), or document that local rebuilds must happen on linux-x64. Don't weaken the check to
+"close enough" — the bytes matter.

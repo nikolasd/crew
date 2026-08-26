@@ -168,7 +168,7 @@ Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/
 **Requires:** only the default `GITHUB_TOKEN` (already available to the workflow) — no separate secret to configure.
 
 **Release checklist, before tagging:**
-- `packages/extension/dist/index.js` is rebuilt (`bun run build`) and the diff is committed — it's the exact file a marketplace-installed plugin loads, and CI's `bundle-check` job rejects a stale one.
+- `packages/extension/dist/index.js` is rebuilt (`bun run build`) and the diff is committed — it's the exact file a marketplace-installed plugin loads, and CI's `bundle-check` job rejects a stale one. **Platform caveat:** the bundle embeds Bun's platform-specific module shim, so a rebuild on a different platform (e.g. macOS/arm64) does **not** byte-match CI's linux-x64 `bundle-check` (observed with Bun 1.3.14). Refresh the committed bundle via the `refresh-bundle` workflow (builds on linux-x64 + pinned Bun and uploads the artifact to commit), or a linux-x64 build.
 - `.claude-plugin/marketplace.json`'s versions are enforced automatically: `bun run generate --check` fails on any drift from `packages/extension/package.json`, so no manual check is needed.
 
 ## Documentation

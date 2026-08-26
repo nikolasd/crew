@@ -81,6 +81,12 @@ Ask the model to use `crew_task`, `crew_worker`, and `crew_run`, then open `/cre
 
 `packages/extension/dist/index.js` is committed to git and verified in CI (a `bundle-check` job rebuilds and diffs it), since it's the entry point the marketplace-installed plugin loads. Any change under `packages/extension/src/` must be followed by `bun run build` and committing the rebuilt bundle.
 
+> **Platform note:** the bundle embeds Bun's platform-specific module shim, so a rebuild on a
+> different platform (e.g. macOS/arm64) does **not** byte-match CI's `bundle-check` — observed with
+> Bun 1.3.14, where a darwin-arm64 rebuild diverges from CI's linux-x64 output. Always refresh the
+> committed bundle via the `refresh-bundle` workflow (builds on linux-x64 + pinned Bun and uploads
+> the artifact to commit), or a linux-x64 build, or CI will reject the commit as a stale bundle.
+
 ## Contributing
 
 Contributions are welcome. Before submitting a PR:
@@ -106,12 +112,7 @@ This project is licensed under the [MIT License](LICENSE). See the LICENSE file 
 
 ## Known Limitations
 
-This is a pre-1.0 project. The review backlog is empty — the one open item is an
-unreproduced test-flake watch, tracked in the maintainer's local, gitignored `REVIEW.md`
-(resolution history lives in [`docs/journal.md`](docs/journal.md)). What remains below are
-environment and protocol walls, verified against the current codebase. Every adapter is
-installed and authenticated here, and live conformance is run against all four
-(reports under `release/`), so none of these is a "requires a vendor CLI" caveat.
+This is a pre-1.0 project. The review backlog is empty — the one open item is an unreproduced test-flake watch, tracked in the maintainer's local, gitignored `REVIEW.md` (resolution history lives in [`docs/journal.md`](docs/journal.md)). What remains below are environment and protocol walls, verified against the current codebase. Every adapter is installed and authenticated here, and live TUI conformance runs against all four — claude + omp-rpc are fully green, while codex and copilot are blocked on vendor out-of-credits (raw reports under [`release/live-conformance/`](release/live-conformance/) with an erratum). None of the below is a "requires a vendor CLI" caveat.
 
 - **ACP v1 has no durable session handle, so Copilot cannot resume across processes.** A session
   that completed a real turn answers `session/load` with `Resource not found`, which fails

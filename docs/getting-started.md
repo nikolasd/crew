@@ -44,6 +44,12 @@ a git clone never runs `bun install`/`bun run build` itself. Any change under
 `packages/extension/src/` must be followed by re-running `bun run build` and committing the
 rebuilt `dist/index.js`.
 
+> **Platform caveat:** the bundle embeds Bun's platform-specific module shim, so a rebuild on a
+> different platform (e.g. macOS/arm64) does **not** byte-match CI's linux-x64 `bundle-check` —
+> observed with Bun 1.3.14. Refresh the committed bundle via the `refresh-bundle` workflow (builds
+> on linux-x64 + pinned Bun and uploads the artifact to commit), or a linux-x64 build, before
+> committing — otherwise CI rejects the bundle as stale.
+
 ## Configuration
 
 ### Configuration Layers

@@ -3,7 +3,7 @@ set -e
 
 # Crew contributor setup.
 # Bootstraps both halves of the workspace: JS (bun workspaces) and Rust
-# (batcave runtime). Safe to re-run. Does not assume rustup -- Rust may be
+# (crewd runtime). Safe to re-run. Does not assume rustup -- Rust may be
 # installed via rustup, Homebrew, or a system package manager.
 
 cd "$(dirname "$0")/.."
@@ -38,10 +38,29 @@ if ! command -v bun &> /dev/null; then
   exit 1
 fi
 
+# Warn (not fail) if bun is older than the pinned version. The committed extension bundle
+# (packages/extension/dist/index.js) is verified in CI against a linux-x64 build at the pinned
+# Bun version; an older bun can rebuild a bundle CI rejects as stale.
+REQUIRED_BUN_VERSION="1.3.14"
+bun_version_ge() {
+  # $1 = have, $2 = want; returns 0 if have >= want
+  awk -v have="$1" -v want="$2" 'BEGIN{
+    split(have, a, "."); split(want, b, ".");
+    for (i = 1; i <= 3; i++) { x = a[i] + 0; y = b[i] + 0; if (x > y) exit 0; if (x < y) exit 1 }
+    exit 0
+  }'
+}
+BUN_VERSION="$(bun --version)"
+if ! bun_version_ge "$BUN_VERSION" "$REQUIRED_BUN_VERSION"; then
+  echo "Warning: bun ${BUN_VERSION} found, but the project pins bun >= ${REQUIRED_BUN_VERSION} (packageManager field)." >&2
+  echo "  The committed bundle is verified in CI against a linux-x64 build at ${REQUIRED_BUN_VERSION};" >&2
+  echo "  an older bun may produce a bundle CI rejects. Install ${REQUIRED_BUN_VERSION} or newer and re-run." >&2
+fi
+
 echo "Installing JS workspace dependencies..."
 bun install
 
-echo "Building batcave runtime..."
+echo "Building crewd runtime..."
 cargo build -p crew-runtime
 
 echo ""
