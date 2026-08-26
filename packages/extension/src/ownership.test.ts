@@ -88,6 +88,10 @@ function projectIdFromRepo(repo: string): string {
 
 function seedTestData(ownerInstanceId: string): { taskId: string; runId: string; approvalId: string; violationId: string } {
   const db = new (require("bun:sqlite").Database)(databasePath());
+  // The daemon owns this WAL database and writes to it concurrently; under
+  // runner load its lock can overlap ours and a bare write throws SQLITE_BUSY
+  // (seen once on a macos CI runner). Wait instead of failing.
+  db.exec("PRAGMA busy_timeout = 5000");
   const now = new Date().toISOString();
   const pid = projectIdFromRepo(repoDir);
 
