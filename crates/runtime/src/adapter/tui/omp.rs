@@ -39,7 +39,14 @@ use super::{Cursor, TranscriptFormat, TuiEvent, parse_jsonl_chunk};
 /// format assumptions were built and tested against -- same policy as
 /// Codex's gate ([`super::codex`]): one validated point (`18.0.5`, an
 /// installed CLI probed for this module), everything else in the range
-/// an untested extrapolation until WP29's live smoke widens it.
+/// an untested extrapolation until WP29's live smoke widens it. The
+/// extrapolation is deliberately tolerated here (rather than an
+/// exact-match gate like Copilot's): an OMP session transcript
+/// self-describes its own schema (`"version": 3` on its `session`
+/// line), so a format drift behind an unvalidated minor release degrades
+/// to typed `Raw` events at tail time instead of silently corrupting the
+/// journal -- the failure mode Copilot's stricter gate exists for is
+/// protocol-level, not present in this file format.
 const MIN_TESTED_VERSION: (u32, u32, u32) = (18, 0, 0);
 const MAX_TESTED_VERSION: (u32, u32, u32) = (18, 99, 99);
 
