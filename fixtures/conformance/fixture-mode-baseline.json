@@ -7,6 +7,8 @@
     "copilot": ["probe", "read_only_start_and_progress", "follow_up", "cancellation_scope", "session_resume", "runtime_restart", "unexpected_child_observation"],
     "ompRpc": ["probe", "follow_up", "cancellation_scope", "session_resume", "runtime_restart"],
     "claude-tui": ["probe"],
-    "codex-tui": ["probe"]
+    "codex-tui": ["probe"],
+    "copilot-tui": ["probe"],
+    "omp-tui": ["probe"]
   }
 }

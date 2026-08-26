@@ -45,12 +45,9 @@ fn defaults_match_spec_with_headless_mode_override() {
             panic!("expected default adapter '{name}'");
         });
         assert!(adapter.enabled);
-        let expected_mode = if name == "claude" || name == "codex" {
-            AdapterMode::Tui
-        } else {
-            AdapterMode::Headless
-        };
-        assert_eq!(adapter.mode, expected_mode, "adapter '{name}' mode");
+        // Every built-in adapter defaults to `mode: tui` since WP28
+        // (all four TuiVendor impls pass fixture-mode conformance).
+        assert_eq!(adapter.mode, AdapterMode::Tui, "adapter '{name}' mode");
         assert_eq!(adapter.permission_mode, PermissionMode::Max);
     }
     assert_eq!(cfg.adapters["claude"].bin, "claude");
@@ -296,7 +293,10 @@ fn full_field_round_trip_through_json_survives_validate_shape() {
             AdapterConfig {
                 enabled: false,
                 bin: format!("{name}-custom-bin"),
-                mode: AdapterMode::Tui,
+                // Headless is a NON-default value since WP28 flipped all
+                // four built-ins to tui -- this round trip must prove the
+                // mode key survives, so it overrides away from the default.
+                mode: AdapterMode::Headless,
                 permission_mode: PermissionMode::Readonly,
                 model: Some(format!("{name}-custom-model")),
                 profile: format!("{name} custom profile"),
@@ -310,7 +310,7 @@ fn full_field_round_trip_through_json_survives_validate_shape() {
         AdapterConfig {
             enabled: false,
             bin: "vertex-cli".to_string(),
-            mode: AdapterMode::Tui,
+            mode: AdapterMode::Headless,
             permission_mode: PermissionMode::Readonly,
             model: Some("gemini-custom".to_string()),
             profile: "a distinct custom profile".to_string(),

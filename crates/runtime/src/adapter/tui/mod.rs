@@ -15,7 +15,13 @@ pub mod claude;
 pub mod claude_conformance;
 pub mod codex;
 pub mod codex_conformance;
+pub mod copilot;
+pub mod copilot_conformance;
+pub mod omp;
+pub mod omp_conformance;
 pub use codex::CodexTuiVendor;
+pub use copilot::CopilotTuiVendor;
+pub use omp::OmpTuiVendor;
 mod discovery;
 mod tailer;
 

@@ -24,9 +24,9 @@
 //! adapter's `mode` defaults to `headless`, not the `tui` shown in the
 //! spec's example -- no TUI adapter existed yet. Later work packages flip
 //! each vendor's default to `tui` as its TUI adapter lands. WP13 landed
-//! Claude's, WP27 landed Codex's (CodexTuiVendor passes fixture-mode
-//! conformance), so `claude` and `codex` default to `tui` here; `copilot`
-//! and `omp` stay `headless` until their own TUI vendor impls land (WP28).
+//! Claude's, WP27 Codex's, and WP28 Copilot's and OMP's (all four
+//! `TuiVendor` impls pass fixture-mode conformance), so every built-in
+//! adapter defaults to `tui` here -- the spec §10 end state.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -275,10 +275,10 @@ impl Default for CrewConfig {
     }
 }
 
-/// The four built-in adapters, per spec §10. `claude` and `codex` default
-/// to `mode: tui` now that their TUI adapters have landed (WP13 / WP27);
-/// `copilot` and `omp` stay `mode: headless` until their own TUI vendor
-/// impls land (WP28) -- the WP4 controller override (see module docs).
+/// The four built-in adapters, per spec §10. All four default to
+/// `mode: tui` now that every vendor's TUI adapter has landed and passes
+/// fixture-mode conformance (WP13 / WP27 / WP28) -- the spec's end
+/// state, completing the WP4 controller override (see module docs).
 fn default_adapters() -> BTreeMap<String, AdapterConfig> {
     let mut adapters = BTreeMap::new();
     adapters.insert(
@@ -312,7 +312,7 @@ fn default_adapters() -> BTreeMap<String, AdapterConfig> {
         AdapterConfig {
             enabled: true,
             bin: "copilot".to_string(),
-            mode: AdapterMode::Headless,
+            mode: AdapterMode::Tui,
             permission_mode: PermissionMode::Max,
             model: None,
             profile: "documentation, explanations".to_string(),
@@ -325,7 +325,7 @@ fn default_adapters() -> BTreeMap<String, AdapterConfig> {
         AdapterConfig {
             enabled: true,
             bin: "omp".to_string(),
-            mode: AdapterMode::Headless,
+            mode: AdapterMode::Tui,
             permission_mode: PermissionMode::Max,
             model: Some("qwen".to_string()),
             profile: "implementation, coding tasks".to_string(),

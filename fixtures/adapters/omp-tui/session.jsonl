@@ -1,0 +1,9 @@
+{"type":"title","v":1,"title":"crew fixture session","source":"auto","updatedAt":"2026-01-01T00:00:00.000Z","pad":" "}
+{"type":"session","version":3,"id":"66666666-6666-4666-8666-000000000001","timestamp":"2026-01-01T00:00:00.100Z","cwd":"/workspace/crew"}
+{"type":"thinking_level_change","id":"tlc1","parentId":null,"timestamp":"2026-01-01T00:00:00.110Z","thinkingLevel":"high","configured":"auto"}
+{"type":"message","id":"m0000001","parentId":"tlc1","timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"Say hi, run 'echo crew-fixture', then ask me exactly one clarifying question. [crew:fixture1]"}]}}
+{"type":"model_change","id":"mc1","parentId":"m0000001","timestamp":"2026-01-01T00:00:01.500Z","modelId":"qwen","providerId":"opencode"}
+{"type":"message","id":"m0000002","parentId":"mc1","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"[synthetic fixture reasoning; never surfaced]"},{"type":"text","text":"Hi! Running the echo command now."},{"type":"toolCall","id":"call_00000001","name":"bash","partialArgs":false,"streamIndex":0,"intent":null,"arguments":{"command":["bash","-lc","echo crew-fixture"]}}]}}
+{"type":"message","id":"m0000003","parentId":"m0000002","timestamp":"2026-01-01T00:00:03.000Z","message":{"role":"toolResult","toolCallId":"call_00000001","toolName":"bash","content":[{"type":"text","text":"crew-fixture\n"}],"isError":false}}
+{"type":"custom_message","id":"cm1","parentId":"m0000003","timestamp":"2026-01-01T00:00:03.500Z","customKey":"synthetic-telemetry"}
+{"type":"message","id":"m0000004","parentId":"cm1","timestamp":"2026-01-01T00:00:04.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The command returned `crew-fixture`. Which part of the repo would you like me to work on next?"}]}}
