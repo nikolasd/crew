@@ -1,0 +1,72 @@
+{
+  "approval": "always",
+  "limits": {
+    "maxConcurrentWorkers": 4,
+    "inactivityTimeoutSec": 300,
+    "totalTimeoutSec": 1800,
+    "turnBudgetPerSubtask": 10
+  },
+  "display": {
+    "backend": "auto",
+    "closeOnExit": "onSuccess"
+  },
+  "adapters": {
+    "claude": {
+      "enabled": true,
+      "bin": "claude",
+      "mode": "tui",
+      "permissionMode": "max",
+      "model": null,
+      "profile": "complex analysis, investigation, deep debugging",
+      "sessionDir": null,
+      "extraArgs": []
+    },
+    "codex": {
+      "enabled": true,
+      "bin": "codex",
+      "mode": "tui",
+      "permissionMode": "max",
+      "model": null,
+      "profile": "code review, finding defects",
+      "sessionDir": null,
+      "extraArgs": []
+    },
+    "copilot": {
+      "enabled": true,
+      "bin": "copilot",
+      "mode": "tui",
+      "permissionMode": "max",
+      "model": null,
+      "profile": "documentation, explanations",
+      "sessionDir": null,
+      "extraArgs": []
+    },
+    "omp": {
+      "enabled": true,
+      "bin": "omp",
+      "mode": "tui",
+      "permissionMode": "max",
+      "model": "qwen",
+      "profile": "implementation, coding tasks",
+      "sessionDir": null,
+      "extraArgs": []
+    }
+  },
+  "workspace": {
+    "defaultMode": "shared",
+    "copyMaxBytes": null,
+    "copyMaxFiles": null,
+    "artifactMaxBytes": null
+  },
+  "dashboard": {
+    "enabled": false,
+    "port": 4747
+  },
+  "retention": {
+    "maxRuns": 20,
+    "period": "30d"
+  },
+  "security": {
+    "patterns": []
+  }
+}
