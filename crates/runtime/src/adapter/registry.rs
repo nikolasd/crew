@@ -51,7 +51,8 @@ use super::profile::{
 use super::run_lifecycle::RunLifecycleSink;
 use super::r#trait::{Adapter, AdapterMessage, StartSpec, VendorSessionRef};
 use super::tui::{
-    ClaudeTuiVendor, CodexTuiVendor, Cursor, ResumeContext, TuiAdapter, TuiSupport, TuiVendor,
+    ClaudeTuiVendor, CodexTuiVendor, CopilotTuiVendor, Cursor, OmpTuiVendor, ResumeContext,
+    TuiAdapter, TuiSupport, TuiVendor,
 };
 use crate::adapter::CancelScope;
 use crate::config::crew::{AdapterConfig, AdapterMode as CrewAdapterMode, PermissionMode};
@@ -1029,9 +1030,9 @@ pub(crate) fn requested_mode(
 }
 
 /// Whether the startup options select a mode whose owning adapter
-/// journals its own real pane attach/detach pair -- today Claude's and Codex's
-/// `mode: "tui"`, whose [`super::tui::TuiAdapter`] attaches through its
-/// `PaneCoordinator`. Such a run must never also receive the submit-time
+/// journals its own real pane attach/detach pair -- every reserved
+/// vendor's `mode: "tui"` (WP13/WP27/WP28), whose
+/// [`super::tui::TuiAdapter`] attaches through its `PaneCoordinator`. Such a run must never also receive the submit-time
 /// placeholder pane events `start_queued_run` journals for every other
 /// backend-resolving run: pairing attach/detach consumers would see two
 /// attaches against one detach. Kept beside [`requested_mode`] so
@@ -1039,10 +1040,9 @@ pub(crate) fn requested_mode(
 /// cannot drift apart.
 pub(crate) fn pane_lifecycle_owned_by_adapter(startup_options: &StartupOptions) -> bool {
     requested_mode(startup_options) == Some(super::profile::AdapterMode::Tui)
-        && matches!(
-            startup_options.adapter_kind(),
-            Some(super::AdapterKind::Claude) | Some(super::AdapterKind::Codex)
-        )
+        // Every reserved kind has a real `TuiVendor` now (WP13/WP27/WP28),
+        // so any `mode: "tui"` run is adapter-owned.
+        && startup_options.adapter_kind().is_some()
 }
 
 /// The capabilities the given reserved adapter kind declares, read off a
@@ -1189,9 +1189,46 @@ fn build_adapter(
                         resume_cursor,
                     ));
                 }
-                // Every other reserved kind (no vendor impl yet) keeps
-                // the typed refusal below.
-                _ => {}
+                super::AdapterKind::Copilot => {
+                    return Ok(build_tui_adapter(
+                        CopilotTuiVendor::new(
+                            repo_root.to_path_buf(),
+                            profile.environment_allowlist.clone(),
+                        ),
+                        "copilot",
+                        &tui,
+                        repo_root,
+                        run_id,
+                        task_id,
+                        worker_id,
+                        db,
+                        project_id,
+                        events_tx,
+                        display,
+                        resume_cursor,
+                    ));
+                }
+                super::AdapterKind::OmpRpc => {
+                    return Ok(build_tui_adapter(
+                        OmpTuiVendor::new(
+                            repo_root.to_path_buf(),
+                            profile.environment_allowlist.clone(),
+                        ),
+                        "omp",
+                        &tui,
+                        repo_root,
+                        run_id,
+                        task_id,
+                        worker_id,
+                        db,
+                        project_id,
+                        events_tx,
+                        display,
+                        resume_cursor,
+                    ));
+                } // Every reserved kind now has a real `TuiVendor` impl
+                  // (WP13/WP27/WP28); the refusal below is reachable only
+                  // when no `TuiSupport` was ever supplied.
             }
         }
         return Err(RegistryError::TuiModeUnavailable(
@@ -1282,13 +1319,16 @@ fn build_tui_adapter<V: TuiVendor>(
     display: Option<crew_protocol::DisplaySelection>,
     resume_cursor: Option<Cursor>,
 ) -> Arc<dyn Adapter> {
-    let cfg = tui.adapters.get(vendor_key).cloned().unwrap_or_else(|| {
-        if vendor_key == "codex" {
-            default_codex_tui_config()
-        } else {
-            default_claude_tui_config()
-        }
-    });
+    let cfg = tui
+        .adapters
+        .get(vendor_key)
+        .cloned()
+        .unwrap_or_else(|| match vendor_key {
+            "codex" => default_codex_tui_config(),
+            "copilot" => default_copilot_tui_config(),
+            "omp" => default_omp_tui_config(),
+            _ => default_claude_tui_config(),
+        });
     let pane_coordinator = Arc::new(PaneCoordinator::new(
         Arc::clone(&tui.display_registry),
         db,
@@ -1353,6 +1393,31 @@ fn default_claude_tui_config() -> AdapterConfig {
     }
 }
 
+fn default_copilot_tui_config() -> AdapterConfig {
+    AdapterConfig {
+        enabled: true,
+        bin: "copilot".to_string(),
+        mode: CrewAdapterMode::Tui,
+        permission_mode: PermissionMode::Max,
+        model: None,
+        profile: "documentation, explanations".to_string(),
+        session_dir: None,
+        extra_args: Vec::new(),
+    }
+}
+
+fn default_omp_tui_config() -> AdapterConfig {
+    AdapterConfig {
+        enabled: true,
+        bin: "omp".to_string(),
+        mode: CrewAdapterMode::Tui,
+        permission_mode: PermissionMode::Max,
+        model: Some("qwen".to_string()),
+        profile: "implementation, coding tasks".to_string(),
+        session_dir: None,
+        extra_args: Vec::new(),
+    }
+}
 #[cfg(test)]
 mod build_adapter_tests {
     //! Unit tests for the private [`build_adapter`] function, reachable
@@ -1501,10 +1566,10 @@ mod build_adapter_tests {
         );
     }
 
-    /// `mode: "tui"` on a reserved adapter kind with no `TuiVendor`
-    /// implementation (Codex/Copilot) -- or on Claude when no
-    /// `TuiSupport` was ever supplied -- must be a typed refusal, never a
-    /// silent fallback to the headless adapter.
+    /// `mode: "tui"` with NO `TuiSupport` supplied must be a typed
+    /// refusal, never a silent fallback to the headless adapter. (Every
+    /// reserved kind has a real vendor impl now; only the missing-support
+    /// window refuses.)
     #[tokio::test]
     async fn tui_mode_without_a_vendor_impl_is_a_typed_refusal_not_a_silent_headless_fallback() {
         let options = ClaudeStartupOptions {
@@ -1539,25 +1604,18 @@ mod build_adapter_tests {
         }
     }
 
-    /// `mode: "tui"` on Codex/Copilot still refuses even *with*
-    /// `TuiSupport` supplied -- claude (WP13) and codex (WP27) have real
-    /// `TuiVendor` impls; copilot still has none.
+    /// `mode: "tui"` now constructs a real TuiAdapter for EVERY reserved
+    /// kind (WP13/WP27/WP28); these assert the two newest vendors wire up
+    /// exactly like claude/codex do.
     #[tokio::test]
-    async fn tui_mode_on_copilot_still_refuses_even_with_tui_support_supplied() {
-        let (db, _dir, events_tx) = db_and_events().await;
-        // WP27 landed codex's TuiVendor, so codex now constructs a real
-        // adapter (asserted separately below); copilot still has none.
-        let options = StartupOptions::Copilot(CopilotStartupOptions {
+    async fn copilot_tui_mode_with_tui_support_constructs_a_real_tui_adapter() {
+        let options = CopilotStartupOptions {
             mode: crate::adapter::profile::AdapterMode::Tui,
             ..CopilotStartupOptions::default()
-        });
-        let expected_kind = profile(options.clone())
-            .startup_options
-            .adapter_kind()
-            .expect("reserved kind")
-            .wire_name()
-            .to_string();
-        let profile = profile(options);
+        };
+        let profile = profile(StartupOptions::Copilot(options));
+        let (db, _dir, events_tx) = db_and_events().await;
+
         let result = build_adapter(
             &profile,
             std::path::Path::new("/tmp"),
@@ -1567,19 +1625,53 @@ mod build_adapter_tests {
             None,
             None,
             Some(test_tui_support()),
-            Arc::clone(&db),
+            db,
             crew_protocol::ProjectId::new(),
-            events_tx.clone(),
+            events_tx,
             None,
             None,
         );
-        match result {
-            Ok(_) => panic!("{expected_kind}: mode: tui must still refuse (no TuiVendor impl)"),
-            Err(err) => assert!(
-                matches!(err, RegistryError::TuiModeUnavailable(ref kind) if *kind == expected_kind),
-                "{expected_kind}: expected TuiModeUnavailable, got: {err}"
-            ),
-        }
+
+        let adapter = result.expect("Copilot TUI mode must construct with TuiSupport supplied");
+        assert_eq!(adapter.kind(), "copilot");
+        assert_eq!(
+            adapter.capabilities().protocol,
+            crate::adapter::capability::ProtocolKind::Terminal
+        );
+    }
+
+    #[tokio::test]
+    async fn omp_tui_mode_with_tui_support_constructs_a_real_tui_adapter() {
+        use crate::adapter::profile::OmpRpcStartupOptions;
+        let options = OmpRpcStartupOptions {
+            mode: crate::adapter::profile::AdapterMode::Tui,
+            ..OmpRpcStartupOptions::default()
+        };
+        let profile = profile(StartupOptions::OmpRpc(options));
+        let (db, _dir, events_tx) = db_and_events().await;
+
+        let result = build_adapter(
+            &profile,
+            std::path::Path::new("/tmp"),
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            None,
+            None,
+            Some(test_tui_support()),
+            db,
+            crew_protocol::ProjectId::new(),
+            events_tx,
+            None,
+            None,
+        );
+
+        let adapter = result.expect("OMP TUI mode must construct with TuiSupport supplied");
+        assert_eq!(adapter.kind(), "omp-rpc");
+        assert_eq!(
+            adapter.capabilities().protocol,
+            crate::adapter::capability::ProtocolKind::Terminal
+        );
     }
 
     /// `mode: "tui"` on Claude, with `TuiSupport` supplied, constructs a
