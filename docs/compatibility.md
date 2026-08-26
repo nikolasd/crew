@@ -135,7 +135,7 @@ restart; transcript recovery across a real restart is a separate e2e, tracked as
 | Copilot | 2 / 4 | `read_only_start_and_progress` + `follow_up` fail on out-of-credits; probe + cancel proven |
 
 Raw reports (verbatim, with an erratum on the overstated `session_resume` detail):
-[`release/live-conformance/`](../../release/live-conformance/).
+[`release/live-conformance/`](../release/live-conformance/).
 
 ## If a version isn't in either table
 
