@@ -14,10 +14,7 @@ import { spawn } from "node:child_process";
 export type ConfigDocument = "defaults" | "schema" | "effective";
 
 /** A `crewd config` invocation, before it becomes an argument vector. */
-export type ConfigRequest =
-  | { readonly op: "init"; readonly repository: string; readonly global?: boolean; readonly force?: boolean }
-  | { readonly op: "print"; readonly repository: string; readonly document?: ConfigDocument }
-  | { readonly op: "path"; readonly repository: string };
+export type ConfigRequest = { readonly op: "init"; readonly repository: string; readonly global?: boolean; readonly force?: boolean } | { readonly op: "print"; readonly repository: string; readonly document?: ConfigDocument } | { readonly op: "path"; readonly repository: string };
 
 /** A text content block, structurally compatible with OMP's `TextContent`. */
 export type ConfigTextContent = { type: "text"; text: string };
