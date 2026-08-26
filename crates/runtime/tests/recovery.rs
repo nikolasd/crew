@@ -378,7 +378,6 @@ async fn multiple_stuck_runs_are_all_recovered_independently() {
     assert_eq!(run_state(&db, paused_run).await, "cancelled");
 }
 
-
 /// WP29 gap: a daemon *restart* must not lose the durable transcript. This
 /// drops the live in-memory handle and re-opens the same on-disk journal —
 /// the exact persistence boundary a real `crewd stop` -> `crewd serve` crosses
@@ -394,7 +393,11 @@ async fn a_journaled_transcript_survives_a_database_restart() {
     // run's durable transcript tail.
     let before = journal_count(&db, run_id, "working").await;
     assert!(before > 0, "expected journaled events before restart");
-    assert_eq!(run_state(&db, run_id).await, "working", "run persisted before restart");
+    assert_eq!(
+        run_state(&db, run_id).await,
+        "working",
+        "run persisted before restart"
+    );
 
     // Simulate the daemon restart: release the live handle, reopen the same
     // journal from disk.
@@ -405,7 +408,11 @@ async fn a_journaled_transcript_survives_a_database_restart() {
 
     let after = journal_count(&db, run_id, "working").await;
     assert_eq!(after, before, "journaled transcript must survive a restart");
-    assert_eq!(run_state(&db, run_id).await, "working", "run must survive a restart");
+    assert_eq!(
+        run_state(&db, run_id).await,
+        "working",
+        "run must survive a restart"
+    );
 }
 // ------------------------------------------- doctor's silence-threshold report
 
