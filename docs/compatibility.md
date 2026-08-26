@@ -134,6 +134,14 @@ restart; transcript recovery across a real restart is a separate e2e, tracked as
 | Codex   | 3 / 4 | `follow_up` fails on out-of-credits; spawn→type→submit→discover proven |
 | Copilot | 2 / 4 | `read_only_start_and_progress` + `follow_up` fail on out-of-credits; probe + cancel proven |
 
+Version provenance: the live reports deliberately record **no** vendor version (`version: null`) —
+the TUI harness does not pin one, so a report is evidence about the adapter injection path, not
+about a specific CLI release. Version-pinned TUI wire behavior lives in the committed fixtures
+instead: claude-tui `2.1.241`, codex-tui `0.149.1`, copilot-tui `1.0.80`. Note these are *newer*
+than the headless captures in the table above (same CLIs, later releases). Gap: unlike the headless
+fixtures, none of the `*-tui` fixtures has a `capture-manifest.yml` entry yet, so there is no
+recorded recipe for re-capturing them against future CLIs — tracked with the open WP29 items.
+
 Raw reports (verbatim, with an erratum on the overstated `session_resume` detail):
 [`release/live-conformance/`](../release/live-conformance/).
 
