@@ -1064,11 +1064,19 @@ async fn run_doctor(
         Err(err) => return abort(json, &format!("failed to load config: {err}")),
     };
 
-    let doctor = Doctor::new(db, Some(paths.root.clone()), policy).with_runtime_context(
-        paths.socket.clone(),
-        repo,
-        paths.project_id,
-    );
+    // The notes report on the layers that actually apply here. Explicit
+    // `--config` flags win when given; otherwise fall back to the implicit
+    // user/project pair the extension launches the daemon with, so a plain
+    // `crewd doctor` still tells the operator which files are in play.
+    let note_layers = if config.is_empty() {
+        config_layer_paths(&repo)
+    } else {
+        config.clone()
+    };
+
+    let doctor = Doctor::new(db, Some(paths.root.clone()), policy)
+        .with_runtime_context(paths.socket.clone(), repo, paths.project_id)
+        .with_config_layers(note_layers);
 
     match doctor.check().await {
         Ok(result) => {
@@ -1087,6 +1095,11 @@ async fn run_doctor(
                     for check in &result.failed_checks {
                         eprintln!("  - {:?}", check);
                     }
+                }
+                // Notes go to stdout, not stderr: they are observations
+                // about a healthy runtime, not diagnostics of a broken one.
+                for note in &result.notes {
+                    println!("note ({}): {}", note.check_name, note.detail);
                 }
             }
             ExitCode::from(if result.healthy { 0 } else { 1 })
