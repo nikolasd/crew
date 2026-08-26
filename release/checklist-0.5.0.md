@@ -38,10 +38,11 @@ SHA-256 checksums, an executable named `crewd`), emitted by `crew-xtask package-
 - [ ] `cargo clippy --all-targets --all-features -- -D warnings`
 - [ ] `cargo fmt --all --check`
 - [ ] `bun run generate --check`
-- [ ] Extension bundle (`packages/extension/dist/index.js`) refreshed via the `refresh-bundle`
-      workflow (builds on ubuntu-latest + pinned Bun 1.3.14 — the same environment `bundle-check`
-      verifies against; the bundle embeds Bun's platform-specific module shim, so a byte-exact
-      rebuild is only possible on linux-x64). Download the `dist-linux-x64` artifact and commit it.
+- [ ] Extension bundle (`packages/extension/dist/index.js`) refreshed in CI's environment:
+      `refresh-bundle` workflow (once merged to `main`) or the container equivalent documented
+      there. The bundle embeds Bun's platform-specific module shim — a darwin-arm64 rebuild does
+      NOT byte-match CI's linux-x64 output (observed on Bun 1.3.14) — so build on linux-x64, the
+      platform `bundle-check` verifies against, and commit the `dist-linux-x64` artifact.
 
 ## Conformance evidence
 
