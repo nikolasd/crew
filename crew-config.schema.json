@@ -1,0 +1,297 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CrewConfig",
+  "description": "The fully resolved crew configuration for a repository.",
+  "type": "object",
+  "properties": {
+    "approval": {
+      "$ref": "#/$defs/ApprovalMode"
+    },
+    "limits": {
+      "$ref": "#/$defs/Limits"
+    },
+    "display": {
+      "$ref": "#/$defs/DisplayConfig"
+    },
+    "adapters": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/AdapterConfig"
+      }
+    },
+    "workspace": {
+      "$ref": "#/$defs/WorkspaceConfig"
+    },
+    "dashboard": {
+      "$ref": "#/$defs/DashboardConfig"
+    },
+    "retention": {
+      "$ref": "#/$defs/RetentionConfig"
+    },
+    "security": {
+      "$ref": "#/$defs/SecurityConfig"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "approval",
+    "limits",
+    "display",
+    "adapters",
+    "workspace",
+    "dashboard",
+    "retention",
+    "security"
+  ],
+  "$defs": {
+    "ApprovalMode": {
+      "description": "When the leader is allowed to act without a human approval gate.",
+      "type": "string",
+      "enum": [
+        "always",
+        "never",
+        "auto"
+      ]
+    },
+    "Limits": {
+      "description": "Concurrency and time ceilings for a crew run.",
+      "type": "object",
+      "properties": {
+        "maxConcurrentWorkers": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "inactivityTimeoutSec": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "totalTimeoutSec": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turnBudgetPerSubtask": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "maxConcurrentWorkers",
+        "inactivityTimeoutSec",
+        "totalTimeoutSec",
+        "turnBudgetPerSubtask"
+      ]
+    },
+    "DisplayConfig": {
+      "description": "Display surface preferences.",
+      "type": "object",
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/DisplayBackend"
+        },
+        "closeOnExit": {
+          "$ref": "#/$defs/CloseOnExit"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "backend",
+        "closeOnExit"
+      ]
+    },
+    "DisplayBackend": {
+      "description": "Which display surface hosts worker panes.",
+      "type": "string",
+      "enum": [
+        "auto",
+        "herdr",
+        "tmux",
+        "osWindow",
+        "hidden"
+      ]
+    },
+    "CloseOnExit": {
+      "description": "When a worker's pane closes relative to its own completion.",
+      "type": "string",
+      "enum": [
+        "never",
+        "onSuccess",
+        "always"
+      ]
+    },
+    "AdapterConfig": {
+      "description": "Per-adapter configuration. The outer map key is the adapter/vendor\nname and is unconstrained (new vendors need no schema change); each\nvalue's own shape is strict.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "bin": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/AdapterMode"
+        },
+        "permissionMode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "profile": {
+          "type": "string"
+        },
+        "sessionDir": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "bin",
+        "mode",
+        "permissionMode",
+        "profile"
+      ]
+    },
+    "AdapterMode": {
+      "description": "Whether a vendor adapter runs its worker attached to a real TUI pane\nor drives a headless protocol adapter.",
+      "type": "string",
+      "enum": [
+        "tui",
+        "headless"
+      ]
+    },
+    "PermissionMode": {
+      "description": "Abstract permission posture, mapped to each vendor's own flags.",
+      "type": "string",
+      "enum": [
+        "max",
+        "default",
+        "readonly"
+      ]
+    },
+    "WorkspaceConfig": {
+      "description": "Workspace isolation defaults and copy-mode ceilings.",
+      "type": "object",
+      "properties": {
+        "defaultMode": {
+          "$ref": "#/$defs/WorkspaceMode"
+        },
+        "copyMaxBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "default": null
+        },
+        "copyMaxFiles": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "default": null
+        },
+        "artifactMaxBytes": {
+          "description": "Ceiling on the artifact store's total bytes; `None` uses\n[`crate::workspace::DEFAULT_ARTIFACT_STORE_MAX_BYTES`].",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "defaultMode"
+      ]
+    },
+    "WorkspaceMode": {
+      "description": "The workspace isolation strategy for a run.",
+      "type": "string",
+      "enum": [
+        "shared",
+        "gitWorktree",
+        "copy"
+      ]
+    },
+    "DashboardConfig": {
+      "description": "The embedded `/crew`-style monitor's own listener.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "port": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "port"
+      ]
+    },
+    "RetentionConfig": {
+      "description": "Run history retention policy.",
+      "type": "object",
+      "properties": {
+        "maxRuns": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "period": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "maxRuns",
+        "period"
+      ]
+    },
+    "SecurityConfig": {
+      "description": "Additional redaction patterns, additive across every layer.",
+      "type": "object",
+      "properties": {
+        "patterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

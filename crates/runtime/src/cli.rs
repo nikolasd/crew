@@ -6,7 +6,7 @@
 //! omitted, and maps [`crate::lifecycle`] outcomes to process exit codes;
 //! all behaviour lives in the library.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -100,6 +100,11 @@ enum Command {
     Version,
     /// Print the canonical JSON Schema document to stdout.
     Schema,
+    /// Inspect or scaffold the crew.json configuration layers.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Audit commands for managing event retention and export.
     Audit {
         #[command(subcommand)]
@@ -201,6 +206,48 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum ConfigCommand {
+    /// Write a starter crew.json (and its schema) for a user or a repository.
+    Init {
+        /// Write to `~/.omp/crew.json` instead of the repository layer.
+        #[arg(long)]
+        global: bool,
+        /// The repository whose `.omp/crew.json` to write. Defaults to the
+        /// current directory. Ignored with `--global`.
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Overwrite an existing crew.json. Without this, an existing file
+        /// is left untouched and the command fails.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print a configuration document to stdout. With no flag, prints the
+    /// effective merged config -- what this repository is actually running.
+    Print {
+        /// The full built-in default snapshot (what `config init` writes).
+        #[arg(long, conflicts_with_all = ["schema", "effective"])]
+        defaults: bool,
+        /// The JSON Schema editors validate and autocomplete crew.json from.
+        #[arg(long, conflicts_with_all = ["defaults", "effective"])]
+        schema: bool,
+        /// The merged result of the layers that actually apply (the default).
+        #[arg(long, conflicts_with_all = ["defaults", "schema"])]
+        effective: bool,
+        /// The repository whose layers `--effective` merges. Defaults to
+        /// the current directory.
+        #[arg(long)]
+        repo: Option<PathBuf>,
+    },
+    /// List the config layer files in precedence order and whether each exists.
+    Path {
+        /// The repository whose project layer to report. Defaults to the
+        /// current directory.
+        #[arg(long)]
+        repo: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
 enum LeaseCommand {
     /// Force-release a workspace lease by id.
     ///
@@ -289,6 +336,7 @@ pub async fn run() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Schema => run_schema().await,
+        Command::Config { command } => run_config(command),
         Command::Audit {
             command:
                 AuditCommand::Export {
@@ -699,6 +747,155 @@ async fn run_monitor(
 }
 
 /// Runs `crewd schema`: prints the canonical JSON Schema document.
+/// The config layer files that apply to `repo`, lowest precedence first.
+/// Mirrors the extension's `resolveCrewConfigPaths` exactly -- the two
+/// must never disagree about which files a daemon is launched with.
+fn config_layer_paths(repo: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        paths.push(PathBuf::from(home).join(".omp").join("crew.json"));
+    }
+    paths.push(repo.join(".omp").join("crew.json"));
+    paths
+}
+
+fn resolve_repo(repo: Option<PathBuf>) -> PathBuf {
+    repo.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+fn run_config(command: ConfigCommand) -> ExitCode {
+    match command {
+        ConfigCommand::Init {
+            global,
+            repo,
+            force,
+        } => run_config_init(global, repo, force),
+        ConfigCommand::Print {
+            defaults,
+            schema,
+            effective: _,
+            repo,
+        } => run_config_print(defaults, schema, repo),
+        ConfigCommand::Path { repo } => run_config_path(repo),
+    }
+}
+
+/// Writes a starter `crew.json` plus its schema, side by side so the
+/// snapshot's relative `$schema` reference resolves in an editor.
+///
+/// Refuses to overwrite an existing crew.json without `--force`: the file
+/// is the operator's, and silently replacing hand-tuned configuration
+/// would be the worst possible failure mode for a convenience command.
+fn run_config_init(global: bool, repo: Option<PathBuf>, force: bool) -> ExitCode {
+    let dir = if global {
+        match std::env::var("HOME") {
+            Ok(home) => PathBuf::from(home).join(".omp"),
+            Err(_) => {
+                eprintln!("error: --global needs HOME to be set");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        resolve_repo(repo).join(".omp")
+    };
+
+    let config_path = dir.join("crew.json");
+    if config_path.exists() && !force {
+        eprintln!(
+            "error: {} already exists; pass --force to overwrite it",
+            config_path.display()
+        );
+        return ExitCode::FAILURE;
+    }
+
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        eprintln!("error: creating {}: {err}", dir.display());
+        return ExitCode::FAILURE;
+    }
+
+    let schema_path = dir.join(crew_runtime::config::crew::SCHEMA_FILE_NAME);
+    if let Err(err) = std::fs::write(
+        &schema_path,
+        crew_runtime::config::crew::render_config_schema(),
+    ) {
+        eprintln!("error: writing {}: {err}", schema_path.display());
+        return ExitCode::FAILURE;
+    }
+    if let Err(err) = std::fs::write(
+        &config_path,
+        crew_runtime::config::crew::render_default_document(),
+    ) {
+        eprintln!("error: writing {}: {err}", config_path.display());
+        return ExitCode::FAILURE;
+    }
+
+    println!("wrote {}", config_path.display());
+    println!("wrote {}", schema_path.display());
+    println!(
+        "\nThis is a full snapshot of today's built-in defaults, so every key in it\n\
+         now overrides the daemon rather than tracking it. Delete any key you do not\n\
+         intend to pin; `crewd doctor` reports the ones that have since diverged."
+    );
+    ExitCode::SUCCESS
+}
+
+fn run_config_print(defaults: bool, schema: bool, repo: Option<PathBuf>) -> ExitCode {
+    if defaults {
+        print!(
+            "{}",
+            String::from_utf8_lossy(&crew_runtime::config::crew::render_default_document())
+        );
+        return ExitCode::SUCCESS;
+    }
+    if schema {
+        print!(
+            "{}",
+            String::from_utf8_lossy(&crew_runtime::config::crew::render_config_schema())
+        );
+        return ExitCode::SUCCESS;
+    }
+
+    let repo = resolve_repo(repo);
+    let paths = config_layer_paths(&repo);
+    let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+    match crew_runtime::config::crew::load_layers(&refs, None) {
+        Ok(cfg) => {
+            let mut text = match serde_json::to_string_pretty(&cfg) {
+                Ok(text) => text,
+                Err(err) => {
+                    eprintln!("error: serializing effective config: {err}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            text.push('\n');
+            print!("{text}");
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Reports which layer files exist, in the order they merge, plus every
+/// key an existing layer pins away from the current built-in default.
+fn run_config_path(repo: Option<PathBuf>) -> ExitCode {
+    let repo = resolve_repo(repo);
+    let paths = config_layer_paths(&repo);
+
+    println!("crew.json layers, lowest precedence first:");
+    for path in &paths {
+        let marker = if path.exists() { "present" } else { "absent " };
+        println!("  [{marker}] {}", path.display());
+    }
+    if !paths.iter().any(|p| p.exists()) {
+        println!("\nNo layer files; the daemon runs on built-in defaults.");
+        println!("Create one with `crewd config init` (or `--global`).");
+    }
+    ExitCode::SUCCESS
+}
+
 async fn run_schema() -> ExitCode {
     // Read the schema file from the protocol package.
     let schema_path = std::path::Path::new("packages/protocol-ts/schema/crew.schema.json");
@@ -867,11 +1064,19 @@ async fn run_doctor(
         Err(err) => return abort(json, &format!("failed to load config: {err}")),
     };
 
-    let doctor = Doctor::new(db, Some(paths.root.clone()), policy).with_runtime_context(
-        paths.socket.clone(),
-        repo,
-        paths.project_id,
-    );
+    // The notes report on the layers that actually apply here. Explicit
+    // `--config` flags win when given; otherwise fall back to the implicit
+    // user/project pair the extension launches the daemon with, so a plain
+    // `crewd doctor` still tells the operator which files are in play.
+    let note_layers = if config.is_empty() {
+        config_layer_paths(&repo)
+    } else {
+        config.clone()
+    };
+
+    let doctor = Doctor::new(db, Some(paths.root.clone()), policy)
+        .with_runtime_context(paths.socket.clone(), repo, paths.project_id)
+        .with_config_layers(note_layers);
 
     match doctor.check().await {
         Ok(result) => {
@@ -890,6 +1095,11 @@ async fn run_doctor(
                     for check in &result.failed_checks {
                         eprintln!("  - {:?}", check);
                     }
+                }
+                // Notes go to stdout, not stderr: they are observations
+                // about a healthy runtime, not diagnostics of a broken one.
+                for note in &result.notes {
+                    println!("note ({}): {}", note.check_name, note.detail);
                 }
             }
             ExitCode::from(if result.healthy { 0 } else { 1 })

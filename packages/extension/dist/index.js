@@ -11534,8 +11534,77 @@ function formatDoctorOutput(result) {
   if (result.unresolved_gates.length > 0) {
     lines.push(`Unresolved gates: ${result.unresolved_gates.join(", ")}`);
   }
+  if (result.notes !== undefined && result.notes.length > 0) {
+    lines.push("Notes:");
+    for (const note of result.notes) {
+      lines.push(`  - ${note.check_name}: ${note.detail}`);
+    }
+  }
   return lines.join(`
 `);
+}
+
+// src/config.ts
+import { spawn as spawn3 } from "child_process";
+var CONFIG_TIMEOUT_MS = 30000;
+function buildConfigArgs(request) {
+  switch (request.op) {
+    case "init": {
+      const args = ["config", "init"];
+      if (request.global === true) {
+        args.push("--global");
+      } else {
+        args.push("--repo", request.repository);
+      }
+      if (request.force === true) {
+        args.push("--force");
+      }
+      return args;
+    }
+    case "print":
+      return ["config", "print", `--${request.document ?? "effective"}`, "--repo", request.repository];
+    case "path":
+      return ["config", "path", "--repo", request.repository];
+  }
+}
+async function runConfigCommand(ctx, request) {
+  const args = buildConfigArgs(request);
+  return new Promise((resolve) => {
+    const proc = spawn3(ctx.crewdPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => proc.kill("SIGKILL"), CONFIG_TIMEOUT_MS);
+    proc.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    proc.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({
+        isError: true,
+        content: [{ type: "text", text: `crew config failed: ${err.message}` }],
+        details: { code: "spawn-failed", message: err.message, op: request.op }
+      });
+    });
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve({
+          content: [{ type: "text", text: stdout.trimEnd() }],
+          details: { op: request.op, output: stdout }
+        });
+        return;
+      }
+      const message = stderr.trim() || `crewd config exited with code ${code}`;
+      resolve({
+        isError: true,
+        content: [{ type: "text", text: `crew config failed: ${message}` }],
+        details: { code: "config-failed", message, op: request.op }
+      });
+    });
+  });
 }
 
 // src/install.ts
@@ -13348,6 +13417,59 @@ function crewExtension(pi) {
         console.log(text);
       } else {
         ctx.ui.notify(text, result.isError ? "error" : "info");
+      }
+    }
+  });
+  const configParams = pi.zod.object({
+    op: pi.zod.enum(["path", "print", "init"]).describe("Which config operation to perform."),
+    document: pi.zod.enum(["effective", "defaults", "schema"]).optional().describe("For op 'print': which document to emit. Defaults to 'effective'."),
+    global: pi.zod.boolean().optional().describe("For op 'init': write ~/.omp/crew.json instead of the repository layer."),
+    force: pi.zod.boolean().optional().describe("For op 'init': overwrite an existing crew.json. Without it, an existing file is left untouched.")
+  });
+  pi.registerTool({
+    name: "crew_config",
+    label: "Crew Config",
+    description: "Use to inspect or scaffold Crew's crew.json configuration. op: 'path' lists which config layers exist and in what precedence order; op: 'print' shows a document (document: 'effective' -- the merged config actually in force, the default -- or 'defaults' / 'schema'); op: 'init' writes a starter crew.json plus its JSON Schema, into <repo>/.omp by default or ~/.omp with global: true. init writes a full snapshot of today's defaults, so every key in it becomes an override; it refuses to overwrite an existing file unless force is true. Use op: 'print' with document: 'effective' when you need to know what setting a run will actually use.",
+    parameters: configParams,
+    approval: (args) => typeof args === "object" && args !== null && ("op" in args) && args.op === "init" ? "write" : "read",
+    async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
+      const { crewdPath } = doctorContextFor(extCtx.cwd);
+      const request = {
+        op: input.op,
+        repository: extCtx.cwd,
+        ...input.document !== undefined ? { document: input.document } : {},
+        ...input.global !== undefined ? { global: input.global } : {},
+        ...input.force !== undefined ? { force: input.force } : {}
+      };
+      return runConfigCommand({ crewdPath, repository: extCtx.cwd }, request);
+    }
+  });
+  pi.registerCommand("crew-config", {
+    description: "Inspect or scaffold crew.json. Usage: /crew-config [path | print [effective|defaults|schema] | init [global] [force]]",
+    handler: async (args, ctx) => {
+      const [op = "path", ...rest] = args.trim().split(/\s+/).filter(Boolean);
+      if (op !== "path" && op !== "print" && op !== "init") {
+        const text2 = `Unknown operation ${op}. Usage: /crew-config [path | print [effective|defaults|schema] | init [global] [force]]`;
+        if (!ctx.hasUI)
+          console.log(text2);
+        else
+          ctx.ui.notify(text2, "error");
+        return;
+      }
+      const request = {
+        op,
+        repository: ctx.cwd,
+        ...op === "print" ? { document: rest[0] ?? "effective" } : {},
+        ...op === "init" ? { global: rest.includes("global"), force: rest.includes("force") } : {}
+      };
+      const { crewdPath } = doctorContextFor(ctx.cwd);
+      const result = await runConfigCommand({ crewdPath, repository: ctx.cwd }, request);
+      const text = result.content.map((block) => block.text).join(`
+`);
+      if (!ctx.hasUI) {
+        console.log(text);
+      } else {
+        ctx.ui.notify(text, result.isError === true ? "error" : "info");
       }
     }
   });

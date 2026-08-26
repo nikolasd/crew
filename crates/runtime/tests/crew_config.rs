@@ -375,3 +375,148 @@ fn missing_layer_file_is_treated_as_absent() {
 
     assert_eq!(cfg, CrewConfig::default());
 }
+
+// ---------------------------------------------------------------- $schema
+
+/// A `$schema` key is what makes editors autocomplete and validate
+/// crew.json. `validate_shape` walks the merged value against the known
+/// top-level keys, so `$schema` has to be an accepted key or every
+/// schema-annotated config fails the launch.
+#[test]
+fn schema_key_is_accepted_at_the_top_level() {
+    let dir = tempdir().unwrap();
+    let layer = write_layer(
+        dir.path(),
+        "crew.json",
+        &json!({ "$schema": "https://example.invalid/crew-config.schema.json" }),
+    );
+
+    let cfg = crew::load_layers(&[layer.as_path()], None)
+        .expect("a $schema annotation must not fail the launch");
+
+    assert_eq!(cfg, CrewConfig::default());
+}
+
+/// `$schema` is an editor annotation, not configuration: it must never
+/// change the resolved config, and two configs differing only by it must
+/// fingerprint identically.
+#[test]
+fn schema_key_does_not_affect_the_resolved_config() {
+    let dir = tempdir().unwrap();
+    let annotated = write_layer(
+        dir.path(),
+        "annotated.json",
+        &json!({ "$schema": "https://example.invalid/s.json", "approval": "never" }),
+    );
+    let plain = write_layer(dir.path(), "plain.json", &json!({ "approval": "never" }));
+
+    let with_schema = crew::load_layers(&[annotated.as_path()], None).unwrap();
+    let without_schema = crew::load_layers(&[plain.as_path()], None).unwrap();
+
+    assert_eq!(with_schema, without_schema);
+    assert_eq!(
+        crew::fingerprint(&with_schema),
+        crew::fingerprint(&without_schema)
+    );
+}
+
+/// A misspelled schema key must still be rejected -- accepting `$schema`
+/// is a single-key allowance, not a hole in unknown-key rejection.
+#[test]
+fn a_misspelled_schema_key_is_still_rejected() {
+    let dir = tempdir().unwrap();
+    let layer = write_layer(dir.path(), "crew.json", &json!({ "$shema": "x" }));
+
+    let err = crew::load_layers(&[layer.as_path()], None)
+        .expect_err("only the exact key $schema is allowed");
+
+    assert!(
+        matches!(err, ConfigError::UnknownKey { ref path } if path == "$shema"),
+        "got {err:?}"
+    );
+}
+
+// ------------------------------------------------- drift against defaults
+
+/// A layer that sets nothing overrides nothing.
+#[test]
+fn an_empty_layer_reports_no_overrides() {
+    assert!(crew::diff_against_defaults(&json!({})).is_empty());
+}
+
+/// A key written at exactly the current built-in default is not an
+/// override -- reporting it would drown the real signal.
+#[test]
+fn a_key_matching_the_current_default_is_not_reported() {
+    let layer = json!({ "limits": { "totalTimeoutSec": 1800 } });
+
+    assert!(crew::diff_against_defaults(&layer).is_empty());
+}
+
+/// The signal the `config_drift` doctor check reports: a key whose value
+/// differs from the current built-in default, named by full JSON path,
+/// carrying both values so the operator can judge it.
+#[test]
+fn a_key_differing_from_the_default_is_reported_with_both_values() {
+    let layer = json!({ "limits": { "totalTimeoutSec": 900 } });
+
+    let drift = crew::diff_against_defaults(&layer);
+
+    assert_eq!(drift.len(), 1, "got {drift:?}");
+    assert_eq!(drift[0].path, "limits.totalTimeoutSec");
+    assert_eq!(drift[0].configured, json!(900));
+    assert_eq!(drift[0].default, json!(1800));
+}
+
+/// Overrides are reported in a stable path order, so the doctor's output
+/// does not reshuffle between runs over the same file.
+#[test]
+fn overrides_are_reported_in_stable_path_order() {
+    let layer = json!({
+        "retention": { "maxRuns": 5 },
+        "approval": "never",
+        "limits": { "maxConcurrentWorkers": 9 },
+    });
+
+    let paths: Vec<String> = crew::diff_against_defaults(&layer)
+        .into_iter()
+        .map(|d| d.path)
+        .collect();
+
+    assert_eq!(
+        paths,
+        vec![
+            "approval".to_string(),
+            "limits.maxConcurrentWorkers".to_string(),
+            "retention.maxRuns".to_string(),
+        ]
+    );
+}
+
+/// `$schema` is an editor annotation with no default counterpart; it must
+/// never be reported as configuration drift.
+#[test]
+fn the_schema_annotation_is_never_reported_as_drift() {
+    let layer = json!({ "$schema": "https://example.invalid/s.json" });
+
+    assert!(crew::diff_against_defaults(&layer).is_empty());
+}
+
+/// A custom adapter has no built-in default to drift from -- it is a
+/// deliberate addition, not a stale pin, so it is not reported.
+#[test]
+fn a_custom_adapter_without_a_builtin_default_is_not_reported() {
+    let layer = json!({ "adapters": { "mistral": { "bin": "mistral" } } });
+
+    assert!(crew::diff_against_defaults(&layer).is_empty());
+}
+
+/// The whole point of the check: a full snapshot written by
+/// `crewd config init` reports nothing today, because every value in it
+/// still equals the built-in default it was generated from.
+#[test]
+fn a_full_default_snapshot_reports_no_drift_when_freshly_generated() {
+    let snapshot = serde_json::to_value(CrewConfig::default()).unwrap();
+
+    assert!(crew::diff_against_defaults(&snapshot).is_empty());
+}

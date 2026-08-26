@@ -66,7 +66,7 @@ pub enum ConfigError {
 }
 
 /// When the leader is allowed to act without a human approval gate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum ApprovalMode {
     Always,
@@ -75,7 +75,7 @@ pub enum ApprovalMode {
 }
 
 /// Concurrency and time ceilings for a crew run.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Limits {
     pub max_concurrent_workers: u32,
@@ -96,7 +96,7 @@ impl Default for Limits {
 }
 
 /// Which display surface hosts worker panes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum DisplayBackend {
     Auto,
@@ -107,7 +107,7 @@ pub enum DisplayBackend {
 }
 
 /// When a worker's pane closes relative to its own completion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum CloseOnExit {
     Never,
@@ -116,7 +116,7 @@ pub enum CloseOnExit {
 }
 
 /// Display surface preferences.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DisplayConfig {
     pub backend: DisplayBackend,
@@ -134,7 +134,7 @@ impl Default for DisplayConfig {
 
 /// Whether a vendor adapter runs its worker attached to a real TUI pane
 /// or drives a headless protocol adapter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum AdapterMode {
     Tui,
@@ -142,7 +142,7 @@ pub enum AdapterMode {
 }
 
 /// Abstract permission posture, mapped to each vendor's own flags.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum PermissionMode {
     Max,
@@ -153,7 +153,7 @@ pub enum PermissionMode {
 /// Per-adapter configuration. The outer map key is the adapter/vendor
 /// name and is unconstrained (new vendors need no schema change); each
 /// value's own shape is strict.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AdapterConfig {
     pub enabled: bool,
@@ -170,7 +170,7 @@ pub struct AdapterConfig {
 }
 
 /// The workspace isolation strategy for a run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum WorkspaceMode {
     Shared,
@@ -179,7 +179,7 @@ pub enum WorkspaceMode {
 }
 
 /// Workspace isolation defaults and copy-mode ceilings.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct WorkspaceConfig {
     pub default_mode: WorkspaceMode,
@@ -205,7 +205,7 @@ impl Default for WorkspaceConfig {
 }
 
 /// The embedded `/crew`-style monitor's own listener.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DashboardConfig {
     pub enabled: bool,
@@ -222,7 +222,7 @@ impl Default for DashboardConfig {
 }
 
 /// Run history retention policy.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RetentionConfig {
     pub max_runs: u32,
@@ -239,7 +239,7 @@ impl Default for RetentionConfig {
 }
 
 /// Additional redaction patterns, additive across every layer.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SecurityConfig {
     #[serde(default)]
@@ -247,7 +247,7 @@ pub struct SecurityConfig {
 }
 
 /// The fully resolved crew configuration for a repository.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CrewConfig {
     pub approval: ApprovalMode,
@@ -336,7 +336,16 @@ fn default_adapters() -> BTreeMap<String, AdapterConfig> {
     adapters
 }
 
+/// The editor-annotation key. Accepted at the top level so a crew.json
+/// can point at its JSON Schema (VS Code and friends autocomplete and
+/// validate from it), but stripped before deserialization: it is an
+/// annotation, never configuration, and must not reach [`CrewConfig`]
+/// (which is `deny_unknown_fields`) or the [`fingerprint`] that
+/// authorizes a run.
+pub const SCHEMA_ANNOTATION_KEY: &str = "$schema";
+
 const TOP_LEVEL_KEYS: &[&str] = &[
+    SCHEMA_ANNOTATION_KEY,
     "approval",
     "limits",
     "display",
@@ -502,7 +511,130 @@ pub fn load_layers(paths: &[&Path], per_run: Option<&Value>) -> Result<CrewConfi
 
     validate_shape(&merged)?;
 
+    // Strip the editor annotation after validation but before deserializing:
+    // `CrewConfig` is `deny_unknown_fields`, and keeping `$schema` would also
+    // leak an editor detail into `fingerprint`, making two structurally
+    // identical policies authorize as different ones.
+    if let Value::Object(map) = &mut merged {
+        map.remove(SCHEMA_ANNOTATION_KEY);
+    }
+
     serde_json::from_value(merged).map_err(|source| ConfigError::Deserialize(source.to_string()))
+}
+
+/// The file name a generated crew.json's `$schema` points at, and the
+/// name `crewd config init` writes the schema out under, so the two land
+/// side by side and the relative reference resolves in an editor.
+pub const SCHEMA_FILE_NAME: &str = "crew-config.schema.json";
+
+/// The full default snapshot document, `$schema` first so the annotation
+/// is the first thing a reader (and an editor) sees.
+///
+/// This is what `crewd config init` writes and `crewd config print
+/// --defaults` emits, and it is byte-for-byte the committed
+/// `crew.default.json` at the repository root.
+#[must_use]
+pub fn default_document() -> Value {
+    let mut doc = serde_json::Map::new();
+    doc.insert(
+        SCHEMA_ANNOTATION_KEY.to_string(),
+        Value::String(format!("./{SCHEMA_FILE_NAME}")),
+    );
+    let defaults =
+        serde_json::to_value(CrewConfig::default()).expect("CrewConfig::default() serializes");
+    let Value::Object(default_map) = defaults else {
+        unreachable!("CrewConfig serializes to a JSON object")
+    };
+    for (key, value) in default_map {
+        doc.insert(key, value);
+    }
+    Value::Object(doc)
+}
+
+/// Pretty-printed, newline-terminated bytes of [`default_document`].
+#[must_use]
+pub fn render_default_document() -> Vec<u8> {
+    let mut text =
+        serde_json::to_string_pretty(&default_document()).expect("default document serializes");
+    text.push('\n');
+    text.into_bytes()
+}
+
+/// Pretty-printed, newline-terminated JSON Schema for [`CrewConfig`].
+///
+/// Mirrors `crew_protocol::render_schema`'s shape so both generated
+/// schema documents are produced and compared the same way.
+#[must_use]
+pub fn render_config_schema() -> Vec<u8> {
+    let schema = schemars::schema_for!(CrewConfig);
+    let mut text = serde_json::to_string_pretty(&schema).expect("config schema serializes");
+    text.push('\n');
+    text.into_bytes()
+}
+
+/// One key a config layer sets to a value that is not the current
+/// built-in default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefaultOverride {
+    /// Full JSON path, e.g. `limits.totalTimeoutSec`.
+    pub path: String,
+    /// What the layer sets it to.
+    pub configured: Value,
+    /// What [`CrewConfig::default`] currently says.
+    pub default: Value,
+}
+
+/// Reports every leaf in `layer` whose value differs from the current
+/// built-in default, in stable path order.
+///
+/// This is deliberately "differs from today's default", not "the user did
+/// not mean it" -- the two are indistinguishable on disk, because a value
+/// frozen by `crewd config init` and a value typed on purpose are byte
+/// identical. Reporting the difference is what makes a stale pin visible
+/// at all: a file generated against an older `CrewConfig::default` starts
+/// reporting the moment a default moves under it.
+///
+/// A path with no default counterpart (the `$schema` annotation, a custom
+/// adapter entry) is skipped: there is nothing to have drifted from.
+#[must_use]
+pub fn diff_against_defaults(layer: &Value) -> Vec<DefaultOverride> {
+    let defaults =
+        serde_json::to_value(CrewConfig::default()).expect("CrewConfig::default() serializes");
+    let mut found = Vec::new();
+    collect_overrides(layer, &defaults, "", &mut found);
+    // `serde_json` is built with `preserve_order` here, so map iteration is
+    // insertion order -- sort explicitly rather than inheriting whatever
+    // order the operator happened to type their file in.
+    found.sort_by(|a, b| a.path.cmp(&b.path));
+    found
+}
+
+/// Recursive worker for [`diff_against_defaults`]. Descends only where
+/// both sides are objects; a key absent from `defaults` has nothing to
+/// have drifted from and is skipped along with its whole subtree.
+fn collect_overrides(layer: &Value, defaults: &Value, path: &str, out: &mut Vec<DefaultOverride>) {
+    let (Value::Object(layer_map), Value::Object(default_map)) = (layer, defaults) else {
+        if layer != defaults {
+            out.push(DefaultOverride {
+                path: path.to_string(),
+                configured: layer.clone(),
+                default: defaults.clone(),
+            });
+        }
+        return;
+    };
+
+    for (key, layer_val) in layer_map {
+        let Some(default_val) = default_map.get(key) else {
+            continue;
+        };
+        let child_path = if path.is_empty() {
+            key.clone()
+        } else {
+            format!("{path}.{key}")
+        };
+        collect_overrides(layer_val, default_val, &child_path, out);
+    }
 }
 
 /// Computes a SHA-256 fingerprint of `cfg` over canonical JSON bytes, so
