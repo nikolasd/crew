@@ -19,6 +19,7 @@ import { OMP_NATIVE_FACT_ENTRY_TYPE, persistedCorrelations, persistedFacts, type
 import { OmpNativeReconciler, createOmpProcessEpoch, reconcileAcrossRestart, reconcileWithRuntime } from "./omp-native/reconcile";
 import { resolveClient, getRuntimeStatus, type GetRuntimeStatusContext } from "./status";
 import { runDoctorCommand, buildDoctorContext, type DoctorContext } from "./doctor";
+import { runConfigCommand, type ConfigDocument, type ConfigRequest } from "./config";
 import { installRuntimeForEnv } from "./install";
 import { registerOrchestrationTools } from "./tools";
 import { registerMonitor } from "./monitor/controller";
@@ -112,6 +113,62 @@ export default function crewExtension(pi: ExtensionAPI): void {
         console.log(text);
       } else {
         ctx.ui.notify(text, result.isError ? "error" : "info");
+      }
+    },
+  });
+
+  const configParams = pi.zod.object({
+    op: pi.zod.enum(["path", "print", "init"]).describe("Which config operation to perform."),
+    document: pi.zod.enum(["effective", "defaults", "schema"]).optional().describe("For op 'print': which document to emit. Defaults to 'effective'."),
+    global: pi.zod.boolean().optional().describe("For op 'init': write ~/.omp/crew.json instead of the repository layer."),
+    force: pi.zod.boolean().optional().describe("For op 'init': overwrite an existing crew.json. Without it, an existing file is left untouched."),
+  });
+
+  pi.registerTool({
+    name: "crew_config",
+    label: "Crew Config",
+    description:
+      "Use to inspect or scaffold Crew's crew.json configuration. op: 'path' lists which config layers exist and in what precedence order; op: 'print' shows a document (document: 'effective' -- the merged config actually in force, the default -- or 'defaults' / 'schema'); op: 'init' writes a starter crew.json plus its JSON Schema, into <repo>/.omp by default or ~/.omp with global: true. init writes a full snapshot of today's defaults, so every key in it becomes an override; it refuses to overwrite an existing file unless force is true. Use op: 'print' with document: 'effective' when you need to know what setting a run will actually use.",
+    parameters: configParams,
+    // `init` writes files the operator owns; reads stay cheap.
+    approval: (args) => (typeof args === "object" && args !== null && "op" in args && args.op === "init" ? "write" : "read"),
+    async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
+      const { crewdPath } = doctorContextFor(extCtx.cwd);
+      const request = {
+        op: input.op,
+        repository: extCtx.cwd,
+        ...(input.document !== undefined ? { document: input.document as ConfigDocument } : {}),
+        ...(input.global !== undefined ? { global: input.global } : {}),
+        ...(input.force !== undefined ? { force: input.force } : {}),
+      } as ConfigRequest;
+      return runConfigCommand({ crewdPath, repository: extCtx.cwd }, request);
+    },
+  });
+
+  pi.registerCommand("crew-config", {
+    description: "Inspect or scaffold crew.json. Usage: /crew-config [path | print [effective|defaults|schema] | init [global] [force]]",
+    handler: async (args, ctx) => {
+      const [op = "path", ...rest] = args.trim().split(/\s+/).filter(Boolean);
+      if (op !== "path" && op !== "print" && op !== "init") {
+        const text = `Unknown operation ${op}. Usage: /crew-config [path | print [effective|defaults|schema] | init [global] [force]]`;
+        if (!ctx.hasUI) console.log(text);
+        else ctx.ui.notify(text, "error");
+        return;
+      }
+      const request = {
+        op,
+        repository: ctx.cwd,
+        ...(op === "print" ? { document: (rest[0] as ConfigDocument) ?? "effective" } : {}),
+        ...(op === "init" ? { global: rest.includes("global"), force: rest.includes("force") } : {}),
+      } as ConfigRequest;
+
+      const { crewdPath } = doctorContextFor(ctx.cwd);
+      const result = await runConfigCommand({ crewdPath, repository: ctx.cwd }, request);
+      const text = result.content.map((block) => block.text).join("\n");
+      if (!ctx.hasUI) {
+        console.log(text);
+      } else {
+        ctx.ui.notify(text, result.isError === true ? "error" : "info");
       }
     },
   });
