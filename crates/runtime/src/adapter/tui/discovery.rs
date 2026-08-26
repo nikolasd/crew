@@ -11,9 +11,11 @@ use std::time::{Duration, SystemTime};
 /// to create/flush its transcript.
 const DISCOVERY_POLL: Duration = Duration::from_millis(150);
 
-/// Recursion bound below the session root (vendors nest at most one or
-/// two directory levels; a runaway symlink farm must not be walked).
-const MAX_DEPTH: usize = 3;
+/// Deepest directory nesting scanned below the transcript root. Codex is
+/// the deepest built-in layout: `~/.codex/sessions/YYYY/MM/DD/*.jsonl` --
+/// three date directories plus the rollout file -- so 4 covers it with the
+/// other vendors' flat/slug layouts to spare.
+const MAX_DEPTH: usize = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DiscoveryError {

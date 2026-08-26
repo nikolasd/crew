@@ -47,7 +47,7 @@ impl EnvironmentPolicy {
         extra_allowed: &[String],
     ) -> HashMap<String, String> {
         let extra: HashSet<&str> = extra_allowed.iter().map(String::as_str).collect();
-        current_env
+        let mut env: HashMap<String, String> = current_env
             .iter()
             .filter(|(name, _)| {
                 self.base_names.contains(name.as_str())
@@ -55,7 +55,21 @@ impl EnvironmentPolicy {
                     || extra.contains(name.as_str())
             })
             .map(|(name, value)| (name.clone(), value.clone()))
-            .collect()
+            .collect();
+        // A supervised TUI vendor (claude/codex/copilot/omp-rpc) needs a real
+        // terminal type to render and accept input. `TERM=dumb` (or unset)
+        // makes Ink-based REPLs establish no session file, so substitute a
+        // safe default rather than propagating the degenerate value.
+        match env.get("TERM").map(String::as_str) {
+            Some(t) if t.is_empty() || t == "dumb" || t == "unknown" => {
+                env.insert("TERM".to_string(), "xterm-256color".to_string());
+            }
+            None => {
+                env.insert("TERM".to_string(), "xterm-256color".to_string());
+            }
+            _ => {}
+        }
+        env
     }
 }
 

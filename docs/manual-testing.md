@@ -589,6 +589,60 @@ and verifies `crew_task`/`crew_peers`/`crew_send`/`crew_request_child`/
 verified descendant of the same live vendor process may reconnect).
 
 
+### 4f. TUI pane attach + out-of-band input (journal check needs no model call)
+
+All four adapters (claude, codex, copilot, omp-rpc) default to **TUI mode**: each worker runs as the real vendor CLI spawned on a PTY inside a pane owned by a display backend (herdr / tmux / terminal). A viewer (or the harness) can type into that pane. Every burst of keystrokes written to a pane is journaled as a `RuntimeEvent::OutOfBandInput { backend, pane_ref }` — the keystrokes themselves are never recorded, only that input happened and on which pane — and the run's `needsReconciliation` flag is set. This is the redaction-boundary guarantee for interactive control: a human steering a live run leaves an auditable trace without leaking typed content.
+
+Manual check (observing the journal needs no model call; only *starting* the run does):
+
+```bash
+export OMP_CREW_BINARY="$PWD/target/debug/crewd"
+EXT="$PWD/packages/extension/dist/index.js"
+
+# Terminal A: start a daemon + a TUI run against one of the four adapters,
+# then leave it open. See plugin-usage.md for the exact run tool.
+omp --extension "$EXT"
+
+# Terminal B: tail the journal for the OutOfBandInput event
+crewd monitor --repo "$PWD" --state-dir "$HOME/.omp/crew" | grep -i OutOfBandInput
+```
+
+Attach to the run's pane via the active display backend (e.g. `tmux attach -t <pane-ref>` for tmux, or the herdr/terminal viewer), type a few characters, and confirm:
+- Terminal B shows one `OutOfBandInput` event per pane-write burst, carrying only `backend` + `pane_ref` — **no keystroke text**.
+- The run's `needsReconciliation` flips true (visible via `/crew` after a `crew_reconcile`, or `crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl` and grep for the flag).
+
+#### 4f.1 TUI live conformance harness
+
+`crewd conformance --live --mode tui` walks the scenario set against the real interactive vendor CLIs on a PTY (the default `--mode` is `tui`; `--mode headless` reaches each adapter's kept non-interactive live report). `--adapter` takes `all` or one of `claude`, `codex`, `copilot`, `ompRpc`; `--output <path>` writes the JSON report.
+
+```bash
+# billed model calls for claude/codex/copilot; omp-rpc reaches a model only when a turn runs
+CREW_DISABLE_VENDOR_CLI=0 CREW_LIVE_CWD=/tmp/crew-smoke-proj \
+  ./target/debug/crewd conformance --live --mode tui --adapter all --output /tmp/live.json
+```
+
+Observed per-vendor outcomes (this release):
+- `probe` — **pass**: real vendor CLI reachable, declared capabilities intact, adapter spawns it on a PTY.
+- `cancellation_scope` — **pass**: `cancel(CancelScope::Worker)` terminates the vendor process and a `ProcessExited` is journaled.
+- `read_only_start_and_progress` / `follow_up` — **pass for claude and omp-rpc**; codex passed
+  both earlier the same day and is currently blocked by an explicit vendor credit wall
+  (`usage_limit_exceeded` recorded in its rollout); copilot's turns are refused with an explicit
+  monthly-quota error after submit+discovery were proven. The original failures were never a
+  "vendor limitation": the adapter typed the prompt and its Enter as one atomic write at a fixed
+  moment after spawn. Whether the vendor's TUI processes that Enter depends on where its render
+  loop is when the bytes land -- too early (stdin not yet wired) or mid-layout and the CR is
+  swallowed; machine load shifts that timeline, which is why identical bytes submitted on some
+  runs and not others. The fix is in `crates/runtime/src/adapter/tui/adapter.rs`: two-phase
+  delivery (text once stdin is wired, Enter only after `ENTER_IDLE_MIN` output silence), plus a
+  150ms text-to-Enter gap on queue-style sends (an atomic `text\r` is swallowed whole by codex).
+  If a scenario fails, check the vendor's own session store first: `~/.claude/projects/`,
+  `~/.codex/sessions/`, `~/.copilot/session-state/` (note: current copilot versions write
+  `<session-id>/events.jsonl` inside per-session directories, not flat files),
+  `~/.omp/agent/sessions/<raw-cwd-slug>/` (omp slugs the cwd as given; it does not resolve
+  `/tmp` to `/private/tmp` the way claude does). A rollout/session file containing your prompt
+  but no assistant reply means billing, not the adapter.
+- `session_resume` — **skipped**: a single-process resume is not a daemon restart; genuine restart recovery is proven by the separate serve→stop→serve end-to-end smoke, not this report.
+
 ## 5. Cross-agent workspace isolation (requires a real adapter)
 
 This section verifies that two parallel runs execute in separate git worktrees, each with its own

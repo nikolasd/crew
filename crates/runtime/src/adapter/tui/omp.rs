@@ -162,25 +162,33 @@ impl TuiVendor for OmpTuiVendor {
     }
 
     /// `cfg.session_dir` overrides everything; otherwise
-    /// `~/.omp/agent/sessions/<slug_cwd(canonicalized self.cwd)>` --
-    /// observed on a real install, where each project directory nests
-    /// its sessions (`-Personal-Repos-batman/<timestamp>_<uuid>.jsonl`)
-    /// using the same `/`-and-`.`-to-`-` slug as Claude's projects root
-    /// (confirmed against live dirs, including a worktree path whose
-    /// leading `.claude` segment slugged to `-claude`). `$HOME`
-    /// unresolved falls back to `/root`; canonicalization failure falls
-    /// back to the raw cwd, exactly like Claude's vendor.
+    /// `~/.omp/agent/sessions/<slug_cwd(self.cwd)>`. The slug is built from
+    /// the cwd EXACTLY AS GIVEN: omp does not resolve symlinks the way
+    /// claude does, so on macOS `/tmp/foo` nests under `-tmp-foo`, never
+    /// `-private-tmp-foo` (observed on a real install). Because operator
+    /// configs legitimately contain symlinked paths while old sessions may
+    /// exist under either spelling, both candidates are derived and an
+    /// existing directory wins; with neither present (fresh project) the
+    /// raw-cwd slug is returned -- the directory omp itself will create.
     fn transcript_root(&self, _spec: &StartSpec, cfg: &AdapterConfig) -> PathBuf {
         if let Some(dir) = &cfg.session_dir {
             return PathBuf::from(dir);
         }
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-        let canonical_cwd = std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone());
-        PathBuf::from(home)
+        let base = PathBuf::from(home)
             .join(".omp")
             .join("agent")
-            .join("sessions")
-            .join(slug_cwd(&canonical_cwd))
+            .join("sessions");
+        let raw_slug = slug_cwd(&self.cwd);
+        let canonical = std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone());
+        let canonical_slug = slug_cwd(&canonical);
+        for slug in [&raw_slug, &canonical_slug] {
+            let candidate = base.join(slug);
+            if candidate.is_dir() {
+                return candidate;
+            }
+        }
+        base.join(raw_slug)
     }
 
     /// Unlike Claude, an OMP session's *filename* is not its session id:

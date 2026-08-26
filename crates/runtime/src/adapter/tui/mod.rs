@@ -39,6 +39,10 @@ pub use tailer::{TailerHandle, TranscriptTailer};
 
 use crate::config::crew::{AdapterConfig, CloseOnExit};
 use crate::display::DisplayRegistry;
+use std::time::Duration;
+
+use crate::adapter::event_sink::{AdapterEvent, AdapterEventPayload, AdapterEventSink};
+use crate::conformance::ConformanceReport;
 
 /// Static, daemon-lifetime inputs a real [`TuiVendor`] impl needs beyond
 /// what its own trait methods compute -- threaded into
@@ -236,6 +240,331 @@ impl TuiEvent {
 #[must_use]
 pub fn last_emitting_index(events: &[TuiEvent]) -> Option<usize> {
     events.iter().rposition(TuiEvent::emits_a_payload)
+}
+
+/// Shared live (real-vendor-CLI) conformance harness for every TUI adapter.
+///
+/// Spawns the *real* vendor binary (never a `/bin/sh` double) on a real PTY
+/// and runs the scenarios that can only be proven against the live CLI: the
+/// TUI control plane actually discovers the vendor's own transcript and
+/// tailers a normalized message back. This is the WP29 "real TUI spawn on
+/// PTY -> prompt injection -> transcript discovery -> >=1 normalized message"
+/// smoke, exercised per vendor.
+///
+/// `CREW_DISABLE_VENDOR_CLI=1` forbids the spawn, so this returns `Err` and
+/// `run_live_conformance` reports it as a soft `{passed:false}` entry rather
+/// than failing the whole command.
+///
+/// `resume`/`runtime-restart` are **not** claimed here: a single-process
+/// resume is not a daemon restart. Genuine restart recovery is proven by the
+/// separate serve->stop->serve end-to-end smoke (WP29), not this report.
+/// Resolves the working directory a live vendor CLI is launched in during a
+/// `crewd conformance --live` smoke. Real vendor CLIs (claude in
+/// particular) refuse to persist a session transcript under the system
+/// temp dir (`std::env::temp_dir()` -> `/private/var/folders/...` on macOS),
+/// so this prefers an operator-supplied `CREW_LIVE_CWD` (a real project
+/// directory) and falls back to the process cwd, never the unsafe system
+/// temp dir. The vendor's `transcript_root` slugs by exactly this path, so
+/// it must match where the spawned process actually writes.
+pub(crate) fn live_project_cwd() -> PathBuf {
+    std::env::var("CREW_LIVE_CWD")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp")))
+}
+
+/// Any normalized assistant message surfaced by the transcript tailer --
+/// [`AdapterEventPayload::MessageFinal`] for statement replies,
+/// [`AdapterEventPayload::QuestionDetected`] for the question-form replies
+/// these live prompts deliberately elicit ("...then ask me one short
+/// question"). Both prove exactly what the scenarios assert: a full vendor
+/// turn reached the real CLI and was tailed back out of its own transcript.
+fn is_assistant_message(payload: &AdapterEventPayload) -> bool {
+    matches!(
+        payload,
+        AdapterEventPayload::MessageFinal { .. } | AdapterEventPayload::QuestionDetected { .. }
+    )
+}
+
+pub(crate) async fn live_tui_report<V>(
+    vendor: V,
+    label: &str,
+    bin: &str,
+) -> Result<ConformanceReport, String>
+where
+    V: TuiVendor + 'static,
+{
+    use crate::adapter::r#trait::{Adapter, AdapterMessage, CancelScope, StartSpec};
+    use crate::config::crew::{AdapterMode, PermissionMode};
+    use crate::conformance::report::AdapterKindLabel;
+    use crate::conformance::{ConformanceMode, ScenarioResult, scenario};
+    use crate::db::DatabaseHandle;
+    use crate::display::{DisplayRegistry, HiddenDisplay, PaneCoordinator};
+    use crate::supervisor::EscalationTimings;
+    use crew_protocol::{DisplayConfig, DisplayPlacement, ProjectId, RunId, TaskId, WorkerId};
+    if crate::conformance::vendor_cli_invocation_disabled() {
+        return Err(format!(
+            "real vendor CLI invocation is disabled (CREW_DISABLE_VENDOR_CLI=1); run live \
+             conformance with the variable unset to exercise the real {bin} TUI flow"
+        ));
+    }
+
+    let dir = tempfile::Builder::new()
+        .prefix("bat-tui-live-")
+        .tempdir_in("/tmp")
+        .map_err(|e| format!("create temp dir: {e}"))?;
+    let dir_path = dir.path().to_path_buf();
+    let db = Arc::new(
+        DatabaseHandle::start(dir_path.join("state.db"))
+            .await
+            .map_err(|e| format!("start database: {e}"))?,
+    );
+    let mut registry = DisplayRegistry::new();
+    registry.register(Box::new(HiddenDisplay::new(DisplayConfig::default())));
+    let (events_tx, _rx) = tokio::sync::broadcast::channel(64);
+    let panes_dir = dir_path.join("panes");
+    std::fs::create_dir_all(&panes_dir).map_err(|e| format!("create panes dir: {e}"))?;
+    let pane_coordinator = Arc::new(PaneCoordinator::new(
+        Arc::new(registry),
+        Arc::clone(&db),
+        ProjectId::new(),
+        events_tx,
+        PathBuf::from("/opt/crew/bin/crewd"),
+        dir_path.clone(),
+        dir_path.clone(),
+    ));
+
+    // Live mode leaves `session_dir` unset: real vendor CLIs write
+    // transcripts under their own default roots (the WP28 empirical roots --
+    // ~/.claude/projects/<slug>, ~/.codex/sessions, ~/.copilot/session-state,
+    // ~/.omp/agent/sessions/<slug>), not a temp path. `transcript_root`
+    // then resolves to the real root and discovery filters by the injected
+    // nonce + mtime, so the right transcript is found without redirecting
+    // the vendor's storage. Redirecting to a temp dir would leave discovery
+    // scanning an empty directory.
+    let cfg = AdapterConfig {
+        enabled: true,
+        bin: bin.to_string(),
+        mode: AdapterMode::Tui,
+        permission_mode: PermissionMode::Max,
+        model: None,
+        profile: "conformance".to_string(),
+        session_dir: None,
+        extra_args: Vec::new(),
+    };
+
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let worker_id = WorkerId::new();
+    let adapter = TuiAdapter::new(
+        vendor,
+        cfg,
+        run_id,
+        task_id,
+        worker_id,
+        Arc::clone(&pane_coordinator),
+        panes_dir,
+        DisplayPlacement::SplitRight,
+        None,
+        CloseOnExit::Always,
+        TuiTimings {
+            readiness_quiet: Duration::from_millis(300),
+            readiness_cap: Duration::from_secs(8),
+            discovery_timeout: Duration::from_secs(120),
+            tailer_poll: Duration::from_millis(100),
+            submit_idle: Duration::from_secs(10),
+            escalation: EscalationTimings::default(),
+        },
+        ResumeContext::default(),
+    );
+    let declared = adapter.capabilities();
+
+    let probe = match adapter.probe().await {
+        Ok(_) => ScenarioResult::pass(
+            scenario::PROBE,
+            format!("probe reached the real {bin} CLI; declared capabilities intact"),
+        ),
+        Err(err) => ScenarioResult::fail(
+            scenario::PROBE,
+            format!("probe of real {bin} CLI failed: {err}"),
+        ),
+    };
+
+    let sink = Arc::new(LiveCollectingSink::default());
+    let spec = StartSpec {
+        run_id,
+        task_id,
+        worker_id,
+        prompt: "Say hi, then ask me one short question.".to_string(),
+        resume: None,
+    };
+    let start_result = adapter.start(spec, sink.clone()).await;
+
+    let saw_started = sink
+        .wait_for(
+            |p| matches!(p, AdapterEventPayload::ProcessStarted { .. }),
+            Duration::from_secs(10),
+        )
+        .await;
+    let saw_session = sink
+        .wait_for(
+            |p| matches!(p, AdapterEventPayload::VendorSessionEstablished { .. }),
+            Duration::from_secs(15),
+        )
+        .await;
+    let saw_msg = sink
+        .wait_for(is_assistant_message, Duration::from_secs(90))
+        .await;
+
+    let read_only = if matches!(start_result, Ok(())) && saw_started && saw_session && saw_msg {
+        ScenarioResult::pass(
+            scenario::READ_ONLY_START_AND_PROGRESS,
+            format!(
+                "real {bin} spawned on a PTY, VendorSessionEstablished observed, and >=1 \
+                 normalized assistant message tailed from the vendor's own transcript"
+            ),
+        )
+    } else {
+        ScenarioResult::fail(
+            scenario::READ_ONLY_START_AND_PROGRESS,
+            format!(
+                "start={start_result:?} started={saw_started} session={saw_session} \
+                 first_message={saw_msg}"
+            ),
+        )
+    };
+
+    let before = sink.count(is_assistant_message).await;
+    let follow_up = adapter
+        .send(AdapterMessage::FollowUp {
+            text: "a follow-up message".to_string(),
+        })
+        .await;
+    // Require a *newly appended* assistant message, not one the first
+    // prompt already produced -- otherwise the assertion is vacuous.
+    let saw_ack = sink
+        .wait_until(
+            |payloads| payloads.iter().filter(|p| is_assistant_message(p)).count() > before,
+            Duration::from_secs(90),
+        )
+        .await;
+    let follow_up_scenario = match (follow_up, saw_ack) {
+        (Ok(()), true) => ScenarioResult::pass(
+            scenario::FOLLOW_UP,
+            "send(FollowUp) wrote composed bytes to the pty and a fresh normalized message was \
+             tailed back from the real CLI -- delivery mechanism proven end to end",
+        ),
+        (result, saw_ack) => ScenarioResult::fail(
+            scenario::FOLLOW_UP,
+            format!("send() result={result:?} saw_ack={saw_ack}"),
+        ),
+    };
+
+    let cancel_outcome =
+        tokio::time::timeout(Duration::from_secs(15), adapter.cancel(CancelScope::Worker)).await;
+    let exited = sink
+        .wait_for(
+            |p| matches!(p, AdapterEventPayload::ProcessExited { .. }),
+            Duration::from_secs(15),
+        )
+        .await;
+    let cancel_scenario = match (cancel_outcome, exited) {
+        (Ok(Ok(())), true) => ScenarioResult::pass(
+            scenario::CANCELLATION_SCOPE,
+            "cancel(CancelScope::Worker) signalled termination and a ProcessExited was journaled \
+             once the exit watcher observed it",
+        ),
+        (outcome, exited) => ScenarioResult::fail(
+            scenario::CANCELLATION_SCOPE,
+            format!("cancel outcome={outcome:?} exited={exited}"),
+        ),
+    };
+
+    let resume_restart = ScenarioResult::skip(
+        scenario::SESSION_RESUME,
+        "live mode: a single-process resume is not a daemon restart; genuine restart recovery is \
+         proven by the separate serve->stop->serve end-to-end smoke (WP29), not this report",
+    );
+
+    let scenarios = vec![
+        probe,
+        read_only,
+        follow_up_scenario,
+        cancel_scenario,
+        resume_restart,
+    ];
+
+    let _ = adapter.dispose().await;
+    db.shutdown().await.ok();
+
+    Ok(ConformanceReport::new(
+        AdapterKindLabel::custom(label),
+        ConformanceMode::Live,
+        None,
+        declared,
+        scenarios,
+    ))
+}
+
+#[derive(Default)]
+struct LiveCollectingSink(tokio::sync::Mutex<Vec<AdapterEvent>>);
+
+impl LiveCollectingSink {
+    async fn payloads(&self) -> Vec<AdapterEventPayload> {
+        self.0
+            .lock()
+            .await
+            .iter()
+            .map(|e| e.payload.clone())
+            .collect()
+    }
+
+    async fn wait_for(
+        &self,
+        pred: impl Fn(&AdapterEventPayload) -> bool + Copy,
+        timeout: Duration,
+    ) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if self.payloads().await.iter().any(pred) {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    async fn count(&self, pred: impl Fn(&AdapterEventPayload) -> bool + Copy) -> usize {
+        self.payloads().await.iter().filter(|p| pred(p)).count()
+    }
+
+    async fn wait_until(
+        &self,
+        pred: impl Fn(&[AdapterEventPayload]) -> bool + Copy,
+        timeout: Duration,
+    ) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if pred(&self.payloads().await) {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+}
+
+impl AdapterEventSink for LiveCollectingSink {
+    fn emit(&self, event: AdapterEvent) -> crate::adapter::AdapterFuture<'_, u64> {
+        Box::pin(async move {
+            let mut events = self.0.lock().await;
+            events.push(event);
+            Ok(events.len() as u64)
+        })
+    }
 }
 
 #[cfg(test)]
