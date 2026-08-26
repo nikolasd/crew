@@ -38,7 +38,10 @@ SHA-256 checksums, an executable named `crewd`), emitted by `crew-xtask package-
 - [ ] `cargo clippy --all-targets --all-features -- -D warnings`
 - [ ] `cargo fmt --all --check`
 - [ ] `bun run generate --check`
-- [ ] Release Dry-Run build (4 platforms) green
+- [ ] Extension bundle (`packages/extension/dist/index.js`) refreshed via the `refresh-bundle`
+      workflow (builds on ubuntu-latest + pinned Bun 1.3.14 — the same environment `bundle-check`
+      verifies against; the bundle embeds Bun's platform-specific module shim, so a byte-exact
+      rebuild is only possible on linux-x64). Download the `dist-linux-x64` artifact and commit it.
 
 ## Conformance evidence
 
