@@ -7,6 +7,7 @@
 //! reaps or kills the processes it spawns so no orphans survive.
 
 use std::io::Read;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -16,8 +17,8 @@ use crew_runtime::lifecycle::should_idle_shutdown;
 use serde_json::Value;
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::UnixStream as AsyncUnixStream;
+use tokio::net::unix::OwnedWriteHalf;
 
 const CREWD: &str = env!("CARGO_BIN_EXE_crewd");
 
@@ -31,7 +32,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let state = tempfile::Builder::new()
-            .prefix("bat-lc-s-")
+            .prefix("cl")
             .tempdir_in("/tmp")
             .unwrap();
         let repo = tempfile::Builder::new()
@@ -60,6 +61,11 @@ impl Fixture {
         if let Some(seconds) = idle_seconds {
             cmd.arg("--idle-seconds").arg(seconds.to_string());
         }
+        cmd
+    }
+    fn serve_with_config(&self, config: &Path, idle_seconds: Option<u64>) -> Command {
+        let mut cmd = self.serve(idle_seconds);
+        cmd.arg("--config").arg(config);
         cmd
     }
 
@@ -494,7 +500,10 @@ impl IpcClient {
     async fn connect(path: &Path) -> Self {
         let stream = AsyncUnixStream::connect(path).await.unwrap();
         let (read, writer) = stream.into_split();
-        Self { reader: BufReader::new(read), writer }
+        Self {
+            reader: BufReader::new(read),
+            writer,
+        }
     }
 
     async fn send(&mut self, value: &Value) {
@@ -542,26 +551,180 @@ impl IpcClient {
     }
 }
 
-/// The last unproven integration seam from WP29: a *real* `crewd` OS process
-/// serves, an OMP client journals a task transcript over the real IPC socket,
-/// the process is gracefully stopped and a *fresh* `crewd` process is started
-/// on the same state dir (a genuine daemon restart), and a new IPC client can
-/// still read back the original task and its journaled transcript. This
-/// exercises the full process + socket + persistence + restart boundary that
-/// the in-process `recovery.rs` tests and the database-reopen test do not.
+/// A fake `claude` binary that passes the daemon's `version_gate` (answers
+/// `--version` with a tested-range version) and, on a fresh start, journals a
+/// transcript turn when a `[crew:` prompt is injected -- so a real
+/// `run/submit` drives the vendor-task path with no billed CLI. Mirrors
+/// `tests/tui_claude_registry.rs`'s fake claude (minus the nonce branch this
+/// test never exercises).
+fn write_fake_claude_script(scripts_dir: &Path, session_dir: &Path) -> PathBuf {
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "2.1.241 (Claude Code)"
+  exit 0
+fi
+echo "Welcome to Claude Code!"
+SESSION_ID="11111111-1111-4111-8111-000000000099"
+TRANSCRIPT="{session_dir}/$SESSION_ID.jsonl"
+if [ "$1" = "--resume" ]; then
+  ( sleep 0.3; printf '%s\n' '{{"type":"assistant","sessionId":"'"$SESSION_ID"'","timestamp":"2026-01-01T00:00:30Z","message":{{"content":[{{"type":"text","text":"post-resume answer"}}]}}}}' >> "$TRANSCRIPT" ) &
+  while IFS= read -r line; do :; done
+  exit 0
+fi
+while IFS= read -r line; do
+  case "$line" in
+    *"[crew:"*)
+      printf '%s\n' '{{"type":"user","sessionId":"'"$SESSION_ID"'","timestamp":"2026-01-01T00:00:00Z","message":{{"role":"user","content":"'"$line"'"}}}}' >> "$TRANSCRIPT"
+      printf '%s\n' '{{"type":"assistant","sessionId":"'"$SESSION_ID"'","timestamp":"2026-01-01T00:00:01Z","message":{{"content":[{{"type":"text","text":"hi from the fixture e2e"}}]}}}}' >> "$TRANSCRIPT"
+      printf '%s\n' '{{"type":"assistant","sessionId":"'"$SESSION_ID"'","uuid":"entry-tool-1","timestamp":"2026-01-01T00:00:02Z","message":{{"content":[{{"type":"tool_use","name":"Bash","id":"toolu_1","input":{{"command":"ls"}}}}]}}}}' >> "$TRANSCRIPT"
+      ;;
+  esac
+done
+"#,
+        session_dir = session_dir.display(),
+    );
+    let path = scripts_dir.join("fake-claude.sh");
+    std::fs::write(&path, script).expect("write fake claude script");
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&path, perms).unwrap();
+    path
+}
+
+/// Extracts a run id from a replayed event envelope (tolerant of shape).
+fn event_run_id(e: &Value) -> Option<&str> {
+    e.get("runId").and_then(Value::as_str).or_else(|| {
+        e.get("event")
+            .and_then(|ev| ev.get("payload"))
+            .and_then(|p| p.get("runId"))
+            .and_then(Value::as_str)
+    })
+}
+
+/// Polls `events/replay` until an event for `run_id` carries a
+/// transcript-derived payload -- the fixture assistant text the fake claude
+/// writes to its transcript, which the adapter tailer only emits after it has
+/// actually observed the tailed transcript turn. This proves the run was
+/// driven end-to-end (a turn was tailed), not merely registered by
+/// `run/submit`.
+async fn wait_for_run_event(client: &mut IpcClient, run_id: &str, deadline: Duration) -> bool {
+    let start = tokio::time::Instant::now();
+    loop {
+        let replay = client
+            .call(9, "events/replay", json!({ "afterSequence": 0 }))
+            .await;
+        if let Some(events) = replay.get("result").and_then(Value::as_array)
+            && events.iter().any(|e| {
+                event_run_id(e) == Some(run_id)
+                    && serde_json::to_string(e).is_ok_and(|s| s.contains("hi from the fixture e2e"))
+            })
+        {
+            return true;
+        }
+        if start.elapsed() > deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// Unwind-safe guard that stops + reaps a spawned `crewd` on drop -- normal
+/// return, assertion failure, or panic -- so a mid-test failure never leaks a
+/// real `crewd` OS process (and its tmux server) into `/tmp`.
+struct DaemonGuard<'a> {
+    fixture: &'a Fixture,
+    child: Option<Child>,
+}
+
+impl<'a> DaemonGuard<'a> {
+    /// Spawn `crewd serve --config <config>` and wait for its socket; returns
+    /// the guard plus the socket path.
+    fn spawn(fixture: &'a Fixture, config: &Path) -> (Self, PathBuf) {
+        let child = fixture
+            .serve_with_config(config, Some(30))
+            .spawn()
+            .expect("served crewd must start");
+        let socket = wait_for_socket(fixture.state_dir(), Duration::from_secs(15));
+        (
+            DaemonGuard {
+                fixture,
+                child: Some(child),
+            },
+            socket,
+        )
+    }
+
+    /// Gracefully stop the daemon (`crewd stop`), reap, then force-kill if
+    /// still alive. Returns the stop-command result and exit code only after
+    /// process ownership is cleared; `None` means it was already reaped.
+    fn shutdown(&mut self) -> Option<(std::io::Result<std::process::ExitStatus>, Option<i32>)> {
+        let mut child = self.child.take()?;
+        let stop_status = self.fixture.stop().status();
+        let exit_code = wait_for_exit(&mut child, Duration::from_secs(15));
+        kill(&mut child);
+        Some((stop_status, exit_code))
+    }
+}
+
+impl Drop for DaemonGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
+    }
+}
+/// The last unproven integration seam from WP29, exercised at the *worker*
+/// level (not just task registration): a real `crewd` OS process serves, an
+/// OMP client submits a real `run/submit` whose fake-claude worker journals a
+/// transcript turn over the actual Unix-socket JSON-RPC IPC, the process is
+/// gracefully stopped and a fresh `crewd` started on the same state dir (a
+/// genuine daemon restart), and a new IPC client can still replay that run's
+/// journaled events. No billed vendor CLI is touched -- the `claude` adapter
+/// is pointed at a fake claude via `--config`.
 #[tokio::test]
 async fn real_daemon_survives_serve_stop_serve_with_ipc_transcript() {
     let fixture = Fixture::new();
     let repo = std::fs::canonicalize(fixture.repo_dir()).unwrap();
 
-    // First serve: a real `crewd` OS process.
-    let mut server = fixture.serve(Some(30)).spawn().unwrap();
-    let socket = wait_for_socket(fixture.state_dir(), Duration::from_secs(10));
+    // Point the real daemon's `claude` (Tui) adapter at the fake claude, with
+    // a session dir it journals its transcript into.
+    let scripts_dir = tempfile::Builder::new()
+        .prefix("bat-os-tui-")
+        .tempdir_in("/tmp")
+        .expect("create scripts dir");
+    let session_dir = tempfile::Builder::new()
+        .prefix("bat-os-sess-")
+        .tempdir_in("/tmp")
+        .expect("create session dir");
+    let script_path = write_fake_claude_script(scripts_dir.path(), session_dir.path());
+    let crew_json = scripts_dir.path().join("crew.json");
+    std::fs::write(
+        &crew_json,
+        serde_json::to_string(&json!({
+            "adapters": {
+                "claude": {
+                    "enabled": true,
+                    "bin": script_path.to_str().unwrap(),
+                    "mode": "tui",
+                    "permissionMode": "default",
+                    "profile": "test",
+                    "sessionDir": session_dir.path().to_str().unwrap()
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    // First serve: real crewd, configured with the fake claude. The guard
+    // stops + reaps the process on any exit path (assertion failure or panic).
+    let (mut server, socket) = DaemonGuard::spawn(&fixture, &crew_json);
 
     let mut client = IpcClient::connect(&socket).await;
     let init = client.initialize("omp-1", &repo).await;
     assert!(init.get("error").is_none(), "initialize failed: {init:?}");
 
+    // Register a task + a claude worker, then submit a run whose prompt makes
+    // the fake claude journal a turn.
     let upsert = client
         .call(
             2,
@@ -569,74 +732,97 @@ async fn real_daemon_survives_serve_stop_serve_with_ipc_transcript() {
             json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
         )
         .await;
-    assert!(upsert.get("error").is_none(), "task/upsert failed: {upsert:?}");
-    let task_id = upsert["result"]["taskId"].as_str().unwrap().to_string();
-    assert!(!task_id.is_empty());
-
-    let replay1 = client
-        .call(3, "events/replay", json!({ "afterSequence": 0 }))
-        .await;
-    assert!(replay1.get("error").is_none(), "replay failed: {replay1:?}");
-    let events1 = replay1["result"].as_array().expect("events array");
-    assert!(!events1.is_empty(), "expected journaled events before restart");
-
-    // Graceful stop of the first daemon (real OS process).
     assert!(
-        fixture.stop().status().unwrap().success(),
+        upsert.get("error").is_none(),
+        "task/upsert failed: {upsert:?}"
+    );
+    let task_id = upsert["result"]["taskId"].as_str().unwrap().to_string();
+
+    let register = client
+        .call(
+            3,
+            "profile/register",
+            json!({
+                "adapter": "claude",
+                "model": "test",
+                "permissionEnvelope": {},
+                "startupOptions": { "claude": { "mode": "tui" } },
+                "environmentAllowlist": [],
+                "source": "lifecycle-os-test"
+            }),
+        )
+        .await;
+    assert!(
+        register.get("error").is_none(),
+        "profile/register failed: {register:?}"
+    );
+    let profile_id = register["result"]["profileId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let wkr = client
+        .call(4, "worker/create", json!({ "profileId": profile_id }))
+        .await;
+    assert!(wkr.get("error").is_none(), "worker/create failed: {wkr:?}");
+    let worker_id = wkr["result"]["workerId"].as_str().unwrap().to_string();
+
+    let submit = client
+        .call(
+            4,
+            "run/submit",
+            json!({ "taskId": task_id, "workerId": worker_id, "prompt": "[crew:fixture1] say hi" }),
+        )
+        .await;
+    assert!(
+        submit.get("error").is_none(),
+        "run/submit failed: {submit:?}"
+    );
+    let run_id = submit["result"]["runId"].as_str().unwrap().to_string();
+
+    // The run must journal at least one event (the fake claude turn) before
+    // the restart.
+    let journaled = wait_for_run_event(&mut client, &run_id, Duration::from_secs(30)).await;
+    assert!(
+        journaled,
+        "run {run_id} must journal at least one event before restart"
+    );
+
+    // Graceful stop of the first daemon (genuine daemon restart). `shutdown`
+    // clears/reaps it before these assertions can panic.
+    let (stop_status, exit_code) = server.shutdown().expect("first daemon must still be live");
+    assert!(
+        stop_status.expect("crewd stop must execute").success(),
         "crewd stop must exit 0"
     );
-    assert_eq!(
-        wait_for_exit(&mut server, Duration::from_secs(10)),
-        Some(0),
-        "first daemon must exit 0 after stop"
-    );
+    assert_eq!(exit_code, Some(0), "first daemon must exit 0 after stop");
 
-    // Second serve on the SAME state dir: a genuine restart.
-    let mut server2 = fixture.serve(Some(30)).spawn().unwrap();
-    let socket2 = wait_for_socket(fixture.state_dir(), Duration::from_secs(10));
+    let (_server2, socket2) = DaemonGuard::spawn(&fixture, &crew_json);
 
     let mut client2 = IpcClient::connect(&socket2).await;
     let init2 = client2.initialize("omp-1", &repo).await;
-    assert!(init2.get("error").is_none(), "re-initialize failed: {init2:?}");
-
-    // The task registered through the first process must still exist.
-    let get = client2
-        .call(4, "task/get", json!({ "taskId": task_id }))
-        .await;
     assert!(
-        get.get("error").is_none(),
-        "task/get after restart failed: {get:?}"
-    );
-    assert_eq!(
-        get["result"]["ownerClientInstanceId"], "omp-1",
-        "registered task must survive a real daemon restart"
+        init2.get("error").is_none(),
+        "re-initialize failed: {init2:?}"
     );
 
-    // The journaled transcript must still be replayable and contain the
-    // original task event.
-    let replay2 = client2
+    // The run's journaled transcript must still be replayable after restart.
+    let replay = client2
         .call(5, "events/replay", json!({ "afterSequence": 0 }))
         .await;
     assert!(
-        replay2.get("error").is_none(),
-        "replay after restart failed: {replay2:?}"
+        replay.get("error").is_none(),
+        "replay after restart failed: {replay:?}"
     );
-    let events2 = replay2["result"].as_array().expect("events array after restart");
-    assert!(
-        events2.len() >= events1.len(),
-        "journaled transcript must survive restart (before={}, after={})",
-        events1.len(),
-        events2.len()
-    );
-    let survived = events2.iter().any(|e| {
-        e["event"]["payload"]["taskId"].as_str() == Some(task_id.as_str())
+    let events = replay["result"]
+        .as_array()
+        .expect("events array after restart");
+    let survived = events.iter().any(|e| {
+        event_run_id(e) == Some(run_id.as_str())
+            && serde_json::to_string(e).is_ok_and(|s| s.contains("hi from the fixture e2e"))
     });
     assert!(
         survived,
-        "task upsert event must survive restart in the journal: {events2:?}"
+        "run {run_id} events must survive restart in the journal: {events:?}"
     );
-
-    // Cleanup.
-    let _ = fixture.stop().status();
-    let _ = wait_for_exit(&mut server2, Duration::from_secs(10));
 }
