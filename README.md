@@ -110,12 +110,6 @@ For questions, issues, or contributions, please open a GitHub Issue on this repo
 
 This project is licensed under the [MIT License](LICENSE). See the LICENSE file for full terms.
 
-## Author
-
-Crew was created by **Nikolas Demiridis** as part of the [Oh My Pi](https://github.com/can1357/oh-my-pi) ecosystem.
-
-For questions, issues, or contributions, please open a GitHub Issue on this repository.
-
 ## Known Limitations
 
 This is a pre-1.0 project. The review backlog is empty — the one open item is an unreproduced test-flake watch, tracked in the maintainer's local, gitignored `REVIEW.md` (resolution history lives in [`docs/journal.md`](docs/journal.md)). What remains below are environment and protocol walls, verified against the current codebase. Every adapter is installed and authenticated here, and live TUI conformance runs against all four — claude + omp-rpc are fully green, while codex and copilot are blocked on vendor out-of-credits (raw reports under [`release/live-conformance/`](release/live-conformance/) with an erratum). None of the below is a "requires a vendor CLI" caveat.
