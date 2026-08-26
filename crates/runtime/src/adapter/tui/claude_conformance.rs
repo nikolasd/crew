@@ -395,6 +395,7 @@ fn fast_timings() -> TuiTimings {
         readiness_cap: Duration::from_secs(4),
         discovery_timeout: Duration::from_secs(4),
         tailer_poll: Duration::from_millis(40),
+        submit_idle: Duration::from_millis(50),
         escalation: crate::supervisor::EscalationTimings::default(),
     }
 }
@@ -705,6 +706,16 @@ pub async fn fixture_report() -> ConformanceReport {
     )
 }
 
+/// Live (real `claude` CLI) TUI conformance -- dispatched by
+/// `run_live_conformance` now that the claude adapter defaults to TUI mode.
+pub async fn live_report() -> Result<ConformanceReport, String> {
+    super::live_tui_report(
+        super::claude::ClaudeTuiVendor::new(super::live_project_cwd(), Vec::new()),
+        "claude-tui",
+        "claude",
+    )
+    .await
+}
 #[cfg(test)]
 mod tests {
     use super::*;

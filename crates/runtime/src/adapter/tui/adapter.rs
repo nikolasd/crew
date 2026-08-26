@@ -190,6 +190,9 @@ pub struct TuiTimings {
     pub discovery_timeout: Duration,
     /// The transcript tailer's poll interval.
     pub tailer_poll: Duration,
+    /// How long the PTY must stay output-silent before the prompt's Enter
+    /// (and queue-style `send`s) are delivered -- see [`ENTER_IDLE_MIN`].
+    pub submit_idle: Duration,
     /// SIGINT/SIGTERM/SIGKILL escalation timings for [`PtyProcess`].
     pub escalation: EscalationTimings,
 }
@@ -201,10 +204,30 @@ impl Default for TuiTimings {
             readiness_cap: Duration::from_secs(8),
             discovery_timeout: Duration::from_secs(8),
             tailer_poll: Duration::from_millis(200),
+            submit_idle: ENTER_IDLE_MIN,
             escalation: EscalationTimings::default(),
         }
     }
 }
+
+/// Earliest moment -- measured from `PtyProcess::spawn` -- at which the
+/// prompt text may be typed into the vendor TUI: bytes written before the
+/// vendor has wired its stdin are silently dropped. Text-only, never the
+/// submit byte -- see [`ENTER_IDLE_MIN`].
+const INJECT_MIN_DELAY: Duration = Duration::from_millis(500);
+
+/// How long the PTY must have been output-silent before the prompt's Enter
+/// is delivered. Silence this deep cannot be a working turn (a running turn
+/// animates its spinner continuously) and no turn can exist yet anyway --
+/// the submit byte is the very first one ever sent -- so silence here means
+/// exactly "idle TUI holding our text", where Enter behaves like a human's.
+const ENTER_IDLE_MIN: Duration = Duration::from_secs(10);
+
+/// Guard for [`ENTER_IDLE_MIN`]: if the PTY still has not gone quiet by
+/// then (e.g. a vendor that emits keep-alive frames forever), deliver the
+/// Enter regardless rather than fail the run -- that degrades to today's
+/// single-shot behavior instead of adding a new failure mode.
+const ENTER_IDLE_CAP: Duration = Duration::from_secs(90);
 
 /// Shared, mutable pane identity [`AttachServer`]'s `on_user_input`
 /// callback reads: starts as [`DisplayBackend::Hidden`]/empty (the
@@ -232,6 +255,11 @@ struct RunState {
     terminate_tx: oneshot::Sender<()>,
     sink: Arc<dyn AdapterEventSink>,
     pane_ref: String,
+    /// Freshest PTY-output instant, kept current by the watcher spawned in
+    /// `run_pipeline`; `send` waits on it so queue-style messages are typed
+    /// into an idle REPL (codex drops mid-turn keystrokes) instead of into
+    /// an active turn.
+    last_output: Arc<StdMutex<tokio::time::Instant>>,
 }
 
 /// Everything a caller that already knows a prior session's durable
@@ -459,6 +487,11 @@ impl<V: TuiVendor> TuiAdapter<V> {
             PtyProcess::spawn(&launch.into_spawn_spec(), self.timings.escalation)
                 .map_err(|err| AdapterError::process(self.kind(), "start", err.to_string()))?,
         );
+        // Injection floor is anchored to the spawn instant, not to when the
+        // pipeline reaches the inject call: the emit/attach/pane steps above
+        // are unbounded async work that would otherwise shift the prompt
+        // past the vendor's auto-submit window.
+        let spawn_instant = tokio::time::Instant::now();
         // Captured immediately, before any other `.await` (the
         // `ProcessStarted` emit, `AttachServer::start`, and
         // `pane_coordinator.attach()` below all yield): a broadcast
@@ -468,6 +501,28 @@ impl<V: TuiVendor> TuiAdapter<V> {
         // first output the readiness gate is waiting for -- which would
         // otherwise only resolve by waiting out the whole cap.
         let mut readiness_rx = pty.subscribe_output();
+
+        // Tracks the freshest PTY output instant for phase 2: the prompt's
+        // Enter is only delivered once output has been quiet for
+        // [`ENTER_IDLE_MIN`], proving the TUI is idle rather than mid-render
+        // or mid-turn.
+        let last_output = Arc::new(StdMutex::new(tokio::time::Instant::now()));
+        {
+            let mut idle_rx = pty.subscribe_output();
+            let last = Arc::clone(&last_output);
+            tokio::spawn(async move {
+                loop {
+                    match idle_rx.recv().await {
+                        Ok(_) => {
+                            *last.lock().expect("last-output mutex never poisoned") =
+                                tokio::time::Instant::now();
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
 
         emit(
             &sink,
@@ -531,11 +586,35 @@ impl<V: TuiVendor> TuiAdapter<V> {
             .expect("pane identity mutex never poisoned") =
             (pane_outcome.backend, pane_outcome.pane_ref.clone());
 
+        // Two-phase prompt delivery, mirroring how a human drives the TUI.
+        // Phase 1 (inside wait_for_readiness): type the prompt TEXT once the
+        // vendor's stdin is wired -- never earlier ([`INJECT_MIN_DELAY`]),
+        // never with the submit byte, which a mid-render TUI swallows.
+        // Phase 2 (below): deliver the single Enter only after the PTY has
+        // gone output-silent for [`ENTER_IDLE_MIN`] -- since no submit byte
+        // was ever sent before, that silence can only mean "idle TUI holding
+        // our text", so the Enter lands exactly like a human's keystroke
+        // regardless of how fast or slow the vendor's startup render was.
+        let injected_bytes: Option<Vec<u8>> =
+            inject.as_ref().map(|text| self.vendor.compose_input(text));
+        // `compose_input`'s contract is message plus exactly one trailing
+        // CR; split it so phase 1 types the text and phase 2 owns the Enter.
+        let (type_bytes, enter_byte): (Option<&[u8]>, Option<&[u8]>) =
+            match injected_bytes.as_deref() {
+                Some(bytes) => (
+                    Some(&bytes[..bytes.len() - 1]),
+                    Some(&bytes[bytes.len() - 1..]),
+                ),
+                None => (None, None),
+            };
         if let Err(err) = wait_for_readiness(
             &mut readiness_rx,
             self.kind(),
             self.timings.readiness_quiet,
             self.timings.readiness_cap,
+            &pty,
+            type_bytes,
+            spawn_instant + INJECT_MIN_DELAY,
         )
         .await
         {
@@ -553,22 +632,15 @@ impl<V: TuiVendor> TuiAdapter<V> {
                 .await;
         }
 
-        if let Some(text) = inject {
-            let bytes = self.vendor.compose_input(&text);
-            if let Err(err) = pty.write_input(&bytes).await {
-                return self
-                    .fail_start(
-                        pty,
-                        attach,
-                        pane_outcome,
-                        sink,
-                        run_id,
-                        task_id,
-                        worker_id,
-                        AdapterError::process(self.kind(), "start", err.to_string()),
-                    )
-                    .await;
+        if let Some(enter) = enter_byte {
+            if let Err(err) =
+                wait_for_output_idle(&last_output, self.timings.submit_idle, ENTER_IDLE_CAP).await
+            {
+                tracing::debug!(kind = self.kind(), "{err}");
             }
+            // A write failure here means the worker already exited; the exit
+            // watcher owns reporting that -- nothing useful to add.
+            let _ = pty.write_input(enter).await;
         }
 
         // A resume with an already-known transcript path (e.g. from a
@@ -686,6 +758,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
             terminate_tx,
             sink,
             pane_ref: pane_outcome.pane_ref,
+            last_output,
         });
         Ok(())
     }
@@ -897,6 +970,9 @@ async fn wait_for_readiness(
     kind: &str,
     quiet: Duration,
     cap: Duration,
+    pty: &Arc<PtyProcess>,
+    inject: Option<&[u8]>,
+    not_before: tokio::time::Instant,
 ) -> Result<(), AdapterError> {
     let deadline = tokio::time::Instant::now() + cap;
 
@@ -911,7 +987,28 @@ async fn wait_for_readiness(
         ));
     }
     match tokio::time::timeout(remaining, rx.recv()).await {
-        Ok(Ok(_)) | Ok(Err(broadcast::error::RecvError::Lagged(_))) => {}
+        Ok(Ok(_)) | Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
+            // First output appeared: the vendor's stdin is wired. Hold
+            // until the spawn-anchored floor, then deliver the prompt text.
+            // Deliberately WITHOUT the submit byte: a CR sent here can be
+            // swallowed by the render loop mid-layout. The Enter itself is
+            // delivered by the caller once the PTY has gone quiet (see the
+            // phase-2 block in `run_pipeline`) -- an idle TUI processes it
+            // exactly like a human's keystroke, with no timing assumption
+            // about startup speed at all.
+            if tokio::time::Instant::now() < not_before {
+                tokio::time::sleep_until(not_before).await;
+            }
+            if let Some(bytes) = inject
+                && let Err(err) = pty.write_input(bytes).await
+            {
+                return Err(AdapterError::process(
+                    kind,
+                    "start",
+                    format!("initial prompt injection failed: {err}"),
+                ));
+            }
+        }
         Ok(Err(broadcast::error::RecvError::Closed)) => {
             return Err(AdapterError::process(
                 kind,
@@ -938,6 +1035,36 @@ async fn wait_for_readiness(
             Ok(_) => continue,
             Err(_) => return Ok(()),
         }
+    }
+}
+
+/// Waits until the PTY output has been silent for `required` (phase 2 of
+/// prompt delivery -- see the caller's comment). Gives up waiting at `cap`
+/// and reports it via the returned error so the caller can decide to
+/// proceed anyway; a vendor that genuinely never goes quiet gets today's
+/// single-shot behavior rather than a new failure mode.
+async fn wait_for_output_idle(
+    last_output: &StdMutex<tokio::time::Instant>,
+    required: Duration,
+    cap: Duration,
+) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + cap;
+    loop {
+        let idle_for = tokio::time::Instant::now().saturating_duration_since(
+            *last_output
+                .lock()
+                .expect("last-output mutex never poisoned"),
+        );
+        if idle_for >= required {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "pty output never stayed quiet for {required:?}; delivering the \
+                 submit keystroke on best-effort terms"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
@@ -1094,7 +1221,7 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
             let launch = self.vendor.launch(&spec, &self.cfg);
             let transcript_root = self.vendor.transcript_root(&spec, &self.cfg);
             let nonce = Uuid::now_v7().to_string();
-            let injected = format!("{}\n\n[crew:{nonce}]", spec.prompt);
+            let injected = format!("{} [crew:{}]", spec.prompt, nonce);
             self.run_pipeline(
                 &mut guard,
                 spec.run_id,
@@ -1164,7 +1291,7 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                     .await
                     .map_err(|e| AdapterError::process(self.kind(), "send", e.to_string()))?;
             }
-            let text = match message {
+            let text: &String = match &message {
                 AdapterMessage::Steer { text }
                 | AdapterMessage::FollowUp { text }
                 | AdapterMessage::Answer { text }
@@ -1186,9 +1313,35 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                 })
                 .await
                 .map_err(|e| AdapterError::process(self.kind(), "send", e.to_string()))?;
-            let bytes = self.vendor.compose_input(&text);
+            let bytes = self.vendor.compose_input(text);
+            // Queue-style messages must land in an IDLE REPL: codex drops
+            // keystrokes typed mid-turn outright. Wait for output silence
+            // first; if a vendor never goes quiet the cap expires and the
+            // write proceeds immediately. Steer is exempt -- it already
+            // interrupted the turn above.
+            if !matches!(message, AdapterMessage::Steer { .. })
+                && let Err(err) =
+                    wait_for_output_idle(&run.last_output, self.timings.submit_idle, ENTER_IDLE_CAP)
+                        .await
+            {
+                tracing::debug!(kind = self.kind(), "{err}");
+            }
+            // Mirror run_pipeline's split delivery: TEXT and the submit CR
+            // travel as separate writes. An atomic `text\r` can be swallowed
+            // whole by a vendor TUI running in bracketed-paste mode (the CR
+            // becomes paste content instead of a submit), where a lone CR
+            // after the text has landed behaves like a human's Enter.
+            let split_at = bytes.len() - 1;
+            if let Err(err) = run.pty.write_input(&bytes[..split_at]).await {
+                return Err(AdapterError::process(self.kind(), "send", err.to_string()));
+            }
+            // The gap is load-bearing: a CR arriving microseconds after the
+            // text is glued into the same input chunk and swallowed (observed
+            // against live codex), while a discrete keypress ~150ms later
+            // submits reliably.
+            tokio::time::sleep(Duration::from_millis(150)).await;
             run.pty
-                .write_input(&bytes)
+                .write_input(&bytes[split_at..])
                 .await
                 .map_err(|e| AdapterError::process(self.kind(), "send", e.to_string()))
         })

@@ -10829,7 +10829,7 @@ function envFlag(env, newName, oldName) {
 // package.json
 var package_default = {
   name: "@nikolasd/crew",
-  version: "0.4.1",
+  version: "0.5.0",
   type: "module",
   exports: { ".": "./dist/index.js" },
   omp: { extensions: ["./dist/index.js"] },

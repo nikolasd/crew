@@ -148,12 +148,32 @@ pub async fn run_fixture_conformance(kind: AdapterKind) -> ConformanceReport {
 /// # Errors
 /// Returns a plain message when the kill switch is set or the installed
 /// vendor CLI is unavailable.
-pub async fn run_live_conformance(kind: AdapterKind) -> Result<ConformanceReport, String> {
-    match kind {
-        AdapterKind::Claude => crate::adapter::claude::conformance::live_report().await,
-        AdapterKind::Codex => crate::adapter::codex::conformance::live_report().await,
-        AdapterKind::Copilot => crate::adapter::copilot::conformance::live_report().await,
-        AdapterKind::OmpRpc => crate::adapter::omp_rpc::conformance::live_report().await,
+pub async fn run_live_conformance(
+    kind: AdapterKind,
+    tui: bool,
+) -> Result<ConformanceReport, String> {
+    use crate::adapter::tui::{
+        claude_conformance, codex_conformance, copilot_conformance, omp_conformance,
+    };
+    if tui {
+        // The adapter now defaults to TUI mode: spawn the real vendor binary
+        // on a PTY and prove transcript discovery + normalized tailing.
+        match kind {
+            AdapterKind::Claude => claude_conformance::live_report().await,
+            AdapterKind::Codex => codex_conformance::live_report().await,
+            AdapterKind::Copilot => copilot_conformance::live_report().await,
+            AdapterKind::OmpRpc => omp_conformance::live_report().await,
+        }
+    } else {
+        // Headless path is still reachable (the four headless adapters are
+        // kept): run each adapter's own headless live_report, labeled by its
+        // plain kind name so the two modes never collide in one report set.
+        match kind {
+            AdapterKind::Claude => crate::adapter::claude::conformance::live_report().await,
+            AdapterKind::Codex => crate::adapter::codex::conformance::live_report().await,
+            AdapterKind::Copilot => crate::adapter::copilot::conformance::live_report().await,
+            AdapterKind::OmpRpc => crate::adapter::omp_rpc::conformance::live_report().await,
+        }
     }
 }
 

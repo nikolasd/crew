@@ -12,6 +12,15 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use crew_runtime::{StateRoot, VERSION};
+/// Selector for `crewd conformance --live`: which control plane to exercise
+/// against the real vendor CLI. `Tui` is the default because every reserved
+/// adapter now defaults to TUI mode; `Headless` reaches each adapter's own
+/// kept headless live report (distinct `claude`-style labels).
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum ConformanceModeArg {
+    Tui,
+    Headless,
+}
 /// The committed fixture-mode baseline loaded from
 /// `fixtures/conformance/fixture-mode-baseline.json`. Maps each adapter to
 /// the scenario names that are expected to fail in fixture mode.
@@ -140,6 +149,11 @@ enum Command {
         /// Use live mode (real vendor CLI), gated per adapter.
         #[arg(long, default_value_t = false)]
         live: bool,
+        /// Live mode only: which control plane to exercise. `tui` (default)
+        /// spawns the real vendor binary on a PTY; `headless` runs each
+        /// adapter's kept headless live report.
+        #[arg(long, value_enum, default_value_t = ConformanceModeArg::Tui)]
+        mode: ConformanceModeArg,
         /// Output file path for the conformance report.
         #[arg(long)]
         output: PathBuf,
@@ -312,8 +326,9 @@ pub async fn run() -> ExitCode {
             adapter,
             fixture,
             live,
+            mode,
             output,
-        } => run_conformance(adapter, fixture, live, output).await,
+        } => run_conformance(adapter, fixture, live, mode, output).await,
         Command::Adapters { json } => run_adapters(json).await,
         Command::Attach {
             run_id,
@@ -978,12 +993,19 @@ async fn run_display_probe(backend: String, json: bool) -> ExitCode {
 /// Runs `crewd conformance`: runs one or all adapters' fixture or live
 /// conformance suite and writes the resulting report(s) to `output` as a
 /// JSON array, printing the exact same JSON to stdout. Exactly one of
-/// `fixture`/`live` must be set. Live mode runs by default; when
-/// `CREW_DISABLE_VENDOR_CLI=1` is set, the adapter's `live_report()`
-/// returns `Err`, which this command reports as a `{adapter,
-/// mode:"live", passed:false, error}` entry, never a hard process
+/// `fixture`/`live` must be set. Live mode exercises the TUI control plane
+/// by default (`--mode tui`); `--mode headless` reaches each adapter's kept
+/// headless live report. When `CREW_DISABLE_VENDOR_CLI=1` is set, the
+/// adapter's `live_report()` returns `Err`, which this command reports as a
+/// `{adapter, mode:"live", passed:false, error}` entry, never a hard process
 /// failure.
-async fn run_conformance(adapter: String, fixture: bool, live: bool, output: PathBuf) -> ExitCode {
+async fn run_conformance(
+    adapter: String,
+    fixture: bool,
+    live: bool,
+    mode: ConformanceModeArg,
+    output: PathBuf,
+) -> ExitCode {
     use crew_runtime::adapter::AdapterKind;
     use crew_runtime::conformance::{
         ConformanceReport, run_fixture_conformance, run_live_conformance,
@@ -1020,7 +1042,7 @@ async fn run_conformance(adapter: String, fixture: bool, live: bool, output: Pat
             let report = run_fixture_conformance(kind).await;
             typed_reports.push(report);
         } else {
-            match run_live_conformance(kind).await {
+            match run_live_conformance(kind, matches!(mode, ConformanceModeArg::Tui)).await {
                 Ok(report) => typed_reports.push(report),
                 Err(err) => {
                     // Live failures are reported as entries, never a hard

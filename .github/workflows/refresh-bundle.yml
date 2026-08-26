@@ -1,0 +1,39 @@
+# Produces the committed extension bundle in CI's exact environment
+# (ubuntu-latest + pinned Bun). The bundle embeds Bun's platform-specific
+# module shim: a rebuild on darwin-arm64 does NOT match CI's linux-x64
+# output byte-for-byte (observed with Bun 1.3.14 on both). Build on
+# linux-x64 -- the platform `bundle-check` verifies against. Run this
+# workflow, download the `dist-linux-x64` artifact, and commit it to
+# refresh the bundle. Until this workflow exists on the default branch
+# (dispatch requires that), the equivalent is:
+#   docker run --platform linux/amd64 -v $REPO:/src -w /src oven/bun:1.3.14 \
+#     sh -c "bun install && bun run build"
+# on a source copy. See the bundle-check job in ci.yml.
+name: refresh-bundle
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install JS workspace dependencies
+        run: bun install
+
+      - name: Rebuild the extension bundle
+        run: bun run build
+
+      - name: Record checksum
+        run: sha256sum packages/extension/dist/index.js
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux-x64
+          path: packages/extension/dist/index.js

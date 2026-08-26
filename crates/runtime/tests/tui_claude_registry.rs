@@ -430,6 +430,7 @@ fn fast_timings() -> TuiTimings {
         readiness_cap: Duration::from_secs(20),
         discovery_timeout: Duration::from_secs(4),
         tailer_poll: Duration::from_millis(40),
+        submit_idle: Duration::from_millis(50),
         escalation: EscalationTimings {
             sigint_to_sigterm: Duration::from_millis(150),
             sigterm_to_sigkill: Duration::from_millis(150),
