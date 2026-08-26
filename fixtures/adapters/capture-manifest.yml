@@ -53,3 +53,19 @@ ompRpc:
   - fixture: subagents.jsonl
     model: "lm-studio/qwen2.5-coder-7b-instruct"
     prompt: "Delegate listing this directory to a subagent."
+
+# TUI fixtures (captured by driving the real vendor TUI on a PTY). Only
+# claude-tui and copilot-tui embed their reproduction prompt in the fixture
+# below, so only those get a recipe. codex-tui (cli_version 0.149.1) and
+# omp-tui carry no embedded prompt in their session.jsonl — their exact
+# WP29 live-capture invocations were not recorded, so add them once recovered
+# to avoid fabricating a recipe.
+claude-tui:
+  - fixture: session.jsonl
+    prompt: "Say hi, run 'echo crew-fixture', then ask me exactly one clarifying question. [crew:fixture1]"
+    startupOptions:
+      permissionMode: default
+
+copilot-tui:
+  - fixture: session.jsonl
+    prompt: "Say hi, run 'echo crew-fixture', then ask me exactly one clarifying question."
