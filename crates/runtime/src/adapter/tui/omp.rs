@@ -196,9 +196,16 @@ impl TuiVendor for OmpTuiVendor {
         cfg: &AdapterConfig,
     ) -> PathBuf {
         let root = self.transcript_root(spec, cfg);
-        let suffix = format!("{}.jsonl", session.0);
+        let suffix = format!("_{}.jsonl", session.0);
         let mut stack = vec![root.clone()];
-        let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+        // Newest-first selection must be deterministic: the leading
+        // timestamp prefix of the filename is the primary key (fixed-width
+        // ISO, so lexicographic order is chronological), mtime only
+        // breaks ties between differently-shaped names. mtime alone is
+        // nondeterministic here -- files written within one filesystem
+        // timestamp tick (CI reality) tie, leaving directory iteration
+        // order to decide.
+        let mut newest: Option<(String, Option<std::time::SystemTime>, PathBuf)> = None;
         while let Some(dir) = stack.pop() {
             let Ok(entries) = std::fs::read_dir(&dir) else {
                 continue;
@@ -211,17 +218,25 @@ impl TuiVendor for OmpTuiVendor {
                     if path.starts_with(&root) && path != root {
                         stack.push(path);
                     }
-                } else if path
-                    .file_name()
-                    .is_some_and(|name| name.to_string_lossy().ends_with(&suffix))
-                    && let Ok(modified) = entry.metadata().and_then(|m| m.modified())
-                    && newest.as_ref().is_none_or(|(time, _)| modified > *time)
+                } else if let Some(name) =
+                    path.file_name().map(|n| n.to_string_lossy().into_owned())
+                    && name.ends_with(&suffix)
                 {
-                    newest = Some((modified, path));
+                    let stamp = name[..name.len() - suffix.len()].to_string();
+                    let modified = entry.metadata().and_then(|m| m.modified()).ok();
+                    let candidate = (stamp, modified, path);
+                    if newest.as_ref().is_none_or(|current| {
+                        candidate.0 > current.0
+                            || (candidate.0 == current.0
+                                && (candidate.1 > current.1
+                                    || (candidate.1 == current.1 && candidate.2 > current.2)))
+                    }) {
+                        newest = Some(candidate);
+                    }
                 }
             }
         }
-        newest.map(|(_, path)| path).unwrap_or_else(|| {
+        newest.map(|(_, _, path)| path).unwrap_or_else(|| {
             // No matching session on disk (yet): fall back to a stable
             // shape so callers get a path to wait on rather than a
             // confusing empty option.
