@@ -1097,14 +1097,50 @@ impl AdapterRegistry {
     #[must_use]
     pub fn tui_transcript_path_for_session(
         &self,
+        kind: AdapterKind,
         run_id: RunId,
         task_id: TaskId,
         worker_id: WorkerId,
         session: &VendorSessionRef,
     ) -> Option<std::path::PathBuf> {
+        // C1 fix: every reserved kind now has a real `TuiVendor` (WP13/WP27/WP28),
+        // each with a different on-disk transcript layout -- Claude/Copilot flat
+        // `<root>/<session-id>.jsonl`; Codex date-partitioned rollout walk; OMP
+        // timestamp-partitioned. Pre-fix this hardcoded the `"claude"` vendor +
+        // `ClaudeTuiVendor`, so a codex/copilot/omp run was silently terminalized
+        // on restart: its real session file never matched the Claude-shaped path
+        // the gate checked. Dispatch the same way `build_tui_adapter` does so this
+        // gate and `TuiAdapter::resume_from` share one per-vendor source of truth --
+        // no separate hardcoded copy that can drift out of step.
         let tui = self.tui.lock().clone()?;
-        let cfg = tui.adapters.get("claude")?;
-        let vendor = ClaudeTuiVendor::new(self.repo_root.clone(), Vec::new());
+        let (vendor_key, vendor): (&str, Box<dyn TuiVendor>) = match kind {
+            AdapterKind::Claude => (
+                "claude",
+                Box::new(ClaudeTuiVendor::new(self.repo_root.clone(), Vec::new())),
+            ),
+            AdapterKind::Codex => (
+                "codex",
+                Box::new(CodexTuiVendor::new(self.repo_root.clone(), Vec::new())),
+            ),
+            AdapterKind::Copilot => (
+                "copilot",
+                Box::new(CopilotTuiVendor::new(self.repo_root.clone(), Vec::new())),
+            ),
+            AdapterKind::OmpRpc => (
+                "omp",
+                Box::new(OmpTuiVendor::new(self.repo_root.clone(), Vec::new())),
+            ),
+        };
+        let cfg = tui
+            .adapters
+            .get(vendor_key)
+            .cloned()
+            .unwrap_or_else(|| match vendor_key {
+                "codex" => default_codex_tui_config(),
+                "copilot" => default_copilot_tui_config(),
+                "omp" => default_omp_tui_config(),
+                _ => default_claude_tui_config(),
+            });
         let spec = StartSpec {
             run_id,
             task_id,
@@ -1112,7 +1148,7 @@ impl AdapterRegistry {
             prompt: String::new(),
             resume: Some(session.clone()),
         };
-        Some(vendor.transcript_path_for_session(session, &spec, cfg))
+        Some(vendor.transcript_path_for_session(session, &spec, &cfg))
     }
 }
 #[allow(clippy::too_many_arguments)]
@@ -1781,6 +1817,120 @@ mod build_adapter_tests {
                 result.err().map(|e| e.to_string()).unwrap_or_default()
             );
         }
+    }
+
+    /// C1 regression: `tui_transcript_path_for_session` must dispatch on the
+    /// run's vendor kind, NOT hardcode Claude. Pre-fix this always looked in
+    /// Claude's layout, so a codex/copilot/omp run was abandoned on restart --
+    /// its real session file never matched the Claude-shaped path the gate
+    /// checked. Each kind gets a distinct `session_dir` so a wrong-vendor
+    /// lookup is detectable by root.
+    #[test]
+    fn tui_transcript_path_for_session_dispatches_per_vendor_not_claude() {
+        let tmp = tempfile::Builder::new()
+            .prefix("bat-c1-gate-")
+            .tempdir_in("/tmp")
+            .expect("create temp dir");
+        let root = tmp.path().to_path_buf();
+        let claude_root = root.join("claude");
+        let copilot_root = root.join("copilot");
+        let codex_root = root.join("codex");
+        let omp_root = root.join("omp");
+        for r in [&claude_root, &copilot_root, &codex_root, &omp_root] {
+            std::fs::create_dir_all(r).expect("mkdir vendor root");
+        }
+        let sid = VendorSessionRef("session-abc".to_string());
+
+        // Each vendor's transcript lives ONLY under that vendor's root, in
+        // that vendor's own on-disk layout.
+        std::fs::write(claude_root.join("session-abc.jsonl"), b"[]")
+            .expect("seed claude transcript");
+        std::fs::write(copilot_root.join("session-abc.jsonl"), b"[]")
+            .expect("seed copilot transcript");
+        let codex_file = codex_root
+            .join("2026")
+            .join("07")
+            .join("24")
+            .join("rollout-1700000000-1-session-abc.jsonl");
+        std::fs::create_dir_all(codex_file.parent().expect("codex parent"))
+            .expect("mkdir codex layout");
+        std::fs::write(&codex_file, b"[]").expect("seed codex transcript");
+        let omp_file = omp_root.join("2026-06-01T00-00-00-000Z_session-abc.jsonl");
+        std::fs::write(&omp_file, b"[]").expect("seed omp transcript");
+
+        let mut claude_cfg = default_claude_tui_config();
+        claude_cfg.session_dir = Some(claude_root.to_string_lossy().into_owned());
+        let mut copilot_cfg = default_copilot_tui_config();
+        copilot_cfg.session_dir = Some(copilot_root.to_string_lossy().into_owned());
+        let mut codex_cfg = default_codex_tui_config();
+        codex_cfg.session_dir = Some(codex_root.to_string_lossy().into_owned());
+        let mut omp_cfg = default_omp_tui_config();
+        omp_cfg.session_dir = Some(omp_root.to_string_lossy().into_owned());
+
+        let mut adapters: BTreeMap<String, AdapterConfig> = BTreeMap::new();
+        adapters.insert("claude".to_string(), claude_cfg);
+        adapters.insert("copilot".to_string(), copilot_cfg);
+        adapters.insert("codex".to_string(), codex_cfg);
+        adapters.insert("omp".to_string(), omp_cfg);
+
+        let mut display = crate::display::DisplayRegistry::new();
+        display.register(Box::new(crate::display::HiddenDisplay::new(
+            crew_protocol::DisplayConfig::default(),
+        )));
+        let tui = Arc::new(TuiSupport {
+            display_registry: Arc::new(display),
+            panes_dir: tmp.path().to_path_buf(),
+            crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
+            state_dir: tmp.path().to_path_buf(),
+            close_on_exit: crate::config::crew::CloseOnExit::OnSuccess,
+            forced_backend: None,
+            adapters,
+            timings: crate::adapter::tui::TuiTimings::default(),
+        });
+        let registry = AdapterRegistry::new(
+            Arc::new(FixtureAuthorization { allow: true }),
+            root.clone(),
+            None,
+            Vec::new(),
+        );
+        registry.set_tui_support(tui);
+
+        let path_for = |kind| {
+            registry.tui_transcript_path_for_session(
+                kind,
+                RunId::new(),
+                TaskId::new(),
+                WorkerId::new(),
+                &sid,
+            )
+        };
+
+        // Claude sanity: resolves under the claude root.
+        let claude_path = path_for(AdapterKind::Claude).expect("claude has TUI support");
+        assert_eq!(claude_path, claude_root.join("session-abc.jsonl"));
+
+        // C1 guards: each non-Claude kind must resolve under ITS root, never
+        // under claude_root (the pre-fix behavior).
+        let copilot_path = path_for(AdapterKind::Copilot).expect("copilot has TUI support");
+        assert_eq!(copilot_path, copilot_root.join("session-abc.jsonl"));
+        assert!(
+            !copilot_path.starts_with(&claude_root),
+            "copilot transcript must not resolve to claude's root"
+        );
+
+        let codex_path = path_for(AdapterKind::Codex).expect("codex has TUI support");
+        assert_eq!(codex_path, codex_file);
+        assert!(
+            !codex_path.starts_with(&claude_root),
+            "codex transcript must not resolve to claude's root"
+        );
+
+        let omp_path = path_for(AdapterKind::OmpRpc).expect("omp has TUI support");
+        assert_eq!(omp_path, omp_file);
+        assert!(
+            !omp_path.starts_with(&claude_root),
+            "omp transcript must not resolve to claude's root"
+        );
     }
 
     /// A minimal but real `TuiSupport` for these unit tests: a registry
