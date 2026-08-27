@@ -210,4 +210,47 @@ mod tests {
         let result: Result<AdapterCapabilities, _> = serde_json::from_value(value);
         assert!(result.is_err());
     }
+    #[test]
+    fn capability_field_names_track_struct_fields() {
+        // Tripwire for the cross-task note on progress.md:36: `has()`
+        // and `capabilities.required` config validation both key off
+        // `CAPABILITY_FIELD_NAMES`. If the struct gains a capability field
+        // that the const does not list -- or the const drifts from a rename
+        // -- `has` silently fails to recognize the new name and `required`
+        // accepts a name no adapter can satisfy. The two vocabularies must
+        // stay in lockstep, so this fails the moment they diverge in either
+        // direction.
+        let full = AdapterCapabilities {
+            protocol: ProtocolKind::Structured,
+            resume: ResumeCapability::Session,
+            steering: SteeringCapability::ActiveTurn,
+            approvals: ApprovalsCapability::Controllable,
+            structured_result: true,
+            usage: UsageCapability::PerTurn,
+            nested: NestedCapability::Observable,
+            native_view: NativeViewCapability::IndependentTui,
+            workspace_control: WorkspaceControlCapability::Write,
+            durability: DurabilityCapability::VendorResumable,
+        };
+        let value = serde_json::to_value(full).expect("AdapterCapabilities are serializable");
+        let serialized: std::collections::BTreeSet<&str> = value
+            .as_object()
+            .expect("serializes to a JSON object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let declared: std::collections::BTreeSet<&str> =
+            CAPABILITY_FIELD_NAMES.iter().copied().collect();
+        assert_eq!(
+            serialized, declared,
+            "CAPABILITY_FIELD_NAMES must mirror the AdapterCapabilities struct fields exactly"
+        );
+        // `has()` must recognize every name the const advertises -- an orphan
+        // name (const lists it, `has` does not) reads as absent for every
+        // adapter, so a `required` entry could never be satisfied.
+        assert!(
+            CAPABILITY_FIELD_NAMES.iter().all(|name| full.has(name)),
+            "every declared capability name must be recognized by `has()`"
+        );
+    }
 }
