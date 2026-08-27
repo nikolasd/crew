@@ -1,8 +1,12 @@
 //! TUI-mode worker observation: TUI workers are never observed by parsing
 //! their terminal output -- observation happens by tailing the vendor
 //! CLI's own transcript file (session JSONL) with a durable byte-offset
-//! cursor, so a crashed daemon re-tails from its stored cursor with zero
-//! duplicated events.
+//! cursor, so a crashed daemon re-tails from its stored cursor safely.
+//! The guarantee is AT-LEAST-ONCE at line grain, not exactly-once:
+//! duplication is possible (and accepted) on the boundary the cursor last
+//! advanced to, but loss is not -- see
+//! `crate::adapter::tui::adapter::cursor_placements`'s own doc comment for
+//! why.
 //!
 //! This module owns the vendor-agnostic pieces: the [`Cursor`], the
 //! [`TuiEvent`] normalization target, the [`TranscriptFormat`] trait each
@@ -32,6 +36,8 @@ use std::sync::Arc;
 use crew_protocol::Classified;
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+pub(crate) use adapter::cursor_placements;
 pub use adapter::{LaunchSpec, ResumeContext, TuiAdapter, TuiTimings, TuiVendor, VersionVerdict};
 pub use claude::ClaudeTuiVendor;
 pub use discovery::{DiscoveryError, find_transcript_by_nonce};
@@ -151,8 +157,9 @@ pub enum TuiEvent {
 /// `Cursor` to at most one carrier -- its last emitting event -- is
 /// `crate::adapter::tui::adapter::cursor_placements`'s job, applied to
 /// every batch this trait's `parse` produces before any event reaches the
-/// sink; see that function's own doc comment for the exactly-once
-/// argument in full.
+/// sink; see that function's own doc comment for the full
+/// duplication-never-loss argument (AT-LEAST-ONCE at line grain, not
+/// exactly-once).
 pub trait TranscriptFormat: Send + Sync {
     fn parse(&self, raw: &[u8], cursor: &Cursor) -> Vec<(TuiEvent, Cursor)>;
 }

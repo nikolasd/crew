@@ -862,7 +862,9 @@ async fn emit(
 /// regression in the pump loop's wiring (not just in `last_emitting_index`
 /// itself) has exactly one function standing between it and this module's
 /// own tests.
-fn cursor_placements(tagged: Vec<(TuiEvent, Cursor)>) -> Vec<(TuiEvent, Option<Cursor>)> {
+pub(crate) fn cursor_placements(
+    tagged: Vec<(TuiEvent, Cursor)>,
+) -> Vec<(TuiEvent, Option<Cursor>)> {
     let mut carries_cursor = vec![false; tagged.len()];
     let mut start = 0;
     while start < tagged.len() {
@@ -1471,13 +1473,25 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
 #[cfg(test)]
 mod tests {
     //! Unit-tests `cursor_placements` directly -- the exact function the
-    //! pump loop in `run_pipeline` calls, not a reimplementation of it.
-    //! A future edit that reverts the pump loop to placing every event's
-    //! own line cursor unconditionally (the exactly-once-breaking bug
-    //! `cursor_placements` exists to prevent -- multiple same-line events
-    //! each durably advancing `runs.transcript_cursor`) breaks these tests
-    //! immediately, because there would be no other caller for
-    //! `cursor_placements` to keep it alive/correct.
+    //! pump loop in `run_pipeline` calls, not a reimplementation of it --
+    //! pinning the placement RULE itself (which index in a same-cursor run
+    //! carries `Some`) against every shape: no run, a single emitting
+    //! event, a trailing non-emitting tail, multiple emitting events in
+    //! one run, and no emitting event at all.
+    //!
+    //! These tests alone do not prove the pump loop's own WIRING to this
+    //! function (that `run_pipeline` actually calls it and threads its
+    //! `Option<Cursor>` into `emit_tui_event` unchanged) -- that end-to-end
+    //! proof is `event_sink.rs`'s `crash_resume_tests` module, whose
+    //! `emit_batch` test helper calls this exact function too (not a
+    //! reimplementation) and exercises it at the journal level, including
+    //! a same-line multi-event batch and a simulated crash landing between
+    //! two same-line commits. What THIS module's tests do still guarantee:
+    //! a future edit that reverts the pump loop to placing every event's
+    //! own line cursor unconditionally (the duplication-vs-loss bug this
+    //! function exists to prevent) leaves `cursor_placements` with no
+    //! caller outside `#[cfg(test)]` code, so a normal (non-test) build
+    //! surfaces it as dead code rather than silently compiling clean.
 
     use crew_protocol::{Classified, ContentClass};
 

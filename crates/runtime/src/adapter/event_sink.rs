@@ -1133,11 +1133,17 @@ mod question_detected_tests {
 
 #[cfg(test)]
 mod crash_resume_tests {
-    //! WP12 step 2's crash-resume proof: a tailer that crashes mid-run and
-    //! restarts from the cursor this sink persisted in `runs.transcript_cursor`
-    //! re-tails with zero duplicate events -- proved against the real
-    //! journal, not just the in-memory `Cursor` math `tui_tailer.rs`
-    //! already covers.
+    //! WP12 step 2's crash-resume proof, against the real journal (not
+    //! just the in-memory `Cursor` math `tui_tailer.rs` already covers): a
+    //! tailer that crashes and restarts from the cursor this sink
+    //! persisted in `runs.transcript_cursor` re-tails safely. The
+    //! guarantee is AT-LEAST-ONCE at line grain, not exactly-once: a
+    //! single-event-per-line resume sees zero duplicates (the first
+    //! test below), but a same-line multi-event batch can re-deliver an
+    //! earlier same-line event that already committed with no cursor of
+    //! its own (the last test below) -- duplication, never loss. Also
+    //! exercises the exact placement function (`cursor_placements`) the
+    //! production pump loop calls, not a reimplementation of it.
 
     use std::io::Write;
     use std::sync::Arc;
@@ -1161,7 +1167,10 @@ mod crash_resume_tests {
     /// against, extended with a `"turn_end"` type that produces
     /// `TuiEvent::TurnEnded` -- the shape that exposed the cursor-
     /// placement bug this test suite guards against: a batch whose last
-    /// entry emits nothing at all.
+    /// entry emits nothing at all -- and a `"session_and_text"` type that
+    /// produces TWO events from one line (`SessionMeta` then
+    /// `AssistantText`, mirroring a real Claude entry that is both at
+    /// once) so a same-line multi-event batch can be exercised too.
     struct TestFormat;
 
     impl TranscriptFormat for TestFormat {
@@ -1171,22 +1180,33 @@ mod crash_resume_tests {
                     .get("id")
                     .and_then(|v| v.as_str())
                     .map(ToString::to_string);
-                let event = match value.get("type").and_then(|v| v.as_str()) {
-                    Some("turn_end") => TuiEvent::TurnEnded,
-                    _ => TuiEvent::AssistantText {
-                        text: Classified {
-                            class: ContentClass::Visible,
-                            value: value
-                                .get("text")
+                let text = || TuiEvent::AssistantText {
+                    text: Classified {
+                        class: ContentClass::Visible,
+                        value: value
+                            .get("text")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                    },
+                    is_question: false,
+                    ts: None,
+                };
+                let events = match value.get("type").and_then(|v| v.as_str()) {
+                    Some("turn_end") => vec![TuiEvent::TurnEnded],
+                    Some("session_and_text") => vec![
+                        TuiEvent::SessionMeta {
+                            vendor_session_id: value
+                                .get("session")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or_default()
                                 .to_string(),
                         },
-                        is_question: false,
-                        ts: None,
-                    },
+                        text(),
+                    ],
+                    _ => vec![text()],
                 };
-                (vec![event], entry_id)
+                (events, entry_id)
             })
         }
     }
@@ -1296,10 +1316,13 @@ mod crash_resume_tests {
     }
 
     /// Emits one parsed + tagged batch of `TestFormat` events through
-    /// `sink`, giving every event the cursor it already carries (`parse`'s
-    /// per-line cursor) -- the exact shape the production pump loop emits
-    /// (`emit_tui_event` forwards each event's own cursor). `TuiEvent::TurnEnded`
-    /// emits nothing, matching `emit_tui_event`.
+    /// `sink`, routed through the REAL `cursor_placements` (the exact
+    /// function `run_pipeline`'s pump loop calls, not a reimplementation of
+    /// it) to decide each event's cursor -- so a same-line multi-event
+    /// batch gets exactly the same `Some`/`None` placement production
+    /// would give it, and a regression in `cursor_placements` itself (or in
+    /// this being wired to it) breaks these journal-level tests directly.
+    /// `TuiEvent::TurnEnded` emits nothing, matching `emit_tui_event`.
     async fn emit_batch(
         sink: &DomainAdapterEventSink,
         run_id: RunId,
@@ -1307,7 +1330,7 @@ mod crash_resume_tests {
         worker_id: WorkerId,
         tagged: Vec<(TuiEvent, Cursor)>,
     ) {
-        for (event, event_cursor) in tagged {
+        for (event, cursor) in crate::adapter::tui::cursor_placements(tagged) {
             match event {
                 TuiEvent::AssistantText { text, .. } => {
                     sink.emit(AdapterEvent {
@@ -1318,13 +1341,28 @@ mod crash_resume_tests {
                             role: "assistant".to_string(),
                             text,
                         },
-                        cursor: Some(event_cursor),
+                        cursor,
+                    })
+                    .await
+                    .expect("emit");
+                }
+                TuiEvent::SessionMeta { vendor_session_id } => {
+                    sink.emit(AdapterEvent {
+                        run_id,
+                        task_id,
+                        worker_id,
+                        payload: AdapterEventPayload::VendorSessionEstablished {
+                            vendor_session_id,
+                        },
+                        cursor,
                     })
                     .await
                     .expect("emit");
                 }
                 TuiEvent::TurnEnded => {}
-                other => panic!("TestFormat only produces AssistantText/TurnEnded: {other:?}"),
+                other => panic!(
+                    "TestFormat only produces AssistantText/SessionMeta/TurnEnded: {other:?}"
+                ),
             }
         }
     }
@@ -1545,6 +1583,135 @@ mod crash_resume_tests {
             texts,
             vec!["first".to_string(), "second".to_string()],
             "\"first\" must be journaled exactly once, not re-journaled after the crash"
+        );
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// M1's headline production-path proof: a same-line multi-event batch
+    /// (`SessionMeta` then `AssistantText`, mirroring a real Claude entry
+    /// that is both at once) lets only its LAST emitting event carry the
+    /// line's cursor forward -- and a simulated crash landing exactly
+    /// BETWEEN the two same-line commits (the first commits, the second
+    /// never runs) never loses the second event on resume.
+    #[tokio::test]
+    async fn a_same_line_session_meta_and_text_batch_never_loses_the_second_event_on_a_mid_line_crash()
+     {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_working_run(&db, project_id).await;
+        let (events_tx, _events_rx) = broadcast::channel(64);
+        let sink = sink(Arc::clone(&db), project_id, events_tx);
+
+        let transcript_dir = tempfile::Builder::new()
+            .prefix("bat-crash-resume-same-line-")
+            .tempdir_in("/tmp")
+            .expect("transcript dir");
+        let transcript_path = transcript_dir.path().join("session.jsonl");
+
+        // One line, two events: SessionMeta (itself emits a payload, but
+        // is not the run's LAST emitting event) then AssistantText --
+        // both share this line's Cursor (`parse_jsonl_chunk` gives every
+        // event from one line the identical post-line cursor).
+        append_line(
+            &transcript_path,
+            r#"{"type":"session_and_text","session":"sess-1","text":"hello","id":"L1"}"#,
+        );
+
+        let mut tailer_one = TranscriptTailer::new(
+            transcript_path.clone(),
+            Arc::new(TestFormat),
+            Cursor::start(),
+            std::time::Duration::from_millis(10),
+        );
+        let (tagged, cursor_after_line) = tailer_one
+            .poll_once()
+            .await
+            .expect("the one line's two events are consumed together");
+        assert_eq!(tagged.len(), 2, "SessionMeta then AssistantText");
+        assert!(
+            tagged.iter().all(|(_, c)| *c == cursor_after_line),
+            "both events of one line share that line's cursor"
+        );
+
+        // The exact placement rule, asserted directly against the REAL
+        // `cursor_placements` (not a reimplementation): only the run's
+        // last emitting event (AssistantText, index 1) carries the
+        // cursor; SessionMeta (index 0) -- despite itself emitting a
+        // payload -- gets `None`.
+        let placed = crate::adapter::tui::cursor_placements(tagged.clone());
+        assert_eq!(placed[0].1, None, "SessionMeta must not carry the cursor");
+        assert_eq!(
+            placed[1].1,
+            Some(cursor_after_line),
+            "AssistantText, the run's last emitting event, must carry it"
+        );
+
+        // Simulate a crash landing exactly BETWEEN the two same-line
+        // commits: emit only the first (SessionMeta, cursor `None`) and
+        // stop there, as if the daemon died right after that commit --
+        // the second (AssistantText) never runs this pass.
+        let (first_event, first_cursor) = placed[0].clone();
+        match first_event {
+            TuiEvent::SessionMeta { vendor_session_id } => {
+                sink.emit(AdapterEvent {
+                    run_id,
+                    task_id,
+                    worker_id,
+                    payload: AdapterEventPayload::VendorSessionEstablished { vendor_session_id },
+                    cursor: first_cursor,
+                })
+                .await
+                .expect("emit");
+            }
+            other => panic!("expected SessionMeta first: {other:?}"),
+        }
+        drop(tailer_one);
+
+        // SessionMeta's own commit carried no cursor, so the crash left
+        // nothing stored for this line at all -- a resume must re-tail
+        // from scratch, never from a cursor that would skip it.
+        let stored_after_crash: serde_json::Value = db
+            .run_domain_op(Box::new(move |conn| {
+                let v: Option<String> = conn.query_row(
+                    "SELECT transcript_cursor FROM runs WHERE run_id = ?1",
+                    [run_id.to_string()],
+                    |r| r.get(0),
+                )?;
+                Ok(serde_json::json!(v))
+            }))
+            .await
+            .expect("read stored cursor");
+        assert!(
+            stored_after_crash.as_str().is_none(),
+            "a crash before the line's carrier commit must leave no stored cursor for this line: \
+             {stored_after_crash:?}"
+        );
+
+        // Resume from the start (nothing was ever stored) and process the
+        // whole line normally this time -- SessionMeta re-emits (a
+        // harmless duplicate `VendorSessionEstablished`, not asserted
+        // here), but AssistantText -- the event that would have been
+        // silently lost forever under the old "cursor on every same-line
+        // event" bug -- must be journaled, exactly once.
+        let mut tailer_two = TranscriptTailer::new(
+            transcript_path.clone(),
+            Arc::new(TestFormat),
+            Cursor::start(),
+            std::time::Duration::from_millis(10),
+        );
+        let (tagged_again, _cursor) = tailer_two
+            .poll_once()
+            .await
+            .expect("re-tails the same line from scratch");
+        emit_batch(&sink, run_id, task_id, worker_id, tagged_again).await;
+
+        let texts = journaled_message_final_texts(&db, run_id).await;
+        assert_eq!(
+            texts,
+            vec!["hello".to_string()],
+            "the second same-line event must not be lost to the mid-line crash, and must not be \
+             duplicated either -- its own commit carries the cursor forward"
         );
 
         db.shutdown().await.expect("shutdown database");
