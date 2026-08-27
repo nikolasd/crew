@@ -10,6 +10,17 @@ import { homedir } from "node:os";
 import { detectLibc, resolveCrewd } from "./platform";
 import { resolveStateRoot } from "./state";
 
+/**
+ * An informational observation from the doctor: neither a pass nor a
+ * failure. Absent from results produced by a daemon older than the field.
+ */
+export interface DoctorNote {
+  /** The check that produced the observation. */
+  readonly check_name: string;
+  /** Human-readable detail. */
+  readonly detail: string;
+}
+
 /** A single failed check from the doctor output. */
 export interface FailedCheck {
   /** The name of the check. */
@@ -28,6 +39,13 @@ export interface DoctorResult {
   readonly failed_checks: FailedCheck[];
   /** The set of unresolved rollout gates. */
   readonly unresolved_gates: string[];
+  /**
+   * Observations that are neither passes nor failures. Optional: a daemon
+   * older than this field omits the key, and an absent note list must
+   * never be read as "nothing to report" by anything that can tell the
+   * difference.
+   */
+  readonly notes?: DoctorNote[];
 }
 
 /** Sanitized, machine-readable detail when the doctor command fails. */
@@ -217,7 +235,7 @@ function abortReason(value: unknown): string | undefined {
   return typeof value.error === "string" ? value.error : undefined;
 }
 
-function formatDoctorOutput(result: DoctorResult): string {
+export function formatDoctorOutput(result: DoctorResult): string {
   const lines: string[] = [];
   lines.push(`Doctor check: ${result.healthy ? "healthy" : "failed"}`);
 
@@ -234,6 +252,14 @@ function formatDoctorOutput(result: DoctorResult): string {
 
   if (result.unresolved_gates.length > 0) {
     lines.push(`Unresolved gates: ${result.unresolved_gates.join(", ")}`);
+  }
+
+  // Optional: a daemon predating the notes field omits the key entirely.
+  if (result.notes !== undefined && result.notes.length > 0) {
+    lines.push("Notes:");
+    for (const note of result.notes) {
+      lines.push(`  - ${note.check_name}: ${note.detail}`);
+    }
   }
 
   return lines.join("\n");

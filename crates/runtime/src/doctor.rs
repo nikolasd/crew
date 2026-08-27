@@ -55,6 +55,25 @@ pub struct DoctorResult {
 
     /// The set of unresolved rollout gates.
     pub unresolved_gates: Vec<String>,
+
+    /// Observations that are neither passes nor failures: things the
+    /// operator should see about their configuration without the runtime
+    /// declaring itself unhealthy over them. Running on built-in defaults
+    /// is a valid setup, and deliberately overriding a default is the
+    /// reason crew.json exists -- neither is a fault, and neither is
+    /// discoverable any other way.
+    #[serde(default)]
+    pub notes: Vec<DoctorNote>,
+}
+
+/// A single informational observation. See [`DoctorResult::notes`].
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorNote {
+    /// The check that produced the observation.
+    pub check_name: String,
+
+    /// Human-readable detail.
+    pub detail: String,
 }
 
 /// A single failed check.
@@ -82,6 +101,10 @@ pub struct Doctor {
     repo_root: Option<std::path::PathBuf>,
     /// The project whose leases and runs are inspected.
     project_id: Option<ProjectId>,
+    /// The crew.json layer files that apply here, lowest precedence first.
+    /// Empty means "not supplied", which is indistinguishable from "none
+    /// exist" -- both correctly report that defaults are in use.
+    config_layers: Vec<std::path::PathBuf>,
 }
 
 /// The target triples the foundation ships prebuilt `crewd` leaves for.
@@ -113,6 +136,7 @@ impl Doctor {
             db,
             state_dir,
             policy,
+            config_layers: Vec::new(),
             socket_path: None,
             repo_root: None,
             project_id: None,
@@ -132,6 +156,69 @@ impl Doctor {
         self.repo_root = Some(repo_root);
         self.project_id = Some(project_id);
         self
+    }
+
+    /// Supplies the crew.json layer files, lowest precedence first, that
+    /// the `config_present` and `config_drift` notes report on.
+    #[must_use]
+    pub fn with_config_layers(mut self, layers: Vec<std::path::PathBuf>) -> Self {
+        self.config_layers = layers;
+        self
+    }
+
+    /// Which layer files exist, and what the operator should know if none
+    /// do. Never a failure: running on built-in defaults is valid.
+    fn note_config_present(&self) -> Option<String> {
+        let present: Vec<String> = self
+            .config_layers
+            .iter()
+            .filter(|p| p.exists())
+            .map(|p| p.display().to_string())
+            .collect();
+
+        if present.is_empty() {
+            return Some(
+                "no crew.json layer found; running on built-in defaults. \
+                 Create one with `crewd config init` (or `--global` for ~/.omp)."
+                    .to_string(),
+            );
+        }
+        Some(format!("config layers in effect: {}", present.join(", ")))
+    }
+
+    /// Every key an existing layer sets away from the current built-in
+    /// default, so a value frozen by an older `config init` becomes
+    /// visible once the default moves under it. Never a failure:
+    /// overriding a default on purpose is the point of a config file.
+    fn note_config_drift(&self) -> Option<String> {
+        let mut drift = Vec::new();
+        for path in self.config_layers.iter().filter(|p| p.exists()) {
+            let Ok(raw) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                // A malformed layer is `configuration_valid`'s failure to
+                // report, not a drift note's.
+                continue;
+            };
+            for item in crate::config::crew::diff_against_defaults(&value) {
+                drift.push(format!(
+                    "{} = {} (default {})",
+                    item.path, item.configured, item.default
+                ));
+            }
+        }
+
+        if drift.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "{} key(s) differ from the current built-in defaults: {}. \
+             If you did not choose these deliberately, they may be stale \
+             values frozen by an earlier `crewd config init`.",
+            drift.len(),
+            drift.join(", ")
+        ))
     }
 
     /// Creates a [`Doctor`] with no inputs at all. Every check then
@@ -187,16 +274,20 @@ impl Doctor {
         report.record("disk_space", self.check_disk_space());
         report.record("stale_workspaces", self.check_stale_workspaces());
         report.record("stale_runs", self.check_stale_runs().await);
+        report.note("config_present", self.note_config_present());
+        report.note("config_drift", self.note_config_drift());
 
         let Report {
             passed_checks,
             failed_checks,
+            notes,
         } = report;
 
         Ok(DoctorResult {
             healthy: failed_checks.is_empty(),
             passed_checks,
             failed_checks,
+            notes,
             // No config surface models a rollout gate any more (crew-v2
             // gap-closure WP5); always empty. Kept on the result rather
             // than removed so `packages/extension/src/doctor.ts`'s render
@@ -557,6 +648,7 @@ impl Doctor {
 struct Report {
     passed_checks: Vec<String>,
     failed_checks: Vec<FailedCheck>,
+    notes: Vec<DoctorNote>,
 }
 
 impl Report {
@@ -567,6 +659,18 @@ impl Report {
                 check_name: check_name.to_string(),
                 error: error.to_string(),
             }),
+        }
+    }
+
+    /// Records an observation that is neither a pass nor a failure. `None`
+    /// records nothing, so a check with nothing to say stays silent rather
+    /// than emitting an empty note.
+    fn note(&mut self, check_name: &str, detail: Option<String>) {
+        if let Some(detail) = detail {
+            self.notes.push(DoctorNote {
+                check_name: check_name.to_string(),
+                detail,
+            });
         }
     }
 }

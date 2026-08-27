@@ -108,9 +108,10 @@ test("registers crew_health plus every orchestration tool, and every slash comma
     "crew_stop",
     "crew_finish",
     "crew_doctor",
+    "crew_config",
     "crew_install",
   ]);
-  expect([...commands.keys()]).toEqual(["crew-status", "crew", "crew-doctor", "crew-install"]);
+  expect([...commands.keys()]).toEqual(["crew-status", "crew", "crew-doctor", "crew-config", "crew-install"]);
 });
 
 // ---- Live-daemon path: a real foreground `crewd` the tool must reach. ----
