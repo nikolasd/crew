@@ -135,11 +135,15 @@ pub enum TuiEvent {
 }
 
 /// A vendor transcript format: given a raw chunk that starts at
-/// `cursor.offset`, parse only *complete* lines and return the advanced
-/// cursor. A partial trailing line is left unconsumed, so re-parsing
-/// from any returned cursor is idempotent at arbitrary byte splits.
+/// `cursor.offset`, parse only *complete* lines and return each event
+/// paired with the cursor advanced to *its own* line. A partial trailing
+/// line is left unconsumed, so re-parsing from any returned cursor is
+/// idempotent at arbitrary byte splits. Pairing every event with its own
+/// post-line cursor is what makes a crash mid-batch restart-safe: the
+/// journal advances `runs.transcript_cursor` to each event's own position,
+/// so a resume re-tails past every durably committed event (exactly-once).
 pub trait TranscriptFormat: Send + Sync {
-    fn parse(&self, raw: &[u8], cursor: &Cursor) -> (Vec<TuiEvent>, Cursor);
+    fn parse(&self, raw: &[u8], cursor: &Cursor) -> Vec<(TuiEvent, Cursor)>;
 }
 
 /// Shared JSONL cursor math for [`TranscriptFormat`] implementations:
@@ -151,20 +155,19 @@ pub trait TranscriptFormat: Send + Sync {
 ///
 /// `map_line` turns one parsed JSON entry into its events plus the
 /// vendor entry id (if any) recorded as `last_entry_id`.
-pub fn parse_jsonl_chunk<F>(raw: &[u8], cursor: &Cursor, map_line: F) -> (Vec<TuiEvent>, Cursor)
+pub fn parse_jsonl_chunk<F>(raw: &[u8], cursor: &Cursor, map_line: F) -> Vec<(TuiEvent, Cursor)>
 where
     F: Fn(&serde_json::Value) -> (Vec<TuiEvent>, Option<String>),
 {
-    let mut events = Vec::new();
     let mut consumed: usize = 0;
     let mut last_entry_id = cursor.last_entry_id.clone();
 
+    let mut out = Vec::new();
     let mut rest = raw;
     while let Some(newline_pos) = rest.iter().position(|&b| b == b'\n') {
         let line = &rest[..newline_pos];
         consumed += newline_pos + 1;
         rest = &rest[newline_pos + 1..];
-
         let trimmed = line
             .iter()
             .position(|b| !b.is_ascii_whitespace())
@@ -183,24 +186,36 @@ where
         match serde_json::from_slice::<serde_json::Value>(trimmed) {
             Ok(value) => {
                 let (line_events, entry_id) = map_line(&value);
-                events.extend(line_events);
+                // This line's cursor carries its own entry id (if any), else
+                // the most recent id seen so far -- anchoring every event to
+                // the position *after its own* line, never the previous one's.
+                let line_cursor = Cursor {
+                    offset: cursor.offset + consumed as u64,
+                    last_entry_id: entry_id.clone().or(last_entry_id.clone()),
+                };
+                for e in line_events {
+                    out.push((e, line_cursor.clone()));
+                }
                 if let Some(entry_id) = entry_id {
                     last_entry_id = Some(entry_id);
                 }
             }
-            Err(_) => events.push(TuiEvent::Raw {
-                entry_type: "parse_error".to_string(),
-            }),
+            Err(_) => {
+                let line_cursor = Cursor {
+                    offset: cursor.offset + consumed as u64,
+                    last_entry_id: last_entry_id.clone(),
+                };
+                out.push((
+                    TuiEvent::Raw {
+                        entry_type: "parse_error".to_string(),
+                    },
+                    line_cursor,
+                ));
+            }
         }
     }
 
-    (
-        events,
-        Cursor {
-            offset: cursor.offset + consumed as u64,
-            last_entry_id,
-        },
-    )
+    out
 }
 
 impl TuiEvent {

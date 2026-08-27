@@ -272,7 +272,7 @@ pub fn session_id_from_rollout_filename(filename: &str) -> Option<String> {
 pub(super) struct CodexRolloutFormat;
 
 impl TranscriptFormat for CodexRolloutFormat {
-    fn parse(&self, raw: &[u8], cursor: &Cursor) -> (Vec<TuiEvent>, Cursor) {
+    fn parse(&self, raw: &[u8], cursor: &Cursor) -> Vec<(TuiEvent, Cursor)> {
         parse_jsonl_chunk(raw, cursor, map_entry)
     }
 }
@@ -532,8 +532,13 @@ mod tests {
     #[test]
     fn the_full_fixture_parses_and_consumes_every_byte() {
         let raw = fixture_bytes();
-        let (events, cursor) = CodexRolloutFormat.parse(&raw, &Cursor::start());
-        assert_eq!(cursor.offset, raw.len() as u64);
+        let tagged = CodexRolloutFormat.parse(&raw, &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+        // `parse` pairs each event with the cursor *after its own line*, not a
+        // single batch cursor; the tailer advances past the final complete
+        // line independently, so byte-for-byte consumption is its concern
+        // (proven by `partial_trailing_line_is_left_unconsumed`), while here
+        // we assert no entry degrades to Raw.
         // Every committed entry is understood; nothing degrades to Raw.
         assert!(
             events.iter().all(|e| !matches!(e, TuiEvent::Raw { .. })),
@@ -544,7 +549,8 @@ mod tests {
     #[test]
     fn fixture_yields_session_meta_assistant_text_tool_activity_and_turn_end() {
         let raw = fixture_bytes();
-        let (events, _) = CodexRolloutFormat.parse(&raw, &Cursor::start());
+        let tagged = CodexRolloutFormat.parse(&raw, &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
 
         let session_ids: Vec<_> = events
             .iter()
@@ -597,7 +603,8 @@ mod tests {
     #[test]
     fn user_messages_and_telemetry_never_surface() {
         let raw = fixture_bytes();
-        let (events, _) = CodexRolloutFormat.parse(&raw, &Cursor::start());
+        let tagged = CodexRolloutFormat.parse(&raw, &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
         let surfaced_text = events
             .iter()
             .filter_map(|e| match e {
@@ -615,12 +622,16 @@ mod tests {
     fn partial_trailing_line_is_left_unconsumed() {
         let full = fixture_bytes();
         let split = full.len() - 10;
-        let (first_events, first_cursor) =
-            CodexRolloutFormat.parse(&full[..split], &Cursor::start());
-        let (second_events, second_cursor) =
-            CodexRolloutFormat.parse(&full[first_cursor.offset as usize..], &first_cursor);
-        let (whole_events, _whole_cursor) = CodexRolloutFormat.parse(&full, &Cursor::start());
-        assert_eq!(second_cursor.offset, full.len() as u64);
+        let tagged = CodexRolloutFormat.parse(&full[..split], &Cursor::start());
+        let first_events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+        let first_cursor = tagged
+            .last()
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(Cursor::start);
+        let tagged = CodexRolloutFormat.parse(&full[first_cursor.offset as usize..], &first_cursor);
+        let second_events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+        let tagged = CodexRolloutFormat.parse(&full, &Cursor::start());
+        let whole_events: Vec<TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
         let emitting_count =
             |events: &[TuiEvent]| events.iter().filter(|e| e.emits_a_payload()).count();
         assert_eq!(

@@ -98,9 +98,10 @@ fn fixture_bytes() -> Vec<u8> {
 
 fn parsed_fixture_events() -> Vec<super::TuiEvent> {
     let vendor = ClaudeTuiVendor::new(PathBuf::from("/workspace/crew"), Vec::new());
-    let (events, _) = vendor
+    let tagged = vendor
         .format()
         .parse(&fixture_bytes(), &super::Cursor::start());
+    let events: Vec<super::TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
     events
 }
 

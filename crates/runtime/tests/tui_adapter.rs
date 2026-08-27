@@ -281,7 +281,7 @@ impl Harness {
 struct MockFormat;
 
 impl TranscriptFormat for MockFormat {
-    fn parse(&self, raw: &[u8], cursor: &Cursor) -> (Vec<TuiEvent>, Cursor) {
+    fn parse(&self, raw: &[u8], cursor: &Cursor) -> Vec<(TuiEvent, Cursor)> {
         parse_jsonl_chunk(raw, cursor, |value| {
             let entry_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
             let events = match entry_type {

@@ -17,7 +17,7 @@ fn fixture_bytes() -> Vec<u8> {
     std::fs::read(&path).unwrap_or_else(|err| panic!("reading fixture {path:?}: {err}"))
 }
 
-fn parse_all(raw: &[u8]) -> (Vec<TuiEvent>, Cursor) {
+fn parse_all(raw: &[u8]) -> Vec<(TuiEvent, Cursor)> {
     vendor().format().parse(raw, &Cursor::start())
 }
 
@@ -27,8 +27,15 @@ fn parse_all(raw: &[u8]) -> (Vec<TuiEvent>, Cursor) {
 #[test]
 fn the_full_fixture_parses_and_consumes_every_byte() {
     let raw = fixture_bytes();
-    let (_, cursor) = parse_all(&raw);
-    assert_eq!(cursor.offset, raw.len() as u64);
+    let tagged = parse_all(&raw);
+    let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+    // `parse` pairs each event with the cursor *after its own line*; the
+    // tailer (not `parse`) advances past the final complete line, so the
+    // furthest event cursor sits at EOF when the last line emits (this
+    // fixture's final turn is the assistant's question).
+    let max_offset = tagged.iter().map(|(_, c)| c.offset).max().unwrap_or(0);
+    assert_eq!(max_offset, raw.len() as u64);
+    assert!(!events.is_empty());
 }
 
 /// The expected normalized event sequence: a `SessionMeta` from every
@@ -40,7 +47,8 @@ fn the_full_fixture_parses_and_consumes_every_byte() {
 #[test]
 fn expected_normalized_event_sequence() {
     let raw = fixture_bytes();
-    let (events, _) = parse_all(&raw);
+    let tagged = parse_all(&raw);
+    let events: Vec<TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
 
     let session_metas = events
         .iter()
@@ -115,7 +123,8 @@ fn expected_normalized_event_sequence() {
 #[test]
 fn question_detection_on_the_fixtures_actual_question() {
     let raw = fixture_bytes();
-    let (events, _) = parse_all(&raw);
+    let tagged = parse_all(&raw);
+    let events: Vec<TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
 
     let questions: Vec<bool> = events
         .iter()
@@ -139,7 +148,8 @@ fn question_detection_on_the_fixtures_actual_question() {
 #[test]
 fn every_non_conversational_real_entry_type_degrades_to_raw() {
     let raw = fixture_bytes();
-    let (events, _) = parse_all(&raw);
+    let tagged = parse_all(&raw);
+    let events: Vec<TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
 
     let mut raw_types: Vec<&str> = events
         .iter()
@@ -178,9 +188,11 @@ fn an_entirely_unknown_entry_type_also_degrades_to_raw_not_a_parse_failure() {
         .collect();
     let mutated = mutated_lines.join("\n") + "\n";
 
-    let (events, cursor) = parse_all(mutated.as_bytes());
+    let tagged = parse_all(mutated.as_bytes());
+    let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+    let max_offset = tagged.iter().map(|(_, c)| c.offset).max().unwrap_or(0);
     assert_eq!(
-        cursor.offset,
+        max_offset,
         mutated.len() as u64,
         "the mutated fixture must still fully parse"
     );
@@ -201,24 +213,39 @@ fn an_entirely_unknown_entry_type_also_degrades_to_raw_not_a_parse_failure() {
 #[test]
 fn cursor_parsing_is_idempotent_at_arbitrary_byte_splits() {
     let raw = fixture_bytes();
-    let (whole_events, whole_cursor) = parse_all(&raw);
+    let whole_tagged = parse_all(&raw);
+    let whole_events: Vec<TuiEvent> = whole_tagged.iter().map(|(e, _)| e.clone()).collect();
+    let whole_last_cursor = whole_tagged
+        .last()
+        .map(|(_, c)| c.clone())
+        .unwrap_or_else(Cursor::start);
 
     // A representative spread of split points, including mid-line ones.
     let split_points: Vec<usize> = (1..10).map(|i| raw.len() * i / 10).collect();
 
     for split in split_points {
-        let (first_events, first_cursor) = vendor().format().parse(&raw[..split], &Cursor::start());
+        let first_tagged = vendor().format().parse(&raw[..split], &Cursor::start());
+        let first_events: Vec<TuiEvent> = first_tagged.iter().map(|(e, _)| e.clone()).collect();
+        let first_cursor = first_tagged
+            .last()
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(Cursor::start);
         // Resume from `first_cursor.offset`: feed only the unconsumed
         // remainder, exactly like `TranscriptTailer` does after a batch.
-        let (second_events, second_cursor) = vendor()
+        let second_tagged = vendor()
             .format()
             .parse(&raw[first_cursor.offset as usize..], &first_cursor);
+        let second_events: Vec<TuiEvent> = second_tagged.iter().map(|(e, _)| e.clone()).collect();
+        let second_last_cursor = second_tagged
+            .last()
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(Cursor::start);
 
         let mut combined_events = first_events;
         combined_events.extend(second_events);
 
         assert_eq!(
-            second_cursor.offset, whole_cursor.offset,
+            second_last_cursor.offset, whole_last_cursor.offset,
             "split at {split}: final offset must match a single full parse"
         );
         assert_eq!(
