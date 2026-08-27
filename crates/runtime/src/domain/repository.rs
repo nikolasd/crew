@@ -1439,37 +1439,47 @@ impl<'c> DomainRepository<'c> {
             kind: "worker",
             id: worker_id.clone(),
         })?;
-        self.conn.execute(
-            "INSERT INTO escalations (escalation_id, run_id, kind, question, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![
-                crew_protocol::EscalationId::new().to_string(),
-                run_id.to_string(),
-                reason,
-                question,
-                Timestamp::now().as_str(),
-            ],
-        )?;
         let event = RuntimeEvent::EscalationRaised {
             run_id,
             task_id,
             worker_id,
-            reason,
-            question,
+            reason: reason.clone(),
+            question: question.clone(),
         };
         self.append_and_apply(
             &event,
             Some(task_id),
             Some(worker_id),
             Some(run_id),
-            |_tx| Ok(()),
+            move |tx| {
+                // I1: persist the escalation projection row inside the same
+                // transaction that appends the `EscalationRaised` event
+                // (invariant 1: intent and side-effect projection commit
+                // together). The sibling site `record_adapter_event` inserts
+                // its row in this closure too; inserting on `conn` directly
+                // would orphan the row if the event append rolled back.
+                tx.execute(
+                    "INSERT INTO escalations (escalation_id, run_id, kind, question, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![
+                        crew_protocol::EscalationId::new().to_string(),
+                        run_id.to_string(),
+                        reason,
+                        question,
+                        Timestamp::now().as_str(),
+                    ],
+                )?;
+                Ok(())
+            },
         )
     }
 
     /// Whether this run's immediately preceding terminal run for the same
     /// task also ended `failed` -- WP20's two-consecutive-failures trigger
-    /// for a `repeated_failure` escalation. Reads at most the two newest
-    /// terminal rows for the task.
+    /// for a `repeated_failure` escalation. Reads the single immediately
+    /// preceding terminal run for the task (the most recent run that started
+    /// before this one) -- a failure counts only when that predecessor, too,
+    /// failed.
     ///
     /// # Errors
     /// Returns [`DomainError`] on query failure only; an unknown run reads
@@ -1483,16 +1493,19 @@ impl<'c> DomainRepository<'c> {
         ) else {
             return false;
         };
-        let failed_before: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM runs \
-                 WHERE task_id = ?1 AND state = 'failed' AND run_id != ?2",
-                rusqlite::params![task_id, run_id.to_string()],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        failed_before > 0
+        let Ok(prev_state): Result<String, _> = self.conn.query_row(
+            "SELECT state FROM runs \
+                 WHERE task_id = ?1 AND run_id != ?2 AND started_at IS NOT NULL \
+                 AND started_at < (SELECT started_at FROM runs WHERE run_id = ?2) \
+                 ORDER BY started_at DESC, run_id DESC \
+                 LIMIT 1",
+            rusqlite::params![task_id, run_id.to_string()],
+            |row| row.get(0),
+        ) else {
+            // No preceding terminal run for this task -- not a repeat.
+            return false;
+        };
+        prev_state.as_str() == "failed"
     }
 
     pub fn journal_budget_exceeded(&mut self, run_id: RunId) -> Result<Committed, DomainError> {
@@ -3517,6 +3530,167 @@ mod tests {
         assert!(
             none.is_none(),
             "a settled run must never receive a timeout fact"
+        );
+    }
+
+    /// Seeds a run row directly (bypassing `submit_run`'s state machine) so
+    /// the pure-query helpers can be tested against an ordered run history.
+    fn insert_run(
+        conn: &mut Connection,
+        task_id: &str,
+        worker_id: &str,
+        run_id: &RunId,
+        state: &str,
+        started_at: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO runs (run_id, task_id, worker_id, state, created_at, started_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                run_id.to_string(),
+                task_id,
+                worker_id,
+                state,
+                "2026-01-01T00:00:00Z",
+                started_at,
+            ],
+        )
+        .expect("insert run");
+    }
+
+    /// I1: `record_escalation_raised` persists its `EscalationRaised` event
+    /// and its `escalations` projection row in the SAME transaction (the
+    /// projection was previously INSERT-ed on `conn` outside the append tx,
+    /// risking an orphan row on rollback). The row carries the machine
+    /// `reason` as `kind` and stays open (`decided_at` NULL) until an answer
+    /// resolves it.
+    #[test]
+    fn record_escalation_raised_persists_projection_in_event_tx() {
+        let mut conn = open_test_db();
+        let project_id = ProjectId::new();
+        let (task_id, worker_id) = seed_worker(&mut conn, project_id);
+        let run_id = RunId::new();
+        let run = Run {
+            run_id,
+            task_id,
+            worker_id,
+            state: RunState::try_from("queued").unwrap(),
+            flags: RunFlags::default(),
+            vendor_session_id: None,
+            started_at: None,
+            completed_at: None,
+        };
+        let mut repo = DomainRepository::new(&mut conn, project_id);
+        repo.submit_run(&run, None, None)
+            .expect("submit_run commits");
+
+        let committed = repo
+            .record_escalation_raised(run_id, "write_violation", None)
+            .expect("record_escalation_raised");
+        // The event was appended after the RunQueued row (sequence 3).
+        assert!(
+            committed.sequence > 3,
+            "EscalationRaised event must be journaled"
+        );
+
+        // The projection row is present with the reason as `kind`, still open.
+        let (kind, question, decided_at, escalation_id): (
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+        ) = conn
+            .query_row(
+                "SELECT kind, question, decided_at, escalation_id \
+                 FROM escalations WHERE run_id = ?1",
+                [run_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("escalation projection persists in the event tx");
+        assert_eq!(
+            kind, "write_violation",
+            "reason is written to the kind column"
+        );
+        assert!(question.is_none());
+        assert!(decided_at.is_none(), "open escalation is undecided");
+        assert!(!escalation_id.is_empty());
+    }
+
+    /// I2: `previous_run_for_task_also_failed` fires only on two CONSECUTIVE
+    /// failures (the immediately preceding terminal run also failed), not on
+    /// any prior failure. The old `COUNT(*) > 0` escalated fail -> success ->
+    /// fail; the predecessor-by-start-time SQL must not.
+    #[test]
+    fn previous_run_for_task_also_failed_detects_consecutive_only() {
+        let mut conn = open_test_db();
+        let project_id = ProjectId::new();
+        let (task_id, worker_id) = seed_worker(&mut conn, project_id);
+        let t = task_id.to_string();
+        let w = worker_id.to_string();
+
+        // Same task, three runs ordered by start time: failed, succeeded,
+        // failed. Only r3's direct predecessor (r2) matters for "repeat".
+        let r1 = RunId::new();
+        let r2 = RunId::new();
+        let r3 = RunId::new();
+        insert_run(
+            &mut conn,
+            &t,
+            &w,
+            &r1,
+            "failed",
+            Some("2026-01-01T01:00:00Z"),
+        );
+        insert_run(
+            &mut conn,
+            &t,
+            &w,
+            &r2,
+            "succeeded",
+            Some("2026-01-01T02:00:00Z"),
+        );
+        insert_run(
+            &mut conn,
+            &t,
+            &w,
+            &r3,
+            "failed",
+            Some("2026-01-01T03:00:00Z"),
+        );
+
+        // A different task's failure must not bleed across tasks.
+        let (task_id_2, _worker_id_2) = seed_worker(&mut conn, project_id);
+        let r4 = RunId::new();
+        insert_run(
+            &mut conn,
+            &task_id_2.to_string(),
+            &w,
+            &r4,
+            "failed",
+            Some("2026-01-01T04:00:00Z"),
+        );
+
+        let repo = DomainRepository::new(&mut conn, project_id);
+        // r3 just failed; its immediate predecessor r2 succeeded -- a gap
+        // breaks the streak. The old code returned true (r1 is a prior failure).
+        assert!(
+            !repo.previous_run_for_task_also_failed(r3),
+            "a succeeded run between two failures must not be a repeat"
+        );
+        // r2 just failed, immediately preceded by another failure (r1).
+        assert!(
+            repo.previous_run_for_task_also_failed(r2),
+            "two consecutive failures must raise"
+        );
+        // r1 is the earliest: no predecessor.
+        assert!(
+            !repo.previous_run_for_task_also_failed(r1),
+            "first failure has no preceding run"
+        );
+        // r4 is the only run on its task: no predecessor.
+        assert!(
+            !repo.previous_run_for_task_also_failed(r4),
+            "first failure of a fresh task has no predecessor"
         );
     }
 }
