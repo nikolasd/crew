@@ -21,7 +21,7 @@ use crew_runtime::adapter::tui::{
 struct TestFormat;
 
 impl TranscriptFormat for TestFormat {
-    fn parse(&self, raw: &[u8], cursor: &Cursor) -> (Vec<TuiEvent>, Cursor) {
+    fn parse(&self, raw: &[u8], cursor: &Cursor) -> Vec<(TuiEvent, Cursor)> {
         parse_jsonl_chunk(raw, cursor, |value| {
             let entry_id = value
                 .get("id")
@@ -64,7 +64,12 @@ fn text_of(event: &TuiEvent) -> Option<&str> {
 #[test]
 fn a_partial_trailing_line_is_held_back_and_not_consumed() {
     let data = b"{\"type\":\"text\",\"text\":\"one\",\"id\":\"a\"}\n{\"type\":\"text\",\"te";
-    let (events, cursor) = TestFormat.parse(data, &Cursor::start());
+    let tagged = TestFormat.parse(data, &Cursor::start());
+    let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+    let cursor = tagged
+        .last()
+        .map(|(_, c)| c.clone())
+        .unwrap_or_else(Cursor::start);
 
     assert_eq!(events.len(), 1);
     assert_eq!(text_of(&events[0]), Some("one"));
@@ -88,7 +93,12 @@ fn chunked_parse_at_arbitrary_splits_equals_one_shot_parse() {
     .chain(std::iter::once(b'\n'))
     .collect();
 
-    let (oneshot_events, oneshot_cursor) = TestFormat.parse(&data, &Cursor::start());
+    let oneshot_tagged = TestFormat.parse(&data, &Cursor::start());
+    let oneshot_events: Vec<TuiEvent> = oneshot_tagged.iter().map(|(e, _)| e.clone()).collect();
+    let oneshot_cursor = oneshot_tagged
+        .last()
+        .map(|(_, c)| c.clone())
+        .unwrap_or_else(Cursor::start);
     assert_eq!(oneshot_events.len(), 4);
     assert_eq!(oneshot_cursor.offset, data.len() as u64);
 
@@ -99,12 +109,20 @@ fn chunked_parse_at_arbitrary_splits_equals_one_shot_parse() {
         let mut events = Vec::new();
         let mut cursor = Cursor::start();
 
-        let (first, c1) = TestFormat.parse(&data[..split], &cursor);
-        events.extend(first);
-        cursor = c1;
-        let (rest, c2) = TestFormat.parse(&data[cursor.offset as usize..], &cursor);
-        events.extend(rest);
-        cursor = c2;
+        let first_tagged = TestFormat.parse(&data[..split], &cursor);
+        let first_events: Vec<TuiEvent> = first_tagged.iter().map(|(e, _)| e.clone()).collect();
+        events.extend(first_events);
+        cursor = first_tagged
+            .last()
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(Cursor::start);
+        let rest_tagged = TestFormat.parse(&data[cursor.offset as usize..], &cursor);
+        let rest_events: Vec<TuiEvent> = rest_tagged.iter().map(|(e, _)| e.clone()).collect();
+        events.extend(rest_events);
+        cursor = rest_tagged
+            .last()
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(Cursor::start);
 
         assert_eq!(
             events.len(),
@@ -122,7 +140,12 @@ fn chunked_parse_at_arbitrary_splits_equals_one_shot_parse() {
 #[test]
 fn a_malformed_line_degrades_to_raw_with_parse_error() {
     let data = b"this is not json\n{\"type\":\"text\",\"text\":\"ok\",\"id\":\"z\"}\n";
-    let (events, cursor) = TestFormat.parse(data, &Cursor::start());
+    let tagged = TestFormat.parse(data, &Cursor::start());
+    let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+    let cursor = tagged
+        .last()
+        .map(|(_, c)| c.clone())
+        .unwrap_or_else(Cursor::start);
 
     assert_eq!(events.len(), 2);
     assert!(
@@ -138,7 +161,12 @@ fn a_malformed_line_degrades_to_raw_with_parse_error() {
 fn multi_byte_utf8_advances_the_cursor_by_bytes_not_chars() {
     let line = r#"{"type":"text","text":"日本語テキスト🚀","id":"u"}"#;
     let data = format!("{line}\n").into_bytes();
-    let (events, cursor) = TestFormat.parse(&data, &Cursor::start());
+    let tagged = TestFormat.parse(&data, &Cursor::start());
+    let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+    let cursor = tagged
+        .last()
+        .map(|(_, c)| c.clone())
+        .unwrap_or_else(Cursor::start);
 
     assert_eq!(events.len(), 1);
     assert_eq!(
@@ -152,7 +180,12 @@ fn multi_byte_utf8_advances_the_cursor_by_bytes_not_chars() {
 #[test]
 fn blank_lines_are_consumed_without_producing_events() {
     let data = b"\n\n{\"type\":\"text\",\"text\":\"after blanks\",\"id\":\"b\"}\n";
-    let (events, cursor) = TestFormat.parse(data, &Cursor::start());
+    let tagged = TestFormat.parse(data, &Cursor::start());
+    let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+    let cursor = tagged
+        .last()
+        .map(|(_, c)| c.clone())
+        .unwrap_or_else(Cursor::start);
 
     assert_eq!(events.len(), 1);
     assert_eq!(text_of(&events[0]), Some("after blanks"));
@@ -184,7 +217,8 @@ async fn poll_once_returns_new_events_then_none_until_more_lines_arrive() {
         Duration::from_millis(10),
     );
 
-    let (events, cursor) = tailer.poll_once().await.expect("first poll sees the line");
+    let (tagged, cursor) = tailer.poll_once().await.expect("first poll sees the line");
+    let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
     assert_eq!(events.len(), 1);
     assert!(cursor.offset > 0);
 
@@ -208,7 +242,8 @@ async fn poll_once_returns_new_events_then_none_until_more_lines_arrive() {
     // Completing the line makes it visible.
     file.write_all(b"xt\":\"second\",\"id\":\"2\"}\n").unwrap();
     file.flush().unwrap();
-    let (events, _) = tailer.poll_once().await.expect("completed line arrives");
+    let (tagged2, _) = tailer.poll_once().await.expect("completed line arrives");
+    let events: Vec<TuiEvent> = tagged2.iter().map(|(e, _)| e.clone()).collect();
     assert_eq!(events.len(), 1);
     assert_eq!(text_of(&events[0]), Some("second"));
 }
@@ -226,22 +261,25 @@ async fn spawned_tailer_delivers_batches_and_stops_cleanly() {
         Duration::from_millis(10),
     );
 
-    let (batch_tx, mut batch_rx) = tokio::sync::mpsc::unbounded_channel();
-    let handle = tailer.spawn(move |events, cursor| {
-        let _ = batch_tx.send((events, cursor));
+    let (batch_tx, mut batch_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(Vec<(TuiEvent, Cursor)>, Cursor)>();
+    let handle = tailer.spawn(move |tagged, cursor| {
+        let _ = batch_tx.send((tagged, cursor));
     });
 
-    let (events, _) = tokio::time::timeout(Duration::from_secs(2), batch_rx.recv())
+    let (tagged, _cursor) = tokio::time::timeout(Duration::from_secs(2), batch_rx.recv())
         .await
         .expect("the pre-existing line must arrive promptly")
         .expect("channel open");
+    let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
     assert_eq!(text_of(&events[0]), Some("pre-existing"));
 
     write_line(&path, r#"{"type":"text","text":"appended","id":"q"}"#);
-    let (events, cursor) = tokio::time::timeout(Duration::from_secs(2), batch_rx.recv())
+    let (tagged, cursor) = tokio::time::timeout(Duration::from_secs(2), batch_rx.recv())
         .await
         .expect("the appended line must arrive promptly")
         .expect("channel open");
+    let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
     assert_eq!(text_of(&events[0]), Some("appended"));
     assert_eq!(cursor.last_entry_id.as_deref(), Some("q"));
 

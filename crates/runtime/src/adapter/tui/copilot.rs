@@ -216,7 +216,7 @@ impl TuiVendor for CopilotTuiVendor {
 struct CopilotSessionFormat;
 
 impl TranscriptFormat for CopilotSessionFormat {
-    fn parse(&self, raw: &[u8], cursor: &Cursor) -> (Vec<TuiEvent>, Cursor) {
+    fn parse(&self, raw: &[u8], cursor: &Cursor) -> Vec<(TuiEvent, Cursor)> {
         parse_jsonl_chunk(raw, cursor, map_entry)
     }
 }
@@ -475,7 +475,12 @@ mod tests {
     #[test]
     fn the_full_fixture_parses_and_consumes_every_byte() {
         let vendor = CopilotTuiVendor::new(PathBuf::from("/w"), vec![]);
-        let (events, cursor) = vendor.format().parse(&fixture_bytes(), &Cursor::start());
+        let tagged = vendor.format().parse(&fixture_bytes(), &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+        let cursor = tagged
+            .last()
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(Cursor::start);
         assert!(
             !events.is_empty(),
             "the fixture must normalize to at least one event"
@@ -490,7 +495,8 @@ mod tests {
     #[test]
     fn fixture_yields_session_meta_assistant_text_tool_activity_and_turn_end() {
         let vendor = CopilotTuiVendor::new(PathBuf::from("/w"), vec![]);
-        let (events, _) = vendor.format().parse(&fixture_bytes(), &Cursor::start());
+        let tagged = vendor.format().parse(&fixture_bytes(), &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
         assert!(
             events
                 .iter()
@@ -530,7 +536,8 @@ mod tests {
             "{\"type\":\"session.truncation\",\"data\":{}}\n",
             "{\"type\":\"assistant.message\",\"data\":{\"content\":\"visible reply?\",\"toolRequests\":[]},\"id\":\"a1\"}\n",
         );
-        let (events, _) = vendor.format().parse(raw.as_bytes(), &Cursor::start());
+        let tagged = vendor.format().parse(raw.as_bytes(), &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
         assert_eq!(
             events.len(),
             1,
@@ -550,7 +557,8 @@ mod tests {
             "{\"type\":\"assistant.message\",\"data\":{\"content\":\"Shall I run git status next?\",",
             "\"toolRequests\":[{\"toolCallId\":\"t1\",\"name\":\"bash\",\"arguments\":{\"command\":\"git status\"}}]},\"id\":\"a1\"}\n",
         );
-        let (events, _) = vendor.format().parse(raw.as_bytes(), &Cursor::start());
+        let tagged = vendor.format().parse(raw.as_bytes(), &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
         assert_eq!(events.len(), 2);
         assert!(
             matches!(
@@ -569,7 +577,12 @@ mod tests {
     fn malformed_lines_degrade_to_raw_not_errors() {
         let vendor = CopilotTuiVendor::new(PathBuf::from("/w"), vec![]);
         let raw = b"{not json at all\n{\"type\":\"assistant.turn_end\",\"data\":{}}\n";
-        let (events, cursor) = vendor.format().parse(raw, &Cursor::start());
+        let tagged = vendor.format().parse(raw, &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+        let cursor = tagged
+            .last()
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(Cursor::start);
         assert!(matches!(&events[0], TuiEvent::Raw { .. }));
         assert!(matches!(&events[1], TuiEvent::TurnEnded));
         assert_eq!(cursor.offset as usize, raw.len());
@@ -579,7 +592,12 @@ mod tests {
     fn partial_trailing_line_is_left_unconsumed() {
         let vendor = CopilotTuiVendor::new(PathBuf::from("/w"), vec![]);
         let raw = b"{\"type\":\"assistant.turn_end\",\"data\":{}}\n{\"type\":\"assistant.mess";
-        let (events, cursor) = vendor.format().parse(raw, &Cursor::start());
+        let tagged = vendor.format().parse(raw, &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+        let cursor = tagged
+            .last()
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(Cursor::start);
         assert!(matches!(&events[0], TuiEvent::TurnEnded));
         assert_eq!(
             cursor.offset as usize,

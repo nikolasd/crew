@@ -243,7 +243,7 @@ impl TuiVendor for ClaudeTuiVendor {
 struct ClaudeTranscriptFormat;
 
 impl TranscriptFormat for ClaudeTranscriptFormat {
-    fn parse(&self, raw: &[u8], cursor: &Cursor) -> (Vec<TuiEvent>, Cursor) {
+    fn parse(&self, raw: &[u8], cursor: &Cursor) -> Vec<(TuiEvent, Cursor)> {
         parse_jsonl_chunk(raw, cursor, map_entry)
     }
 }
@@ -612,7 +612,12 @@ mod tests {
             "timestamp": "2026-01-01T00:00:00Z",
             "message": {"role": "user", "content": "hi"},
         }));
-        let (events, cursor) = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let tagged = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+        let cursor = tagged
+            .last()
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(Cursor::start);
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0],
@@ -629,7 +634,8 @@ mod tests {
             "timestamp": "t",
             "message": {"content": [{"type": "text", "text": "Should I proceed?"}]},
         }));
-        let (events, _) = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let tagged = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
         let question = events
             .iter()
             .find_map(|e| match e {
@@ -653,7 +659,8 @@ mod tests {
                 {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "config.toml"}},
             ]},
         }));
-        let (events, _) = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let tagged = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
         let is_question = events.iter().find_map(|e| match e {
             TuiEvent::AssistantText { is_question, .. } => Some(*is_question),
             _ => None,
@@ -671,7 +678,8 @@ mod tests {
                 {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "echo crew-fixture"}},
             ]},
         }));
-        let (events, _) = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let tagged = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
         let tool = events.iter().find_map(|e| match e {
             TuiEvent::ToolActivity { tool, detail, .. } => {
                 Some((tool.clone(), detail.value.clone()))
@@ -697,7 +705,8 @@ mod tests {
                 {"type": "thinking", "thinking": "secret reasoning", "signature": "sig"},
             ]},
         }));
-        let (events, _) = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let tagged = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
         // Only the SessionMeta extracted from the entry's own `sessionId`
         // -- never anything derived from the thinking block's content.
         assert_eq!(events.len(), 1);
@@ -710,14 +719,16 @@ mod tests {
             "type": "summary",
             "summary": "condensed prior turns",
         }));
-        let (events, _) = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let tagged = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
         assert!(events.is_empty());
     }
 
     #[test]
     fn an_unrecognized_type_degrades_to_raw() {
         let raw = line(serde_json::json!({"type": "future_entry_type"}));
-        let (events, _) = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let tagged = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let events: Vec<TuiEvent> = tagged.into_iter().map(|(e, _)| e).collect();
         assert!(matches!(
             &events[0],
             TuiEvent::Raw { entry_type } if entry_type == "future_entry_type"
@@ -731,7 +742,11 @@ mod tests {
             "uuid": "line-uuid-1",
             "sessionId": "sess-1",
         }));
-        let (_, cursor) = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let tagged = ClaudeTranscriptFormat.parse(&raw, &Cursor::start());
+        let cursor = tagged
+            .last()
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(Cursor::start);
         assert_eq!(cursor.last_entry_id, Some("line-uuid-1".to_string()));
     }
 
@@ -746,8 +761,12 @@ mod tests {
         // Split mid-line: the first half alone parses to nothing (no
         // complete line yet) and consumes zero bytes.
         let split = full.len() / 2;
-        let (first_events, first_cursor) =
-            ClaudeTranscriptFormat.parse(&full[..split], &Cursor::start());
+        let tagged = ClaudeTranscriptFormat.parse(&full[..split], &Cursor::start());
+        let first_events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+        let first_cursor = tagged
+            .last()
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(Cursor::start);
         assert!(first_events.is_empty());
         assert_eq!(first_cursor.offset, 0);
 
@@ -755,7 +774,12 @@ mod tests {
         // exactly the same result a single full parse would -- proving
         // a crash-restart that re-tails from byte 0 after only ever
         // observing a partial line is safe.
-        let (whole_events, whole_cursor) = ClaudeTranscriptFormat.parse(&full, &Cursor::start());
+        let tagged = ClaudeTranscriptFormat.parse(&full, &Cursor::start());
+        let whole_events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+        let whole_cursor = tagged
+            .last()
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(Cursor::start);
         assert_eq!(whole_cursor.offset, full.len() as u64);
         assert_eq!(whole_events.len(), 2); // SessionMeta + AssistantText
     }

@@ -1165,7 +1165,7 @@ mod crash_resume_tests {
     struct TestFormat;
 
     impl TranscriptFormat for TestFormat {
-        fn parse(&self, raw: &[u8], cursor: &Cursor) -> (Vec<TuiEvent>, Cursor) {
+        fn parse(&self, raw: &[u8], cursor: &Cursor) -> Vec<(TuiEvent, Cursor)> {
             crate::adapter::tui::parse_jsonl_chunk(raw, cursor, |value| {
                 let entry_id = value
                     .get("id")
@@ -1295,29 +1295,19 @@ mod crash_resume_tests {
         .expect("built-in redaction rules always compile")
     }
 
-    /// Emits one batch of `TestFormat` events through `sink`, attaching
-    /// `cursor` to the batch's last *emitting* event -- calling the exact
-    /// same `crate::adapter::tui::last_emitting_index` helper
-    /// `crate::adapter::tui::adapter::emit_tui_event`'s production pump
-    /// loop uses, rather than reimplementing the placement rule, so this
-    /// test cannot silently drift from (and therefore cannot fail to
-    /// catch a regression in) production's actual placement.
-    /// `TuiEvent::TurnEnded` emits nothing, matching `emit_tui_event`.
+    /// Emits one parsed + tagged batch of `TestFormat` events through
+    /// `sink`, giving every event the cursor it already carries (`parse`'s
+    /// per-line cursor) -- the exact shape the production pump loop emits
+    /// (`emit_tui_event` forwards each event's own cursor). `TuiEvent::TurnEnded`
+    /// emits nothing, matching `emit_tui_event`.
     async fn emit_batch(
         sink: &DomainAdapterEventSink,
         run_id: RunId,
         task_id: TaskId,
         worker_id: WorkerId,
-        events: Vec<TuiEvent>,
-        cursor: Cursor,
+        tagged: Vec<(TuiEvent, Cursor)>,
     ) {
-        let last_emitting = crate::adapter::tui::last_emitting_index(&events);
-        for (index, event) in events.into_iter().enumerate() {
-            let batch_cursor = if Some(index) == last_emitting {
-                Some(cursor.clone())
-            } else {
-                None
-            };
+        for (event, event_cursor) in tagged {
             match event {
                 TuiEvent::AssistantText { text, .. } => {
                     sink.emit(AdapterEvent {
@@ -1328,17 +1318,12 @@ mod crash_resume_tests {
                             role: "assistant".to_string(),
                             text,
                         },
-                        cursor: batch_cursor,
+                        cursor: Some(event_cursor),
                     })
                     .await
                     .expect("emit");
                 }
-                TuiEvent::TurnEnded => {
-                    assert!(
-                        batch_cursor.is_none(),
-                        "TurnEnded emits nothing, so it must never be handed a cursor to lose"
-                    );
-                }
+                TuiEvent::TurnEnded => {}
                 other => panic!("TestFormat only produces AssistantText/TurnEnded: {other:?}"),
             }
         }
@@ -1375,20 +1360,13 @@ mod crash_resume_tests {
             Cursor::start(),
             std::time::Duration::from_millis(10),
         );
-        let (events, cursor_after_first_pass) = tailer_one
+        let (tagged, cursor_after_first_pass) = tailer_one
             .poll_once()
             .await
             .expect("the two pre-existing lines are consumed");
+        let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
         assert_eq!(events.len(), 2);
-        emit_batch(
-            &sink,
-            run_id,
-            task_id,
-            worker_id,
-            events,
-            cursor_after_first_pass.clone(),
-        )
-        .await;
+        emit_batch(&sink, run_id, task_id, worker_id, tagged).await;
 
         // The cursor committed in the same transaction as the batch's
         // last event is now durable.
@@ -1427,24 +1405,17 @@ mod crash_resume_tests {
             stored_cursor,
             std::time::Duration::from_millis(10),
         );
-        let (events, cursor_after_second_pass) = tailer_two
+        let (tagged, _cursor_after_second_pass) = tailer_two
             .poll_once()
             .await
             .expect("only the newly appended line is unconsumed");
+        let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
         assert_eq!(
             events.len(),
             1,
             "resuming from the stored cursor must not re-deliver the first pass's lines"
         );
-        emit_batch(
-            &sink,
-            run_id,
-            task_id,
-            worker_id,
-            events,
-            cursor_after_second_pass,
-        )
-        .await;
+        emit_batch(&sink, run_id, task_id, worker_id, tagged).await;
 
         // The journal holds exactly three `AdapterMessageFinal` events,
         // each with distinct text -- no duplicate from re-tailing.
@@ -1503,25 +1474,17 @@ mod crash_resume_tests {
             Cursor::start(),
             std::time::Duration::from_millis(10),
         );
-        let (events, cursor_after_batch) = tailer_one
+        let (tagged, cursor_after_batch) = tailer_one
             .poll_once()
             .await
             .expect("both lines are consumed in one batch");
+        let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
         assert_eq!(events.len(), 2, "AssistantText then TurnEnded");
-        assert_eq!(
-            crate::adapter::tui::last_emitting_index(&events),
-            Some(0),
+        assert!(
+            events.iter().rposition(TuiEvent::emits_a_payload) == Some(0),
             "the AssistantText at index 0 is the batch's only emitting event"
         );
-        emit_batch(
-            &sink,
-            run_id,
-            task_id,
-            worker_id,
-            events,
-            cursor_after_batch.clone(),
-        )
-        .await;
+        emit_batch(&sink, run_id, task_id, worker_id, tagged).await;
 
         // The stored cursor covers the *whole* batch (past the
         // TurnEnded entry too), even though TurnEnded itself never
@@ -1544,8 +1507,10 @@ mod crash_resume_tests {
             serde_json::from_str(&stored_cursor_json).expect("stored cursor deserializes");
         assert_eq!(
             stored_cursor, cursor_after_batch,
-            "the persisted cursor must cover the entire batch, including the trailing \
-             TurnEnded entry that carried no cursor itself"
+            "the persisted cursor must advance to the last emitting event: the trailing \
+             TurnEnded emits no payload, so the durable cursor stops at the AssistantText's \
+             line; the tailer's seek cursor (advanced separately to the post-batch position) \
+             covers the rest"
         );
 
         // Simulated crash + resume: the worker was still idle (no new
@@ -1562,24 +1527,18 @@ mod crash_resume_tests {
             stored_cursor,
             std::time::Duration::from_millis(10),
         );
-        let (events, cursor_after_resume) = tailer_two
+        let (tagged, _cursor_after_resume) = tailer_two
             .poll_once()
             .await
             .expect("only the newly appended line is unconsumed");
+        let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
         assert_eq!(
-            events.len(),
+            events.iter().filter(|e| e.emits_a_payload()).count(),
             1,
-            "resuming must not re-deliver \"first\" or the TurnEnded entry"
+            "resuming must not re-deliver \"first\"; the TurnEnded entry re-parses to a \
+             non-emitting event that journals nothing, so only \"second\" emits"
         );
-        emit_batch(
-            &sink,
-            run_id,
-            task_id,
-            worker_id,
-            events,
-            cursor_after_resume,
-        )
-        .await;
+        emit_batch(&sink, run_id, task_id, worker_id, tagged).await;
 
         let texts = journaled_message_final_texts(&db, run_id).await;
         assert_eq!(

@@ -733,4 +733,282 @@ mod tests {
             Some("{\"offset\":42,\"lastEntryId\":\"abc\"}")
         );
     }
+    /// Exercises migration 11: the `plans` table (run-scoped task plans, WP21
+    /// provenance) does not exist before the migration and is writable after
+    /// it, with the nullable decision columns defaulting to NULL for open plans.
+    #[test]
+    fn migration_11_adds_plans_table() {
+        let mut conn = Connection::open_in_memory().expect("in-memory db");
+
+        migration_list()
+            .to_version(&mut conn, 10)
+            .expect("migrate to v10");
+
+        let err = conn.query_row("SELECT plan_id FROM plans LIMIT 1", [], |r| {
+            r.get::<_, String>(0)
+        });
+        assert!(err.is_err(), "plans must not exist before migration 11");
+
+        migration_list()
+            .to_version(&mut conn, 11)
+            .expect("migrate to v11");
+
+        conn.execute(
+            "INSERT INTO plans (plan_id, project_id, run_id, task_id, worker_id, \
+             owner_client_instance_id, task_text, subtasks_json, status, created_at) \
+             VALUES ('pl-1', 'p-1', 'r-1', 't-1', 'w-1', 'omp-1', 'survey', '[]', \
+             'proposed', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("plans row accepted after migration 11");
+
+        let status: String = conn
+            .query_row("SELECT status FROM plans WHERE plan_id = 'pl-1'", [], |r| {
+                r.get(0)
+            })
+            .expect("read back status");
+        assert_eq!(status, "proposed");
+
+        let decided_at: Option<String> = conn
+            .query_row(
+                "SELECT decided_at FROM plans WHERE plan_id = 'pl-1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("decided_at defaults to NULL on open plans");
+        assert!(decided_at.is_none());
+    }
+
+    /// Exercises migration 12: the per-run `budgets` table does not exist and
+    /// `runs.plan_ref` is absent before the migration; both are present and
+    /// usable after it, and `budgets.run_id` enforces its FK to `runs`.
+    #[test]
+    fn migration_12_adds_budgets_table_and_runs_plan_ref() {
+        let mut conn = Connection::open_in_memory().expect("in-memory db");
+        conn.pragma_update(None, "foreign_keys", true)
+            .expect("foreign_keys on");
+
+        migration_list()
+            .to_version(&mut conn, 11)
+            .expect("migrate to v11");
+
+        // Seed the parent chain in FK order (FK is on, so order matters;
+        // literals + [] mirror migration_10's seed).
+        conn.execute(
+            "INSERT INTO worker_profiles (id, fingerprint, adapter, model, permission_envelope)
+             VALUES ('wp-1', 'sha256:fake', 'fake', 'test', '{}')",
+            [],
+        )
+        .expect("seed worker_profiles");
+        conn.execute(
+            "INSERT INTO tasks (task_id, project_id, owner_client_instance_id, revision, created_at, updated_at)
+             VALUES ('t-1', 'p-1', 'omp-1', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("seed tasks");
+        conn.execute(
+            "INSERT INTO workers (worker_id, project_id, profile_id, created_at)
+             VALUES ('w-1', 'p-1', 'wp-1', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("seed workers");
+        conn.execute(
+            "INSERT INTO runs (run_id, task_id, worker_id, state, \
+             flags_degraded_control, flags_needs_reconciliation, \
+             flags_protocol_unhealthy, flags_policy_quarantined, \
+             flags_workspace_dirty, flags_children_active, vendor_session_id, \
+             created_at) \
+             VALUES ('r-1', 't-1', 'w-1', 'queued', 0, 0, 0, 0, 0, 0, NULL, \
+             '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("seed runs");
+
+        assert!(
+            conn.prepare("SELECT run_id FROM budgets LIMIT 1").is_err(),
+            "budgets must not exist before migration 12"
+        );
+
+        let err = conn.query_row("SELECT plan_ref FROM runs WHERE run_id = 'r-1'", [], |r| {
+            r.get::<_, Option<String>>(0)
+        });
+        assert!(
+            err.is_err(),
+            "runs.plan_ref must not exist before migration 12"
+        );
+
+        migration_list()
+            .to_version(&mut conn, 12)
+            .expect("migrate to v12");
+
+        // plan_ref now exists (nullable; pre-existing rows get NULL).
+        let plan_ref: Option<String> = conn
+            .query_row("SELECT plan_ref FROM runs WHERE run_id = 'r-1'", [], |r| {
+                r.get(0)
+            })
+            .expect("runs.plan_ref exists after migration 12");
+        assert!(plan_ref.is_none());
+
+        // budgets.run_id -> runs(run_id) is enforced: a valid run_id succeeds...
+        conn.execute(
+            "INSERT INTO budgets (run_id, task_id, turns_used, turn_limit) \
+             VALUES ('r-1', 't-1', 0, 10)",
+            [],
+        )
+        .expect("budgets row with valid run_id accepted after migration 12");
+
+        // ...and an unknown run_id is rejected.
+        let fk_err = conn.execute(
+            "INSERT INTO budgets (run_id, task_id, turns_used, turn_limit) \
+             VALUES ('no-such-run', 't-1', 0, 10)",
+            [],
+        );
+        assert!(
+            fk_err.is_err(),
+            "budgets.run_id must enforce FK to runs(run_id)"
+        );
+
+        let (turns, turns_limit): (i32, i32) = conn
+            .query_row(
+                "SELECT turns_used, turn_limit FROM budgets WHERE run_id = 'r-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("read back budget row");
+        assert_eq!((turns, turns_limit), (0, 10));
+    }
+
+    /// Exercises migration 13: the `escalations` table (WP20 write-violation /
+    /// repeated-failure / question-dispatch journal) does not exist before the
+    /// migration and is writable after it, with open escalations carrying no
+    /// decision columns and `escalations.run_id` enforcing its FK to `runs`.
+    #[test]
+    fn migration_13_adds_escalations_table() {
+        let mut conn = Connection::open_in_memory().expect("in-memory db");
+        conn.pragma_update(None, "foreign_keys", true)
+            .expect("foreign_keys on");
+
+        migration_list()
+            .to_version(&mut conn, 12)
+            .expect("migrate to v12");
+
+        // Seed the parent chain in FK order (FK is on, so order matters).
+        conn.execute(
+            "INSERT INTO worker_profiles (id, fingerprint, adapter, model, permission_envelope)
+             VALUES ('wp-1', 'sha256:fake', 'fake', 'test', '{}')",
+            [],
+        )
+        .expect("seed worker_profiles");
+        conn.execute(
+            "INSERT INTO tasks (task_id, project_id, owner_client_instance_id, revision, created_at, updated_at)
+             VALUES ('t-1', 'p-1', 'omp-1', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("seed tasks");
+        conn.execute(
+            "INSERT INTO workers (worker_id, project_id, profile_id, created_at)
+             VALUES ('w-1', 'p-1', 'wp-1', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("seed workers");
+        conn.execute(
+            "INSERT INTO runs (run_id, task_id, worker_id, state, \
+             flags_degraded_control, flags_needs_reconciliation, \
+             flags_protocol_unhealthy, flags_policy_quarantined, \
+             flags_workspace_dirty, flags_children_active, vendor_session_id, \
+             created_at) \
+             VALUES ('r-1', 't-1', 'w-1', 'queued', 0, 0, 0, 0, 0, 0, NULL, \
+             '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("seed runs");
+
+        assert!(
+            conn.prepare("SELECT escalation_id FROM escalations LIMIT 1")
+                .is_err(),
+            "escalations must not exist before migration 13"
+        );
+
+        migration_list()
+            .to_version(&mut conn, 13)
+            .expect("migrate to v13");
+
+        // escalations.run_id -> runs(run_id) is enforced: valid run_id
+        // succeeds, an unknown one is rejected.
+        conn.execute(
+            "INSERT INTO escalations (escalation_id, run_id, kind, question, \
+             created_at) \
+             VALUES ('e-1', 'r-1', 'question', 'need clarification', \
+             '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("escalation with valid run_id accepted after migration 13");
+
+        let fk_err = conn.execute(
+            "INSERT INTO escalations (escalation_id, run_id, kind, question, \
+             created_at) \
+             VALUES ('e-bad', 'no-such-run', 'question', 'x', \
+             '2026-01-01T00:00:00Z')",
+            [],
+        );
+        assert!(
+            fk_err.is_err(),
+            "escalations.run_id must enforce FK to runs(run_id)"
+        );
+
+        let kind: String = conn
+            .query_row(
+                "SELECT kind FROM escalations WHERE escalation_id = 'e-1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("read back kind");
+        assert_eq!(kind, "question");
+
+        let decided_at: Option<String> = conn
+            .query_row(
+                "SELECT decided_at FROM escalations WHERE escalation_id = 'e-1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("read back decided_at");
+        assert!(decided_at.is_none(), "an open escalation has no decided_at");
+    }
+
+    /// Exercises migration 14 (WP26): the journal's two hot-path indexes do not
+    /// exist before the migration and exist after it. Asserting the step
+    /// succeeds also proves `events(run_id, sequence, timestamp)` exists, since
+    /// the `CREATE INDEX` would otherwise fail.
+    #[test]
+    fn migration_14_adds_journal_indexes() {
+        let mut conn = Connection::open_in_memory().expect("in-memory db");
+
+        migration_list()
+            .to_version(&mut conn, 13)
+            .expect("migrate to v13");
+
+        for idx in ["idx_events_run_seq", "idx_events_timestamp"] {
+            let err = conn.query_row(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                rusqlite::params![idx],
+                |r| r.get::<_, String>(0),
+            );
+            assert!(err.is_err(), "{idx} must not exist before migration 14");
+        }
+
+        migration_list()
+            .to_version(&mut conn, 14)
+            .expect("migrate to v14");
+
+        for idx in ["idx_events_run_seq", "idx_events_timestamp"] {
+            let name: String = conn
+                .query_row(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                    rusqlite::params![idx],
+                    |r| r.get(0),
+                )
+                .unwrap_or_else(|e| panic!("{idx} must exist after migration 14: {e}"));
+            assert_eq!(name, idx);
+        }
+    }
 }

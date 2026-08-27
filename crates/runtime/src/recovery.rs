@@ -716,6 +716,7 @@ impl RecoveryCoordinator {
                 let session_ref = VendorSessionRef(session.clone());
                 let path = self.resume.as_ref().and_then(|seam| {
                     seam.registry.tui_transcript_path_for_session(
+                        kind,
                         stuck.run_id,
                         stuck.task_id,
                         stuck.worker_id,
