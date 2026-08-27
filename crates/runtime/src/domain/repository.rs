@@ -1474,12 +1474,17 @@ impl<'c> DomainRepository<'c> {
         )
     }
 
-    /// Whether this run's immediately preceding terminal run for the same
-    /// task also ended `failed` -- WP20's two-consecutive-failures trigger
-    /// for a `repeated_failure` escalation. Reads the single immediately
-    /// preceding terminal run for the task (the most recent run that started
-    /// before this one) -- a failure counts only when that predecessor, too,
-    /// failed.
+    /// Whether this run's predecessor for the same task also ended `failed`
+    /// -- WP20's two-consecutive-failures trigger for a `repeated_failure`
+    /// escalation. The predecessor is the most-recent prior run by
+    /// `(started_at, run_id)` for this task, **regardless of terminality**:
+    /// the query does not filter to terminal states, so a concurrently
+    /// running (non-terminal) sibling that started after the real last
+    /// terminal run can be picked instead. This is a deliberate fail-safe,
+    /// not a gap -- it only ever *masks* a genuine two-in-a-row streak
+    /// (reads as `false` when the true predecessor in fact failed), never
+    /// fabricates one, so it can only under-escalate, never spuriously
+    /// escalate.
     ///
     /// # Errors
     /// Returns [`DomainError`] on query failure only; an unknown run reads
@@ -1502,7 +1507,7 @@ impl<'c> DomainRepository<'c> {
             rusqlite::params![task_id, run_id.to_string()],
             |row| row.get(0),
         ) else {
-            // No preceding terminal run for this task -- not a repeat.
+            // No preceding run for this task -- not a repeat.
             return false;
         };
         prev_state.as_str() == "failed"

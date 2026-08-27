@@ -54,12 +54,20 @@ ompRpc:
     model: "lm-studio/qwen2.5-coder-7b-instruct"
     prompt: "Delegate listing this directory to a subagent."
 
-# TUI fixtures (captured by driving the real vendor TUI on a PTY). Only
-# claude-tui and copilot-tui embed their reproduction prompt in the fixture
-# below, so only those get a recipe. codex-tui (cli_version 0.149.1) and
-# omp-tui carry no embedded prompt in their session.jsonl — their exact
-# WP29 live-capture invocations were not recorded, so add them once recovered
-# to avoid fabricating a recipe.
+# TUI fixtures. These *-tui entries are prose documentation, not
+# tooling-reachable recipes: capture.rs looks up fixtures by wire_name and
+# has no *-tui directory mapping at all, so nothing here actually drives a
+# `*-tui` recapture.
+#
+# Only claude-tui is a real recording (see fixtures/adapters/claude-tui/
+# README.md for full provenance). codex-tui, copilot-tui, and omp-tui are
+# hand-authored SYNTHETIC fixtures, not live captures whose invocations
+# went unrecorded -- each uses a pattern placeholder session id
+# (codex-tui 22222222-…, copilot-tui 55555555-…, omp-tui 66666666-…), a
+# fixed 2026-01-01 timestamp, and `originator`/similar fields naming
+# `crew-fixture`. All three DO embed their reproduction prompt verbatim in
+# session.jsonl (including omp-tui, corrected below); "prompt" here
+# documents that hand-authored content, not a recipe capture.rs can run.
 claude-tui:
   - fixture: session.jsonl
     prompt: "Say hi, run 'echo crew-fixture', then ask me exactly one clarifying question. [crew:fixture1]"

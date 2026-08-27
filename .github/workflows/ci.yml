@@ -138,6 +138,9 @@ jobs:
       - name: Install JS workspace dependencies
         run: bun install
 
+      - name: Fail if the bundle is not a tracked file
+        run: git ls-files --error-unmatch packages/extension/dist/index.js
+
       - name: Rebuild the extension bundle
         run: bun run build
 

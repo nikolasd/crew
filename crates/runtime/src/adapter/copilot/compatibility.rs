@@ -8,7 +8,7 @@
 //! field names of. `1.0.73` was the version installed on the build
 //! machine at the start of this work; the CLI's own background
 //! auto-updater (`copilot update`) then moved it to `1.0.75`, `1.0.78`,
-//! and later `1.0.80`. All four are listed below because each was
+//! `1.0.80`, and later `1.0.81`. All five are listed below because each was
 //! empirically reprobed with a real `initialize` handshake and confirmed
 //! to negotiate `protocolVersion: 1` with identical ACP v1
 //! `agentCapabilities`/`agentInfo` field names (see
@@ -40,6 +40,10 @@ pub const COPILOT_KNOWN_CLI_VERSIONS: &[CopilotCompatibilityEntry] = &[
     },
     CopilotCompatibilityEntry {
         cli_version: "1.0.80",
+        acp_protocol_version: 1,
+    },
+    CopilotCompatibilityEntry {
+        cli_version: "1.0.81",
         acp_protocol_version: 1,
     },
 ];

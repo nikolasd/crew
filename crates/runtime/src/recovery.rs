@@ -507,11 +507,11 @@ impl RecoveryCoordinator {
                     .db
                     .run_domain_op(Box::new(move |conn| {
                         let state: String = conn.query_row(
-                            "SELECT status FROM runs WHERE run_id = ?1",
+                            "SELECT state FROM runs WHERE run_id = ?1",
                             [&run_id_string],
                             |row| row.get(0),
                         )?;
-                        Ok(serde_json::json!({ "status": state }))
+                        Ok(serde_json::json!({ "state": state }))
                     }))
                     .await
                     .map_err(|read_err| RecoveryError::TransitionFailed {
@@ -520,7 +520,7 @@ impl RecoveryCoordinator {
                         to_state: target.to_string(),
                         reason: format!("{err}; state re-read also failed: {read_err}"),
                     })?;
-                let current = current["status"].as_str().unwrap_or_default();
+                let current = current["state"].as_str().unwrap_or_default();
                 if current == target.to_string() {
                     serde_json::json!({ "sequence": null, "alreadyTerminal": true })
                 } else {

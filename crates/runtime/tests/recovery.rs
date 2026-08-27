@@ -907,6 +907,121 @@ async fn a_resumable_working_run_is_resumed_and_stays_non_terminal() {
     scenario.db.shutdown().await.expect("shutdown database");
 }
 
+/// A fake `claude` binary whose `--resume` invocation exits nonzero without
+/// ever producing pty output -- unlike [`write_fake_claude_script`], this
+/// one never becomes ready. `wait_for_readiness` sees the process exit
+/// before readiness, so the adapter's own `fail_start` runs and journals a
+/// real `ProcessExited` evidence.
+fn write_fake_failing_resume_script(scripts_dir: &std::path::Path) -> std::path::PathBuf {
+    let script = r#"#!/bin/sh
+if [ "$1" = "--resume" ]; then
+  exit 1
+fi
+while IFS= read -r line; do :; done
+"#;
+    let path = scripts_dir.join("fake-claude-fails-resume.sh");
+    std::fs::write(&path, script).expect("write fake failing resume script");
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&path, perms).unwrap();
+    path
+}
+
+/// Same shape as [`seed_resumable_run`], except the fake vendor is wired to
+/// fail its resume attempt for real (see
+/// [`write_fake_failing_resume_script`]) instead of succeeding.
+async fn seed_resumable_run_with_failing_resume() -> ResumableScenario {
+    let state_dir = tempfile::Builder::new()
+        .prefix("bat-recovery-wp15-")
+        .tempdir_in("/tmp")
+        .expect("create state dir");
+    let db = Arc::new(
+        DatabaseHandle::start(state_dir.path().join("runtime.db"))
+            .await
+            .unwrap(),
+    );
+    let project_id = ProjectId::new();
+    let (_task_id, _worker_id, run_id) =
+        seed_run_with_profile(&db, project_id, "working", Some(claude_tui_profile_json())).await;
+
+    let session_dir = state_dir.path().join("sessions");
+    std::fs::create_dir_all(&session_dir).expect("create session dir");
+    std::fs::write(session_dir.join(format!("{SESSION_ID}.jsonl")), "")
+        .expect("write empty transcript");
+    set_resume_state(&db, run_id, Some(SESSION_ID.to_string())).await;
+
+    let script_path = write_fake_failing_resume_script(state_dir.path());
+    let (registry, events_tx) = resume_registry(
+        &db,
+        &state_dir,
+        project_id,
+        &script_path,
+        &session_dir,
+        true,
+    )
+    .await;
+    ResumableScenario {
+        _state_dir: state_dir,
+        db,
+        project_id,
+        registry,
+        events_tx,
+        run_id,
+    }
+}
+
+/// Regression test for the recovery.rs:510 bug: `terminalize`'s idempotent
+/// fallback re-read the run's state with `SELECT status FROM runs`, but the
+/// column is `state` -- so every re-read errored, and the sweep always
+/// reported `TransitionFailed`/`LeftUntouched` behind "state re-read also
+/// failed: no such column: status", masking the real resume-failure root
+/// cause.
+///
+/// This drives the actual production race deterministically, not by luck of
+/// timing: the fake vendor exits nonzero with no pty output, so
+/// `wait_for_readiness` fails, the adapter's own `fail_start` emits
+/// `ProcessExited`, and `RunLifecycleSink` transitions the run to `failed`
+/// for real -- awaited to completion inside `emit()` -- before `resume_run`
+/// even returns its `Err` up to `resume_failed_fallback`. By the time
+/// `resume_failed_fallback` calls `terminalize`, the run is ALREADY
+/// terminal, so `terminalize`'s own `transition_run` call hits the illegal
+/// failed->failed edge and must take the idempotent re-read branch, not
+/// error out.
+#[tokio::test]
+async fn terminalize_takes_the_idempotent_branch_when_the_run_is_already_terminal() {
+    let scenario = seed_resumable_run_with_failing_resume().await;
+    let result = resume_coordinator(&scenario)
+        .recover()
+        .await
+        .expect("sweep");
+
+    assert_eq!(result.recovered_runs.len(), 1, "{result:?}");
+    let recovered = &result.recovered_runs[0];
+    assert_eq!(
+        recovered.outcome,
+        RecoveredOutcome::Terminalized,
+        "the idempotent already-terminal branch must be taken, not TransitionFailed \
+         (error: {:?})",
+        recovered.error
+    );
+    assert!(recovered.success, "error: {:?}", recovered.error);
+    assert!(
+        recovered
+            .error
+            .as_deref()
+            .is_none_or(|e| !e.contains("state re-read also failed")),
+        "must not hit the broken re-read path: {:?}",
+        recovered.error
+    );
+    assert_eq!(run_state(&scenario.db, scenario.run_id).await, "failed");
+    assert_eq!(
+        journal_count(&scenario.db, scenario.run_id, "\"code\":\"resume_failed\"").await,
+        1
+    );
+
+    scenario.db.shutdown().await.expect("shutdown database");
+}
+
 /// No vendor session was ever established: the attempt is announced and
 /// fails, `resume_failed` is journaled BEFORE the failed edge, and the run
 /// takes the existing terminalize fallback.

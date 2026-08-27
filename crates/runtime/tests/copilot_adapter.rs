@@ -76,22 +76,23 @@ fn real_copilot_binary() -> Option<PathBuf> {
 fn known_cli_version_is_exact_match_against_every_empirically_verified_version() {
     // 1.0.73 was installed when this work started; the CLI's own
     // background auto-updater (`copilot update`) moved it to 1.0.75,
-    // 1.0.78, and later 1.0.80. Each was reprobed with a real
+    // 1.0.78, 1.0.80, and later 1.0.81. Each was reprobed with a real
     // `initialize` handshake and confirmed to negotiate the same ACP v1
     // shape (see `compatibility.rs`'s module doc, and
     // `real_binary_initialize_and_session_list_never_invoke_a_model`
     // below, which fails if the *installed* version is absent from the
-    // table). All four are exact-match known versions; nothing else is.
+    // table). All five are exact-match known versions; nothing else is.
     assert!(copilot_cli_version_known("1.0.73"));
     assert!(copilot_cli_version_known("1.0.75"));
     assert!(copilot_cli_version_known("1.0.78"));
     assert!(copilot_cli_version_known("1.0.80"));
+    assert!(copilot_cli_version_known("1.0.81"));
     // A neighbouring patch release is never assumed compatible, and a
     // prefix is never a match.
     assert!(!copilot_cli_version_known("1.0.74"));
     assert!(!copilot_cli_version_known("1.0.77"));
     assert!(!copilot_cli_version_known("1.0.79"));
-    assert!(!copilot_cli_version_known("1.0.81"));
+    assert!(!copilot_cli_version_known("1.0.82"));
     assert!(!copilot_cli_version_known("1.0.7"));
     assert!(!copilot_cli_version_known(""));
 }
