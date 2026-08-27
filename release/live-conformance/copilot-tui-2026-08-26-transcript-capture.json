@@ -36,12 +36,12 @@
       {
         "name": "read_only_start_and_progress",
         "outcome": "fail",
-        "detail": "start=Ok(()) started=true session=true first_message=false"
+        "detail": "start=Err(AdapterError { code: Process, adapter: \"copilot\", operation: \"start\", detail: \"no transcript containing nonce \\\"01a03e95-9614-7963-aa8d-5cbc5eacbe58\\\" appeared under /Users/nikolasdemiridis/.copilot/session-state within 120s (vendor CLI may not have created its session file)\" }) started=true session=false first_message=false"
       },
       {
         "name": "follow_up",
         "outcome": "fail",
-        "detail": "send() result=Ok(()) saw_ack=false"
+        "detail": "send() result=Err(AdapterError { code: InvalidVendorState, adapter: \"copilot\", operation: \"send\", detail: \"no active run\" }) saw_ack=false"
       },
       {
         "name": "cancellation_scope",

@@ -59,14 +59,19 @@ SHA-256 checksums, an executable named `crewd`), emitted by `crew-xtask package-
       gone output-silent for `ENTER_IDLE_MIN` -- an idle TUI processes it exactly like a human's
       keystroke, independent of vendor startup-render speed; queue-style sends additionally split
       text and Enter with a 150ms gap (an atomic `text\r` is swallowed whole by codex).
-- [x] codex: `probe` / `read_only_start_and_progress` / `cancellation_scope` passed live earlier
-      the same day, proving the full spawn -> type -> submit -> discover -> tail path. Current
-      reruns are blocked by the vendor: rollouts record `usage_limit_exceeded` ("Your workspace is
-      out of credits"), so no assistant turn exists to tail. Re-run after the 5h window resets.
-- [x] copilot: folder-trust prerequisite solved (`trustedFolders` in `~/.copilot/config.json`);
-      submit + transcript discovery proven (`session established`, prompt present in
-      `events.jsonl`). Assistant turns are refused by the vendor with an explicit monthly-quota
-      error; re-run after quota refills.
+- [x] codex: re-proven on current main (2026-08-27, main@2cde61e, post-#17/#18 adapter changes) --
+      `probe` / `read_only_start_and_progress` / `follow_up` / `cancellation_scope` all pass
+      (4/4 runnable), a byte-identical report to the earlier confirmed run. Full
+      spawn -> type -> submit -> discover -> tail path proven.
+      `release/live-conformance/codex-tui.json`.
+- [x] copilot: re-run 2026-08-27 on current main -- folder-trust prerequisite solved (#15), and
+      submit + transcript discovery now genuinely work (`start=Ok(())`, `session=true`; the
+      2026-08-26 evening run's discovery failure is gone). `read_only_start_and_progress` and
+      `follow_up` still fail (`first_message=false`/`saw_ack=false`), but the root cause is now
+      CONFIRMED rather than inferred: the tailed session's own `events.jsonl` records a typed
+      `session.error` (`errorType: quota`, `errorCode: quota_exceeded`, `statusCode: 402`,
+      "You have exceeded your monthly quota") -- a genuine vendor billing wall, not an adapter
+      defect. Re-run after quota refills. `release/live-conformance/copilot-tui.json`.
 - [ ] `session_resume` stays skipped here by design: a single-process resume proves nothing about
       daemon-restart recovery; that is the separate serve -> stop -> serve end-to-end smoke below.
       Documented in `docs/manual-testing.md` §4f.1.
