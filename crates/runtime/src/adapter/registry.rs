@@ -45,8 +45,8 @@ use super::capability::{AdapterCapabilities, NestedCapability};
 use super::event_sink::{AdapterEventSink, DomainAdapterEventSink, SettlementSink};
 use super::mcp_config::AdapterMcpConfig;
 use super::profile::{
-    AdapterKind, ClaudeStartupOptions, CodexStartupOptions, CopilotStartupOptions, StartupOptions,
-    WorkerProfile,
+    AdapterKind, AdapterMode, ClaudeStartupOptions, CodexStartupOptions, CopilotStartupOptions,
+    StartupOptions, WorkerProfile,
 };
 use super::run_lifecycle::RunLifecycleSink;
 use super::r#trait::{Adapter, AdapterMessage, StartSpec, VendorSessionRef};
@@ -71,6 +71,28 @@ pub trait AdapterAuthorization: Send + Sync {
     /// -- the startup policy re-merged with that run's `policyOverrides`.
     /// `None` means "use the authorizer's own startup policy", which is the
     /// behavior every run without overrides and every test path relies on.
+    ///
+    /// **Today's production implementation ([`crate::policy::PolicyEvaluator`])
+    /// reads `effective_capabilities` ZERO times** -- the org-governance
+    /// checks that once read it (model/adapter allowlists, required
+    /// capabilities) were retired (crew-v2 gap-closure WP5). The parameter
+    /// is retained for signature stability, not because anything gates on
+    /// it today.
+    ///
+    /// **Binding constraint for whoever adds the first real capability
+    /// check here (a post-0.5.0 follow-up, not this WP): DENY-ON-UNPROVEN.**
+    /// A gated capability whose backing evidence is
+    /// [`crate::conformance::ScenarioOutcome::Skipped`] (the kill switch,
+    /// a missing probe, or any other skipped-gating scenario) must be
+    /// refused with a typed rejection naming which of those it was --
+    /// never silently stripped (that would be a fabricated disproof, R52)
+    /// and never silently granted (that would let an unattempted scenario
+    /// pass as proof). `effective_capabilities` already carries `Skipped`
+    /// scenarios as undowngraded (R68) precisely so this function can tell
+    /// "proved" apart from "merely never disproved" -- collapsing that
+    /// distinction back into a bare grant/deny here would silently reopen
+    /// the skip-grants-declared hazard the R68/R52 invariants exist to
+    /// close.
     ///
     /// # Errors
     /// Returns a human-readable denial reason. The run is never started
@@ -431,7 +453,9 @@ impl AdapterRegistry {
         // own policy was fixed at submit time; the authorizer falls back
         // to its startup policy (its documented behavior for `None`),
         // which is the same policy the boot sweep itself runs under.
-        let effective_capabilities = gate_profile(&self.authorization, &profile, None).await?;
+        let mode = requested_mode(&profile.startup_options).unwrap_or_default();
+        let effective_capabilities =
+            gate_profile(&self.authorization, &profile, None, mode).await?;
         // Fresh starts launch at the run's isolated workspace when one was
         // materialized; no such path is stored per-run, so a resumed
         // process lands back at the repository root (disclosed WP14 gap).
@@ -742,8 +766,9 @@ async fn run_one(
 ) -> Result<(Arc<dyn Adapter>, oneshot::Receiver<()>, bool), String> {
     let profile = resolve_profile(ctx).await.map_err(String::from)?;
 
+    let mode = requested_mode(&profile.startup_options).unwrap_or_default();
     let effective_capabilities =
-        gate_profile(authorization, &profile, ctx.policy.as_deref()).await?;
+        gate_profile(authorization, &profile, ctx.policy.as_deref(), mode).await?;
     // Use the workspace path from the context (isolated worktree or copy)
     // when available; fall back to the repository root.
     let cwd = ctx.workspace_path.as_deref().unwrap_or(repo_root);
@@ -862,12 +887,17 @@ async fn resolve_worker_profile(
     serde_json::from_str(&snapshot).map_err(|err| RegistryError::ProfileUnreadable(err.to_string()))
 }
 
-/// WP26: memoized fixture-suite effective capabilities per adapter kind,
-/// stamped with the vendor-CLI version the suite ran against (`None`
-/// under the kill switch). A probed version different from the stamp is
-/// the invalidation signal. The guard is never held across an `await`.
-type ConformanceMemo =
-    std::collections::HashMap<crate::adapter::AdapterKind, (Option<String>, AdapterCapabilities)>;
+/// WP26: memoized fixture-suite effective capabilities per `(adapter kind,
+/// requested control plane)` -- WP-B added the `AdapterMode` axis, since a
+/// headless and a TUI run of the same kind are gated from materially
+/// different declared profiles and must never share a cache entry.
+/// Stamped with the vendor-CLI version the suite ran against (`None` under
+/// the kill switch). A probed version different from the stamp is the
+/// invalidation signal. The guard is never held across an `await`.
+type ConformanceMemo = std::collections::HashMap<
+    (crate::adapter::AdapterKind, AdapterMode),
+    (Option<String>, AdapterCapabilities),
+>;
 
 static CONFORMANCE_CACHE: std::sync::LazyLock<parking_lot::Mutex<ConformanceMemo>> =
     std::sync::LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
@@ -877,10 +907,26 @@ static CONFORMANCE_CACHE: std::sync::LazyLock<parking_lot::Mutex<ConformanceMemo
 /// the policy decision, and the vendor-CLI availability probe. Shared by
 /// [`run_one`] (fresh start / resume-through-`StartSpec`) and
 /// [`AdapterRegistry::resume_run`] so the two paths can never drift.
+///
+/// `mode` is the run's REQUESTED control plane
+/// (`super::registry::requested_mode(&profile.startup_options)`, resolved
+/// once by the caller and threaded through here rather than re-derived --
+/// find the call sites in [`run_one`]/[`AdapterRegistry::resume_run`]) --
+/// crew-v2 gap-closure WP-B's fix for the WP13 scope boundary this
+/// function used to carry: before WP-B, the conformance dispatch below had
+/// no mode axis at all, so a `mode: "tui"` run was authorized against its
+/// vendor's *headless* fixture suite's effective capabilities, even though
+/// the `TuiAdapter` actually constructed for it declares a materially
+/// different profile (`ProtocolKind::Terminal`, not `Structured`, for
+/// one). `TerminalDegraded` profiles have no adapter kind and never reach
+/// the conformance dispatch below at all, so their caller may pass
+/// whichever `AdapterMode` is convenient (`requested_mode` itself returns
+/// `None` for that variant).
 async fn gate_profile(
     authorization: &Arc<dyn AdapterAuthorization>,
     profile: &WorkerProfile,
     policy: Option<&crate::config::RuntimePolicy>,
+    mode: AdapterMode,
 ) -> Result<AdapterCapabilities, String> {
     // Handle TerminalDegraded specially (it has no adapter kind)
     let effective_capabilities = if profile.adapter_kind().is_none() {
@@ -895,30 +941,37 @@ async fn gate_profile(
         let Some(kind) = profile.adapter_kind() else {
             return Err("no adapter kind".to_string());
         };
-        // WP26: the full 14-scenario suite is memoized per adapter kind,
-        // stamped with the vendor-CLI version the availability probe
-        // observed; a changed version (upgrade, downgrade, install) is the
-        // invalidation signal. The probe runs first because it stamps the
-        // key AND lets an unusable CLI fail before a pointless suite run;
-        // it stays a version handshake only -- never a model call -- and
-        // its own 60s cache means repeated submits re-spawn no binary.
-        // Nothing has been authorized yet at this point, so a denial here
-        // releases nothing.
+        // WP26: the full suite is memoized per `(kind, mode)`, stamped
+        // with the vendor-CLI version the availability probe observed; a
+        // changed version (upgrade, downgrade, install) is the
+        // invalidation signal. The probe itself stays kind-only
+        // (`probe_availability_with_version` -- a vendor's installed CLI
+        // version does not vary by how this runtime chooses to invoke
+        // it), and runs first because it stamps the key AND lets an
+        // unusable CLI fail before a pointless suite run; it stays a
+        // version handshake only -- never a model call -- and its own 60s
+        // cache means repeated submits re-spawn no binary. Nothing has
+        // been authorized yet at this point, so a denial here releases
+        // nothing.
         //
-        // Scope boundary (WP13, documented not silently omitted): the
-        // conformance dispatch has no `mode` axis -- it dispatches by
-        // `AdapterKind` only -- so a `mode: "tui"` run is authorized
-        // against its *headless* fixture suite's effective capabilities
-        // (e.g. Claude headless's `ApprovalsCapability::Controllable`),
-        // even though the `TuiAdapter` actually constructed below declares
-        // a materially different profile (`ProtocolKind::Terminal`,
-        // `ApprovalsCapability::None`, `UsageCapability::None`, ...).
-        // Giving this call a `mode` parameter means widening the closed
-        // `AdapterKind`-keyed dispatch `conformance::run_fixture_conformance`/
-        // `run_live_conformance`/`probe_availability` and the `crewd
-        // conformance`/`adapters --json` CLI surfaces all share -- out of
-        // scope for the WP that first makes `mode: "tui"` reachable at
-        // all; flagged for a follow-up rather than fixed here.
+        // Both halves of the kill-switch skip-through, on record (WP-B
+        // ruling): under `CREW_DISABLE_VENDOR_CLI=1` this probe itself is
+        // `Skipped`, not disproved, so `availability.disproved()` below is
+        // `false` and this function proceeds -- a kill-switch daemon is
+        // never denied here. The fixture suite run below then reports
+        // every scenario it cannot attempt under the switch as `Skipped`
+        // too, and a skip strips no capability (R68/R52, see
+        // `conformance::vendor_cli_required_scenario`'s doc comment), so
+        // `effective_capabilities` comes back equal to the adapter's full
+        // *declared* set. This is by design, not a gap: `authorize()`
+        // reads zero capability fields today (see
+        // `AdapterAuthorization::authorize`'s doc comment), so there is
+        // nothing here for a kill-switch daemon's unproven capabilities to
+        // corrupt. The hazard this skip-through would reopen -- a
+        // kill-switch run sailing through a REAL capability check on
+        // merely-unproven evidence -- goes live only the day `authorize`
+        // grows one; that doc comment's DENY-ON-UNPROVEN constraint is
+        // what must hold from that day on, not this one.
         let (availability, probed_version) =
             conformance::probe_availability_with_version(kind).await;
         if availability.disproved() {
@@ -928,22 +981,23 @@ async fn gate_profile(
                 availability.detail
             ));
         }
+        let cache_key = (kind, mode);
         let suite_hit =
             CONFORMANCE_CACHE
                 .lock()
-                .get(&kind)
+                .get(&cache_key)
                 .and_then(|(stamped_version, cached)| {
                     (*stamped_version == probed_version).then_some(*cached)
                 });
         match suite_hit {
             Some(cached) => cached,
             None => {
-                let effective = conformance::run_fixture_conformance(kind)
+                let effective = conformance::run_fixture_conformance(kind, mode)
                     .await
                     .effective_capabilities;
                 CONFORMANCE_CACHE
                     .lock()
-                    .insert(kind, (probed_version, effective));
+                    .insert(cache_key, (probed_version, effective));
                 effective
             }
         }
@@ -2184,22 +2238,31 @@ mod settlement_tests {
 #[cfg(test)]
 mod conformance_cache_tests {
     use super::*;
-    use crate::conformance::FIXTURE_SUITE_RUNS;
+    // `FIXTURE_SUITE_RUNS_SERIAL`, not a module-local lock: this counter is
+    // one process-global shared with `conformance::tests` too, in the same
+    // unit-test binary -- see that static's own doc comment.
+    use crate::conformance::{FIXTURE_SUITE_RUNS, FIXTURE_SUITE_RUNS_SERIAL as SERIAL};
     use std::sync::atomic::Ordering;
 
-    static SERIAL: std::sync::LazyLock<tokio::sync::Mutex<()>> =
-        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
-
-    fn omp_rpc_profile() -> WorkerProfile {
+    fn omp_rpc_profile_with_mode(mode: AdapterMode) -> WorkerProfile {
         WorkerProfile {
             id: crate::adapter::profile::ProfileId::new(),
             adapter: "ompRpc".to_string(),
             model: String::new(),
             permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
-            startup_options: StartupOptions::OmpRpc(Default::default()),
+            startup_options: StartupOptions::OmpRpc(
+                crate::adapter::profile::OmpRpcStartupOptions {
+                    mode,
+                    ..Default::default()
+                },
+            ),
             environment_allowlist: Vec::new(),
             source: "test".to_string(),
         }
+    }
+
+    fn omp_rpc_profile() -> WorkerProfile {
+        omp_rpc_profile_with_mode(AdapterMode::Headless)
     }
 
     #[tokio::test]
@@ -2211,7 +2274,7 @@ mod conformance_cache_tests {
             Arc::new(FixtureAuthorization { allow: true });
         let profile = omp_rpc_profile();
 
-        let first = gate_profile(&authorization, &profile, None)
+        let first = gate_profile(&authorization, &profile, None, AdapterMode::Headless)
             .await
             .expect("first gate must pass");
         assert_eq!(
@@ -2220,7 +2283,7 @@ mod conformance_cache_tests {
             "a cold cache runs the suite exactly once"
         );
 
-        let second = gate_profile(&authorization, &profile, None)
+        let second = gate_profile(&authorization, &profile, None, AdapterMode::Headless)
             .await
             .expect("second gate must pass");
         assert_eq!(first, second, "the memoized capabilities must match");
@@ -2241,14 +2304,21 @@ mod conformance_cache_tests {
             Some("0.0.0-stale-test".to_string()),
             crate::adapter::omp_rpc::OmpRpcAdapter::declared_capabilities(),
         );
-        CONFORMANCE_CACHE.lock().insert(AdapterKind::OmpRpc, stale);
+        CONFORMANCE_CACHE
+            .lock()
+            .insert((AdapterKind::OmpRpc, AdapterMode::Headless), stale);
         FIXTURE_SUITE_RUNS.store(0, Ordering::Relaxed);
         let authorization: Arc<dyn AdapterAuthorization> =
             Arc::new(FixtureAuthorization { allow: true });
 
-        gate_profile(&authorization, &omp_rpc_profile(), None)
-            .await
-            .expect("gate must pass despite the stale stamp");
+        gate_profile(
+            &authorization,
+            &omp_rpc_profile(),
+            None,
+            AdapterMode::Headless,
+        )
+        .await
+        .expect("gate must pass despite the stale stamp");
         assert_eq!(
             FIXTURE_SUITE_RUNS.load(Ordering::Relaxed),
             1,
@@ -2258,12 +2328,121 @@ mod conformance_cache_tests {
         // the stale one.
         let stamp = CONFORMANCE_CACHE
             .lock()
-            .get(&AdapterKind::OmpRpc)
+            .get(&(AdapterKind::OmpRpc, AdapterMode::Headless))
             .and_then(|(version, _)| version.clone());
         assert_ne!(
             stamp.as_deref(),
             Some("0.0.0-stale-test"),
             "the refreshed entry must be stamped with the current probe"
+        );
+        CONFORMANCE_CACHE.lock().clear();
+    }
+
+    /// WP-B Task 5a: a TUI-mode submit's gate consumes the TUI suite's
+    /// report, not the headless one -- pinned at the SOURCE, not just the
+    /// outcome, via `protocol` (`Terminal` for every TUI adapter,
+    /// `Structured` for headless ompRpc; verified by reading both
+    /// `declared_capabilities()`s directly).
+    #[tokio::test]
+    async fn a_tui_mode_submit_gates_on_the_tui_suites_effective_capabilities() {
+        let _serial = SERIAL.lock().await;
+        CONFORMANCE_CACHE.lock().clear();
+        let authorization: Arc<dyn AdapterAuthorization> =
+            Arc::new(FixtureAuthorization { allow: true });
+
+        let effective = gate_profile(
+            &authorization,
+            &omp_rpc_profile_with_mode(AdapterMode::Tui),
+            None,
+            AdapterMode::Tui,
+        )
+        .await
+        .expect("tui gate must pass");
+
+        assert_eq!(
+            effective.protocol,
+            crate::adapter::capability::ProtocolKind::Terminal,
+            "a TUI-mode submit must be gated on the TUI suite's effective capabilities, not \
+             ompRpc headless's Structured declaration: {effective:?}"
+        );
+        CONFORMANCE_CACHE.lock().clear();
+    }
+
+    /// WP-B Task 5b: a Headless-mode submit still consumes the headless
+    /// report (regression pin, until WP-C retires the headless suites).
+    #[tokio::test]
+    async fn a_headless_mode_submit_still_gates_on_the_headless_suites_effective_capabilities() {
+        let _serial = SERIAL.lock().await;
+        CONFORMANCE_CACHE.lock().clear();
+        let authorization: Arc<dyn AdapterAuthorization> =
+            Arc::new(FixtureAuthorization { allow: true });
+
+        let effective = gate_profile(
+            &authorization,
+            &omp_rpc_profile_with_mode(AdapterMode::Headless),
+            None,
+            AdapterMode::Headless,
+        )
+        .await
+        .expect("headless gate must pass");
+
+        assert_eq!(
+            effective.protocol,
+            crate::adapter::capability::ProtocolKind::Structured,
+            "a Headless-mode submit must keep gating on the headless suite's effective \
+             capabilities: {effective:?}"
+        );
+        CONFORMANCE_CACHE.lock().clear();
+    }
+
+    /// WP-B Task 5c: the memo's new mode axis. Two TUI submits of the same
+    /// kind share one cache entry (one suite run); a TUI and a Headless
+    /// submit of the SAME kind never share one (distinct cache keys, two
+    /// suite runs) -- proving the cache key is truly `(kind, mode)`, not
+    /// `kind` with mode ignored.
+    #[tokio::test]
+    async fn the_memo_key_is_kind_and_mode_not_kind_alone() {
+        let _serial = SERIAL.lock().await;
+        CONFORMANCE_CACHE.lock().clear();
+        FIXTURE_SUITE_RUNS.store(0, Ordering::Relaxed);
+        let authorization: Arc<dyn AdapterAuthorization> =
+            Arc::new(FixtureAuthorization { allow: true });
+
+        gate_profile(
+            &authorization,
+            &omp_rpc_profile_with_mode(AdapterMode::Tui),
+            None,
+            AdapterMode::Tui,
+        )
+        .await
+        .expect("first tui gate must pass");
+        gate_profile(
+            &authorization,
+            &omp_rpc_profile_with_mode(AdapterMode::Tui),
+            None,
+            AdapterMode::Tui,
+        )
+        .await
+        .expect("second tui gate must pass");
+        assert_eq!(
+            FIXTURE_SUITE_RUNS.load(Ordering::Relaxed),
+            1,
+            "two TUI submits of the same kind must reuse one memoized suite run"
+        );
+
+        gate_profile(
+            &authorization,
+            &omp_rpc_profile_with_mode(AdapterMode::Headless),
+            None,
+            AdapterMode::Headless,
+        )
+        .await
+        .expect("headless gate of the same kind must pass");
+        assert_eq!(
+            FIXTURE_SUITE_RUNS.load(Ordering::Relaxed),
+            2,
+            "a Headless submit of the same kind must run its OWN suite -- the mode axis must \
+             keep it from hitting the TUI entry's cache"
         );
         CONFORMANCE_CACHE.lock().clear();
     }

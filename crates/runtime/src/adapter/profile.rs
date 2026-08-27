@@ -184,7 +184,7 @@ impl StartupOptions {
 /// fully headless. Defaults to `Headless` so a profile serialized before
 /// this field existed still deserializes -- the same wire-compat pattern
 /// `ApprovalEvent.reason` uses in `crew_protocol::event`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AdapterMode {
     Tui,

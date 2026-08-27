@@ -3,8 +3,9 @@
 //! resulting fixed-point fixture bytes in place.
 
 use crate::adapter::{
-    Adapter, AdapterEvent, AdapterEventSink, AdapterFuture, AdapterKind, ClaudeStartupOptions,
-    CodexStartupOptions, CopilotStartupOptions, OmpRpcAdapterOptions, StartSpec,
+    Adapter, AdapterEvent, AdapterEventSink, AdapterFuture, AdapterKind, AdapterMode,
+    ClaudeStartupOptions, CodexStartupOptions, CopilotStartupOptions, OmpRpcAdapterOptions,
+    StartSpec,
 };
 use crate::conformance::scrub::Scrubber;
 use crate::conformance::{
@@ -161,9 +162,12 @@ pub async fn capture_adapter(
     }
 
     // Re-run the fixture conformance suite so the caller learns immediately
-    // whether the new captures still satisfy it. Skip in dry-run.
+    // whether the new captures still satisfy it. Skip in dry-run. This
+    // tool only ever captures the four kept HEADLESS adapters' fixtures
+    // (see `adapter_fixture_dir`'s plain kind names, never a `*-tui`
+    // directory), so the mode is fixed at `Headless`, not derived.
     let report = if !dry_run {
-        Some(run_fixture_conformance(kind).await)
+        Some(run_fixture_conformance(kind, AdapterMode::Headless).await)
     } else {
         None
     };

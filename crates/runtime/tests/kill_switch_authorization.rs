@@ -30,7 +30,7 @@
 //! Never invokes a model: `run_fixture_conformance` is the zero-model-call
 //! fixture suite.
 
-use crew_runtime::adapter::AdapterKind;
+use crew_runtime::adapter::{AdapterKind, AdapterMode};
 use crew_runtime::conformance::{DISABLE_VENDOR_CLI_ENV, run_fixture_conformance, scenario};
 
 #[tokio::test(flavor = "current_thread")]
@@ -54,7 +54,7 @@ async fn the_kill_switch_never_shrinks_effective_capabilities() {
         AdapterKind::Copilot,
         AdapterKind::OmpRpc,
     ] {
-        let report = run_fixture_conformance(kind).await;
+        let report = run_fixture_conformance(kind, AdapterMode::Headless).await;
         let skipped: Vec<(&str, String)> = report
             .scenarios
             .iter()
