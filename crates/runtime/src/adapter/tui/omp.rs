@@ -266,8 +266,9 @@ impl TuiVendor for OmpTuiVendor {
 
     /// A bare Escape byte: the interactive REPL's turn-interrupt key,
     /// same convention as the other vendored REPLs. [INFERENCE] not
-    /// separately confirmed against a live 18.0.5 session -- WP29's
-    /// live smoke owns that confirmation.
+    /// separately confirmed against a live session -- WP29's live smoke
+    /// only ever exercised `CancelScope::Worker` (process-kill); this
+    /// turn-level interrupt remains unconfirmed live, tracked post-0.5.0.
     fn interrupt_sequence(&self) -> Vec<u8> {
         vec![0x1b]
     }

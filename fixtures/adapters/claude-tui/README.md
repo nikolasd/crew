@@ -51,6 +51,11 @@ confirmed for the interactive PTY path specifically. WP29's live TUI smoke test 
 gap for real -- if it finds the interactive transcript format differs, this fixture (and
 `ClaudeTuiVendor`'s format mapping) gets revisited then, not assumed correct forever.
 
+**Answered:** WP29's live TUI conformance run proved `read_only_start_and_progress` against a real
+interactive `claude` session (PASS) -- the interactive PTY path's on-disk transcript uses the same
+entry shapes this headless capture already covers, so `ClaudeTuiVendor`'s format mapping needed no
+revisiting.
+
 ## What the recording surfaced, beyond the v1 plan's format sketch
 
 - Real entry `type` values seen: `queue-operation`, `attachment` (9, several distinct subtypes),

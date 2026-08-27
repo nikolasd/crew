@@ -48,7 +48,10 @@ SHA-256 checksums, an executable named `crewd`), emitted by `crew-xtask package-
 
 - [x] Fixture conformance (`tests/conformance`, `CREW_DISABLE_VENDOR_CLI=1`) green — no billed calls
 - [x] TUI live harness (`crewd conformance --live --mode tui --adapter all`) exercises the real CLIs:
-      `probe` + `cancellation_scope` pass for claude/codex/copilot/omp-rpc
+      `probe` + `cancellation_scope` pass for claude/codex/copilot/omp-rpc -- `cancellation_scope`
+      proves `CancelScope::Worker` (process-kill) termination only. Turn-level interrupt
+      (`interrupt_sequence`/Steer, `CancelScope::Turn`, the Esc-style byte sequence) remains
+      UNPROVEN live for all four vendors; tracked post-0.5.0.
 - [x] `read_only_start_and_progress` / `follow_up` mechanics fixed and proven for claude and
       omp-rpc (all runnable scenarios pass; reports on file). Two-phase prompt delivery
       (`adapter.rs`): the prompt text is typed once the vendor's stdin is wired (never before
