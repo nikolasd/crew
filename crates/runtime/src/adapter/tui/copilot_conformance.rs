@@ -13,7 +13,7 @@
 //! double writing session-shaped lines; PROBE alone needs the real CLI
 //! and honors the kill switch like every other vendor's probe.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -678,15 +678,311 @@ pub async fn fixture_report() -> ConformanceReport {
     )
 }
 
+/// Extract the string entries (unescaped, without surrounding quotes) of the
+/// top-level `"trustedFolders"` array from copilot's JSONC `config.json`.
+/// Deliberately narrow: tolerates the JSONC features copilot emits (`//`,
+/// `/* */`, trailing commas) and only collects the array's string literals,
+/// skipping comments. Returns `None` if the key/array cannot be located, or an
+/// empty list if present but empty. Membership is checked against the returned
+/// tokens, never against raw text, so a path appearing only in a comment
+/// (inside or outside the array) can never false-positive.
+fn copilot_trusted_folders_from_config(config: &str) -> Option<Vec<String>> {
+    let bytes = config.as_bytes();
+    let n = bytes.len();
+    let key = b"\"trustedFolders\"";
+    let mut i = 0;
+    let mut array_start = None;
+    let mut depth = 0i32;
+    while i + key.len() <= n {
+        // Skip comments so a quoted key appearing inside a comment (e.g.
+        // `// "trustedFolders": ["/repo"]`) is not mistaken for the real key.
+        if bytes[i] == b'/' && i + 1 < n && bytes[i + 1] == b'/' {
+            while i < n && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if bytes[i] == b'/' && i + 1 < n && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < n && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i += 2;
+            continue;
+        }
+        // Skip string literals so braces/keys inside values don't affect depth
+        // tracking. The trustedFolders key itself (a string) is processed
+        // rather than skipped, but only at root-object depth.
+        if bytes[i] == b'"' {
+            if depth == 1 && i + key.len() <= n && &bytes[i..i + key.len()] == key {
+                // fall through to key handling below
+            } else {
+                i += 1;
+                while i < n && bytes[i] != b'"' {
+                    if bytes[i] == b'\\' {
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                if i < n {
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        if bytes[i] == b'{' {
+            depth += 1;
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'}' {
+            if depth > 0 {
+                depth -= 1;
+            }
+            i += 1;
+            continue;
+        }
+        if depth == 1 && &bytes[i..i + key.len()] == key {
+            let mut j = i + key.len();
+            while j < n && matches!(bytes[j], b' ' | b'\t' | b'\n' | b'\r') {
+                j += 1;
+            }
+            if j < n && bytes[j] == b':' {
+                let mut k = j + 1;
+                while k < n {
+                    match bytes[k] {
+                        b' ' | b'\t' | b'\n' | b'\r' => k += 1,
+                        b'/' if k + 1 < n && bytes[k + 1] == b'/' => {
+                            while k < n && bytes[k] != b'\n' {
+                                k += 1;
+                            }
+                        }
+                        b'/' if k + 1 < n && bytes[k + 1] == b'*' => {
+                            k += 2;
+                            while k + 1 < n && !(bytes[k] == b'*' && bytes[k + 1] == b'/') {
+                                k += 1;
+                            }
+                            k += 2;
+                        }
+                        b'[' => {
+                            array_start = Some(k);
+                            break;
+                        }
+                        _ => return None,
+                    }
+                }
+                break;
+            }
+        }
+        i += 1;
+    }
+    let start = array_start?;
+    let mut k = start + 1;
+    let mut depth = 0i32;
+    let mut out: Vec<String> = Vec::new();
+    while k < n {
+        match bytes[k] {
+            b'"' => {
+                k += 1;
+                let mut s = String::new();
+                while k < n && bytes[k] != b'"' {
+                    if bytes[k] == b'\\' && k + 1 < n {
+                        let e = bytes[k + 1];
+                        match e {
+                            b'"' => s.push('"'),
+                            b'\\' => s.push('\\'),
+                            b'/' => s.push('/'),
+                            b'n' => s.push('\n'),
+                            b't' => s.push('\t'),
+                            b'r' => s.push('\r'),
+                            b'b' => s.push('\u{0008}'),
+                            b'f' => s.push('\u{000C}'),
+                            b'u' if k + 5 < n => {
+                                if let Ok(cp) = u32::from_str_radix(
+                                    std::str::from_utf8(&bytes[k + 2..k + 6]).unwrap_or(""),
+                                    16,
+                                ) && let Some(ch) = char::from_u32(cp)
+                                {
+                                    s.push(ch);
+                                }
+                                k += 6;
+                                continue;
+                            }
+                            other => s.push(other as char),
+                        }
+                        k += 2;
+                    } else {
+                        s.push(bytes[k] as char);
+                        k += 1;
+                    }
+                }
+                out.push(s);
+            }
+            b'/' if k + 1 < n && bytes[k + 1] == b'/' => {
+                while k < n && bytes[k] != b'\n' {
+                    k += 1;
+                }
+            }
+            b'/' if k + 1 < n && bytes[k + 1] == b'*' => {
+                k += 2;
+                while k + 1 < n && !(bytes[k] == b'*' && bytes[k + 1] == b'/') {
+                    k += 1;
+                }
+                k += 1;
+            }
+            b'[' => depth += 1,
+            b']' => {
+                if depth == 0 {
+                    return Some(out);
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+        k += 1;
+    }
+    None
+}
+
+/// Read-only copilot trust check: is `cwd` (or its canonical form) listed in
+/// copilot's `trustedFolders`? Membership is tested against the extracted
+/// string tokens (comments skipped), so a path appearing only in a comment
+/// cannot false-positive.
+fn is_copilot_trusted(config: &str, cwd: &Path) -> bool {
+    let Some(trusted) = copilot_trusted_folders_from_config(config) else {
+        return false;
+    };
+    let cwd_raw = cwd.to_string_lossy();
+    if trusted.iter().any(|t| t.as_str() == cwd_raw.as_ref()) {
+        return true;
+    }
+    if let Ok(abs) = std::fs::canonicalize(cwd) {
+        let abs_raw = abs.to_string_lossy();
+        if trusted.iter().any(|t| t.as_str() == abs_raw.as_ref()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Copilot's interactive TUI refuses to open a chat session -- and therefore
+/// never writes its `~/.copilot/session-state/<id>/events.jsonl` transcript --
+/// in a workspace that is not listed in its `~/.copilot/config.json`
+/// `trustedFolders`: it blocks on a first-run trust modal that swallows the
+/// injected prompt, so transcript discovery times out (the "capture" failure).
+/// This preflight fails fast with an actionable message instead of hanging for
+/// the full discovery window. Read-only: it never mutates copilot's config.
+fn ensure_copilot_workspace_trusted(cwd: &Path) -> Result<(), String> {
+    let home = std::env::var("HOME")
+        .map_err(|_| "HOME is not set; cannot locate ~/.copilot/config.json".to_string())?;
+    let cfg = PathBuf::from(home).join(".copilot").join("config.json");
+    // Missing config: don't block on it; let discovery report the failure.
+    let Ok(text) = std::fs::read_to_string(&cfg) else {
+        return Ok(());
+    };
+    if is_copilot_trusted(&text, cwd) {
+        Ok(())
+    } else {
+        Err(format!(
+            "copilot workspace '{}' is not trusted (not found in ~/.copilot/config.json trustedFolders). \
+             copilot blocks on a first-run trust modal in untrusted workspaces, so it never creates \
+             a session transcript and capture fails. Fix: run `copilot` once in this directory and \
+             choose 'Trust', or set CREW_LIVE_CWD to an already-trusted project directory.",
+            cwd.display()
+        ))
+    }
+}
+
 /// Live (real `copilot` CLI) TUI conformance -- dispatched by
 /// `run_live_conformance` now that the copilot adapter defaults to TUI mode.
 pub async fn live_report() -> Result<ConformanceReport, String> {
+    let cwd = super::live_project_cwd();
+    // Copilot blocks on a trust modal in untrusted workspaces; fail fast with
+    // a clear remediation instead of hanging for the full discovery window.
+    ensure_copilot_workspace_trusted(&cwd)?;
     super::live_tui_report(
-        super::copilot::CopilotTuiVendor::new(super::live_project_cwd(), Vec::new()),
+        super::copilot::CopilotTuiVendor::new(cwd, Vec::new()),
         "copilot-tui",
         "copilot",
     )
     .await
+}
+#[cfg(test)]
+mod preflight_tests {
+    use super::is_copilot_trusted;
+    use std::path::Path;
+
+    #[test]
+    fn trusted_when_in_array() {
+        let cfg = "{\n  \"trustedFolders\": [\n    \"/tmp/crew-smoke-proj\"\n  ]\n}";
+        assert!(is_copilot_trusted(cfg, Path::new("/tmp/crew-smoke-proj")));
+    }
+
+    #[test]
+    fn not_trusted_when_absent() {
+        let cfg = "{\n  \"trustedFolders\": [\n    \"/tmp/crew-smoke-proj\"\n  ]\n}";
+        assert!(!is_copilot_trusted(cfg, Path::new("/Users/me/repo")));
+    }
+
+    #[test]
+    fn not_trusted_when_only_in_comment() {
+        // Path present only in a comment must not false-positive.
+        let cfg = "// /tmp/crew-smoke-proj is where we test\n{\n  \"trustedFolders\": []\n}";
+        assert!(!is_copilot_trusted(cfg, Path::new("/tmp/crew-smoke-proj")));
+    }
+
+    #[test]
+    fn tolerates_comments_and_trailing_comma_in_array() {
+        let cfg = "{\n  // note\n  \"trustedFolders\": [\n    \"/a\",  /* trailing */\n  ]\n}";
+        assert!(is_copilot_trusted(cfg, Path::new("/a")));
+    }
+
+    #[test]
+    fn no_false_positive_on_path_prefix() {
+        let cfg = "{\n  \"trustedFolders\": [\n    \"/tmp/crew-smoke-proj\"\n  ]\n}";
+        assert!(!is_copilot_trusted(cfg, Path::new("/tmp/crew-smoke")));
+    }
+    #[test]
+    fn does_not_terminate_on_bracket_in_comment() {
+        // A ']' inside a line comment must not close trustedFolders early.
+        let cfg = "{\n  \"trustedFolders\": [\n    \"/a\", // note: ] end\n    \"/b\"\n  ]\n}";
+        assert!(is_copilot_trusted(cfg, Path::new("/a")));
+        assert!(is_copilot_trusted(cfg, Path::new("/b")));
+    }
+
+    #[test]
+    fn does_not_terminate_on_bracket_in_block_comment() {
+        let cfg = "{\n  \"trustedFolders\": [\n    \"/a\" /* ] here */,\n    \"/b\"\n  ]\n}";
+        assert!(is_copilot_trusted(cfg, Path::new("/a")));
+        assert!(is_copilot_trusted(cfg, Path::new("/b")));
+    }
+    #[test]
+    fn not_trusted_when_only_in_array_comment() {
+        // Quoted cwd appears only inside an array comment -- must not match.
+        let cfg = "{\n  \"trustedFolders\": [ /* \"/repo\" */ ]\n}";
+        assert!(!is_copilot_trusted(cfg, Path::new("/repo")));
+    }
+    #[test]
+    fn skips_commented_fake_key_before_real_empty_array() {
+        // A commented "trustedFolders": ["/repo"] must not be mistaken for the
+        // real (empty) array that follows.
+        let cfg = "// \"trustedFolders\": [\"/repo\"]\n{\n  \"trustedFolders\": []\n}";
+        assert!(!is_copilot_trusted(cfg, Path::new("/repo")));
+    }
+    #[test]
+    fn ignores_nested_trusted_folders_key() {
+        // A nested "trustedFolders" inside another object must not shadow the
+        // real top-level (empty) array.
+        let cfg = "{\"other\":{\"trustedFolders\":[\"/repo\"]},\"trustedFolders\":[]}";
+        assert!(!is_copilot_trusted(cfg, Path::new("/repo")));
+    }
+    #[test]
+    fn tolerates_block_comment_between_colon_and_array() {
+        // A block comment between ':' and '[' must not reject the key.
+        let cfg = "{\n  \"trustedFolders\": /* note */ [\n    \"/repo\"\n  ]\n}";
+        assert!(is_copilot_trusted(cfg, Path::new("/repo")));
+    }
 }
 #[cfg(test)]
 mod tests {
