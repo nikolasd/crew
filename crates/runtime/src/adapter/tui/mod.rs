@@ -138,10 +138,21 @@ pub enum TuiEvent {
 /// `cursor.offset`, parse only *complete* lines and return each event
 /// paired with the cursor advanced to *its own* line. A partial trailing
 /// line is left unconsumed, so re-parsing from any returned cursor is
-/// idempotent at arbitrary byte splits. Pairing every event with its own
-/// post-line cursor is what makes a crash mid-batch restart-safe: the
-/// journal advances `runs.transcript_cursor` to each event's own position,
-/// so a resume re-tails past every durably committed event (exactly-once).
+/// idempotent at arbitrary byte splits.
+///
+/// This pairing only *labels* each event with its line's position -- it
+/// does not by itself decide which events may durably advance
+/// `runs.transcript_cursor`. One line commonly maps to more than one
+/// event (e.g. a `SessionMeta` plus an `AssistantText`), and each event
+/// still commits through its own separate journal transaction, so more
+/// than one of them carrying the identical `Cursor` forward would let a
+/// crash between those commits silently skip a still-uncommitted sibling
+/// on resume instead of safely re-emitting it. Restricting each line's
+/// `Cursor` to at most one carrier -- its last emitting event -- is
+/// `crate::adapter::tui::adapter::cursor_placements`'s job, applied to
+/// every batch this trait's `parse` produces before any event reaches the
+/// sink; see that function's own doc comment for the exactly-once
+/// argument in full.
 pub trait TranscriptFormat: Send + Sync {
     fn parse(&self, raw: &[u8], cursor: &Cursor) -> Vec<(TuiEvent, Cursor)>;
 }
