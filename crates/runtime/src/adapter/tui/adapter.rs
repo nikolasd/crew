@@ -728,16 +728,8 @@ impl<V: TuiVendor> TuiAdapter<V> {
         let pump_sink = Arc::clone(&sink);
         tokio::spawn(async move {
             while let Some((tagged, _new_cursor)) = batch_rx.recv().await {
-                for (event, event_cursor) in tagged {
-                    emit_tui_event(
-                        &pump_sink,
-                        run_id,
-                        task_id,
-                        worker_id,
-                        event,
-                        Some(event_cursor),
-                    )
-                    .await;
+                for (event, cursor) in cursor_placements(tagged) {
+                    emit_tui_event(&pump_sink, run_id, task_id, worker_id, event, cursor).await;
                 }
             }
         });
@@ -836,6 +828,65 @@ async fn emit(
     }
 }
 
+/// Pairs each event of one tailed batch with the cursor it should carry
+/// when emitted (`emit_tui_event`'s own `cursor` parameter).
+///
+/// `tagged` is straight from `parse`: every event is paired with its
+/// *line's* own post-line `Cursor`, so two or more consecutive events
+/// that share an identical `Cursor` value always originate from the same
+/// transcript line (`parse_jsonl_chunk` never assigns one line's cursor
+/// to another line's events). A single line commonly maps to more than
+/// one `TuiEvent` -- e.g. a Claude entry that is both the session's first
+/// `SessionMeta` and an `AssistantText` -- and each event still commits
+/// through its own, separate journal transaction (`emit` -> one
+/// `AdapterEventSink::emit` call each). Letting more than one of them
+/// carry that identical `Cursor` would mean a crash between two such
+/// commits durably advances `runs.transcript_cursor` past the whole line
+/// on the *first* commit, so the still-uncommitted sibling is never
+/// re-tailed on resume -- silently lost forever rather than safely
+/// re-emitted.
+///
+/// So within each run of events sharing one `Cursor`, only the run's last
+/// *emitting* event (`TuiEvent::emits_a_payload`, via `last_emitting_index`)
+/// may carry it forward (`Some`); every other event in the run -- earlier
+/// emitting siblings and any non-emitting `TurnEnded`/`Raw` tail alike --
+/// gets `None`. A crash before that one carrier event's own commit simply
+/// re-tails and re-emits the whole line on resume: duplication, never
+/// loss. A run with no emitting event at all (`last_emitting_index`
+/// returns `None`) persists no cursor for it either, which is safe: none
+/// of its events were journaled the first time, so re-parsing produces no
+/// duplicate.
+///
+/// Extracted from the pump loop as its own pure function so the placement
+/// rule is unit-testable without a real tailer/vendor/PTY, and so a
+/// regression in the pump loop's wiring (not just in `last_emitting_index`
+/// itself) has exactly one function standing between it and this module's
+/// own tests.
+fn cursor_placements(tagged: Vec<(TuiEvent, Cursor)>) -> Vec<(TuiEvent, Option<Cursor>)> {
+    let mut carries_cursor = vec![false; tagged.len()];
+    let mut start = 0;
+    while start < tagged.len() {
+        let mut end = start;
+        while end + 1 < tagged.len() && tagged[end + 1].1 == tagged[start].1 {
+            end += 1;
+        }
+        // `end` is the run's last index (inclusive) -- every event in
+        // `tagged[start..=end]` shares one line's `Cursor`.
+        if let Some(offset) = tagged[start..=end]
+            .iter()
+            .rposition(|(event, _)| event.emits_a_payload())
+        {
+            carries_cursor[start + offset] = true;
+        }
+        start = end + 1;
+    }
+    tagged
+        .into_iter()
+        .zip(carries_cursor)
+        .map(|((event, cursor), carries)| (event, carries.then_some(cursor)))
+        .collect()
+}
+
 /// Maps one parsed [`TuiEvent`] to the [`AdapterEventPayload`](s) it
 /// produces and emits them, in order:
 /// `AssistantText{is_question:false}` -> `MessageFinal`,
@@ -850,16 +901,13 @@ async fn emit(
 /// format drift is expected, not itself an error worth journaling
 /// durably; see this module's own doc comment).
 ///
-/// `cursor` is the event's own post-line position returned by `parse`
-/// (the pump loop forwards it as `Some` for every emitted event), so the
-/// durable `runs.transcript_cursor` advances to each event's own line as
-/// it commits -- a crash between journaling an earlier event and a later
-/// one of the same batch leaves the cursor at the last durably committed
-/// event, and a resume re-tails from there (exactly-once). It is attached
-/// here to whichever of this event's own emitted payloads is emitted last
-/// (`ToolResult` rather than `ToolStarted` for `ToolActivity`), so the
-/// durable cursor and the event that observed everything up to it commit
-/// together.
+/// `cursor` is this event's placement from `cursor_placements` (`Some`
+/// only for the last emitting event of the transcript line it came from,
+/// `None` otherwise) -- see that function's own doc comment for why. It
+/// is attached here to whichever of this event's own emitted payloads is
+/// emitted last (`ToolResult` rather than `ToolStarted` for
+/// `ToolActivity`), so the durable cursor and the event that observed
+/// everything up to it commit together.
 async fn emit_tui_event(
     sink: &Arc<dyn AdapterEventSink>,
     run_id: RunId,
@@ -1417,5 +1465,153 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
             let _ = run.watcher.await;
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit-tests `cursor_placements` directly -- the exact function the
+    //! pump loop in `run_pipeline` calls, not a reimplementation of it.
+    //! A future edit that reverts the pump loop to placing every event's
+    //! own line cursor unconditionally (the exactly-once-breaking bug
+    //! `cursor_placements` exists to prevent -- multiple same-line events
+    //! each durably advancing `runs.transcript_cursor`) breaks these tests
+    //! immediately, because there would be no other caller for
+    //! `cursor_placements` to keep it alive/correct.
+
+    use crew_protocol::{Classified, ContentClass};
+
+    use super::*;
+
+    fn text(value: &str) -> TuiEvent {
+        TuiEvent::AssistantText {
+            text: Classified {
+                class: ContentClass::Visible,
+                value: value.to_string(),
+            },
+            is_question: false,
+            ts: None,
+        }
+    }
+
+    fn tagged(events: Vec<TuiEvent>, cursor: Cursor) -> Vec<(TuiEvent, Cursor)> {
+        events.into_iter().map(|e| (e, cursor.clone())).collect()
+    }
+
+    #[test]
+    fn a_trailing_turn_ended_does_not_take_the_cursor_from_the_message_before_it() {
+        let cursor = Cursor {
+            offset: 10,
+            last_entry_id: Some("e1".to_string()),
+        };
+        let placements = cursor_placements(tagged(
+            vec![text("first"), TuiEvent::TurnEnded],
+            cursor.clone(),
+        ));
+
+        assert_eq!(placements.len(), 2);
+        assert_eq!(
+            placements[0].1,
+            Some(cursor),
+            "the AssistantText, this line's only emitting event, must carry the cursor"
+        );
+        assert_eq!(
+            placements[1].1, None,
+            "TurnEnded emits nothing and must never carry a cursor"
+        );
+    }
+
+    #[test]
+    fn a_trailing_raw_does_not_take_the_cursor_from_the_message_before_it() {
+        let cursor = Cursor::start();
+        let placements = cursor_placements(tagged(
+            vec![
+                text("first"),
+                TuiEvent::Raw {
+                    entry_type: "unknown".to_string(),
+                },
+            ],
+            cursor.clone(),
+        ));
+
+        assert_eq!(placements[0].1, Some(cursor));
+        assert_eq!(placements[1].1, None);
+    }
+
+    /// The C1-followup bug this function exists to close: one transcript
+    /// line mapping to two emitting events (e.g. Claude's `SessionMeta` +
+    /// `AssistantText` from a single entry) means `parse` hands both the
+    /// identical line `Cursor`. Only the *last* of them may carry it --
+    /// otherwise a crash between their two separate journal commits would
+    /// durably advance the cursor on the first commit and silently lose
+    /// the second, uncommitted one on resume.
+    #[test]
+    fn only_the_last_of_several_same_line_emitting_events_carries_that_lines_cursor() {
+        let cursor = Cursor::start();
+        let placements = cursor_placements(tagged(
+            vec![
+                TuiEvent::SessionMeta {
+                    vendor_session_id: "sess-1".to_string(),
+                },
+                text("first"),
+            ],
+            cursor.clone(),
+        ));
+
+        assert_eq!(
+            placements[0].1, None,
+            "SessionMeta shares its line's cursor with a later event and must not carry it"
+        );
+        assert_eq!(
+            placements[1].1,
+            Some(cursor),
+            "AssistantText is the last emitting event on this line and must carry the cursor"
+        );
+    }
+
+    /// A batch spans multiple lines, each with its own distinct cursor;
+    /// each line's carrier decision must be made independently of the
+    /// others.
+    #[test]
+    fn each_line_in_a_batch_gets_its_own_independent_carrier() {
+        let first_line = Cursor {
+            offset: 5,
+            last_entry_id: Some("e1".to_string()),
+        };
+        let second_line = Cursor {
+            offset: 11,
+            last_entry_id: Some("e2".to_string()),
+        };
+        let mut batch = tagged(vec![text("first")], first_line.clone());
+        batch.extend(tagged(
+            vec![
+                TuiEvent::SessionMeta {
+                    vendor_session_id: "sess-1".to_string(),
+                },
+                text("second"),
+            ],
+            second_line.clone(),
+        ));
+
+        let placements = cursor_placements(batch);
+
+        assert_eq!(placements[0].1, Some(first_line));
+        assert_eq!(placements[1].1, None);
+        assert_eq!(placements[2].1, Some(second_line));
+    }
+
+    #[test]
+    fn a_line_where_nothing_emits_persists_no_cursor_at_all() {
+        let placements = cursor_placements(tagged(
+            vec![
+                TuiEvent::TurnEnded,
+                TuiEvent::Raw {
+                    entry_type: "unknown".to_string(),
+                },
+            ],
+            Cursor::start(),
+        ));
+
+        assert!(placements.iter().all(|(_, cursor)| cursor.is_none()));
     }
 }
