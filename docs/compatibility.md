@@ -39,6 +39,15 @@ Windows equivalent is implemented), and the packaged binaries are built against 
 
 ## Adapter Compatibility
 
+**The table and the four per-adapter sections immediately below are historical.** They were
+generated from the headless control plane's `--live` conformance runs. crew-v2 gap-closure WP-C
+retired that control plane entirely — deleted, not kept inert (`mode: "headless"` stays
+deserializable for old configs/journals but is typed-rejected;
+[`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md)) — so none of the
+commands below are reproducible against the current tree. Kept only as a record of which vendor
+CLI versions were once verified compatible; **for current, reproducible compatibility evidence,
+see "TUI live conformance" further below, which is unaffected by this retirement.**
+
 The table below is **generated from real `--live` conformance runs**, not from prose. Each row
 records the version the adapter's own probe observed and how many canonical scenarios that run
 proved.
@@ -46,6 +55,8 @@ proved.
 Reproduce with (`CREW_DISABLE_VENDOR_CLI` must be **unset** — it suppresses vendor invocation):
 
 ```bash
+# NOT REPRODUCIBLE: --live now always runs the TUI suite (the only mode left); this command
+# is preserved verbatim as a record of how the headless-era numbers below were captured.
 ./target/debug/crewd conformance --adapter <claude|codex|copilot|ompRpc> --live \
   --output /tmp/live-<adapter>.json
 ```
@@ -120,6 +131,9 @@ v1 field names.
 
 ### TUI live conformance (0.5.0)
 
+**Current.** Unlike everything above, this subsection is reproducible against the tree as it
+stands today — `--mode tui` is the only live mode there is now.
+
 WP29 added a TUI-mode live suite (`crewd conformance --live --mode tui`) that spawns the real
 vendor TUI on a PTY and drives it through the same injection path the runtime uses. It exercises
 `probe`, `read_only_start_and_progress`, `follow_up`, `cancellation_scope`, and `session_resume`.
@@ -137,9 +151,11 @@ Version provenance: the live reports deliberately record **no** vendor version (
 the TUI harness does not pin one, so a report is evidence about the adapter injection path, not
 about a specific CLI release. Version-pinned TUI wire behavior lives in the committed fixtures
 instead: claude-tui `2.1.241`, codex-tui `0.149.1`, copilot-tui `1.0.80`. Note these are *newer*
-than the headless captures in the table above (same CLIs, later releases). Gap: unlike the headless
-fixtures, none of the `*-tui` fixtures has a `capture-manifest.yml` entry yet, so there is no
-recorded recipe for re-capturing them against future CLIs — tracked with the open WP29 items.
+than the historical headless captures in the table above (same CLIs, later releases; the headless
+control plane those came from is retired, see the historical notice above). Gap: there is no
+recorded recipe for re-capturing the `*-tui` fixtures against future CLIs (`capture-manifest.yml`
+governed recapturing the now-deleted headless fixtures specifically and was deleted along with
+them by crew-v2 gap-closure WP-C; it never covered `*-tui`) — tracked with the open WP29 items.
 
 Raw reports (verbatim, with an erratum on the overstated `session_resume` detail):
 [`release/live-conformance/`](../release/live-conformance/).

@@ -279,7 +279,7 @@ to the backend — this is read-only.
 Runs the fixture or live conformance suite for one adapter (or all four) and writes a JSON report.
 
 ```bash
-crewd conformance --adapter <claude|codex|copilot|ompRpc|all> (--fixture | --live) [--mode <tui|headless>] --output <path>
+crewd conformance --adapter <claude|codex|copilot|ompRpc|all> (--fixture | --live) [--mode tui] --output <path>
 ```
 
 Exactly one of `--fixture`/`--live` must be set. `--fixture` runs entirely offline against golden
@@ -287,10 +287,12 @@ frames; `--live` shells out to the real vendor CLI (gated by adapter-specific en
 `CREW_LIVE_CLAUDE=1`) and reports a structured `{adapter, mode: "live", passed: false, error}`
 entry rather than a hard process failure if the vendor CLI is unavailable or refuses (e.g. out of
 credits). The report is written to `--output` and also printed to stdout.
-- The live suite runs in **TUI mode by default** (`--mode tui`): it spawns the real vendor
-  TUI on a PTY and drives it through the same injection path the runtime uses. Pass
-  `--mode headless` to reach each adapter's non-interactive live path (kept for CI / hidden
-  runs). The fixture suite ignores `--mode`.
+- The live suite spawns the real vendor TUI on a PTY and drives it through the same injection
+  path the runtime uses. `tui` is the only accepted `--mode` value (and its default) —
+  the headless control plane this used to also reach is retired: `--mode headless` is a typed
+  rejection, not a live path, per crew-v2 gap-closure WP-C (spec §4.6,
+  [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md)). The fixture suite
+  ignores `--mode`.
 
 Each scenario in the report is `pass`, `fail`, or `skipped` — never collapsed to a boolean. `skipped`
 means the scenario was never attempted (e.g. `CREW_DISABLE_VENDOR_CLI=1` suppresses every real

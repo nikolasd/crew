@@ -85,7 +85,9 @@ Implement only when an organization operates multiple Crew repositories and need
 ## Copilot Adapter: Token Usage / Cost Reporting
 
 **Blocked by:** ACP protocol version 1 (Copilot CLI)
-**References:** `crates/runtime/src/adapter/copilot/client.rs`, TODO.md item 50 (retired)
+**References:** `crates/runtime/src/adapter/tui/copilot.rs` (the headless
+`adapter/copilot/client.rs` this originally cited was removed by crew-v2 gap-closure WP-C), TODO.md
+item 50 (retired)
 
 ### What it is
 
@@ -112,7 +114,8 @@ bumping the pinned Copilot CLI version.
 ## Copilot Adapter: Nested-Worker (Unexpected Child) Observation
 
 **Blocked by:** ACP protocol version 1 (Copilot CLI)
-**References:** `crates/runtime/src/adapter/copilot/compatibility.rs`, `crates/runtime/tests/copilot_adapter.rs`, TODO.md item 51 (retired)
+**References:** `crates/runtime/src/adapter/tui/copilot_compatibility.rs` (moved from the retired
+headless `adapter/copilot/compatibility.rs` by crew-v2 gap-closure WP-C), TODO.md item 51 (retired)
 
 ### What it is
 
@@ -125,10 +128,11 @@ signal the Claude and Codex adapters already raise.
 ACP v1 has no `session/update` variant for a vendor-spawned subagent at
 all — there is no message to observe. `normalize.rs` correctly drops
 unrecognized updates to zero events rather than fabricate a
-`NestedWorkerObserved`. A test in `copilot_adapter.rs` already pins this:
-it fails if `COPILOT_MAX_ACP_PROTOCOL_VERSION` is ever raised without a
-corresponding mapping added, so the gap can't silently regress into a
-false negative.
+`NestedWorkerObserved`. A test already pins this (formerly in the now-deleted
+`copilot_adapter.rs`, moved with the rest of this table to
+`adapter/tui/copilot_compatibility.rs`'s own inline tests by crew-v2 gap-closure WP-C): it fails
+if `COPILOT_MAX_ACP_PROTOCOL_VERSION` is ever raised without a corresponding mapping added, so the
+gap can't silently regress into a false negative.
 
 ### Decision trigger
 
@@ -179,6 +183,43 @@ read.
 Implement when an operator needs centrally-managed policy across a fleet of repos/machines —
 the same trigger as the org config layer's own return, below, since this enforcement has no
 inputs without it.
+
+---
+
+## Headless Control Plane
+
+**Specified by:** crew-v2 gap-closure WP-C ruling (2026-08-22)
+**References:** [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md),
+[`docs/adr/0025-crew-v2-tui-control-plane.md`](adr/0025-crew-v2-tui-control-plane.md)
+
+### What it is
+
+Before crew-v2, each of the four worker adapters (Claude, Codex, Copilot, OMP-RPC) had two
+independent implementations: a headless one driving each vendor's own non-interactive/JSON
+protocol directly (`claude stream-json`, `codex app-server`, `copilot --acp`, `omp --mode rpc`),
+and a TUI one driving the real interactive CLI on a PTY. WP-C deleted every headless
+implementation, its fixtures, and its conformance suite, leaving `adapter::tui::*` as the sole
+control plane. `mode: "headless"` stays deserializable (an old journal or config naming it must
+still parse) but is typed-rejected at both config-validation and adapter-dispatch time — never
+silently remapped to `tui` and never silently accepted.
+
+### Why deferred
+
+The headless adapters existed for CI-friendly, non-interactive automation and for hidden/backgrounded
+runs a PTY-based TUI can't naturally serve. But crew-v2's TUI control plane became the
+better-maintained, better-tested path (ADR-0025), and running two parallel implementations per
+vendor doubled the surface WP-C's authors had to keep correct without doubling real usage — no
+operator was reported as depending on the headless path specifically. Retiring it outright, rather
+than keeping it permanently inert, follows the same reasoning as the Org Governance Enforcement
+entry above: an unreachable-in-practice code path is a liability, not a free option.
+
+### Decision trigger
+
+Implement a non-interactive control plane again only if a concrete deployment needs to drive a
+vendor CLI without a PTY (e.g. a headless CI runner with no pane backend available at all) *and*
+the TUI path is confirmed unworkable for it — not merely inconvenient. Any reintroduction should
+design fresh against the vendor CLIs' current protocols rather than resurrect the deleted code,
+since the vendor wire formats this was built against may themselves have moved on by then.
 
 ---
 

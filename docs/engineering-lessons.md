@@ -93,12 +93,17 @@ hop the legal-edge table forces and never overwriting a terminal state.
 
 **Regression tests:** `crates/runtime/src/adapter/run_lifecycle.rs`'s 9 unit tests
 (`process_started_moves_a_queued_run_to_starting` through
-`vendor_output_never_reopens_working_on_a_run_that_started_waiting`), plus the end-to-end proofs
-against real processes: `crates/runtime/tests/run_lifecycle.rs`'s
-`a_real_worker_process_walks_its_run_from_queued_into_working` and
-`a_real_worker_process_exit_settles_its_run`, `crates/runtime/src/adapter/claude/mod.rs`'s
+`vendor_output_never_reopens_working_on_a_run_that_started_waiting`) are unaffected. The
+end-to-end proofs against real processes named here at the time this lesson was written --
+`crates/runtime/tests/run_lifecycle.rs`'s `a_real_worker_process_walks_its_run_from_queued_into_working`
+and `a_real_worker_process_exit_settles_its_run`, `crates/runtime/src/adapter/claude/mod.rs`'s
 `run_state_tests` module, and `crates/runtime/tests/copilot_adapter.rs`'s
-`a_supervised_process_exit_is_reported_with_its_real_status`.
+`a_supervised_process_exit_is_reported_with_its_real_status` -- all drove a real process through
+the *headless* control plane, which crew-v2 gap-closure WP-C retired. `claude/mod.rs` and
+`copilot_adapter.rs` are deleted outright; `run_lifecycle.rs` still names the deleted
+`OmpRpcAdapter` purely as a protocol-agnostic "spawn a real process" test vehicle and is left
+uncompiling pending a decision on its replacement (see WP-C's report) -- **this lesson's specific
+"a real process, not just a test-fake" regression coverage is open again until that's resolved.**
 
 ---
 

@@ -64,7 +64,7 @@ Small, dependency-light, and the vocabulary for everything else.
 | `src/service/query.rs` | Read-only lookup closures (`task_get_op`, `run_state_op`, etc.) run through `DatabaseHandle::run_domain_op` |
 | `src/service/run_driver.rs` | `RunDriver` trait, `RunDriverContext`, `FakeRunDriver` (`queued -> starting -> working`) |
 | `src/adapter/trait.rs` | `Adapter` trait with `start`/`resume`/`send`/`cancel`/`dispose` |
-| `src/adapter/registry.rs` | `AdapterRegistry` — implements `RunDriver` against four worker adapters, `AdapterAuthorization` trait, `FixtureAuthorization`/`DenyByDefaultAuthorization` |
+| `src/adapter/registry.rs` | `AdapterRegistry` — implements `RunDriver` against four TUI worker adapters (the headless control plane these once ran alongside is retired; `mode: "headless"` is deserializable but typed-rejected — crew-v2 gap-closure WP-C, `docs/adr/0026-headless-retirement.md`), `AdapterAuthorization` trait, `FixtureAuthorization`/`DenyByDefaultAuthorization` |
 | `src/adapter/event_sink.rs` | `DomainAdapterEventSink` — sanitizes, journals, and broadcasts adapter events |
 | `src/adapter/run_lifecycle.rs` | `RunLifecycleSink` — applies `queued -> starting -> working` and the terminal edge from adapter evidence |
 | `src/adapter/error.rs` | `AdapterError` — adapter-specific error types |
@@ -73,16 +73,15 @@ Small, dependency-light, and the vocabulary for everything else.
 | `src/adapter/profile.rs` | `WorkerProfile` — worker profile definitions |
 | `src/adapter/profile_store.rs` | `ProfileStore` — adapter profile persistence |
 | `src/adapter/terminal.rs` | Terminal adapter backend |
-| `src/adapter/claude/mod.rs` | `claude stream-json` protocol adapter |
-| `src/adapter/claude/command.rs` | Claude CLI command construction |
-| `src/adapter/claude/protocol.rs` | Claude protocol types |
-| `src/adapter/codex/mod.rs` | `codex app-server` protocol adapter |
-| `src/adapter/codex/schema.rs` | Codex schema definitions |
-| `src/adapter/copilot/mod.rs` | `copilot --acp` protocol adapter |
-| `src/adapter/copilot/client.rs` | Copilot ACP client implementation |
-| `src/adapter/copilot/compatibility.rs` | Copilot compatibility checks |
-| `src/adapter/omp_rpc/mod.rs` | `omp --mode rpc` protocol adapter |
-| `src/adapter/omp_rpc/client.rs` | OMP-RPC client implementation |
+| `src/adapter/tui/adapter.rs` | `TuiAdapter<V: TuiVendor>` — the shared PTY-driven adapter generic over all four vendors |
+| `src/adapter/tui/claude.rs` | `ClaudeTuiVendor` — drives the real interactive `claude` CLI |
+| `src/adapter/tui/codex.rs` | `CodexTuiVendor` — drives the real interactive `codex` CLI |
+| `src/adapter/tui/copilot.rs` | `CopilotTuiVendor` — drives the real interactive `copilot` CLI |
+| `src/adapter/tui/copilot_compatibility.rs` | Copilot CLI/ACP version compatibility checks (moved from the retired headless copilot adapter in WP-C) |
+| `src/adapter/tui/omp.rs` | `OmpTuiVendor` — drives the real interactive `omp` CLI |
+| `src/adapter/tui/discovery.rs` | Vendor-pane discovery/attach helpers |
+| `src/adapter/tui/tailer.rs` | Session-transcript tailing shared across vendors |
+| `src/adapter/tui/{claude,codex,copilot,omp}_conformance.rs` | Per-vendor fixture/live conformance scenario probes |
 | `src/coordination/broker.rs` | `CoordinationBroker` — record-before-delivery messaging, `sweep_unacknowledged_as_unknown` |
 | `src/coordination/scope_token.rs` | `ScopeTokenStore` (mint/verify), `PidAncestryChecker` |
 | `src/coordination/rate_limit.rs` | `RateLimiter` — single 30-calls/minute/sender sliding window, charged by every journaling coordination call (`coordination/send`, `coordination/requestChild`, `coordination/publishArtifact`) |
