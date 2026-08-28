@@ -2242,6 +2242,9 @@ mod conformance_cache_tests {
     // one process-global shared with `conformance::tests` too, in the same
     // unit-test binary -- see that static's own doc comment.
     use crate::conformance::{FIXTURE_SUITE_RUNS, FIXTURE_SUITE_RUNS_SERIAL as SERIAL};
+    use crew_protocol::{
+        ProjectId, Run, RunFlags, RunState, TaskRef, Timestamp, Worker, WorkerProfileRef,
+    };
     use std::sync::atomic::Ordering;
 
     fn omp_rpc_profile_with_mode(mode: AdapterMode) -> WorkerProfile {
@@ -2445,5 +2448,236 @@ mod conformance_cache_tests {
              keep it from hitting the TUI entry's cache"
         );
         CONFORMANCE_CACHE.lock().clear();
+    }
+
+    /// Seeds a task/worker/run with a resolved Claude profile snapshot in
+    /// the given `mode`, for driving the REAL `resume_run`/`start` call
+    /// sites end to end (not `gate_profile` in isolation).
+    async fn seed_claude_profile_run(
+        db: &Arc<crate::db::DatabaseHandle>,
+        project_id: ProjectId,
+        mode: AdapterMode,
+    ) -> (TaskId, WorkerId, RunId) {
+        let task_id = TaskId::new();
+        let worker_id = WorkerId::new();
+        let run_id = RunId::new();
+        let profile_json = serde_json::to_string(&WorkerProfile {
+            id: crate::adapter::profile::ProfileId::new(),
+            adapter: "claude".to_string(),
+            model: String::new(),
+            permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
+            startup_options: StartupOptions::Claude(ClaudeStartupOptions {
+                mode,
+                ..Default::default()
+            }),
+            environment_allowlist: Vec::new(),
+            source: "test".to_string(),
+        })
+        .expect("profile serializes");
+        db.run_domain_op(Box::new(move |conn| {
+            let mut repo = DomainRepository::new(conn, project_id);
+            repo.upsert_task(
+                task_id,
+                &TaskRef {
+                    owner_client_instance_id: "omp-1".into(),
+                    revision: 1,
+                },
+            )?;
+            let worker = Worker {
+                worker_id,
+                profile_ref: WorkerProfileRef {
+                    id: worker_id,
+                    fingerprint: "sha256:fake".into(),
+                    adapter: "claude".into(),
+                    model: "test".into(),
+                    permission_envelope: serde_json::json!({}),
+                },
+                parent_worker_id: None,
+                created_at: Timestamp::now(),
+            };
+            repo.create_worker_with_snapshot(&worker, Some(profile_json))?;
+            let run = Run {
+                run_id,
+                task_id,
+                worker_id,
+                state: RunState::try_from("queued").expect("queued is a valid state"),
+                flags: RunFlags::default(),
+                vendor_session_id: None,
+                started_at: None,
+                completed_at: None,
+            };
+            repo.submit_run(&run, None, None)?;
+            Ok(serde_json::json!({}))
+        }))
+        .await
+        .expect("seed task/worker/run");
+        (task_id, worker_id, run_id)
+    }
+
+    /// Reviewer finding on WP-B's first pass: 5a/5b/5c all call
+    /// `gate_profile` directly, passing `mode` as an explicit argument --
+    /// they pin that `gate_profile` USES its parameter correctly, but say
+    /// nothing about whether the real call sites (`resume_run`/`run_one`)
+    /// COMPUTE and pass the right value. A regression at either call site
+    /// (a hardcoded `Headless`, or a wrong re-derivation) would leave
+    /// every one of those tests green while TUI runs silently revert to
+    /// headless-derived capabilities -- precisely the WP13-F2 bug this WP
+    /// exists to close. This drives the REAL `resume_run` with a genuine
+    /// Claude TUI-mode worker profile (no `TuiSupport` configured on
+    /// purpose -- `build_adapter`'s typed refusal for an unsupported TUI
+    /// kind is a clean `Err`, reached only AFTER `gate_profile` already
+    /// ran, which is exactly the point this test needs to observe; a real
+    /// running `TuiAdapter` needs a fake vendor CLI script and proves
+    /// nothing more about mode-threading than this does) and asserts
+    /// `CONFORMANCE_CACHE` ends up keyed `(Claude, Tui)`, never
+    /// `(Claude, Headless)`.
+    #[tokio::test]
+    async fn resume_run_threads_the_profiles_own_requested_mode_into_the_cache_key() {
+        let _serial = SERIAL.lock().await;
+        CONFORMANCE_CACHE.lock().clear();
+        let state_dir = tempfile::Builder::new()
+            .prefix("bat-registry-mode-thread-resume-")
+            .tempdir_in("/tmp")
+            .expect("create state dir");
+        let db = Arc::new(
+            crate::db::DatabaseHandle::start(state_dir.path().join("runtime.db"))
+                .await
+                .expect("start database"),
+        );
+        let project_id = ProjectId::new();
+        let (events_tx, _rx) = tokio::sync::broadcast::channel(16);
+        let (_task_id, _worker_id, run_id) =
+            seed_claude_profile_run(&db, project_id, AdapterMode::Tui).await;
+
+        let violation_service = Arc::new(crate::policy::ViolationService::new(
+            Arc::clone(&db),
+            project_id,
+            events_tx.clone(),
+            None,
+            crate::config::NestedViolationAction::default(),
+            crate::security::redaction::Redactor::new(),
+        ));
+        let registry = AdapterRegistry::new(
+            Arc::new(FixtureAuthorization { allow: true }),
+            state_dir.path().to_path_buf(),
+            None,
+            Vec::new(),
+        );
+        registry.set_resume_support(Arc::new(ResumeSupport {
+            db: Arc::clone(&db),
+            project_id,
+            violation_service,
+            events_tx,
+        }));
+
+        let result = registry
+            .resume_run(run_id, VendorSessionRef("sess-1".to_string()), None)
+            .await;
+        assert!(
+            result.is_err(),
+            "no TuiSupport is configured, so this must fail AFTER gate_profile ran (the typed \
+             refusal build_adapter gives an unsupported TUI kind), not before: {result:?}"
+        );
+
+        let (has_tui_key, has_headless_key, cache_debug) = {
+            let cache = CONFORMANCE_CACHE.lock();
+            (
+                cache.contains_key(&(AdapterKind::Claude, AdapterMode::Tui)),
+                cache.contains_key(&(AdapterKind::Claude, AdapterMode::Headless)),
+                format!("{cache:?}"),
+            )
+        };
+        assert!(
+            has_tui_key,
+            "resume_run must have gated this profile's real Claude-TUI request as Tui: \
+             {cache_debug}"
+        );
+        assert!(
+            !has_headless_key,
+            "a Claude-TUI profile must never populate the Headless cache entry -- that would \
+             mean resume_run silently re-derived (or hardcoded) the wrong mode: {cache_debug}"
+        );
+        CONFORMANCE_CACHE.lock().clear();
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// The `run_one`/`AdapterRegistry::start` equivalent of the test
+    /// above -- the OTHER real call site `gate_profile`'s `mode` argument
+    /// must be threaded through correctly at, driven the same way (no
+    /// `TuiSupport`, asserting the cache key after an expected `Err`).
+    #[tokio::test]
+    async fn start_threads_the_profiles_own_requested_mode_into_the_cache_key() {
+        let _serial = SERIAL.lock().await;
+        CONFORMANCE_CACHE.lock().clear();
+        let state_dir = tempfile::Builder::new()
+            .prefix("bat-registry-mode-thread-start-")
+            .tempdir_in("/tmp")
+            .expect("create state dir");
+        let db = Arc::new(
+            crate::db::DatabaseHandle::start(state_dir.path().join("runtime.db"))
+                .await
+                .expect("start database"),
+        );
+        let project_id = ProjectId::new();
+        let (events_tx, _rx) = tokio::sync::broadcast::channel(16);
+        let (task_id, worker_id, run_id) =
+            seed_claude_profile_run(&db, project_id, AdapterMode::Tui).await;
+
+        let violation_service = Arc::new(crate::policy::ViolationService::new(
+            Arc::clone(&db),
+            project_id,
+            events_tx.clone(),
+            None,
+            crate::config::NestedViolationAction::default(),
+            crate::security::redaction::Redactor::new(),
+        ));
+        let registry = AdapterRegistry::new(
+            Arc::new(FixtureAuthorization { allow: true }),
+            state_dir.path().to_path_buf(),
+            None,
+            Vec::new(),
+        );
+
+        let ctx = crate::service::RunDriverContext {
+            db: Arc::clone(&db),
+            project_id,
+            run_id,
+            task_id,
+            worker_id,
+            prompt: None,
+            events_tx,
+            violation_service,
+            workspace_path: None,
+            policy: None,
+            display: None,
+            activity: Arc::new(crate::adapter::ActivityClock::new()),
+        };
+        let result = <AdapterRegistry as RunDriver>::start(&registry, ctx).await;
+        assert!(
+            result.is_err(),
+            "no TuiSupport is configured, so this must fail AFTER gate_profile ran, not before: \
+             {result:?}"
+        );
+
+        let (has_tui_key, has_headless_key, cache_debug) = {
+            let cache = CONFORMANCE_CACHE.lock();
+            (
+                cache.contains_key(&(AdapterKind::Claude, AdapterMode::Tui)),
+                cache.contains_key(&(AdapterKind::Claude, AdapterMode::Headless)),
+                format!("{cache:?}"),
+            )
+        };
+        assert!(
+            has_tui_key,
+            "start (run_one) must have gated this profile's real Claude-TUI request as Tui: \
+             {cache_debug}"
+        );
+        assert!(
+            !has_headless_key,
+            "a Claude-TUI profile must never populate the Headless cache entry via start/run_one \
+             either: {cache_debug}"
+        );
+        CONFORMANCE_CACHE.lock().clear();
+        db.shutdown().await.expect("shutdown database");
     }
 }
