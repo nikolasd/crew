@@ -378,6 +378,85 @@ test("/crew health console.logs (not notify) outside interactive mode", async ()
   expect(notifications.length).toBe(0);
 });
 
+test("the hyphenated management commands forward with a deprecation notice", async () => {
+  setEnv("CREW_STATE_DIR", stateDir);
+
+  const { api, commands } = createFakeApi();
+  extension(api);
+
+  const { ctx, notifications } = fakeCommandContext(repoDir, true);
+  await commands.get("crew-status")!.handler("", ctx);
+
+  expect(notifications.length).toBe(1);
+  expect(notifications[0]).toContain("deprecated; use /crew health");
+  expect(notifications[0]).toContain("running");
+});
+
+test("the crew-doctor forwarder notes deprecation and appends doctor output", async () => {
+  setEnv("CREW_STATE_DIR", stateDir);
+  setEnv("OMP_CREW_BINARY", CREWD);
+
+  const { api, commands } = createFakeApi();
+  extension(api);
+
+  const { ctx, notifications } = fakeCommandContext(repoDir, true);
+  await commands.get("crew-doctor")!.handler("", ctx);
+
+  expect(notifications.length).toBe(1);
+  expect(notifications[0]).toContain("deprecated; use /crew doctor");
+  expect(notifications[0]).toContain("Doctor check:");
+});
+
+test("the crew-config forwarder notes deprecation and appends config output", async () => {
+  setEnv("CREW_STATE_DIR", stateDir);
+  setEnv("OMP_CREW_BINARY", CREWD);
+
+  const { api, commands } = createFakeApi();
+  extension(api);
+
+  const { ctx, notifications } = fakeCommandContext(repoDir, true);
+  await commands.get("crew-config")!.handler("path", ctx);
+
+  expect(notifications.length).toBe(1);
+  expect(notifications[0]).toContain("deprecated; use /crew config");
+  expect(notifications[0]).toContain("crew.json");
+});
+
+test("/crew config reaches configResult (not healthResult) through the management map", async () => {
+  setEnv("CREW_STATE_DIR", stateDir);
+  setEnv("OMP_CREW_BINARY", CREWD);
+
+  const { api, commands } = createFakeApi();
+  extension(api);
+  const command = commands.get("crew")!;
+
+  const { ctx, notifications } = fakeCommandContext(repoDir, true);
+  await command.handler("config path", ctx);
+
+  expect(notifications.length).toBe(1);
+  expect(notifications[0]).toContain("crew.json");
+  expect(notifications[0]).not.toContain("running");
+});
+
+test("/crew config print bogus is a usage error with the error level, before any spawn", async () => {
+  const { api, commands } = createFakeApi();
+  extension(api);
+
+  const notifications: Array<{ message: string; level: string }> = [];
+  const ctx = {
+    cwd: repoDir,
+    hasUI: true,
+    ui: { notify: (message: string, level: string) => notifications.push({ message, level }) },
+    sessionManager: { getSessionId: () => "test-session-id-12345" },
+  } as unknown as ExtensionCommandContext;
+
+  await commands.get("crew")!.handler("config print bogus", ctx);
+
+  expect(notifications.length).toBe(1);
+  expect(notifications[0]?.message).toContain("Unknown document bogus");
+  expect(notifications[0]?.level).toBe("error");
+});
+
 test("the golden runtime/status fixture validates against the canonical schema", () => {
   // Guards fixtures/omp/status-result.json against drift from the real
   // `RuntimeStatus` schema: nothing else in the suite loads this fixture.

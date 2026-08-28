@@ -67,10 +67,7 @@ export default function crewExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand(COMMAND_NAME, {
-    description: STATUS_DESCRIPTION,
-    handler: async (_args, ctx) => emitResult(ctx, await healthResult(ctx)),
-  });
+  registerDeprecatedForwarder(COMMAND_NAME, "/crew health", (_args, ctx) => healthResult(ctx));
 
   registerOrchestrationTools(pi, { getClient });
   /**
@@ -95,6 +92,19 @@ export default function crewExtension(pi: ExtensionAPI): void {
     }
   }
 
+  /** Registers a deprecated hyphenated command that forwards to `run`'s
+   *  result with a one-line deprecation notice prepended to the same
+   *  message -- never emitted as a second notification. */
+  function registerDeprecatedForwarder(oldName: string, replacement: string, run: (args: string, ctx: ExtensionCommandContext) => Promise<CommandResult>): void {
+    pi.registerCommand(oldName, {
+      description: `Deprecated: use ${replacement}.`,
+      handler: async (args, ctx) => {
+        const result = await run(args, ctx);
+        emitResult(ctx, { text: `Note: /${oldName} is deprecated; use ${replacement}.\n${result.text}`, isError: result.isError });
+      },
+    });
+  }
+
   async function healthResult(extCtx: ExtensionContext): Promise<CommandResult> {
     return blocksToResult(await getRuntimeStatus(statusContextFor(extCtx)));
   }
@@ -108,6 +118,12 @@ export default function crewExtension(pi: ExtensionAPI): void {
     if (op !== "path" && op !== "print" && op !== "init") {
       return { text: `Unknown operation ${op}. Usage: /crew config [path | print [effective|defaults|schema] | init [global] [force]]`, isError: true };
     }
+    if (op === "print") {
+      const doc = rest[0] ?? "effective";
+      if (doc !== "effective" && doc !== "defaults" && doc !== "schema") {
+        return { text: `Unknown document ${doc}. Usage: /crew config print [effective|defaults|schema]`, isError: true };
+      }
+    }
     const request = {
       op,
       repository: cwd,
@@ -118,6 +134,8 @@ export default function crewExtension(pi: ExtensionAPI): void {
     return blocksToResult(await runConfigCommand({ crewdPath, repository: cwd }, request));
   }
 
+  // Registration order is user-visible and pinned by index.test.ts's exact-list
+  // assertion: crew-status, crew, crew-doctor, crew-config, crew-install.
   registerMonitor(pi, {
     getClient,
     management: new Map<string, ManagementSubcommand>([
@@ -137,10 +155,7 @@ export default function crewExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("crew-doctor", {
-    description: "Run diagnostic checks on the Crew runtime state and configuration.",
-    handler: async (_args, ctx) => emitResult(ctx, await doctorResult(ctx.cwd)),
-  });
+  registerDeprecatedForwarder("crew-doctor", "/crew doctor", (_args, ctx) => doctorResult(ctx.cwd));
 
   const configParams = pi.zod.object({
     op: pi.zod.enum(["path", "print", "init"]).describe("Which config operation to perform."),
@@ -170,10 +185,7 @@ export default function crewExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("crew-config", {
-    description: "Inspect or scaffold crew.json. Usage: /crew config [path | print [effective|defaults|schema] | init [global] [force]]",
-    handler: async (args, ctx) => emitResult(ctx, await configResult(args, ctx.cwd)),
-  });
+  registerDeprecatedForwarder("crew-config", "/crew config", (args, ctx) => configResult(args, ctx.cwd));
 
   pi.registerTool({
     name: INSTALL_TOOL_NAME,
