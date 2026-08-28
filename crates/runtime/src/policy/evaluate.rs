@@ -475,4 +475,70 @@ mod tests {
             "{err}"
         );
     }
+
+    /// The maximally-capable end of every field -- deliberately a
+    /// different literal from [`test_capabilities`], so this reads
+    /// unambiguously as "as much declared as an adapter could possibly
+    /// claim", not a coincidental match.
+    fn fully_declared_capabilities() -> AdapterCapabilities {
+        AdapterCapabilities {
+            protocol: ProtocolKind::Structured,
+            resume: ResumeCapability::Turn,
+            steering: SteeringCapability::ActiveTurn,
+            approvals: ApprovalsCapability::Controllable,
+            structured_result: true,
+            usage: UsageCapability::PerChild,
+            nested: NestedCapability::Managed,
+            native_view: NativeViewCapability::IndependentTui,
+            workspace_control: WorkspaceControlCapability::Write,
+            durability: DurabilityCapability::VendorResumable,
+        }
+    }
+
+    /// The maximally-stripped end of every field that has a "none"
+    /// variant; the two fields with no such variant (`workspace_control`,
+    /// `durability`) and the two-valued `protocol` are simply set to
+    /// whichever value differs from [`fully_declared_capabilities`]'s
+    /// choice -- as far apart as the type allows.
+    fn fully_stripped_capabilities() -> AdapterCapabilities {
+        AdapterCapabilities {
+            protocol: ProtocolKind::Terminal,
+            resume: ResumeCapability::None,
+            steering: SteeringCapability::None,
+            approvals: ApprovalsCapability::None,
+            structured_result: false,
+            usage: UsageCapability::None,
+            nested: NestedCapability::None,
+            native_view: NativeViewCapability::None,
+            workspace_control: WorkspaceControlCapability::ReadOnly,
+            durability: DurabilityCapability::ParentScoped,
+        }
+    }
+
+    /// WP-B (b1): `authorize()` must be invariant to `effective_capabilities`
+    /// -- with NO exception clause, not even for `nested`. This holds today
+    /// only because `authorize()` (via `evaluate()`) ignores the parameter
+    /// entirely, and this test exists to FAIL the instant that stops being
+    /// true: the moment someone adds the first real capability check here,
+    /// this test breaks, which is exactly when the deny-on-unproven
+    /// constraint documented on [`crate::adapter::AdapterAuthorization::authorize`]'s
+    /// doc comment becomes binding.
+    #[test]
+    fn authorize_is_invariant_to_effective_capabilities_with_no_exception() {
+        let declared_evaluator = PolicyEvaluator::new(test_policy());
+        let stripped_evaluator = PolicyEvaluator::new(test_policy());
+        let profile = test_profile("any-model-at-all");
+
+        let declared_result =
+            declared_evaluator.authorize(&profile, &fully_declared_capabilities(), None);
+        let stripped_result =
+            stripped_evaluator.authorize(&profile, &fully_stripped_capabilities(), None);
+
+        assert!(declared_result.is_ok(), "{declared_result:?}");
+        assert_eq!(
+            declared_result, stripped_result,
+            "authorize() must return the identical result for a fully-declared and a \
+             fully-stripped AdapterCapabilities -- it reads capabilities zero times today"
+        );
+    }
 }

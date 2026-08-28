@@ -1216,7 +1216,7 @@ async fn run_conformance(
     mode: ConformanceModeArg,
     output: PathBuf,
 ) -> ExitCode {
-    use crew_runtime::adapter::AdapterKind;
+    use crew_runtime::adapter::{AdapterKind, AdapterMode};
     use crew_runtime::conformance::{
         ConformanceReport, run_fixture_conformance, run_live_conformance,
     };
@@ -1249,7 +1249,12 @@ async fn run_conformance(
     let mut typed_reports: Vec<ConformanceReport> = Vec::new();
     for kind in kinds {
         if fixture {
-            let report = run_fixture_conformance(kind).await;
+            // Fixture mode stays HEADLESS-sourced regardless of `--mode`
+            // (unlike the live branch below): CI's fixture-mode
+            // conformance signal is deliberately substituted by the four
+            // `*-tui` suites in a later WP (crew-v2 gap-closure WP-C), not
+            // this one. `--mode` only ever selects which live suite runs.
+            let report = run_fixture_conformance(kind, AdapterMode::Headless).await;
             typed_reports.push(report);
         } else {
             match run_live_conformance(kind, matches!(mode, ConformanceModeArg::Tui)).await {
@@ -1360,7 +1365,7 @@ async fn run_conformance(
 /// truth for OMP-facing effective capabilities) as JSON or human-readable
 /// text.
 async fn run_adapters(json: bool) -> ExitCode {
-    use crew_runtime::adapter::AdapterKind;
+    use crew_runtime::adapter::{AdapterKind, AdapterMode};
     use crew_runtime::conformance::run_fixture_conformance;
 
     let kinds = [
@@ -1371,7 +1376,9 @@ async fn run_adapters(json: bool) -> ExitCode {
     ];
     let mut reports = Vec::with_capacity(kinds.len());
     for kind in kinds {
-        reports.push(run_fixture_conformance(kind).await);
+        // Headless only, unchanged by WP-B: this command's report shape
+        // (kind names, not `*-tui`) is a documented CLI surface.
+        reports.push(run_fixture_conformance(kind, AdapterMode::Headless).await);
     }
 
     if json {
