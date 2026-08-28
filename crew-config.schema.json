@@ -174,7 +174,7 @@
       ]
     },
     "AdapterMode": {
-      "description": "Whether a vendor adapter runs its worker attached to a real TUI pane\nor drives a headless protocol adapter.",
+      "description": "Whether a vendor adapter runs its worker attached to a real TUI pane\nor drives a headless protocol adapter. `\"headless\"` is retired\n(crew-v2 gap-closure WP-C, spec §4.6): it still parses here (an old\nconfig file naming it must not fail to load with a schema-shaped\nerror) but is rejected with a typed error at validation time --\n`load_layers` refuses any reserved adapter kind whose `mode` is\n`Headless`, naming the retirement and directing the operator to\n`\"tui\"`. See `docs/adr/0026-headless-retirement.md`.",
       "type": "string",
       "enum": [
         "tui",

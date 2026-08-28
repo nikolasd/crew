@@ -153,26 +153,18 @@ pub(crate) static FIXTURE_SUITE_RUNS_SERIAL: std::sync::LazyLock<tokio::sync::Mu
     std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 /// Runs one adapter kind's full fixture conformance suite (never a model
-/// call) for the given control plane and returns its report.
+/// call) and returns its report.
 ///
-/// **Dispatched by `(kind, mode)`, not `kind` alone (crew-v2 gap-closure
-/// WP-B):** `AdapterMode::Headless` reaches the four kept headless
-/// adapters' own `conformance` submodules (unchanged); `AdapterMode::Tui`
-/// reaches `adapter::tui::{claude,codex,copilot,omp}_conformance`'s
-/// fixture suites instead -- the suites that actually feed
-/// `fixture-mode-baseline.json`'s `claude-tui`/`codex-tui`/`copilot-tui`/
-/// `omp-tui` entries. Before WP-B, this function dispatched by `kind`
-/// only, so a `mode: "tui"` run was authorized (via
-/// `adapter::registry::gate_profile`) against its vendor's *headless*
-/// effective capabilities -- a materially different declared profile
-/// (`ProtocolKind::Terminal` vs. `Structured`, for one) than the
-/// `TuiAdapter` actually constructed for it. Every caller of this function
-/// that is not gating a specific run's own requested control plane (the
-/// `crewd conformance`/`adapters --json` CLI surfaces, the fixture
-/// capture tool) still passes `AdapterMode::Headless` explicitly, keeping
-/// their behavior unchanged -- CI's fixture-mode conformance signal stays
-/// headless-sourced until WP-C deliberately substitutes it with the four
-/// `*-tui` suites.
+/// **Dispatched by `(kind, mode)` (crew-v2 gap-closure WP-B), but only
+/// `AdapterMode::Tui` is reachable now (WP-C):** every call reaches
+/// `adapter::tui::{claude,codex,copilot,omp}_conformance`'s fixture
+/// suites -- the suites that feed `fixture-mode-baseline.json`'s
+/// `claude-tui`/`codex-tui`/`copilot-tui`/`omp-tui` entries, and the only
+/// ones CI's fixture-mode conformance signal has been sourced from since
+/// WP-C. `mode` still takes the full `AdapterMode` enum (not just `Tui`)
+/// so a caller-side `Headless` request fails loudly right here (see the
+/// `unreachable!` arm below) rather than the parameter silently narrowing
+/// away the caller's mistake at the type level.
 pub async fn run_fixture_conformance(kind: AdapterKind, mode: AdapterMode) -> ConformanceReport {
     #[cfg(test)]
     FIXTURE_SUITE_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

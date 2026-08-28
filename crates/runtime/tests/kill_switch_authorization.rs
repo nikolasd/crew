@@ -35,7 +35,10 @@
 //! specifically, must never be read as a disproof -- has no live end-to-end
 //! trigger left in fixture mode and is proven synthetically instead, at
 //! the unit level: `conformance::report`'s
-//! `a_skip_never_masks_a_real_disproof_of_a_different_gate` inline test.
+//! `a_skipped_scenario_leaves_its_gated_capability_declared` inline test
+//! (the direct, single-gate R68 proof; its sibling
+//! `a_skip_never_masks_a_real_disproof_of_a_different_gate` additionally
+//! proves a skip on one gate never masks a genuine disproof on another).
 //!
 //! This file deliberately contains exactly **one** test. It mutates the
 //! process-global `CREW_DISABLE_VENDOR_CLI` variable, which

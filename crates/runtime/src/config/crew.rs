@@ -161,7 +161,13 @@ impl Default for DisplayConfig {
 }
 
 /// Whether a vendor adapter runs its worker attached to a real TUI pane
-/// or drives a headless protocol adapter.
+/// or drives a headless protocol adapter. `"headless"` is retired
+/// (crew-v2 gap-closure WP-C, spec §4.6): it still parses here (an old
+/// config file naming it must not fail to load with a schema-shaped
+/// error) but is rejected with a typed error at validation time --
+/// `load_layers` refuses any reserved adapter kind whose `mode` is
+/// `Headless`, naming the retirement and directing the operator to
+/// `"tui"`. See `docs/adr/0026-headless-retirement.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum AdapterMode {

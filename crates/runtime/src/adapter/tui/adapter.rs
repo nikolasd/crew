@@ -93,7 +93,10 @@ pub enum VersionVerdict {
 /// Per-vendor behavior a [`TuiAdapter`] drives generically. Every method
 /// is a pure, no-process-spawned computation except through the
 /// [`LaunchSpec`]s it returns -- `TuiAdapter` itself owns the actual
-/// spawn, attach, discovery, and tailing.
+/// spawn, attach, discovery, and tailing. [`Self::preflight`] is the one
+/// documented exception: a vendor whose CLI can only answer a
+/// compatibility question (e.g. "is this model selector real?") via a
+/// real fetch, not a fixed rule, may perform that one process spawn there.
 pub trait TuiVendor: Send + Sync + 'static {
     /// The adapter kind, e.g. `"claude"`. Used verbatim in every
     /// [`AdapterError::adapter`] this adapter instance raises.
@@ -171,6 +174,19 @@ pub trait TuiVendor: Send + Sync + 'static {
         path.file_stem()
             .and_then(|stem| stem.to_str())
             .map(str::to_string)
+    }
+
+    /// An optional real-process preflight run before a *fresh* start's
+    /// spawn (never on resume, which continues an already-established
+    /// session rather than choosing a new one) -- e.g. a selector-
+    /// compatibility check the vendor's own CLI can only answer via a
+    /// real fetch. Default: no preflight, every start proceeds
+    /// unconditionally. Returning `Err` refuses the start before any PTY
+    /// is spawned, with the same typed-rejection shape [`Self::version_gate`]
+    /// produces from [`TuiAdapter::probe`] -- see the trait doc's "pure"
+    /// exception this method is.
+    fn preflight(&self, _spec: &StartSpec, _cfg: &AdapterConfig) -> AdapterFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -1246,6 +1262,7 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                     )
                     .await;
             }
+            self.vendor.preflight(&spec, &self.cfg).await?;
             let launch = self.vendor.launch(&spec, &self.cfg);
             let transcript_root = self.vendor.transcript_root(&spec, &self.cfg);
             let nonce = Uuid::now_v7().to_string();

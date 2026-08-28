@@ -429,3 +429,39 @@ linux-x64 rebuild even at the same Bun version. `bundle-check`'s byte-exact cont
 satisfiable from CI's platform. Produce the committed artifact in CI's environment (`refresh-bundle`
 workflow), or document that local rebuilds must happen on linux-x64. Don't weaken the check to
 "close enough" — the bytes matter.
+
+---
+
+## Test Suite Integrity
+
+### A mechanical type-level fix can compile clean while leaving a test's evidence invalid
+
+**Location:** `crates/runtime/tests/kill_switch_authorization.rs`
+(`the_kill_switch_never_shrinks_effective_capabilities`)
+
+**The bug:** crew-v2 gap-closure WP-C deleted the headless control plane and retargeted
+`run_fixture_conformance` from `AdapterMode::Headless` to `AdapterMode::Tui`. Swapping the enum
+value this test passed compiled clean and would have looked done: the type checker has no opinion
+on what a test's assertions actually establish, only on whether the code that produces the values
+they check type-checks. Run for real, the test panicked -- TUI fixture mode's only live dependency
+is `PROBE`'s real `--version`/binary check, so the kill switch now skips only that (ungated)
+scenario, never Codex's `FOLLOW_UP`/`SESSION_RESUME` the way headless fixture mode's live-turn
+dependency once did. The test's own assertion said otherwise, and would have kept saying otherwise
+-- silently proving a claim about the *previous* control plane against evidence the current one no
+longer produces -- if the enum swap alone had been trusted as "the fix."
+
+**The lesson:** A mechanical, type-checking fix to a test after a dependency changes underneath it
+proves only that the test *compiles* against the new shape -- never that it still proves what its
+name and assertions claim. The guard is running the test and re-deriving, from what actually
+happens, whether its evidence still holds -- not inferring compilation success. Before trusting a
+retargeted test, run it deliberately unfixed first (only the mechanical change applied) to observe
+the *actual* failure, exactly as this session did here: the panic's message named precisely which
+assertion had gone stale, which is what made the real fix (in `crates/runtime/src/conformance/report.rs`'s
+unit-level R68 proof and this file's rewritten assertions) targeted rather than guessed at. The same
+methodology already used throughout this codebase's regression tests ("verify by breaking it") applies
+just as much to fixing an existing test as to writing a new one.
+
+**Regression tests:** N/A -- this is a process lesson about how a fix was verified, not a
+production code path a test can pin. The corrected test itself
+(`the_kill_switch_never_shrinks_effective_capabilities`) and `conformance::report`'s
+`a_skipped_scenario_leaves_its_gated_capability_declared` are what the fix left behind.
