@@ -27,8 +27,8 @@ export interface MonitorFlags {
 export interface MonitorPane {
   readonly backend: string;
   readonly placement: string;
-  /** Empty for a `hidden` backend, or a headless run's placeholder
-   *  attach event -- never a filesystem path, only a vendor pane id. */
+  /** Empty for a `hidden` backend. Never a filesystem path, only a vendor
+   *  pane id. */
   readonly paneRef: string;
   readonly attached: boolean;
 }
