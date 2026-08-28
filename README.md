@@ -1,4 +1,4 @@
-# Crew
+![Crew Logo](./assets/logo/banner/transparent/crew-banner-2560x640.png)
 
 Crew is an [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi) extension backed by a durable, repository-scoped local daemon. OMP stays the brain — task intake, scheduling, worker selection, approvals, merge decisions, synthesis. Crew is the hands: it supervises worker processes, speaks harness adapter protocols, persists a durable event journal, recovers after crashes, and feeds display backends.
 
