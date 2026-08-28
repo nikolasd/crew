@@ -187,7 +187,7 @@ Check catalog, in run order:
 | `binary_integrity` | `current_exe()` resolves |
 | `socket_permissions` | If `runtime.sock` exists: it's actually a socket, owned by the current uid, mode `0600` |
 | `schema_compatibility` | If `--repo` is a Crew source checkout, its committed `packages/protocol-ts/schema/crew.schema.json` matches the binary's own rendered schema; passes trivially (not applicable) for any other `--repo` |
-| `adapter_claude_available`, `adapter_codex_available`, `adapter_copilot_available`, `adapter_omp_rpc_available` | Each vendor CLI is reachable |
+| `adapter_claude_available`, `adapter_codex_available`, `adapter_copilot_available`, `adapter_ompRpc_available` | Each vendor CLI is reachable (name built from `AdapterKind::wire_name()` -- `ompRpc`, not `omp_rpc`) |
 | `display_available` | If `display.backend` forces a specific backend, that backend reports available; otherwise a real backend (Herdr or tmux) is available -- the always-available terminal fallback never satisfies this on its own |
 | `disk_space` | State dir's filesystem has ≥ 512 MiB free |
 | `stale_workspaces` | Counts workspace leases whose worktree vanished, failed cleanup, or have sat `allocating` past a 10-minute grace period (abandoned before materialization completed) |
@@ -201,8 +201,54 @@ WP5) — see [`future-features.md`](future-features.md#org-governance-enforcemen
 A check that's missing required context (no db handle, no policy, etc.) reports a failure prefixed
 `skipped:` rather than silently passing.
 
+Two informational **notes** (not pass/fail checks) also ride along: `config_present` (whether a
+`crew.json` config layer exists for this repository/user) and `config_drift` (whether the merged
+effective config differs from the built-in defaults). Both report facts about the `crew.json`
+layer (`crewd config`, below), never fail the overall `doctor` exit code.
+
 `crew_doctor` (the OMP tool/`,/crew-doctor` command) runs this same check catalog without
 requiring a live runtime connection — see [`plugin-usage.md`](plugin-usage.md).
+
+### `crewd config`
+
+Manages the `crew.json` config layer (spec §10, `crates/runtime/src/config/crew.rs`). Three
+subcommands:
+
+```bash
+crewd config init [--global] [--repo <path>] [--force]
+crewd config print [--defaults | --schema | --effective] [--repo <path>]
+crewd config path [--repo <path>]
+```
+
+- **`init`** writes a starter `crew.json`: a full snapshot of today's built-in defaults, so every
+  key in it now overrides the daemon rather than tracking it. `--global` writes
+  `~/.omp/crew.json` instead of the repository layer; `--repo` (ignored with `--global`) picks
+  which repository's `.omp/crew.json` to write, default the current directory. Without `--force`,
+  an existing file is left untouched and the command fails rather than silently overwriting it.
+- **`print`** writes one of three documents to stdout, mutually exclusive: `--defaults` (the same
+  built-in snapshot `init` writes), `--schema` (the JSON Schema editors validate and autocomplete
+  `crew.json` from -- also committed at the repo root as `crew-config.schema.json`, refreshed via
+  this command), or the default with no flag — `--effective`, the merged result of whichever layers
+  actually apply to `--repo` (current directory if omitted).
+- **`path`** lists the config layer files in precedence order and whether each exists on disk, for
+  `--repo` (current directory if omitted).
+
+`mode: "headless"` is retired (crew-v2 gap-closure WP-C, spec §4.6): a `crew.json` layer naming it
+still parses (so `config print`/`config path` never fail on an old file), but `serve`/every other
+subcommand that reads config typed-rejects it at validation time, naming the retirement --
+[`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md).
+
+### `crewd attach`
+
+Attaches to a run's display pane directly from the CLI, without going through the extension.
+
+```bash
+crewd attach <run-id> (--repo <path> | --socket <path>) [--state-dir <path>]
+```
+
+`<run-id>` is positional (the full, untruncated id). Either `--repo` (resolved against
+`--state-dir`, same precedence as every other subcommand) or `--socket` (connect directly to a
+given socket path, mainly for tests) must be given.
 
 ### `crewd version`
 

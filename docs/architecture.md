@@ -109,11 +109,11 @@ graph TB
         end
     end
 
-    subgraph "Worker Process Containers"
-        CA[Claude Adapter<br/>claude CLI]
-        COD[Codex Adapter<br/>codex CLI]
-        CO[Copilot Adapter<br/>copilot CLI]
-        OR[OMP-RPC Adapter<br/>omp --mode rpc]
+    subgraph "Worker Process Containers (TUI, WP-C)"
+        CA[Claude Adapter<br/>claude CLI, real PTY]
+        COD[Codex Adapter<br/>codex CLI, real PTY]
+        CO[Copilot Adapter<br/>copilot CLI, real PTY]
+        OR[OMP-RPC Adapter<br/>omp CLI, real PTY]
     end
 
     TO -->|JSON-RPC| IS
@@ -122,7 +122,7 @@ graph TB
     CL -->|JSON-RPC| IS
 
     IS -->|commands| DA
-    AR -->|start/resume/cancel| SV
+    AR -->|start/send_follow_up/cancel_run| SV
     CB -->|coordination/*| IS
     AS -->|approval/*| IS
 
@@ -546,41 +546,83 @@ pub struct FixtureAuthorization {
 pub struct PolicyEvaluator { ... }
 
 /// Implements `RunDriver` against the four real worker adapters.
-pub struct AdapterRegistry { ... }
+pub struct AdapterRegistry {
+    authorization: Arc<dyn AdapterAuthorization>,
+    repo_root: PathBuf,
+    mcp: Option<AdapterMcpConfig>,
+    /// Set post-construction via `set_broker`/`set_tui_support` (the real
+    /// instances aren't available yet at `AdapterRegistry::new` time --
+    /// see each setter's own doc comment) -- `None` until then, or
+    /// permanently for callers (chiefly tests) that never call the
+    /// setter.
+    broker: Mutex<Option<Arc<CoordinationBroker>>>,
+    tui: Mutex<Option<Arc<TuiSupport>>>,
+    resume_support: Mutex<Option<Arc<ResumeSupport>>>,
+    running: Arc<Mutex<HashMap<RunId, Arc<dyn Adapter>>>>,
+    org_security_patterns: Vec<String>,
+    activity: Mutex<Option<Arc<ActivityClock>>>,
+}
 
 impl AdapterRegistry {
     pub fn new(
-        db: DatabaseHandle,
-        project_id: ProjectId,
-        adapter_mcp_config: Option<AdapterMcpConfig>,
+        authorization: Arc<dyn AdapterAuthorization>,
+        repo_root: PathBuf,
+        mcp: Option<AdapterMcpConfig>,
+        org_security_patterns: Vec<String>,
     ) -> Self { ... }
 
-    pub fn set_broker(&mut self, broker: Arc<CoordinationBroker>) { ... }
+    pub fn set_broker(&self, broker: Arc<CoordinationBroker>) { ... }
+    pub fn set_tui_support(&self, tui: Arc<TuiSupport>) { ... }
+    pub fn set_resume_support(&self, resume: Arc<ResumeSupport>) { ... }
 }
 
+// `RunDriver` has no `resume` method -- a resume is a `start()` call whose
+// `StartSpec.resume` carries a `VendorSessionRef`; `AdapterRegistry` also
+// exposes `resume_run` directly for recovery's own continuation path,
+// outside the trait.
 impl RunDriver for AdapterRegistry {
-    async fn start(
-        &self,
-        ctx: RunDriverContext,
-    ) -> Result<RunDriverFuture, String> { ... }
+    fn active_run_count(&self) -> usize { ... }
 
-    async fn resume(
+    fn start(&self, ctx: RunDriverContext) -> AdapterFuture<'static, Result<(), String>> { ... }
+
+    fn send_follow_up(
         &self,
         run_id: RunId,
-        ctx: RunDriverContext,
-    ) -> Result<RunDriverFuture, String> { ... }
+        task_id: TaskId,
+        worker_id: WorkerId,
+        prompt: String,
+        kind: crew_protocol::MessageKind,
+    ) -> AdapterFuture<'static, Result<(), String>> { ... }
 
-    async fn cancel(&self, run_id: RunId) -> Result<(), String> { ... }
+    fn running_adapter(&self, run_id: RunId) -> Option<Arc<dyn Adapter>> { ... }
+
+    fn cancel_run(
+        &self,
+        run_id: RunId,
+        scope: CancelScope,
+    ) -> AdapterFuture<'static, Result<CancelOutcome, String>> { ... }
 }
 
+/// Authorizes and constructs one fresh run's adapter: `gate_profile` runs
+/// the profile's conformance suite (`(kind, mode)`-keyed, memoized) and
+/// checks the resulting effective capabilities against `authorization`
+/// before `build_adapter` ever runs -- an unauthorized or non-conformant
+/// profile never reaches a real spawn.
 async fn run_one(
     ctx: &RunDriverContext,
     authorization: &Arc<dyn AdapterAuthorization>,
     repo_root: &std::path::Path,
     mcp: Option<AdapterMcpConfig>,
     broker: Option<Arc<CoordinationBroker>>,
-) -> Result<Arc<dyn Adapter>, String> { ... }
+    tui: Option<Arc<TuiSupport>>,
+    org_security_patterns: Vec<String>,
+) -> Result<(Arc<dyn Adapter>, oneshot::Receiver<()>, bool), String> { ... }
 
+/// `mode: "tui"` dispatches to `TuiAdapter<V>` for a vendor with a
+/// `TuiVendor` implementation (all four, since crew-v2 gap-closure WP-C
+/// retired the headless control plane); every `StartupOptions` variant
+/// that used to reach a headless adapter is now a typed
+/// `RegistryError::HeadlessControlPlaneRetired` refusal instead.
 fn build_adapter(
     profile: &WorkerProfile,
     repo_root: &std::path::Path,
@@ -589,6 +631,12 @@ fn build_adapter(
     worker_id: WorkerId,
     mcp: Option<AdapterMcpConfig>,
     broker: Option<Arc<CoordinationBroker>>,
+    tui: Option<Arc<TuiSupport>>,
+    db: Arc<DatabaseHandle>,
+    project_id: crew_protocol::ProjectId,
+    events_tx: tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
+    display: Option<crew_protocol::DisplaySelection>,
+    resume_cursor: Option<Cursor>,
 ) -> Result<Arc<dyn Adapter>, RegistryError> { ... }
 ```
 

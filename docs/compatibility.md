@@ -144,21 +144,44 @@ restart; transcript recovery across a real restart is a separate e2e, tracked as
 | Adapter | Runnable pass | Notes |
 |---------|---------------|-------|
 | Claude  | 4 / 4 | fully green (TUI) |
-| Codex   | 3 / 4 | `follow_up` fails on out-of-credits; spawn→type→submit→discover proven. A ~40-min-later rerun ([`codex-tui-post-quota.json`](../release/live-conformance/codex-tui-post-quota.json)) could observe **no turns at all** — no typed vendor reason — consistent with full credit exhaustion |
-| Copilot | 2 / 4 | `read_only_start_and_progress` + `follow_up` fail on out-of-credits; probe + cancel proven |
+| Codex   | 4 / 4 | fully green (TUI) — credits refilled; re-run 2026-08-27 on current main (post-#17/#18 adapter changes) is byte-identical to the 2026-08-26 evening report. The earlier out-of-credits state ([`codex-tui-post-quota.json`](../release/live-conformance/codex-tui-post-quota.json), no turns observable at all) is retained only as historical exhaustion evidence |
+| Copilot | 2 / 4 | `read_only_start_and_progress` + `follow_up` fail — CONFIRMED vendor monthly quota wall (`session.error`, `errorCode: quota_exceeded`, independently verified against the raw tailed session file, not just the harness's summary); probe + cancel proven. Not a capture defect: an earlier 2026-08-26 diagnosis blamed transcript-capture/discovery, but that was problem #15's untrusted-workspace bug, since fixed — discovery itself now succeeds (`start=Ok(())`, `session=true`) |
 
 Version provenance: the live reports deliberately record **no** vendor version (`version: null`) —
 the TUI harness does not pin one, so a report is evidence about the adapter injection path, not
-about a specific CLI release. Version-pinned TUI wire behavior lives in the committed fixtures
-instead: claude-tui `2.1.241`, codex-tui `0.149.1`, copilot-tui `1.0.80`. Note these are *newer*
-than the historical headless captures in the table above (same CLIs, later releases; the headless
-control plane those came from is retired, see the historical notice above). Gap: there is no
-recorded recipe for re-capturing the `*-tui` fixtures against future CLIs (`capture-manifest.yml`
-governed recapturing the now-deleted headless fixtures specifically and was deleted along with
-them by crew-v2 gap-closure WP-C; it never covered `*-tui`) — tracked with the open WP29 items.
+about a specific CLI release. Fixture-captured versions are *newer* than the historical headless
+captures in the table above (same CLIs, later releases; the headless control plane those came from
+is retired, see the historical notice above) — see "TUI vendor CLI version gates" below for the
+exact pins. Gap: there is no recorded recipe for re-capturing the `*-tui` fixtures against future
+CLIs (`capture-manifest.yml` governed recapturing the now-deleted headless fixtures specifically
+and was deleted along with them by crew-v2 gap-closure WP-C; it never covered `*-tui`) — tracked
+with the open WP29 items.
 
 Raw reports (verbatim, with an erratum on the overstated `session_resume` detail):
 [`release/live-conformance/`](../release/live-conformance/).
+
+### TUI vendor CLI version gates (current)
+
+Each `TuiVendor::version_gate` decides, from a real `--version` probe, whether an installed CLI is
+one this adapter's fixed argv/transcript-format assumptions were built against
+(`AdapterError::incompatible_version` otherwise). Three of the four tolerate a version *range*
+(their on-disk transcript format self-describes its own schema, so drift behind an unvalidated
+minor release degrades gracefully rather than corrupting the journal); Copilot's is a discrete,
+exact-match list instead (ACP is a wire protocol, not a self-describing file format, so an
+untested build gets no benefit of the doubt):
+
+| Vendor | Gate | Current range/list |
+|---|---|---|
+| Claude | Range | `1.0.0` – `2.99.99` |
+| Codex | Range | `0.100.0` – `0.199.99` |
+| OMP | Range | `18.0.0` – `18.99.99` |
+| Copilot | Exact match | `1.0.73`, `1.0.75`, `1.0.78`, `1.0.80`, `1.0.81` (all negotiate ACP protocol version 1; `COPILOT_MIN_ACP_PROTOCOL_VERSION`/`COPILOT_MAX_ACP_PROTOCOL_VERSION` are both `1`) |
+
+Version-pinned TUI wire *behavior* (as opposed to the gate above, which only decides
+compatible/incompatible) lives in the committed fixtures instead — the exact CLI version each
+vendor's fixture was captured against: claude-tui `2.1.241`, codex-tui `0.149.1`, copilot-tui
+`1.0.80`. These predate `1.0.81` being added to Copilot's known-versions list above (the gate was
+widened after fixture capture) and are all still within their vendor's current range/list.
 
 ## If a version isn't in either table
 

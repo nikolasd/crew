@@ -44,7 +44,7 @@ Small, dependency-light, and the vocabulary for everything else.
 | File | What lives there |
 |---|---|
 | `src/main.rs` | Thin entry point; calls `cli::run()` |
-| `src/cli.rs` | clap definitions for `serve`/`status`/`stop`/`version`/`schema`/`monitor`/`audit`; maps outcomes to exit codes (73 = lost the singleton race) |
+| `src/cli.rs` | clap definitions for `serve`/`status`/`stop`/`version`/`schema`/`monitor`/`audit`/`doctor`/`config`/`coordination-mcp`/`display`/`conformance`/`adapters`/`lease`/`attach`; maps outcomes to exit codes (73 = lost the singleton race) |
 | `src/lifecycle.rs` | `serve()`/`status()`/`stop()`: flock singleton, lock metadata, idle shutdown, graceful-stop ordering, log routing, doctor integration |
 | `src/doctor.rs` | `Doctor` — health checking: adapter availability, configuration validity, and more |
 | `src/recovery.rs` | `RecoveryCoordinator` — recovers every non-terminal run at startup (ownership, not age); `recover_paused`/`recover_waiting` gates; `DEFAULT_STALE_RUN_THRESHOLD` for the doctor's read-only `stale_runs` report |
@@ -109,13 +109,24 @@ Small, dependency-light, and the vocabulary for everything else.
 | `src/conformance/scenario.rs` | Adapter conformance test scenarios |
 | `src/conformance/report.rs` | Conformance test reporting |
 Integration tests in `crates/runtime/tests/` are the daemon's behavioural spec — one file per
-subsystem (`paths`, `database`, `redaction_boundary`, `ipc`, `lifecycle`, `domain_repository`,
-`orchestration_rpc`, `coordination`, `approval`, `adapter_contract`, `adapter_registry`,
-`claude_adapter`, `codex_adapter`, `copilot_adapter`, `omp_rpc_adapter`, `supervisor`,
-`workspace_apply`, `workspace_lease`, `workspace_materialize`, `display_registry`, `display_selector`,
-`herdr_display`, `tmux_display`, `terminal_adapter`, `monitor_cli`, `audit`, `config`, `conformance`,
-`coordination_mcp`, `redaction`). The lifecycle tests run the real compiled binary
-(`env!("CARGO_BIN_EXE_crewd")`) as real processes.
+subsystem (`paths`, `database`, `redaction`, `redaction_boundary`, `ipc`, `lifecycle`,
+`domain_repository`, `orchestration_rpc`, `coordination`, `coordination_mcp`, `approval`,
+`adapter_contract`, `adapter_registry`, `supervisor`, `supervisor_pty`, `workspace_apply`,
+`workspace_lease`, `workspace_materialize`, `display_registry`, `herdr_display`, `tmux_display`,
+`terminal_adapter`, `monitor_cli`, `audit`, `config`, `config_cli`, `config_artifacts`,
+`crew_config`, `conformance`, `attach`, `dashboard`, `escalations`, `lease_cli`, `lease_db`,
+`recovery`, `run_result`, `run_lifecycle`, `vendor_cli_availability`, `kill_switch_authorization`,
+and the several race-condition-named files, e.g. `approval_decide_race`,
+`task_revision_race`). The four worker adapters are TUI-only now (crew-v2 gap-closure WP-C;
+`docs/adr/0026-headless-retirement.md`) — their own real-process coverage lives in `tui_adapter.rs`
+(the shared `TuiAdapter<V>` machinery against a scripted mock vendor), `tui_claude_registry.rs`
+(a real, TUI-mode Claude run through the registry), `tui_tailer.rs`, and `claude_tui_fixture.rs`
+(the committed `claude-tui` fixture); `run_lifecycle.rs` and `orchestration_rpc.rs` additionally
+drive a real spawned OS process through `tests/support/spawn_evidence_adapter.rs` — a small,
+protocol-agnostic, test-only `Adapter` (not a shipped adapter kind) built to keep that specific
+"a real process, not a test-fake" property provable once the headless control plane's adapters
+(which those two files used to borrow for exactly this) were deleted. The lifecycle tests run the
+real compiled binary (`env!("CARGO_BIN_EXE_crewd")`) as real processes.
 
 ### `crates/xtask` — build tooling
 
@@ -225,8 +236,9 @@ companion to the design-level sequence in
    in the same tick — this is the fix for the bug described in [`engineering-lessons.md`](engineering-lessons.md#durable-mutations-must-broadcast-the-same-event-they-just-committed).
 5. **The adapter seam** — `run_submit` then calls the injected `RunDriver` (the `AdapterRegistry`
    by default): it resolves the worker profile, checks `AdapterAuthorization` (deny-by-default in
-   production, configurable in tests), constructs the matching adapter (Claude/Codex/Copilot/OMP-RPC),
-   and spawns a supervised process via `Supervisor`. With no driver, it returns `adapter_unavailable`
+   production, configurable in tests), constructs the matching `TuiAdapter<V>` (`V` one of the four
+   vendors — Claude/Codex/Copilot/OMP-RPC, all TUI-driven since crew-v2 gap-closure WP-C), and
+   spawns the vendor CLI on a real PTY via `Supervisor`/`PtyProcess`. With no driver, it returns `adapter_unavailable`
    *after* the queued run already committed in step 3 — the run is never silently dropped just
    because nothing can start it yet. With the registry wired (production,
    `run_lifecycle.rs:261-273`), the run now advances `queued -> starting -> working` as the
@@ -303,14 +315,18 @@ on death, so the next start recovers automatically.
 **Run conformance tests.** To verify adapter implementations match their protocol specs:
 
 ```bash
-# Run all conformance tests
+# Run all conformance tests (crewd CLI, black-box)
 cargo test --test conformance
 
-# Run specific adapter conformance
-cargo test --test claude_adapter
-cargo test --test codex_adapter
-cargo test --test copilot_adapter
-cargo test --test omp_rpc_adapter
+# The claude-tui committed fixture directly
+cargo test --test claude_tui_fixture
+
+# Per-vendor fixture/live scenario probes live as lib-side unit tests, not
+# a standalone per-adapter test binary (fixture mode is TUI-sourced now):
+cargo test -p crew-runtime --lib adapter::tui::claude_conformance
+cargo test -p crew-runtime --lib adapter::tui::codex_conformance
+cargo test -p crew-runtime --lib adapter::tui::copilot_conformance
+cargo test -p crew-runtime --lib adapter::tui::omp_conformance
 ```
 
 **Export audit events.** For offline analysis:
@@ -343,10 +359,10 @@ provider).
 | Coordination broker behavior (bounds, rate limits, scope tokens) | `crates/runtime/tests/coordination.rs` |
 | Approval ownership, idempotency, callback, recovery | `crates/runtime/tests/approval.rs` |
 | Adapter contract and registry | `crates/runtime/tests/adapter_contract.rs`, `adapter_registry.rs` |
-| Claude/Codex/Copilot/OMP-RPC adapters | `crates/runtime/tests/{claude,codex,copilot,omp_rpc}_adapter.rs` |
+| Claude/Codex/Copilot/OMP-RPC adapters (TUI-only, WP-C) | `crates/runtime/tests/tui_adapter.rs` (shared `TuiAdapter<V>` machinery), `tui_claude_registry.rs`, `tui_tailer.rs`, `claude_tui_fixture.rs`; per-vendor fixture/live scenario probes are lib-side unit tests under `crates/runtime/src/adapter/tui/{claude,codex,copilot,omp}_conformance.rs` |
 | Supervisor (process management) | `crates/runtime/tests/supervisor.rs` |
 | Workspace operations (lease, apply, materialize) | `crates/runtime/tests/{workspace_lease,workspace_apply,workspace_materialize}.rs` |
-| Display backends (terminal, herdr, tmux) | `crates/runtime/tests/{terminal,herdr,tmux}_adapter.rs`, `display_registry.rs`, `display_selector.rs` |
+| Display backends (terminal, herdr, tmux) | `crates/runtime/tests/terminal_adapter.rs`, `herdr_display.rs`, `tmux_display.rs`, `display_registry.rs` |
 | Configuration loading and merging (crew.json) | `crates/runtime/tests/crew_config.rs` |
 | Conformance test scenarios | `crates/runtime/tests/conformance.rs` |
 | Coordination MCP proxy | `crates/runtime/tests/coordination_mcp.rs` |
