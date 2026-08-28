@@ -395,6 +395,7 @@ fn fast_timings() -> TuiTimings {
         tailer_poll: Duration::from_millis(40),
         submit_idle: Duration::from_millis(50),
         escalation: crate::supervisor::EscalationTimings::default(),
+        preflight_timeout: Duration::from_secs(4),
     }
 }
 

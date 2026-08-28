@@ -862,6 +862,7 @@ fn fast_timings() -> TuiTimings {
             sigint_to_sigterm: Duration::from_millis(150),
             sigterm_to_sigkill: Duration::from_millis(150),
         },
+        preflight_timeout: Duration::from_secs(4),
     }
 }
 

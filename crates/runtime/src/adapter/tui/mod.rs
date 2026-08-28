@@ -407,6 +407,7 @@ where
             tailer_poll: Duration::from_millis(100),
             submit_idle: Duration::from_secs(10),
             escalation: EscalationTimings::default(),
+            preflight_timeout: Duration::from_secs(8),
         },
         ResumeContext::default(),
     );
