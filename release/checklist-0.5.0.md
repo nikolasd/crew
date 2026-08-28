@@ -47,7 +47,7 @@ assets; the downloader (`download.ts`) fetches exactly `crewd-${leaf}` and
 Plus the aggregate `release-manifest.json` (shared version, identical schema fingerprint, real
 SHA-256 checksums, an executable named `crewd`), emitted by `crew-xtask package-set`.
 
-- [x] All four `crewd-${leaf}` assets uploaded + executable bit intact (verified: darwin-arm64 downloaded, chmod-free run not required after chmod, reports `crewd 0.5.0`)
+- [x] All four `crewd-${leaf}` assets uploaded + executable bit intact (verified: darwin-arm64 downloaded, executes and reports `crewd 0.5.0`)
 - [x] All four `crewd-${leaf}.manifest.json` uploaded
 - [x] `release-manifest.json` uploaded (version 0.5.0, per-leaf sha256s present)
 - [x] `/crew-install` (download.ts) resolves each leaf by SHA-256 against the manifest — install-path chain verified manually against the live release: leaf manifest sha256 == downloaded binary sha256 == entry in release-manifest.json; binary executes (`crewd 0.5.0`)
