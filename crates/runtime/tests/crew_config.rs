@@ -22,9 +22,11 @@ fn write_layer(dir: &Path, name: &str, value: &serde_json::Value) -> std::path::
     path
 }
 
-/// Defaults match spec §10, with the controller override that every
-/// adapter's `mode` defaults to `headless` except `claude`, whose TUI
-/// adapter has landed (WP13) and so defaults to `tui`.
+/// Defaults match spec §10. Every built-in adapter defaults to `mode:
+/// "tui"` (WP28 flipped all four; crew-v2 gap-closure WP-C then retired
+/// `headless` as a live mode entirely, leaving `tui` the only one a
+/// reserved adapter kind may configure -- see
+/// `headless_mode_is_rejected_for_every_reserved_adapter_kind` below).
 #[test]
 fn defaults_match_spec_with_headless_mode_override() {
     let cfg = crew::load_layers(&[], None).expect("defaults load with no layers");
@@ -78,6 +80,63 @@ fn defaults_match_spec_with_headless_mode_override() {
     assert_eq!(cfg.retention.period, "30d");
 
     assert!(cfg.security.patterns.is_empty());
+}
+
+/// crew-v2 gap-closure WP-C: `mode: "headless"` is retired for every one
+/// of the four reserved adapter kinds (each backed by a real Rust
+/// implementation, all now TUI-only) -- config loading fails closed with
+/// a typed, named error, not a generic deserialize failure, and not a
+/// silent accept.
+#[test]
+fn headless_mode_is_rejected_for_every_reserved_adapter_kind() {
+    for name in ["claude", "codex", "copilot", "omp"] {
+        let dir = tempdir().unwrap();
+        let user = write_layer(
+            dir.path(),
+            "user.json",
+            &json!({
+                "adapters": {
+                    name: { "mode": "headless" }
+                }
+            }),
+        );
+        let err = crew::load_layers(&[user.as_path()], None)
+            .expect_err(&format!("{name}: mode: \"headless\" must be rejected"));
+        match err {
+            ConfigError::HeadlessModeRetired { adapter } => assert_eq!(adapter, name),
+            other => panic!("{name}: expected HeadlessModeRetired, got: {other}"),
+        }
+    }
+}
+
+/// A custom (non-reserved) adapter name is unaffected by the reserved-kind
+/// rejection above -- nothing dispatches by `AdapterKind` for it, so its
+/// `mode` field is inert either way. This is the same "gemini" shape
+/// `unknown_adapter_name_accepted_with_strict_inner_shape` already
+/// exercises for unknown-field strictness; asserted here specifically for
+/// the headless-retirement boundary so the two concerns don't get
+/// conflated by a future edit.
+#[test]
+fn headless_mode_is_still_accepted_for_a_non_reserved_adapter_name() {
+    let dir = tempdir().unwrap();
+    let user = write_layer(
+        dir.path(),
+        "user.json",
+        &json!({
+            "adapters": {
+                "gemini": {
+                    "enabled": true,
+                    "bin": "gemini",
+                    "mode": "headless",
+                    "permissionMode": "max",
+                    "profile": "custom vendor"
+                }
+            }
+        }),
+    );
+    let cfg = crew::load_layers(&[user.as_path()], None)
+        .expect("a non-reserved adapter's headless mode is not rejected");
+    assert_eq!(cfg.adapters["gemini"].mode, AdapterMode::Headless);
 }
 
 /// A layer that overrides one field in `limits` must leave its siblings
@@ -293,10 +352,16 @@ fn full_field_round_trip_through_json_survives_validate_shape() {
             AdapterConfig {
                 enabled: false,
                 bin: format!("{name}-custom-bin"),
-                // Headless is a NON-default value since WP28 flipped all
-                // four built-ins to tui -- this round trip must prove the
-                // mode key survives, so it overrides away from the default.
-                mode: AdapterMode::Headless,
+                // Tui is the default for these four reserved kinds (WP28),
+                // and crew-v2 gap-closure WP-C retired `headless` as a
+                // live mode for them entirely (load_layers now rejects it
+                // -- see headless_mode_is_rejected_for_every_reserved_adapter_kind),
+                // so this field can no longer be exercised at a
+                // non-default value here. The "vertex" entry below (a
+                // non-reserved custom adapter, exempt from that rejection)
+                // is what still proves the `mode` key itself survives
+                // validate_shape's key tables at a non-default value.
+                mode: AdapterMode::Tui,
                 permission_mode: PermissionMode::Readonly,
                 model: Some(format!("{name}-custom-model")),
                 profile: format!("{name} custom profile"),

@@ -535,6 +535,144 @@ fn claude_tui_profile_json() -> String {
     serde_json::to_string(&profile).expect("WorkerProfile is a plain serializable type")
 }
 
+/// A Claude profile's resolved JSON with a specific override for the
+/// `mode` key inside `startupOptions.claude`: `Some(literal)` sets it to
+/// that exact string; `None` removes the key entirely, simulating a
+/// genuine pre-WP13 journal entry that predates the `mode` field ever
+/// existing -- it must still deserialize (per `AdapterMode`'s own
+/// `#[default] Headless`), not fail to parse.
+fn claude_profile_json_with_mode(mode_override: Option<&str>) -> String {
+    let profile = WorkerProfile {
+        id: crew_runtime::adapter::ProfileId::new(),
+        adapter: AdapterKind::Claude.wire_name().to_string(),
+        model: String::new(),
+        permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
+        // The `mode` set here is a placeholder, overwritten below -- the
+        // struct itself has no way to express "no mode key at all".
+        startup_options: StartupOptions::Claude(ClaudeStartupOptions {
+            mode: ProfileAdapterMode::Tui,
+            ..ClaudeStartupOptions::default()
+        }),
+        environment_allowlist: Vec::new(),
+        source: "test".to_string(),
+    };
+    let mut value = serde_json::to_value(&profile).expect("WorkerProfile serializes");
+    let claude_options = value["startupOptions"]["claude"]
+        .as_object_mut()
+        .expect("claude startup options is a JSON object");
+    match mode_override {
+        Some(mode) => {
+            claude_options.insert("mode".to_string(), serde_json::json!(mode));
+        }
+        None => {
+            claude_options.remove("mode");
+        }
+    }
+    serde_json::to_string(&value).expect("profile value serializes")
+}
+
+/// A minimal registry wired ONLY for resume support -- no `TuiSupport` at
+/// all. Sufficient (and deliberately minimal) for the retired-headless-mode
+/// test below: the rejection fires from `mode` alone, before any adapter
+/// construction, transcript lookup, or vendor spawn is ever attempted.
+async fn resume_only_registry(
+    db: &Arc<DatabaseHandle>,
+    project_id: ProjectId,
+) -> (
+    Arc<AdapterRegistry>,
+    tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
+) {
+    let (events_tx, _rx) = tokio::sync::broadcast::channel(256);
+    let registry = AdapterRegistry::new(
+        Arc::new(FixtureAuthorization { allow: true }),
+        std::env::temp_dir(),
+        None,
+        vec![],
+    );
+    registry.set_resume_support(Arc::new(ResumeSupport {
+        db: Arc::clone(db),
+        project_id,
+        violation_service: Arc::new(ViolationService::new(
+            Arc::clone(db),
+            project_id,
+            events_tx.clone(),
+            None,
+            NestedViolationAction::default(),
+            crew_runtime::security::redaction::Redactor::new(),
+        )),
+        events_tx: events_tx.clone(),
+    }));
+    (Arc::new(registry), events_tx)
+}
+
+/// crew-v2 gap-closure WP-C ruling 1 -- the pre-drop journal compatibility
+/// test, the heart of this WP: a run whose stored profile OMITS `mode`
+/// entirely (a genuine pre-WP13 journal entry, defaulting to `Headless`
+/// per `AdapterMode`'s own `#[default]`), and one that says `"mode":
+/// "headless"` explicitly, must BOTH terminalize on boot recovery with the
+/// honest retired-mode reason -- NOT "profile unreadable", NOT a
+/// Claude-shaped transcript-path failure. (A pre-WP-C build would have
+/// produced exactly one of those confusing symptoms instead:
+/// `evaluate_resume_eligibility`'s old Headless branch asked a
+/// since-deleted headless adapter for its declared capabilities.)
+#[tokio::test]
+async fn a_pre_mode_field_and_an_explicit_headless_journal_both_terminalize_with_the_retired_mode_reason()
+ {
+    for (label, mode_override) in [
+        ("mode omitted entirely (pre-WP13 journal)", None),
+        ("mode: \"headless\" explicit", Some("headless")),
+    ] {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let profile_json = claude_profile_json_with_mode(mode_override);
+        let (_task_id, _worker_id, run_id) =
+            seed_run_with_profile(&db, project_id, "working", Some(profile_json)).await;
+        set_resume_state(&db, run_id, Some("some-vendor-session".to_string())).await;
+
+        let db = Arc::new(db);
+        let (registry, events_tx) = resume_only_registry(&db, project_id).await;
+        let coordinator = RecoveryCoordinator::with_resume(
+            Arc::clone(&db),
+            project_id,
+            RecoveryConfig::default(),
+            registry,
+            events_tx,
+        );
+
+        let result = coordinator.recover().await.expect("sweep");
+        assert_eq!(result.recovered_runs.len(), 1, "{label}: {result:?}");
+        let recovered = &result.recovered_runs[0];
+        assert_eq!(
+            recovered.outcome,
+            RecoveredOutcome::Terminalized,
+            "{label}: {recovered:?}"
+        );
+        assert!(recovered.success, "{label}: {recovered:?}");
+        assert_eq!(
+            run_state(&db, run_id).await,
+            "failed",
+            "{label}: the run must terminalize, not stay stuck"
+        );
+
+        let reason = recovered.error.as_deref().unwrap_or_default();
+        assert!(
+            reason.contains("headless") && reason.contains("retired"),
+            "{label}: expected the honest retired-mode reason, got: {reason:?}"
+        );
+        let reason_lower = reason.to_lowercase();
+        assert!(
+            !reason_lower.contains("unreadable"),
+            "{label}: must not be a \"profile unreadable\"-shaped failure: {reason:?}"
+        );
+        assert!(
+            !reason_lower.contains("transcript"),
+            "{label}: must not be a Claude-shaped transcript-path failure: {reason:?}"
+        );
+
+        db.shutdown().await.expect("shutdown database");
+    }
+}
+
 /// Seeds one task + worker + run exactly like [`seed_run`], but stores the
 /// given resolved profile JSON on the worker -- what `resume_run` re-derives
 /// the adapter kind and mode from.

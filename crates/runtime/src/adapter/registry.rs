@@ -165,6 +165,24 @@ pub enum RegistryError {
     /// without its own journal/sink wiring could only run unsupervised.
     #[error("resume support was never supplied (set_resume_support); cannot resume run {0}")]
     ResumeUnsupported(RunId),
+    /// `mode: "headless"` was requested for a reserved adapter kind
+    /// (crew-v2 gap-closure WP-C, spec §4.6: crew v2 is TUI-only). This is
+    /// distinct from [`Self::TuiModeUnavailable`]: that one names a
+    /// specific kind's TUI vendor gap (temporary, closes as vendors land
+    /// TUI support); this one names a permanently retired control plane
+    /// with no adapter code left to dispatch to at all -- `AdapterMode`
+    /// keeps `Headless` deserializable (old journals/profiles must still
+    /// parse), but nothing constructs a headless adapter for it anymore.
+    /// [`gate_profile`] checks for this before any conformance dispatch,
+    /// so it fires identically for a fresh submit (`run_one`) and a
+    /// recovery resume (`AdapterRegistry::resume_run`) -- the shared
+    /// pre-flight both paths run through.
+    #[error(
+        "adapter {0} was requested with mode: \"headless\", which is retired in crew v2 (spec \
+         §4.6) -- the headless control plane has no adapter implementation to dispatch to; use \
+         mode: \"tui\""
+    )]
+    HeadlessControlPlaneRetired(String),
 }
 
 impl From<RegistryError> for String {
@@ -941,6 +959,19 @@ async fn gate_profile(
         let Some(kind) = profile.adapter_kind() else {
             return Err("no adapter kind".to_string());
         };
+        // crew-v2 gap-closure WP-C: the headless control plane is
+        // retired -- `AdapterMode::Headless` stays deserializable (a
+        // pre-WP-C journal entry or profile that never set `mode` at all
+        // defaults to it, per `AdapterMode`'s own doc comment), but there
+        // is no adapter implementation left to dispatch to. Reject here,
+        // before any conformance dispatch, so this fires identically for
+        // a fresh submit and a recovery resume (see this function's own
+        // doc comment).
+        if mode == AdapterMode::Headless {
+            return Err(
+                RegistryError::HeadlessControlPlaneRetired(kind.wire_name().to_string()).into(),
+            );
+        }
         // WP26: the full suite is memoized per `(kind, mode)`, stamped
         // with the vendor-CLI version the availability probe observed; a
         // changed version (upgrade, downgrade, install) is the
@@ -1097,47 +1128,6 @@ pub(crate) fn pane_lifecycle_owned_by_adapter(startup_options: &StartupOptions) 
         // Every reserved kind has a real `TuiVendor` now (WP13/WP27/WP28),
         // so any `mode: "tui"` run is adapter-owned.
         && startup_options.adapter_kind().is_some()
-}
-
-/// The capabilities the given reserved adapter kind declares, read off a
-/// throwaway adapter instance so each kind's `capabilities()` body remains
-/// the single source of truth (no second, driftable capability literal
-/// lives here). Construction is pure in-memory bookkeeping -- no process is
-/// spawned and no vendor CLI probe runs -- which is exactly what the boot
-/// recovery sweep's *eligibility* check needs: "does this run's adapter
-/// even claim session resumption", decided before any resume is attempted.
-/// The full availability/policy pre-flight still runs later, inside
-/// [`Self::resume_run`], through the same `gate_profile` a fresh start uses.
-pub(crate) fn declared_capabilities_for_kind(kind: AdapterKind) -> Option<AdapterCapabilities> {
-    let cwd = std::path::PathBuf::from(".");
-    Some(match kind {
-        AdapterKind::Claude => super::ClaudeAdapter::new(
-            super::ClaudeStartupOptions::default(),
-            cwd,
-            Vec::new(),
-            RunId::new(),
-            TaskId::new(),
-            WorkerId::new(),
-            None,
-        )
-        .capabilities(),
-        AdapterKind::Codex => {
-            super::CodexAdapter::new(cwd, super::CodexStartupOptions::default(), Vec::new(), None)
-                .capabilities()
-        }
-        AdapterKind::Copilot => super::CopilotAdapter::new(
-            PathBuf::from("copilot"),
-            cwd,
-            super::CopilotStartupOptions::default(),
-            Vec::new(),
-            RunId::new(),
-            TaskId::new(),
-            WorkerId::new(),
-            None,
-        )
-        .capabilities(),
-        AdapterKind::OmpRpc => super::OmpRpcAdapter::declared_capabilities(),
-    })
 }
 
 impl AdapterRegistry {
@@ -2264,8 +2254,14 @@ mod conformance_cache_tests {
         }
     }
 
+    /// crew-v2 gap-closure WP-C: `Tui` is the only mode that reaches the
+    /// conformance dispatch at all now (`Headless` is rejected in
+    /// `gate_profile` before it gets there) -- so every generic
+    /// memoization test in this module drives `Tui` unconditionally,
+    /// unlike WP-B's `omp_rpc_profile()` (which defaulted to `Headless`,
+    /// the pre-WP-C `AdapterMode` default).
     fn omp_rpc_profile() -> WorkerProfile {
-        omp_rpc_profile_with_mode(AdapterMode::Headless)
+        omp_rpc_profile_with_mode(AdapterMode::Tui)
     }
 
     #[tokio::test]
@@ -2277,7 +2273,7 @@ mod conformance_cache_tests {
             Arc::new(FixtureAuthorization { allow: true });
         let profile = omp_rpc_profile();
 
-        let first = gate_profile(&authorization, &profile, None, AdapterMode::Headless)
+        let first = gate_profile(&authorization, &profile, None, AdapterMode::Tui)
             .await
             .expect("first gate must pass");
         assert_eq!(
@@ -2286,7 +2282,7 @@ mod conformance_cache_tests {
             "a cold cache runs the suite exactly once"
         );
 
-        let second = gate_profile(&authorization, &profile, None, AdapterMode::Headless)
+        let second = gate_profile(&authorization, &profile, None, AdapterMode::Tui)
             .await
             .expect("second gate must pass");
         assert_eq!(first, second, "the memoized capabilities must match");
@@ -2302,26 +2298,36 @@ mod conformance_cache_tests {
     async fn a_version_change_invalidates_the_memoized_suite() {
         let _serial = SERIAL.lock().await;
         // A stamp no probe can report (the kill switch stamps `None`) --
-        // exactly the "installed version changed" signal.
+        // exactly the "installed version changed" signal. The stubbed
+        // capabilities value itself is arbitrary (any AdapterCapabilities
+        // literal proves the point) -- deliberately not read from a real
+        // adapter's `declared_capabilities()`, so this test has zero
+        // dependency on which adapter kinds still exist.
         let stale = (
             Some("0.0.0-stale-test".to_string()),
-            crate::adapter::omp_rpc::OmpRpcAdapter::declared_capabilities(),
+            AdapterCapabilities {
+                protocol: crate::adapter::capability::ProtocolKind::Terminal,
+                resume: crate::adapter::capability::ResumeCapability::Session,
+                steering: crate::adapter::capability::SteeringCapability::ActiveTurn,
+                approvals: crate::adapter::capability::ApprovalsCapability::None,
+                structured_result: false,
+                usage: crate::adapter::capability::UsageCapability::None,
+                nested: NestedCapability::None,
+                native_view: crate::adapter::capability::NativeViewCapability::IndependentTui,
+                workspace_control: crate::adapter::capability::WorkspaceControlCapability::Write,
+                durability: crate::adapter::capability::DurabilityCapability::VendorResumable,
+            },
         );
         CONFORMANCE_CACHE
             .lock()
-            .insert((AdapterKind::OmpRpc, AdapterMode::Headless), stale);
+            .insert((AdapterKind::OmpRpc, AdapterMode::Tui), stale);
         FIXTURE_SUITE_RUNS.store(0, Ordering::Relaxed);
         let authorization: Arc<dyn AdapterAuthorization> =
             Arc::new(FixtureAuthorization { allow: true });
 
-        gate_profile(
-            &authorization,
-            &omp_rpc_profile(),
-            None,
-            AdapterMode::Headless,
-        )
-        .await
-        .expect("gate must pass despite the stale stamp");
+        gate_profile(&authorization, &omp_rpc_profile(), None, AdapterMode::Tui)
+            .await
+            .expect("gate must pass despite the stale stamp");
         assert_eq!(
             FIXTURE_SUITE_RUNS.load(Ordering::Relaxed),
             1,
@@ -2331,7 +2337,7 @@ mod conformance_cache_tests {
         // the stale one.
         let stamp = CONFORMANCE_CACHE
             .lock()
-            .get(&(AdapterKind::OmpRpc, AdapterMode::Headless))
+            .get(&(AdapterKind::OmpRpc, AdapterMode::Tui))
             .and_then(|(version, _)| version.clone());
         assert_ne!(
             stamp.as_deref(),
@@ -2341,11 +2347,10 @@ mod conformance_cache_tests {
         CONFORMANCE_CACHE.lock().clear();
     }
 
-    /// WP-B Task 5a: a TUI-mode submit's gate consumes the TUI suite's
-    /// report, not the headless one -- pinned at the SOURCE, not just the
-    /// outcome, via `protocol` (`Terminal` for every TUI adapter,
-    /// `Structured` for headless ompRpc; verified by reading both
-    /// `declared_capabilities()`s directly).
+    /// WP-B Task 5a (still current post-WP-C: `Tui` is the only mode that
+    /// reaches this dispatch at all now): a TUI-mode submit's gate
+    /// consumes the TUI suite's report, pinned at the SOURCE via
+    /// `protocol` (`Terminal` for every TUI adapter).
     #[tokio::test]
     async fn a_tui_mode_submit_gates_on_the_tui_suites_effective_capabilities() {
         let _serial = SERIAL.lock().await;
@@ -2365,89 +2370,56 @@ mod conformance_cache_tests {
         assert_eq!(
             effective.protocol,
             crate::adapter::capability::ProtocolKind::Terminal,
-            "a TUI-mode submit must be gated on the TUI suite's effective capabilities, not \
-             ompRpc headless's Structured declaration: {effective:?}"
+            "a TUI-mode submit must be gated on the TUI suite's effective capabilities: \
+             {effective:?}"
         );
         CONFORMANCE_CACHE.lock().clear();
     }
 
-    /// WP-B Task 5b: a Headless-mode submit still consumes the headless
-    /// report (regression pin, until WP-C retires the headless suites).
+    /// crew-v2 gap-closure WP-C ruling 1: `mode: "headless"` is retired.
+    /// Supersedes WP-B's `a_headless_mode_submit_still_gates_on_the_headless_suites_effective_capabilities`
+    /// (headless submits used to succeed; now every one is refused) and
+    /// `the_memo_key_is_kind_and_mode_not_kind_alone`'s Headless half (the
+    /// mode-axis distinctness that test proved is git history now that
+    /// there is only one live mode to distinguish from -- the surviving
+    /// half, "two submits of the same kind share one memoized run", is
+    /// `two_gate_profile_calls_run_the_fixture_suite_once` above). Pins
+    /// that the rejection fires BEFORE any conformance dispatch: no suite
+    /// runs, no cache entry is written, and the error names the retired
+    /// kind via the typed `RegistryError::HeadlessControlPlaneRetired`,
+    /// not a generic string a caller could mistake for something else
+    /// (an unavailable CLI, a config error, ...).
     #[tokio::test]
-    async fn a_headless_mode_submit_still_gates_on_the_headless_suites_effective_capabilities() {
-        let _serial = SERIAL.lock().await;
-        CONFORMANCE_CACHE.lock().clear();
-        let authorization: Arc<dyn AdapterAuthorization> =
-            Arc::new(FixtureAuthorization { allow: true });
-
-        let effective = gate_profile(
-            &authorization,
-            &omp_rpc_profile_with_mode(AdapterMode::Headless),
-            None,
-            AdapterMode::Headless,
-        )
-        .await
-        .expect("headless gate must pass");
-
-        assert_eq!(
-            effective.protocol,
-            crate::adapter::capability::ProtocolKind::Structured,
-            "a Headless-mode submit must keep gating on the headless suite's effective \
-             capabilities: {effective:?}"
-        );
-        CONFORMANCE_CACHE.lock().clear();
-    }
-
-    /// WP-B Task 5c: the memo's new mode axis. Two TUI submits of the same
-    /// kind share one cache entry (one suite run); a TUI and a Headless
-    /// submit of the SAME kind never share one (distinct cache keys, two
-    /// suite runs) -- proving the cache key is truly `(kind, mode)`, not
-    /// `kind` with mode ignored.
-    #[tokio::test]
-    async fn the_memo_key_is_kind_and_mode_not_kind_alone() {
+    async fn a_headless_mode_submit_is_rejected_before_any_suite_runs_or_the_cache_is_touched() {
         let _serial = SERIAL.lock().await;
         CONFORMANCE_CACHE.lock().clear();
         FIXTURE_SUITE_RUNS.store(0, Ordering::Relaxed);
         let authorization: Arc<dyn AdapterAuthorization> =
             Arc::new(FixtureAuthorization { allow: true });
 
-        gate_profile(
-            &authorization,
-            &omp_rpc_profile_with_mode(AdapterMode::Tui),
-            None,
-            AdapterMode::Tui,
-        )
-        .await
-        .expect("first tui gate must pass");
-        gate_profile(
-            &authorization,
-            &omp_rpc_profile_with_mode(AdapterMode::Tui),
-            None,
-            AdapterMode::Tui,
-        )
-        .await
-        .expect("second tui gate must pass");
-        assert_eq!(
-            FIXTURE_SUITE_RUNS.load(Ordering::Relaxed),
-            1,
-            "two TUI submits of the same kind must reuse one memoized suite run"
-        );
-
-        gate_profile(
+        let err = gate_profile(
             &authorization,
             &omp_rpc_profile_with_mode(AdapterMode::Headless),
             None,
             AdapterMode::Headless,
         )
         .await
-        .expect("headless gate of the same kind must pass");
+        .expect_err("a Headless-mode submit must be refused, not gated");
+
+        assert_eq!(
+            err,
+            RegistryError::HeadlessControlPlaneRetired("ompRpc".to_string()).to_string(),
+            "must be the typed retirement refusal, not some other denial"
+        );
         assert_eq!(
             FIXTURE_SUITE_RUNS.load(Ordering::Relaxed),
-            2,
-            "a Headless submit of the same kind must run its OWN suite -- the mode axis must \
-             keep it from hitting the TUI entry's cache"
+            0,
+            "the rejection must fire before any conformance suite runs"
         );
-        CONFORMANCE_CACHE.lock().clear();
+        assert!(
+            CONFORMANCE_CACHE.lock().is_empty(),
+            "a refused Headless submit must never write a cache entry"
+        );
     }
 
     /// Seeds a task/worker/run with a resolved Claude profile snapshot in
@@ -2573,10 +2545,16 @@ mod conformance_cache_tests {
         let result = registry
             .resume_run(run_id, VendorSessionRef("sess-1".to_string()), None)
             .await;
-        assert!(
-            result.is_err(),
-            "no TuiSupport is configured, so this must fail AFTER gate_profile ran (the typed \
-             refusal build_adapter gives an unsupported TUI kind), not before: {result:?}"
+        // WP-B re-review rider: tightened from a bare `is_err()` to the
+        // specific typed refusal, so an environment availability-disproof
+        // (a different failure entirely) would self-diagnose here instead
+        // of being misread as a mode-threading regression.
+        assert_eq!(
+            result,
+            Err(RegistryError::TuiModeUnavailable("claude".to_string()).to_string()),
+            "no TuiSupport is configured, so this must fail AFTER gate_profile ran with exactly \
+             build_adapter's typed refusal for an unsupported TUI kind, not before and not some \
+             other error"
         );
 
         let (has_tui_key, has_headless_key, cache_debug) = {
@@ -2653,10 +2631,13 @@ mod conformance_cache_tests {
             activity: Arc::new(crate::adapter::ActivityClock::new()),
         };
         let result = <AdapterRegistry as RunDriver>::start(&registry, ctx).await;
-        assert!(
-            result.is_err(),
-            "no TuiSupport is configured, so this must fail AFTER gate_profile ran, not before: \
-             {result:?}"
+        // WP-B re-review rider: tightened from a bare `is_err()` (see the
+        // matching comment on `resume_run_threads...` above).
+        assert_eq!(
+            result,
+            Err(RegistryError::TuiModeUnavailable("claude".to_string()).to_string()),
+            "no TuiSupport is configured, so this must fail AFTER gate_profile ran with exactly \
+             build_adapter's typed refusal, not before and not some other error"
         );
 
         let (has_tui_key, has_headless_key, cache_debug) = {
