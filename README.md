@@ -112,17 +112,17 @@ This project is licensed under the [MIT License](LICENSE). See the LICENSE file 
 
 ## Known Limitations
 
-This is a pre-1.0 project. The review backlog is empty — the one open item is an unreproduced test-flake watch, tracked in the maintainer's local, gitignored `REVIEW.md` (resolution history lives in [`docs/journal.md`](docs/journal.md)). What remains below are environment and protocol walls, verified against the current codebase. Every adapter is installed and authenticated here, and live TUI conformance runs against all four — claude + omp-rpc are fully green, while codex and copilot are blocked on vendor out-of-credits (raw reports under [`release/live-conformance/`](release/live-conformance/) with an erratum). None of the below is a "requires a vendor CLI" caveat.
+This is a pre-1.0 project. The review backlog is empty — the one open item is an unreproduced test-flake watch, tracked in the maintainer's local, gitignored `REVIEW.md` (resolution history lives in [`docs/journal.md`](docs/journal.md)). What remains below are environment and protocol walls, verified against the current codebase. Every adapter is installed and authenticated here, and live TUI conformance runs against all four — claude, codex, and omp-rpc are fully green, while copilot alone is blocked on a confirmed vendor monthly-quota wall (raw reports under [`release/live-conformance/`](release/live-conformance/) with an erratum). None of the below is a "requires a vendor CLI" caveat.
 
 - **ACP v1 has no durable session handle, so Copilot cannot resume across processes.** A session
   that completed a real turn answers `session/load` with `Resource not found`, which fails
   `session_resume` and `runtime_restart`. A protocol wall, not an adapter defect.
 - **ACP v1 exposes no subagent-observation variant**, so Copilot's vendor-side delegation cannot be
   normalized to `NestedWorkerObserved`. Pending a newer ACP version.
-- **Codex's turn-dependent scenarios are unprovable on an out-of-credit account.** `initialize` and
-  `thread/start` succeed; the turn is refused server-side with `usageLimitExceeded`. The adapter
-  reports that reason verbatim instead of timing out. Refilling the workspace makes five scenarios
-  provable with no code change.
+- **Copilot's turn-dependent scenarios are unprovable on this account's monthly quota.** The
+  tailed session's own event log records a typed `session.error` (`errorCode: quota_exceeded`,
+  `statusCode: 402`) — independently confirmed, not inferred from a timeout. Refilling the
+  workspace makes the two remaining scenarios provable with no code change.
 
 Consciously deferred features, each with a decision trigger, live in
 [`docs/future-features.md`](docs/future-features.md).

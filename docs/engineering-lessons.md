@@ -100,10 +100,12 @@ and `a_real_worker_process_exit_settles_its_run`, `crates/runtime/src/adapter/cl
 `run_state_tests` module, and `crates/runtime/tests/copilot_adapter.rs`'s
 `a_supervised_process_exit_is_reported_with_its_real_status` -- all drove a real process through
 the *headless* control plane, which crew-v2 gap-closure WP-C retired. `claude/mod.rs` and
-`copilot_adapter.rs` are deleted outright; `run_lifecycle.rs` still names the deleted
-`OmpRpcAdapter` purely as a protocol-agnostic "spawn a real process" test vehicle and is left
-uncompiling pending a decision on its replacement (see WP-C's report) -- **this lesson's specific
-"a real process, not just a test-fake" regression coverage is open again until that's resolved.**
+`copilot_adapter.rs` are deleted outright; `run_lifecycle.rs`'s two proofs kept their coverage by
+switching from the deleted `OmpRpcAdapter` to `support::spawn_evidence_adapter::SpawnEvidenceAdapter`
+(`tests/support/spawn_evidence_adapter.rs`) -- a small, protocol-agnostic, test-only `Adapter` that
+spawns a real OS process and forwards only its spawn/exit evidence, built specifically to keep this
+lesson's "a real process, not just a test-fake" property true once the headless control plane it
+had borrowed for that purpose was gone. This lesson's regression coverage is intact.
 
 ---
 

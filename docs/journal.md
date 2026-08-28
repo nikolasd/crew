@@ -4230,3 +4230,45 @@ they are not regenerated from edited JSON.
 second connection to the daemon-owned WAL `runtime.db` and writes directly. Added
 `PRAGMA busy_timeout = 5000` to match the daemon's own connection policy; the daemon sets the same
 pragma on that database. Verified locally (2 pass) and green on both CI OSes.
+
+## Part XLVI — The endgame: interim findings closed, three work packages, the headless drop
+
+**Interim review, closed (#17).** crew-reviewer's deep-track pass (HEAD `64c70d6`) found C1
+CRITICAL: `registry.rs`'s `tui_transcript_path_for_session` hardcoded `"claude"` as the vendor
+regardless of which TUI adapter a run actually used, and `recovery.rs`'s restart-recovery path
+called it for every TUI run — a non-Claude TUI run silently terminalized on restart with a
+misleading Claude-shaped transcript-path reason. Alongside it: I1 (`record_escalation_raised`
+wrote its projection row outside the event transaction, violating invariant 1), I2 (the
+repeated-failure escalation query counted *any* prior failure rather than a consecutive streak),
+and I3 (migrations 11–14 shipped with no version-step tests). All four closed in #17;
+crew-reviewer's own follow-up verification pass (main@`2cde61e`) confirmed C1/I1/I2/I3 CONFIRMED
+CLOSED.
+
+**Two blockers, found during that same verification pass.** `recovery.rs:510`'s idempotent-
+terminalize branch queried `SELECT status FROM runs` — the column is `state` — so the `d637033`
+fix for the already-terminal re-read path had never actually worked; every re-read silently fell
+through to the broken path it was meant to guard. Separately, `packages/extension/dist/index.js`
+was found absent from git at HEAD entirely (deleted by #17's own M5 cleanup, its refresh never
+re-run) — a fresh clone had no extension entry point, and CI's `bundle-check` was vacuously
+passing against a file that didn't exist. Both fixed in WP-A (#19), alongside a Copilot `1.0.81`
+version-pin fix and the doc-honesty sweep the phase's name promised.
+
+**Three work packages, sequenced and landed.** WP-A (#19, blockers + doc honesty) → WP-B (#20,
+authorization re-basing: `gate_profile` now gates on the run's own requested `(kind, mode)`, not
+`kind` alone, so a TUI run is authorized against its own TUI-suite effective capabilities instead
+of its vendor's headless ones; CI's vendor-independent conformance signal deliberately substituted
+the four `*-tui` fixture suites for the headless ones) → WP-C (#21, the headless drop proper:
+`AdapterMode::Headless` kept deserializable but typed-rejected everywhere it's requested, per the
+user's 2026-08-27 decision reversing WP29's recorded "KEEP ALL FOUR" stance (spec §4.6); the four
+headless adapter implementations, their fixtures, and their conformance suites deleted outright —
+not kept dark behind a flag). All three landed on `main` (`d27cee4`) after two full rounds of
+crew-reviewer review plus a final polish pass — including one genuine near-miss (a mechanical
+`AdapterMode::Headless` → `Tui` enum swap in a kill-switch test that compiled clean while its
+assertions had gone stale) and a whole-engagement lesson about deletion sweeps needing to check
+surviving *prose claims*, not just surviving *references* — both written up in
+`docs/engineering-lessons.md`.
+
+**Pre-tag bundle gate, closed with positive evidence.** The `refresh-bundle` workflow run on
+post-merge `main` produced a bundle byte-identical to the one already committed — proving the
+WP-C extension-side comment edits are inert through the bundler, not merely assumed to be. `v0.5.0`'s
+tag is still held pending the repo owner's explicit `ship`.
