@@ -107,9 +107,14 @@ fn parsed_fixture_events() -> Vec<super::TuiEvent> {
 
 // ------------------------------------------------------------- PROBE
 
-async fn probe_scenario() -> ScenarioResult {
+/// The scenario result, plus the raw `--version` string observed (`None`
+/// under the kill switch or on a spawn failure) -- the latter is what
+/// [`probe_with_version`] (crew-v2 gap-closure WP-C's
+/// `conformance::probe_availability_with_version` TUI dispatch) stamps its
+/// memoization cache key with.
+async fn probe_scenario_with_version() -> (ScenarioResult, Option<String>) {
     if crate::conformance::vendor_cli_invocation_disabled() {
-        return crate::conformance::vendor_cli_skipped_probe();
+        return (crate::conformance::vendor_cli_skipped_probe(), None);
     }
     let vendor = ClaudeTuiVendor::new(std::env::temp_dir(), Vec::new());
     let output = std::process::Command::new(
@@ -121,7 +126,7 @@ async fn probe_scenario() -> ScenarioResult {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             use super::adapter::VersionVerdict;
-            match vendor.version_gate(&version) {
+            let result = match vendor.version_gate(&version) {
                 VersionVerdict::Compatible => ScenarioResult::pass(
                     scenario::PROBE,
                     format!("claude --version reported {version:?}, inside the tested range"),
@@ -129,17 +134,39 @@ async fn probe_scenario() -> ScenarioResult {
                 VersionVerdict::Incompatible { detail } => {
                     ScenarioResult::fail(scenario::PROBE, detail)
                 }
-            }
+            };
+            (result, Some(version))
         }
-        Ok(output) => ScenarioResult::fail(
-            scenario::PROBE,
-            format!(
-                "claude --version exited non-zero: {}",
-                String::from_utf8_lossy(&output.stderr)
+        Ok(output) => (
+            ScenarioResult::fail(
+                scenario::PROBE,
+                format!(
+                    "claude --version exited non-zero: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ),
             ),
+            None,
         ),
-        Err(err) => ScenarioResult::fail(scenario::PROBE, format!("probe failed: {err}")),
+        Err(err) => (
+            ScenarioResult::fail(scenario::PROBE, format!("probe failed: {err}")),
+            None,
+        ),
     }
+}
+
+async fn probe_scenario() -> ScenarioResult {
+    probe_scenario_with_version().await.0
+}
+
+/// crew-v2 gap-closure WP-C: the lightweight version+availability probe
+/// `conformance::probe_availability_with_version` dispatches to for TUI
+/// mode -- the same real `--version` handshake [`fixture_report`]'s own
+/// `PROBE` scenario performs, exposed standalone so the gate's
+/// memoization cache can stamp itself without running the full
+/// (memoized, but still 14-scenario) suite just to learn the installed
+/// version.
+pub(crate) async fn probe_with_version() -> (ScenarioResult, Option<String>) {
+    probe_scenario_with_version().await
 }
 
 // ------------------------------------------------------ pure scenarios
@@ -398,6 +425,7 @@ fn fast_timings() -> TuiTimings {
         tailer_poll: Duration::from_millis(40),
         submit_idle: Duration::from_millis(50),
         escalation: crate::supervisor::EscalationTimings::default(),
+        preflight_timeout: Duration::from_secs(4),
     }
 }
 

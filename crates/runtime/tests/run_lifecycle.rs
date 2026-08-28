@@ -1,21 +1,17 @@
 //! Integration tests for the evidence-driven run state machine
-//! (`crates/runtime/src/adapter/run_lifecycle.rs`): a real spawned OMP-RPC
-//! worker process (`fake-worker --mode rpc`) driven through the *production*
-//! sink chain — `DomainAdapterEventSink` wrapped in `RunLifecycleSink` — with
-//! the run's durable row observed through a real, migrated `DatabaseHandle`
-//! and the real `DomainRepository`. This is the end-to-end complement of
-//! `run_lifecycle.rs`'s inline unit tests, which pin the evidence→edge mapping
-//! at the sink level against a stubbed inner sink: the `working` edge here can
-//! only have been committed by the lifecycle sink reacting to frames the
-//! normalizer produced from a live child process.
-//!
-//! The `fake-worker --mode rpc` alias is the grounded OMP-RPC wire shape (see
-//! `crew_runtime::adapter::omp_rpc::client`'s module doc), and it answers
-//! the host-tool exchange with a `None` broker, exactly as
-//! `a_host_tool_call_during_the_prompt_turn_never_deadlocks_start` in
-//! `omp_rpc_adapter.rs` already proves: its `prompt` response (the
-//! prompt-acceptance `MessageChunk`) is the first non-exit payload the sink
-//! sees, which is what walks a queued run `queued -> starting -> working`.
+//! (`crates/runtime/src/adapter/run_lifecycle.rs`): a real spawned OS
+//! worker process (`fake-worker --mode jsonl`, driven through
+//! `support::spawn_evidence_adapter::SpawnEvidenceAdapter` — see that
+//! module's doc for what it is and why it replaced the real `OmpRpcAdapter`
+//! this file used before crew-v2 gap-closure WP-C) driven through the
+//! *production* sink chain — `DomainAdapterEventSink` wrapped in
+//! `RunLifecycleSink` — with the run's durable row observed through a real,
+//! migrated `DatabaseHandle` and the real `DomainRepository`. This is the
+//! end-to-end complement of `run_lifecycle.rs`'s inline unit tests, which
+//! pin the evidence→edge mapping at the sink level against a stubbed inner
+//! sink: the `working` edge here can only have been committed by the
+//! lifecycle sink reacting to real evidence from a live child process (see
+//! `SpawnEvidenceAdapter::start`'s doc for exactly what evidence that is).
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,10 +20,7 @@ use crew_protocol::{
     ProjectId, Run, RunFlags, RunId, RunState, RuntimeEvent, TaskId, TaskRef, Timestamp, Worker,
     WorkerId, WorkerProfileRef,
 };
-use crew_runtime::adapter::{
-    Adapter, DomainAdapterEventSink, OmpRpcAdapter, OmpRpcAdapterOptions, OmpRpcStartupOptions,
-    ProfileId, RunLifecycleSink, StartSpec, StartupOptions, WorkerProfile,
-};
+use crew_runtime::adapter::{Adapter, DomainAdapterEventSink, RunLifecycleSink, StartSpec};
 use crew_runtime::config::NestedViolationAction;
 use crew_runtime::db::DatabaseHandle;
 use crew_runtime::domain::DomainRepository;
@@ -36,6 +29,10 @@ use crew_runtime::recovery::RecoveryCoordinator;
 use tempfile::TempDir;
 use tokio::sync::broadcast;
 use tokio::time::{Instant, MissedTickBehavior};
+
+#[path = "support/spawn_evidence_adapter.rs"]
+mod spawn_evidence_adapter;
+use spawn_evidence_adapter::SpawnEvidenceAdapter;
 
 /// The `fake-worker` binary that stands in for `omp` (see
 /// `omp_rpc_adapter.rs`'s own copy — each `tests/*.rs` file is its own
@@ -72,25 +69,6 @@ fn build_fake_worker_once() -> PathBuf {
         binary.display()
     );
     binary
-}
-
-/// The same OMP-RPC worker profile `omp_rpc_adapter.rs` builds — `lm-studio/x`
-/// is a deliberately inert model selector: `fake-worker` never resolves it,
-/// and no local model server is required.
-fn omp_rpc_test_profile() -> WorkerProfile {
-    WorkerProfile {
-        id: ProfileId::new(),
-        adapter: "ompRpc".to_string(),
-        model: "lm-studio/x".to_string(),
-        permission_envelope: serde_json::json!({}),
-        startup_options: StartupOptions::OmpRpc(OmpRpcStartupOptions {
-            profile: None,
-            host_tools: None,
-            ..Default::default()
-        }),
-        environment_allowlist: Vec::new(),
-        source: "test".to_string(),
-    }
 }
 
 /// A real, migrated database on a throwaway file: the same pattern
@@ -305,11 +283,9 @@ async fn a_real_worker_process_walks_its_run_from_queued_into_working() {
     let (events_tx, _events_rx) = broadcast::channel(64);
     let sink = production_sink_chain(&db, project_id, events_tx, run_id);
 
-    let adapter = OmpRpcAdapter::with_binary(
-        fake_worker_path().to_string_lossy().into_owned(),
-        omp_rpc_test_profile(),
-        OmpRpcAdapterOptions::default(),
-        None,
+    let adapter = SpawnEvidenceAdapter::new(
+        fake_worker_path(),
+        vec!["--mode".to_string(), "jsonl".to_string()],
     );
     let spec = StartSpec {
         run_id,
@@ -367,11 +343,9 @@ async fn a_real_worker_process_exit_settles_its_run() {
     let (events_tx, _events_rx) = broadcast::channel(64);
     let sink = production_sink_chain(&db, project_id, events_tx, run_id);
 
-    let adapter = OmpRpcAdapter::with_binary(
-        fake_worker_path().to_string_lossy().into_owned(),
-        omp_rpc_test_profile(),
-        OmpRpcAdapterOptions::default(),
-        None,
+    let adapter = SpawnEvidenceAdapter::new(
+        fake_worker_path(),
+        vec!["--mode".to_string(), "jsonl".to_string()],
     );
     let spec = StartSpec {
         run_id,

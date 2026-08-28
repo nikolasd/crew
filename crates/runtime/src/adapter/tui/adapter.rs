@@ -93,7 +93,10 @@ pub enum VersionVerdict {
 /// Per-vendor behavior a [`TuiAdapter`] drives generically. Every method
 /// is a pure, no-process-spawned computation except through the
 /// [`LaunchSpec`]s it returns -- `TuiAdapter` itself owns the actual
-/// spawn, attach, discovery, and tailing.
+/// spawn, attach, discovery, and tailing. [`Self::preflight`] is the one
+/// documented exception: a vendor whose CLI can only answer a
+/// compatibility question (e.g. "is this model selector real?") via a
+/// real fetch, not a fixed rule, may perform that one process spawn there.
 pub trait TuiVendor: Send + Sync + 'static {
     /// The adapter kind, e.g. `"claude"`. Used verbatim in every
     /// [`AdapterError::adapter`] this adapter instance raises.
@@ -172,6 +175,26 @@ pub trait TuiVendor: Send + Sync + 'static {
             .and_then(|stem| stem.to_str())
             .map(str::to_string)
     }
+
+    /// An optional real-process preflight run before a *fresh* start's
+    /// spawn (never on resume, which continues an already-established
+    /// session rather than choosing a new one) -- e.g. a selector-
+    /// compatibility check the vendor's own CLI can only answer via a
+    /// real fetch. Default: no preflight, every start proceeds
+    /// unconditionally. Returning `Err` refuses the start before any PTY
+    /// is spawned, with the same typed-rejection shape [`Self::version_gate`]
+    /// produces from [`TuiAdapter::probe`] -- see the trait doc's "pure"
+    /// exception this method is. `timings.preflight_timeout` bounds
+    /// whatever process an override spawns -- a vendor implementation
+    /// must honor it, never wait on its own command unbounded.
+    fn preflight(
+        &self,
+        _spec: &StartSpec,
+        _cfg: &AdapterConfig,
+        _timings: &TuiTimings,
+    ) -> AdapterFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// Timing knobs for [`TuiAdapter`]'s readiness gate, nonce-discovery
@@ -195,6 +218,14 @@ pub struct TuiTimings {
     pub submit_idle: Duration,
     /// SIGINT/SIGTERM/SIGKILL escalation timings for [`PtyProcess`].
     pub escalation: EscalationTimings,
+    /// The bound on [`TuiVendor::preflight`]'s own external command, if it
+    /// runs one -- a vendor whose preflight spawns a real process (e.g.
+    /// [`super::omp::OmpTuiVendor`]'s model-catalog check) must never let
+    /// a wedged command stall `start()` indefinitely on the daemon's
+    /// fresh-start path while holding the adapter's run lock. Same
+    /// convention as every other externally-bounded wait here
+    /// ([`Self::readiness_cap`], [`Self::discovery_timeout`]).
+    pub preflight_timeout: Duration,
 }
 
 impl Default for TuiTimings {
@@ -206,6 +237,7 @@ impl Default for TuiTimings {
             tailer_poll: Duration::from_millis(200),
             submit_idle: ENTER_IDLE_MIN,
             escalation: EscalationTimings::default(),
+            preflight_timeout: Duration::from_secs(8),
         }
     }
 }
@@ -1246,6 +1278,9 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                     )
                     .await;
             }
+            self.vendor
+                .preflight(&spec, &self.cfg, &self.timings)
+                .await?;
             let launch = self.vendor.launch(&spec, &self.cfg);
             let transcript_root = self.vendor.transcript_root(&spec, &self.cfg);
             let nonce = Uuid::now_v7().to_string();

@@ -50,8 +50,13 @@ export interface CombinedReport {
   readonly adapters: Record<string, AdapterConformanceReport>;
 }
 
-/** Adapter wire names. There is no `omp-rpc`; the wire name is `ompRpc`. */
-const EXPECTED_ADAPTERS = ["claude", "codex", "copilot", "ompRpc"] as const;
+/**
+ * Adapter report labels. crew-v2 gap-closure WP-C: fixture mode is
+ * TUI-sourced now (spec §4.6) -- the headless control plane and its
+ * `claude`/`codex`/`copilot`/`ompRpc` labels are retired. `ompRpc`'s TUI
+ * label is `"omp-tui"`, not a mechanical `<wire_name>-tui`.
+ */
+const EXPECTED_ADAPTERS = ["claude-tui", "codex-tui", "copilot-tui", "omp-tui"] as const;
 
 /**
  * The capability fields whose value is downgraded when a specific scenario

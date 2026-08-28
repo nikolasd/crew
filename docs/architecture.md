@@ -229,10 +229,10 @@ graph TB
         RD[service/run_driver.rs]
         AR[adapter/registry.rs]
         AT[adapter/trait.rs]
-        AC[adapter/claude/mod.rs]
-        ACD[adapter/codex/mod.rs]
-        ACP[adapter/copilot/mod.rs]
-        AOR[adapter/omp_rpc/mod.rs]
+        AC[adapter/tui/claude.rs]
+        ACD[adapter/tui/codex.rs]
+        ACP[adapter/tui/copilot.rs]
+        AOR[adapter/tui/omp.rs]
         CB[coordination/broker.rs]
         CST[coordination/scope_token.rs]
         CRL[coordination/rate_limit.rs]
@@ -325,12 +325,15 @@ graph TB
 
 #### Adapter Layer
 - **Adapter Trait** ([`crates/runtime/src/adapter/trait.rs`](crates/runtime/src/adapter/trait.rs)): `Adapter` trait with `start`/`resume`/`send`/`cancel`/`dispose`
-- **Adapter Registry** ([`crates/runtime/src/adapter/registry.rs`](crates/runtime/src/adapter/registry.rs)): Implements `RunDriver` against four worker adapters
+- **Adapter Registry** ([`crates/runtime/src/adapter/registry.rs`](crates/runtime/src/adapter/registry.rs)): Implements `RunDriver` against four TUI worker adapters. The headless control plane these
+  once ran alongside (a direct, non-interactive protocol per vendor) is retired — `mode: "headless"`
+  stays deserializable for old configs/journals but is typed-rejected at validation and dispatch
+  time (crew-v2 gap-closure WP-C; see [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md)).
 - **Run Lifecycle Sink** ([`crates/runtime/src/adapter/run_lifecycle.rs`](crates/runtime/src/adapter/run_lifecycle.rs)): Applies `RunState` edges from journaled adapter evidence
-- **Claude Adapter** ([`crates/runtime/src/adapter/claude/mod.rs`](crates/runtime/src/adapter/claude/mod.rs)): `claude stream-json` protocol
-- **Codex Adapter** ([`crates/runtime/src/adapter/codex/mod.rs`](crates/runtime/src/adapter/codex/mod.rs)): `codex app-server` protocol
-- **Copilot Adapter** ([`crates/runtime/src/adapter/copilot/mod.rs`](crates/runtime/src/adapter/copilot/mod.rs)): `copilot --acp` protocol
-- **OMP-RPC Adapter** ([`crates/runtime/src/adapter/omp_rpc/mod.rs`](crates/runtime/src/adapter/omp_rpc/mod.rs)): `omp --mode rpc` protocol
+- **Claude Adapter** ([`crates/runtime/src/adapter/tui/claude.rs`](crates/runtime/src/adapter/tui/claude.rs)): drives the real interactive `claude` CLI on a PTY
+- **Codex Adapter** ([`crates/runtime/src/adapter/tui/codex.rs`](crates/runtime/src/adapter/tui/codex.rs)): drives the real interactive `codex` CLI on a PTY
+- **Copilot Adapter** ([`crates/runtime/src/adapter/tui/copilot.rs`](crates/runtime/src/adapter/tui/copilot.rs)): drives the real interactive `copilot` CLI on a PTY
+- **OMP-RPC Adapter** ([`crates/runtime/src/adapter/tui/omp.rs`](crates/runtime/src/adapter/tui/omp.rs)): drives the real interactive `omp` CLI on a PTY
 
 #### Coordination and Approval
 - **Coordination Broker** ([`crates/runtime/src/coordination/broker.rs`](crates/runtime/src/coordination/broker.rs)): Worker-safe messaging with record-before-delivery
@@ -355,7 +358,7 @@ graph TB
 #### Domain and Security
 - **Domain Repository** ([`crates/runtime/src/domain/repository.rs`](crates/runtime/src/domain/repository.rs)): Only way to mutate projection tables
 - **State Transitions** ([`crates/runtime/src/domain/transitions.rs`](crates/runtime/src/domain/transitions.rs)): Validates `RunState` edges
-- **Redaction** ([`crates/runtime/src/security/redaction.rs`](crates/runtime/src/security/redaction.rs)): Type-enforced redaction boundary; durable JSON bytes are recursively key-sorted so `preserve_order` can remain available for fixture capture without making equal input persist differently
+- **Redaction** ([`crates/runtime/src/security/redaction.rs`](crates/runtime/src/security/redaction.rs)): Type-enforced redaction boundary; durable JSON bytes are recursively key-sorted so `preserve_order` (needed for deterministic profile/policy fingerprinting) doesn't make equal input persist differently
 - **Redaction Rules** ([`crates/runtime/src/security/rules.rs`](crates/runtime/src/security/rules.rs)): Built-in regex patterns
 
 #### Audit and Conformance
@@ -363,11 +366,9 @@ graph TB
 - **Audit Retention** ([`crates/runtime/src/audit/retention.rs`](crates/runtime/src/audit/retention.rs)): Event retention and pruning
 - **Conformance Scenarios** ([`crates/runtime/src/conformance/scenario.rs`](crates/runtime/src/conformance/scenario.rs)): Adapter conformance test scenarios
 - **Conformance Report** ([`crates/runtime/src/conformance/report.rs`](crates/runtime/src/conformance/report.rs)): Conformance test reporting
-- **Fixture Capture** ([`crates/runtime/src/conformance/capture.rs`](crates/runtime/src/conformance/capture.rs)): Drives a real vendor CLI turn per manifest entry and persists scrubbed frames only when they differ from the pre-write committed content — `unchanged` is decided by reading the existing file before any write, and a dry run never writes at all
-- **Frame Scrubber** ([`crates/runtime/src/conformance/scrub.rs`](crates/runtime/src/conformance/scrub.rs)): Rewrites nondeterministic values (session/UUID/correlation identities, timestamps, costs, cwd and command paths) into placeholders keyed by first-encounter order within their family, so a captured fixture is a fixed point of its own scrub/render pipeline
 
 #### Configuration and Policy
-- **Config Merge** ([`crates/runtime/src/config/merge.rs`](crates/runtime/src/config/merge.rs)): Layers org/repo/user/per-run YAML with strict unknown-key rejection into an immutable, SHA-256-fingerprinted `RuntimePolicy`; hashed JSON bytes are recursively key-sorted because the fixture-capture scrubber requires `preserve_order`
+- **Config Merge** ([`crates/runtime/src/config/merge.rs`](crates/runtime/src/config/merge.rs)): Layers org/repo/user/per-run YAML with strict unknown-key rejection into an immutable, SHA-256-fingerprinted `RuntimePolicy`; hashed JSON bytes are recursively key-sorted because this workspace enables `preserve_order`, and fingerprinting must not depend on input key order
 - **Policy Evaluator** ([`crates/runtime/src/policy/evaluate.rs`](crates/runtime/src/policy/evaluate.rs)): `PolicyEvaluator` implements `AdapterAuthorization` against a `RuntimePolicy` (model allowlist, concurrency ceiling) — wired into production via `lifecycle::serve()`, same as the real `ScopeTokenVerifier` `workerMcp` credential store (see the maintainer's local, gitignored `REVIEW.md` for remaining gaps; resolution history in [`journal.md`](journal.md))
 
 ## Level 4: Code (C4-4)
@@ -811,8 +812,6 @@ ownership gates *mutation*. Rationale and the one exception (`workspace/get`) in
 | A quarantine survives a concurrent release of a different violation | `crates/runtime/tests/quarantine_race.rs` |
 | Sanitized JSON bytes are key-order independent | `crates/runtime/src/security/redaction.rs` (inline tests) |
 | Profile and policy fingerprints are key-order independent | `crates/runtime/tests/config.rs`, `crates/runtime/tests/adapter_contract.rs` |
-| Every capture-managed fixture is a scrub/render fixed point | `manifest_fixtures_are_scrub_render_fixed_points` |
-| Capture's `unchanged` flag reflects pre-write bytes, never the write it guards | `crates/runtime/src/conformance/capture.rs` (`persist_fixture_content_*` inline tests) |
 | Run-lifecycle mutations are gated by task ownership | `crates/runtime/tests/orchestration_rpc.rs` |
 | Workspace lease operations are gated by task ownership | `crates/runtime/tests/orchestration_rpc.rs` |
 

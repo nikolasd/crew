@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 use crew_protocol::{ProjectId, RunId, TaskId, WorkerId};
 use crew_runtime::adapter::{
-    AdapterKind, AdapterRegistry, ClaudeStartupOptions, FixtureAuthorization, StartupOptions,
-    WorkerProfile,
+    AdapterKind, AdapterMode, AdapterRegistry, ClaudeStartupOptions, FixtureAuthorization,
+    StartupOptions, WorkerProfile,
 };
 use crew_runtime::conformance::{DISABLE_VENDOR_CLI_ENV, probe_availability};
 use crew_runtime::db::DatabaseHandle;
@@ -38,7 +38,13 @@ fn claude_profile() -> WorkerProfile {
         adapter: "claude".to_string(),
         model: "sonnet".to_string(),
         permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
-        startup_options: StartupOptions::Claude(ClaudeStartupOptions::default()),
+        // crew-v2 gap-closure WP-C: `mode` must be explicit `Tui` --
+        // `Headless` is retired and gate_profile refuses it before the
+        // vendor-CLI-availability denial this test is actually about.
+        startup_options: StartupOptions::Claude(ClaudeStartupOptions {
+            mode: AdapterMode::Tui,
+            ..Default::default()
+        }),
         environment_allowlist: Vec::new(),
         source: "test".to_string(),
     }

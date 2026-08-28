@@ -437,22 +437,25 @@ Fixture mode runs the conformance suites against committed JSONL fixtures under
 `fixtures/adapters/<name>/` — zero model calls, zero vendor CLI invocations. Run via `cargo test`:
 
 ```bash
-# All four adapters, fixture mode:
+# All four adapters, fixture mode (crewd CLI, black-box):
 cargo test -p crew-runtime --test conformance
 
-# Individual adapters:
-cargo test -p crew-runtime --test claude_adapter
-cargo test -p crew-runtime --test codex_adapter
-cargo test -p crew-runtime --test copilot_adapter
-cargo test -p crew-runtime --test omp_rpc_adapter
+# claude-tui's own committed fixture (`fixtures/adapters/claude-tui/`):
+cargo test -p crew-runtime --test claude_tui_fixture
 ```
+
+Fixture mode is TUI-sourced now (crew-v2 gap-closure WP-C, spec §4.6) — the headless control
+plane this section used to also exercise via a per-adapter test file
+(`claude_adapter`/`codex_adapter`/`copilot_adapter`/`omp_rpc_adapter`) is retired; those files are
+deleted along with it. Each vendor's own scenario probes live under `adapter::tui::*_conformance`
+(exercised via `conformance` and `tui_adapter` above), not a standalone per-adapter test binary.
 
 Expected shape (one array element per adapter for the full test; a single-element array otherwise):
 
 ```json
 [
   {
-    "adapter": "claude",
+    "adapter": "claude-tui",
     "mode": "fixture",
     "version": "2.1.220",
     "declaredCapabilities": { "protocol": "structured", "resume": "session", ... },
@@ -480,58 +483,17 @@ papered over with a fabricated pass:
 
 | Adapter | Scenario(s) | Why |
 |---|---|---|
-| `codex` | `follow_up`, `cancellation_scope`, `session_resume`, `runtime_restart` | The installed `codex-cli` does not write a thread's rollout file to disk until a turn actually runs — resuming/following up/cancelling a turn on a never-turned thread needs a real (billed) turn, which fixture mode must never make. Live mode (4c) proves all four for real when its gate is set. |
-| `copilot` | `session_resume`, `runtime_restart` | The installed CLI (1.0.75) does not persist a never-prompted session across a process boundary — proving full persistence needs a real turn. |
-| `copilot` | `unexpected_child_observation` | ACP protocol v1 has no `session/update` variant this adapter maps to a nested-worker observation — a genuine, currently-unimplemented gap. |
+| `codex-tui` | `follow_up`, `cancellation_scope`, `session_resume`, `runtime_restart` | The installed `codex-cli` does not write a thread's rollout file to disk until a turn actually runs — resuming/following up/cancelling a turn on a never-turned thread needs a real (billed) turn, which fixture mode must never make. Live mode (4f.1) proves what it can for real when its gate is set. |
+| `copilot-tui` | `session_resume`, `runtime_restart` | The installed CLI (1.0.75) does not persist a never-prompted session across a process boundary — proving full persistence needs a real turn. |
+| `copilot-tui` | `unexpected_child_observation` | ACP protocol v1 has no `session/update` variant this adapter maps to a nested-worker observation — a genuine, currently-unimplemented gap. |
 
-### 4c. Per-adapter smoke, live mode (requires a real API key/session; makes a real, billed model
-call for the adapters that reach one)
+### 4c. Live mode (requires a real vendor CLI session; makes a real, billed model call)
 
-Vendor CLIs are ordinary installed dependencies: none of the commands below need an opt-in
-environment variable, and each test file handles its own gating internally.
-
-```bash
-mkdir -p /tmp/crew-conformance-live && cd /tmp/crew-conformance-live && git init -q && git commit -q --allow-empty -m init
-
-# Claude — needs an authenticated `claude` CLI session (run `claude auth status` first if unsure).
-# `#[ignore]`d: an explicit `--ignored` run is itself the signal a human wants the live call.
-cargo test -p crew-runtime --test claude_live -- --ignored
-
-# Codex — needs $OPENAI_API_KEY (or an authenticated `codex` CLI session) in the environment.
-# `#[ignore]`d for the same reason.
-cargo test -p crew-runtime --test codex_adapter -- --ignored
-
-# Copilot — needs an authenticated `copilot` CLI session (`copilot` itself manages this, not an
-# env var this adapter reads directly). Not `#[ignore]`d: its real-binary test only performs the
-# `initialize` + `session/list` handshake, which never invokes a model, so it runs in every
-# default `cargo test` and simply skips if `copilot` is not on PATH.
-cargo test -p crew-runtime --test copilot_adapter
-
-# OMP-RPC — no cloud API key needed. The harness resolves a cloud selector from `omp`'s built-in
-# catalog of 583 models; no local model server is required. Not `#[ignore]`d: its real-binary
-# tests exercise zero-model-call stdio probes and run on every `cargo test`, skipping only if
-# `omp` is not on PATH.
-cargo test -p crew-runtime --test omp_rpc_adapter
-```
-
-Run each from inside `/tmp/crew-conformance-live` (a disposable repo — some live scenarios spawn
-a real vendor process with that directory as its `cwd`), and reference credentials only as the
-environment variable name, never the value, exactly as shown above.
-
-Set `export CREW_DISABLE_VENDOR_CLI=1` first to forbid the Claude and Codex live tests from
-making their real, billed call. The Copilot and OMP-RPC real-binary tests above never invoke a
-model at all, so the switch has nothing to suppress for them — they are safe by construction,
-and are instead protected in CI simply by the `copilot` or `omp` binary being absent.
-
-**What "no paid model call" means here, precisely:** every 4b (fixture) test is *guaranteed*
-zero model calls — a design invariant, proven by the test code never invoking a model. A 4c
-(live) test that reaches a model, run with the kill switch unset, is the opposite: it
-deliberately makes a real, billed call for whichever scenarios that adapter's own live suite
-defines as needing one (the default posture: prove as much as possible in fixture mode, reserve
-live mode for the few properties — a real vendor process schema/handshake, mostly — that only a
-live process can prove at all). Always set
-`export CREW_DISABLE_VENDOR_CLI=1` in a CI job or an unattended run, so a stray `--ignored`
-invocation degrades to an honest skip instead of a charge.
+The headless control plane this section used to test directly against a per-adapter test file
+(a real, billed call reached via `cargo test --test claude_live -- --ignored`, etc.) is retired
+(crew-v2 gap-closure WP-C, spec §4.6) — those test files are deleted along with it. **See 4f.1
+below**, the TUI live conformance harness (`crewd conformance --live --mode tui`), which is now
+the only live path against a real vendor CLI.
 
 ### 4d. AdapterRegistry wiring
 
@@ -613,7 +575,7 @@ Attach to the run's pane via the active display backend (e.g. `tmux attach -t <p
 
 #### 4f.1 TUI live conformance harness
 
-`crewd conformance --live --mode tui` walks the scenario set against the real interactive vendor CLIs on a PTY (the default `--mode` is `tui`; `--mode headless` reaches each adapter's kept non-interactive live report). `--adapter` takes `all` or one of `claude`, `codex`, `copilot`, `ompRpc`; `--output <path>` writes the JSON report.
+`crewd conformance --live --mode tui` walks the scenario set against the real interactive vendor CLIs on a PTY (`tui` is the only accepted `--mode` value and its default — the headless control plane this also used to reach is retired, `--mode headless` is a typed rejection now, crew-v2 gap-closure WP-C). `--adapter` takes `all` or one of `claude`, `codex`, `copilot`, `ompRpc`; `--output <path>` writes the JSON report.
 
 ```bash
 # billed model calls for claude/codex/copilot; omp-rpc reaches a model only when a turn runs

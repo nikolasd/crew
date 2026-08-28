@@ -63,7 +63,35 @@ pub enum ConfigError {
     /// string where a number was expected).
     #[error("crew config failed to deserialize: {0}")]
     Deserialize(String),
+
+    /// One of the four reserved adapter kinds (`claude`/`codex`/`copilot`/
+    /// `omp`, each backed by a real Rust adapter implementation) was
+    /// configured with `mode: "headless"`. crew v2 is TUI-only (crew-v2
+    /// gap-closure WP-C, spec §4.6): the headless control plane was
+    /// retired and its adapter code deleted, so this key can now only
+    /// ever name a mode this daemon has no implementation for. `headless`
+    /// stays a *deserializable* enum value (old journals and configs must
+    /// still parse), so this is a validation-layer rejection, not a
+    /// deserialization failure -- a config with `mode: "gemini-typo"` (an
+    /// actually unrecognized value) fails to deserialize at all; this
+    /// failure is for a value that parses fine and names something real,
+    /// just retired. Custom (non-reserved) adapter names are unaffected:
+    /// nothing dispatches by kind for them, so their `mode` field is
+    /// inert either way.
+    #[error(
+        "adapter '{adapter}' is configured with mode: \"headless\", which is retired in crew v2 \
+         (spec §4.6) -- remove the \"mode\" key (it now defaults to \"tui\") or set it to \"tui\" \
+         explicitly"
+    )]
+    HeadlessModeRetired { adapter: String },
 }
+
+/// The four reserved adapter config keys backed by a real Rust adapter
+/// implementation -- the only ones [`load_layers`] checks for a retired
+/// `mode: "headless"` override. Note this is the *config* key set
+/// (`"omp"`), distinct from [`crate::adapter::AdapterKind::wire_name`]'s
+/// wire name (`"ompRpc"`) used elsewhere for the same adapter.
+const RESERVED_ADAPTER_CONFIG_KEYS: [&str; 4] = ["claude", "codex", "copilot", "omp"];
 
 /// When the leader is allowed to act without a human approval gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
@@ -133,7 +161,13 @@ impl Default for DisplayConfig {
 }
 
 /// Whether a vendor adapter runs its worker attached to a real TUI pane
-/// or drives a headless protocol adapter.
+/// or drives a headless protocol adapter. `"headless"` is retired
+/// (crew-v2 gap-closure WP-C, spec §4.6): it still parses here (an old
+/// config file naming it must not fail to load with a schema-shaped
+/// error) but is rejected with a typed error at validation time --
+/// `load_layers` refuses any reserved adapter kind whose `mode` is
+/// `Headless`, naming the retirement and directing the operator to
+/// `"tui"`. See `docs/adr/0026-headless-retirement.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum AdapterMode {
@@ -519,7 +553,20 @@ pub fn load_layers(paths: &[&Path], per_run: Option<&Value>) -> Result<CrewConfi
         map.remove(SCHEMA_ANNOTATION_KEY);
     }
 
-    serde_json::from_value(merged).map_err(|source| ConfigError::Deserialize(source.to_string()))
+    let cfg: CrewConfig = serde_json::from_value(merged)
+        .map_err(|source| ConfigError::Deserialize(source.to_string()))?;
+
+    for name in RESERVED_ADAPTER_CONFIG_KEYS {
+        if let Some(adapter) = cfg.adapters.get(name)
+            && adapter.mode == AdapterMode::Headless
+        {
+            return Err(ConfigError::HeadlessModeRetired {
+                adapter: name.to_string(),
+            });
+        }
+    }
+
+    Ok(cfg)
 }
 
 /// The file name a generated crew.json's `$schema` points at, and the

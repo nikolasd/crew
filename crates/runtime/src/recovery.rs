@@ -62,11 +62,9 @@ use std::time::Duration;
 use crew_protocol::{DiagnosticLevel, EventEnvelope, ProjectId, RunId, RunState, WorkerId};
 use thiserror::Error;
 
-use crate::adapter::registry::{declared_capabilities_for_kind, requested_mode};
+use crate::adapter::registry::requested_mode;
 use crate::adapter::tui::Cursor;
-use crate::adapter::{
-    AdapterMode, AdapterRegistry, ResumeCapability, VendorSessionRef, WorkerProfile,
-};
+use crate::adapter::{AdapterMode, AdapterRegistry, VendorSessionRef, WorkerProfile};
 use crate::db::{DatabaseHandle, DomainClosure};
 use crate::domain::{DomainRepository, broadcast_committed, embed_envelope};
 
@@ -731,19 +729,22 @@ impl RecoveryCoordinator {
                 }
             }
             Some(AdapterMode::Headless) => {
-                // Headless availability starts from what the adapter itself
-                // declares: a kind that claims no resumption can never be a
-                // continuation, whatever else is true. (The full policy/
-                // authorization/CLI-availability pre-flight still runs later
-                // inside `resume_run`, through the same gate a fresh start
-                // uses.)
-                let declared = declared_capabilities_for_kind(kind)
-                    .ok_or_else(|| format!("adapter {kind} is unknown to this runtime"))?;
-                if declared.resume == ResumeCapability::None {
-                    return Err(format!(
-                        "adapter {kind} does not declare session resumption"
-                    ));
-                }
+                // crew-v2 gap-closure WP-C: the headless control plane is
+                // retired (spec §4.6) -- there is no adapter implementation
+                // left to even ask "does it declare session resumption".
+                // Reject here, at the FIRST point recovery inspects this
+                // run's mode, with the same honest reason `gate_profile`
+                // gives a live submit -- never the confusing downstream
+                // symptom a pre-WP-C build would have produced instead (a
+                // "profile unreadable" from a since-deleted capability
+                // lookup, or a Claude-shaped transcript-path failure from
+                // treating a headless-mode run as if it were the TUI
+                // continuation it never claimed to be).
+                return Err(format!(
+                    "adapter {kind} was requested with mode: \"headless\", which is retired in \
+                     crew v2 (spec §4.6) -- the headless control plane has no adapter \
+                     implementation to dispatch to; use mode: \"tui\""
+                ));
             }
             None => {
                 return Err(

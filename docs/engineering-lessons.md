@@ -93,12 +93,17 @@ hop the legal-edge table forces and never overwriting a terminal state.
 
 **Regression tests:** `crates/runtime/src/adapter/run_lifecycle.rs`'s 9 unit tests
 (`process_started_moves_a_queued_run_to_starting` through
-`vendor_output_never_reopens_working_on_a_run_that_started_waiting`), plus the end-to-end proofs
-against real processes: `crates/runtime/tests/run_lifecycle.rs`'s
-`a_real_worker_process_walks_its_run_from_queued_into_working` and
-`a_real_worker_process_exit_settles_its_run`, `crates/runtime/src/adapter/claude/mod.rs`'s
+`vendor_output_never_reopens_working_on_a_run_that_started_waiting`) are unaffected. The
+end-to-end proofs against real processes named here at the time this lesson was written --
+`crates/runtime/tests/run_lifecycle.rs`'s `a_real_worker_process_walks_its_run_from_queued_into_working`
+and `a_real_worker_process_exit_settles_its_run`, `crates/runtime/src/adapter/claude/mod.rs`'s
 `run_state_tests` module, and `crates/runtime/tests/copilot_adapter.rs`'s
-`a_supervised_process_exit_is_reported_with_its_real_status`.
+`a_supervised_process_exit_is_reported_with_its_real_status` -- all drove a real process through
+the *headless* control plane, which crew-v2 gap-closure WP-C retired. `claude/mod.rs` and
+`copilot_adapter.rs` are deleted outright; `run_lifecycle.rs` still names the deleted
+`OmpRpcAdapter` purely as a protocol-agnostic "spawn a real process" test vehicle and is left
+uncompiling pending a decision on its replacement (see WP-C's report) -- **this lesson's specific
+"a real process, not just a test-fake" regression coverage is open again until that's resolved.**
 
 ---
 
@@ -424,3 +429,74 @@ linux-x64 rebuild even at the same Bun version. `bundle-check`'s byte-exact cont
 satisfiable from CI's platform. Produce the committed artifact in CI's environment (`refresh-bundle`
 workflow), or document that local rebuilds must happen on linux-x64. Don't weaken the check to
 "close enough" — the bytes matter.
+
+---
+
+## Test Suite Integrity
+
+### A mechanical type-level fix can compile clean while leaving a test's evidence invalid
+
+**Location:** `crates/runtime/tests/kill_switch_authorization.rs`
+(`the_kill_switch_never_shrinks_effective_capabilities`)
+
+**The bug:** crew-v2 gap-closure WP-C deleted the headless control plane and retargeted
+`run_fixture_conformance` from `AdapterMode::Headless` to `AdapterMode::Tui`. Swapping the enum
+value this test passed compiled clean and would have looked done: the type checker has no opinion
+on what a test's assertions actually establish, only on whether the code that produces the values
+they check type-checks. Run for real, the test panicked -- TUI fixture mode's only live dependency
+is `PROBE`'s real `--version`/binary check, so the kill switch now skips only that (ungated)
+scenario, never Codex's `FOLLOW_UP`/`SESSION_RESUME` the way headless fixture mode's live-turn
+dependency once did. The test's own assertion said otherwise, and would have kept saying otherwise
+-- silently proving a claim about the *previous* control plane against evidence the current one no
+longer produces -- if the enum swap alone had been trusted as "the fix."
+
+**The lesson:** A mechanical, type-checking fix to a test after a dependency changes underneath it
+proves only that the test *compiles* against the new shape -- never that it still proves what its
+name and assertions claim. The guard is running the test and re-deriving, from what actually
+happens, whether its evidence still holds -- not inferring compilation success. Before trusting a
+retargeted test, run it deliberately unfixed first (only the mechanical change applied) to observe
+the *actual* failure, exactly as this session did here: the panic's message named precisely which
+assertion had gone stale, which is what made the real fix (in `crates/runtime/src/conformance/report.rs`'s
+unit-level R68 proof and this file's rewritten assertions) targeted rather than guessed at. The same
+methodology already used throughout this codebase's regression tests ("verify by breaking it") applies
+just as much to fixing an existing test as to writing a new one.
+
+**Regression tests:** N/A -- this is a process lesson about how a fix was verified, not a
+production code path a test can pin. The corrected test itself
+(`the_kill_switch_never_shrinks_effective_capabilities`) and `conformance::report`'s
+`a_skipped_scenario_leaves_its_gated_capability_declared` are what the fix left behind.
+
+---
+
+## Deletion Sweeps
+
+### A deletion sweep must sweep claims, not just references
+
+**Location:** crew-v2 gap-closure WP-A/B/C, broadly -- exemplar:
+`crates/runtime/src/adapter/tui/omp.rs`'s `base_args` doc comment (WP-C review round 1, I-1)
+
+**The bug:** Across three work packages of deletions, nearly every finding that survived review was
+the same shape: a true prose claim -- "validated by X", "proven by Y", "this module owns that
+confirmation" -- that quietly stopped being true the moment its referent changed or was deleted,
+with nothing in the toolchain forcing anyone to notice. The exemplar: WP-C's own inventory step
+(`grep -rn 'adapter::(claude|codex|copilot|omp_rpc)::'`) correctly found and classified every code
+*reference* to the headless adapters before deleting them -- and still missed that
+`adapter/tui/omp.rs`'s `base_args` doc comment made an *assertion about* the headless adapter
+(the model selector "is validated ... by the headless adapter's probe") without ever naming it as a
+path or symbol the grep could match. The inventory swept symbols correctly; the claim hid in prose
+a symbol-grep cannot see.
+
+**The lesson:** `grep` finds references (a path, a type name, an import); it does not find claims (a
+doc comment asserting something is true of, checked by, or owned by a thing being deleted). A
+deletion sweep's inventory step -- however systematic -- only ever proves reference-completeness,
+never claim-completeness. Before trusting an inventory as done, separately ask: what does the
+surviving code (or docs, or a release checklist) *say* about the thing being deleted, independent
+of whether it names it directly? That second pass is prose-shaped, not grep-shaped -- it means
+reading, not searching -- and is exactly what this WP's review rounds kept surfacing one deletion
+sweep after the next: a stale contract comment, a checklist never updated, a schema description
+never touched, a citation pointing at the wrong sibling test. None of these were reference bugs; all
+of them were claims a grep-based inventory has no way to catch.
+
+**Regression tests:** N/A -- this is a review-process lesson, not a single code path. The concrete
+instance this WP left behind is fixed (`OmpTuiVendor::preflight` restores the enforcement `base_args`
+claims, with its own tests); the transferable practice is the takeaway.

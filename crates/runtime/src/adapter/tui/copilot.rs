@@ -5,7 +5,7 @@
 //!
 //! Every flag here was validated against an installed `copilot` CLI's
 //! own `--help` output (version `1.0.80`, one of the exact versions in
-//! `copilot::compatibility::COPILOT_KNOWN_CLI_VERSIONS`: `-m/--model
+//! `super::copilot_compatibility::COPILOT_KNOWN_CLI_VERSIONS`: `-m/--model
 //! <model>`, `--allow-all-tools`, `--deny-tool[=tools...]`,
 //! `-r/--resume[=value]`), and the transcript shapes against a real
 //! recorded session on this machine (`~/.copilot/session-state/<session-
@@ -23,8 +23,8 @@ use serde_json::{Value, json};
 
 use crew_protocol::{Classified, ContentClass};
 
-use crate::adapter::copilot::compatibility;
 use crate::adapter::r#trait::{StartSpec, VendorSessionRef};
+use crate::adapter::tui::copilot_compatibility as compatibility;
 use crate::config::crew::{AdapterConfig, PermissionMode};
 use crate::supervisor::EnvironmentPolicy;
 
@@ -191,7 +191,7 @@ impl TuiVendor for CopilotTuiVendor {
             None => VersionVerdict::Incompatible {
                 detail: format!(
                     "copilot probe {probed:?} matches none of the empirically verified \
-                     versions {:?}; see copilot::compatibility",
+                     versions {:?}; see tui::copilot_compatibility",
                     compatibility::COPILOT_KNOWN_CLI_VERSIONS
                         .iter()
                         .map(|entry| entry.cli_version)

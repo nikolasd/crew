@@ -292,10 +292,9 @@ impl Redactor {
     /// `[REDACTED:<rule-id>]`. Unlike [`Redactor::sanitize`], nothing here
     /// is dropped based on a [`ContentClass`]: arbitrary JSON carries no
     /// classification, so every string is scanned. The result is
-    /// serialized deterministically. This workspace enables `preserve_order`
-    /// for the conformance scrubber, so explicit
-    /// [`crate::canonical_json::canonicalize_in_place`] makes equal JSON
-    /// produce equal durable bytes regardless of input key order.
+    /// serialized deterministically. This workspace enables `preserve_order`,
+    /// so explicit [`crate::canonical_json::canonicalize_in_place`] makes
+    /// equal JSON produce equal durable bytes regardless of input key order.
     #[must_use]
     pub fn sanitize_json(&self, value: &serde_json::Value) -> SanitizedJson {
         let mut redacted = self.redact_json_value(value);

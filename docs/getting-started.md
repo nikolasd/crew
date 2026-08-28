@@ -354,14 +354,11 @@ cargo test --test adapter_contract
 cargo test --test adapter_registry
 cargo test --test approval
 cargo test --test audit
-cargo test --test claude_adapter
-cargo test --test claude_live -- --ignored   # #[ignore]d; real model call; skips if CREW_DISABLE_VENDOR_CLI=1
-cargo test --test codex_adapter
+cargo test --test claude_tui_fixture
 cargo test --test config
 cargo test --test conformance
 cargo test --test coordination
 cargo test --test coordination_mcp
-cargo test --test copilot_adapter
 cargo test --test database
 cargo test --test display_registry
 cargo test --test display_selector
@@ -371,7 +368,6 @@ cargo test --test herdr_display
 cargo test --test ipc
 cargo test --test lifecycle
 cargo test --test monitor_cli
-cargo test --test omp_rpc_adapter
 cargo test --test orchestration_rpc
 cargo test --test paths
 cargo test --test recovery
@@ -380,6 +376,8 @@ cargo test --test redaction_boundary
 cargo test --test supervisor
 cargo test --test terminal_adapter
 cargo test --test tmux_display
+cargo test --test tui_adapter
+cargo test --test tui_claude_registry
 cargo test --test vendor_cli_availability
 cargo test --test workspace_apply
 cargo test --test workspace_lease
@@ -388,11 +386,13 @@ cargo test --test workspace_materialize
 
 ### Test Coverage
 
-The test suite includes 34 Rust integration test files (`crates/runtime/tests/`) covering:
+The test suite's Rust integration test files (`crates/runtime/tests/`) cover:
 - Adapter contract and registry
 - Approval workflows
 - Audit and redaction
-- All four worker adapters (Claude, Codex, Copilot, OMP-RPC)
+- All four TUI vendor adapters (Claude, Codex, Copilot, OMP-RPC) — the headless control plane
+  these once ran alongside is retired (crew-v2 gap-closure WP-C; deserializable but rejected, see
+  [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md))
 - Configuration and merging
 - Conformance testing
 - Coordination and MCP integration

@@ -11,9 +11,7 @@ use std::sync::Arc;
 
 use crew_protocol::{ProjectId, RunId, TaskId, WorkerId};
 use crew_runtime::adapter::{
-    Adapter, AdapterEvent, AdapterEventPayload, AdapterEventSink, CancelScope, OmpRpcAdapter,
-    OmpRpcAdapterOptions, OmpRpcStartupOptions, ProfileId, StartSpec, StartupOptions,
-    WorkerProfile,
+    Adapter, AdapterEvent, AdapterEventPayload, AdapterEventSink, CancelScope, StartSpec,
 };
 use crew_runtime::db::DatabaseHandle;
 use crew_runtime::domain::DomainRepository;
@@ -29,6 +27,10 @@ use tokio::net::UnixStream;
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+
+#[path = "support/spawn_evidence_adapter.rs"]
+mod spawn_evidence_adapter;
+use spawn_evidence_adapter::SpawnEvidenceAdapter;
 
 // ------------------------------------------------------------------ fakes
 
@@ -3843,7 +3845,7 @@ fn build_fake_worker_once() -> PathBuf {
 }
 
 /// Collects every `AdapterEvent` a real adapter emits, so the test can
-/// read back the OS pid `OmpRpcAdapter::start` reports via
+/// read back the OS pid `SpawnEvidenceAdapter::start` reports via
 /// `AdapterEventPayload::ProcessStarted` -- the adapter itself exposes no
 /// pid accessor, this is the only observable path to it.
 #[derive(Default)]
@@ -3874,14 +3876,17 @@ impl AdapterEventSink for TestSink {
     }
 }
 
-/// A `RunDriver` that constructs a real `OmpRpcAdapter` (via
-/// `OmpRpcAdapter::with_binary`, pointed at the `fake-worker` fixture) and
-/// stores it, delegating `running_adapter`/`cancel_run` to the adapter's
-/// own methods exactly as `AdapterRegistry` does -- exercising the real
-/// `Adapter::cancel` implementation (`run_pump`'s
-/// `client.process_mut().terminate().await`), not a hand-rolled stand-in.
+/// A `RunDriver` that constructs a real [`SpawnEvidenceAdapter`] (pointed
+/// at the `fake-worker` fixture) and stores it, delegating
+/// `running_adapter`/`cancel_run` to the adapter's own methods exactly as
+/// `AdapterRegistry` does -- exercising the real `Adapter::cancel`
+/// implementation (`SpawnEvidenceAdapter`'s watcher task ->
+/// `ManagedProcess::terminate()`), not a hand-rolled stand-in. Before
+/// crew-v2 gap-closure WP-C this drove a real `OmpRpcAdapter`; see
+/// `support::spawn_evidence_adapter`'s module doc for why it doesn't
+/// anymore and what `SpawnEvidenceAdapter` still proves in its place.
 struct RealAdapterRunDriver {
-    adapter: parking_lot::Mutex<Option<Arc<OmpRpcAdapter>>>,
+    adapter: parking_lot::Mutex<Option<Arc<SpawnEvidenceAdapter>>>,
     sink: Arc<TestSink>,
 }
 
@@ -3895,8 +3900,9 @@ impl Default for RealAdapterRunDriver {
 }
 
 impl RealAdapterRunDriver {
-    /// The fake-worker's real OS pid, once `OmpRpcAdapter::start` has
-    /// emitted `ProcessStarted` (always true by the time `start` returns).
+    /// The fake-worker's real OS pid, once `SpawnEvidenceAdapter::start`
+    /// has emitted `ProcessStarted` (always true by the time `start`
+    /// returns).
     async fn pid(&self) -> Option<u32> {
         self.sink.process_started_pid().await
     }
@@ -3908,23 +3914,9 @@ impl RunDriver for RealAdapterRunDriver {
     }
 
     fn start(&self, ctx: RunDriverContext) -> AdapterFuture<'static, Result<(), String>> {
-        let adapter = Arc::new(OmpRpcAdapter::with_binary(
-            fake_worker_path().to_string_lossy().into_owned(),
-            WorkerProfile {
-                id: ProfileId::new(),
-                adapter: "ompRpc".to_string(),
-                model: "lm-studio/x".to_string(),
-                permission_envelope: serde_json::json!({}),
-                startup_options: StartupOptions::OmpRpc(OmpRpcStartupOptions {
-                    profile: None,
-                    host_tools: None,
-                    ..Default::default()
-                }),
-                environment_allowlist: Vec::new(),
-                source: "test".to_string(),
-            },
-            OmpRpcAdapterOptions::default(),
-            None,
+        let adapter = Arc::new(SpawnEvidenceAdapter::new(
+            fake_worker_path(),
+            vec!["--mode".to_string(), "jsonl".to_string()],
         ));
         *self.adapter.lock() = Some(Arc::clone(&adapter));
         let sink = Arc::clone(&self.sink) as Arc<dyn AdapterEventSink>;
@@ -3981,23 +3973,27 @@ impl RunDriver for RealAdapterRunDriver {
 
 /// Closes item 33's remaining gap: proves `run/cancel` reaches the *real*
 /// `AdapterRegistry`-equivalent chain -- `RunDriver::cancel_run` ->
-/// `OmpRpcAdapter::cancel()` -> `run_pump`'s
-/// `client.process_mut().terminate().await` -- and the OS-level vendor
-/// subprocess actually dies, not merely that the run's database state
-/// becomes `"cancelled"`.
+/// `SpawnEvidenceAdapter::cancel()` -> its watcher task's
+/// `ManagedProcess::terminate()` -- and the OS-level worker subprocess
+/// actually dies, not merely that the run's database state becomes
+/// `"cancelled"`.
 ///
-/// Uses `OmpRpcAdapter::with_binary` pointed at the `fake-worker` fixture
-/// (its `--mode rpc` argv, always sent verbatim by `OmpRpcAdapter::start`,
-/// is aliased to fake-worker's `omp-rpc-host-tool` mode -- see
-/// `fake-worker/src/main.rs`'s `Mode::OmpRpcHostTool`), so this exercises
-/// the adapter's real, production `cancel()` implementation end to end.
+/// Uses `SpawnEvidenceAdapter` pointed at the `fake-worker` fixture
+/// (`--mode jsonl`: a real, long-lived, protocol-agnostic process that
+/// blocks reading stdin until closed or signaled), so this exercises the
+/// vehicle's real, production-shared `cancel()` implementation
+/// (`crew_runtime::supervisor::ManagedProcess::terminate`, the same
+/// escalation path every real adapter uses) end to end. Before crew-v2
+/// gap-closure WP-C this drove a real `OmpRpcAdapter`; see
+/// `support::spawn_evidence_adapter`'s module doc for why it doesn't
+/// anymore.
 ///
-/// This does not itself prove SIGKILL escalation (fake-worker's
-/// `omp-rpc-host-tool` mode does not ignore SIGINT/SIGTERM, so
-/// `ManagedProcess::terminate` is expected to succeed on its first
-/// signal) -- that coverage remains `supervisor.rs`'s `ignore-term` test.
+/// This does not itself prove SIGKILL escalation (`jsonl` mode doesn't
+/// ignore SIGINT/SIGTERM, so `ManagedProcess::terminate` is expected to
+/// succeed on its first signal) -- that coverage remains `supervisor.rs`'s
+/// `ignore-term` test.
 #[tokio::test]
-async fn run_cancel_reaches_real_omprpc_adapter_and_kills_process() {
+async fn run_cancel_reaches_real_spawn_evidence_adapter_and_kills_process() {
     use nix::sys::signal::kill;
     use nix::unistd::Pid;
 
@@ -4040,13 +4036,14 @@ async fn run_cancel_reaches_real_omprpc_adapter_and_kills_process() {
     );
     let run_id = submit["result"]["runId"].as_str().unwrap().to_string();
 
-    // OmpRpcAdapter::start emits ProcessStarted (carrying the fake-worker's
-    // real OS pid) synchronously, before start() ever returns -- so it must
-    // already be recorded by the time run/submit's RPC response arrives.
+    // SpawnEvidenceAdapter::start emits ProcessStarted (carrying the
+    // fake-worker's real OS pid) synchronously, before start() ever
+    // returns -- so it must already be recorded by the time run/submit's
+    // RPC response arrives.
     let pid = driver
         .pid()
         .await
-        .expect("OmpRpcAdapter must have emitted ProcessStarted with a real pid");
+        .expect("SpawnEvidenceAdapter must have emitted ProcessStarted with a real pid");
     let os_pid = Pid::from_raw(pid as i32);
     assert!(
         kill(os_pid, None).is_ok(),
@@ -4061,10 +4058,10 @@ async fn run_cancel_reaches_real_omprpc_adapter_and_kills_process() {
         "run/cancel failed: {cancel:?}"
     );
 
-    // OmpRpcAdapter::cancel() only queues Outbound::Terminate on
-    // run_pump's channel and returns immediately -- it does not itself
-    // await ManagedProcess::terminate() completing. Poll for the process
-    // to actually die, bounded well past escalation's worst case at
+    // SpawnEvidenceAdapter::cancel() only signals its watcher task and
+    // returns immediately -- it does not itself await
+    // ManagedProcess::terminate() completing. Poll for the process to
+    // actually die, bounded well past escalation's worst case at
     // production EscalationTimings::default() (5s + 5s).
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
@@ -4074,7 +4071,7 @@ async fn run_cancel_reaches_real_omprpc_adapter_and_kills_process() {
         assert!(
             tokio::time::Instant::now() < deadline,
             "process (pid {pid}) must be dead after run/cancel reaches the real \
-             OmpRpcAdapter::cancel() -> run_pump's ManagedProcess::terminate()"
+             SpawnEvidenceAdapter::cancel() -> its watcher task's ManagedProcess::terminate()"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

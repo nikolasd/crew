@@ -16,8 +16,8 @@
 //! Permission modes deliberately map to NO argv at all: unlike the other
 //! vendors, `omp --help` exposes no approval-posture flags -- its
 //! interactive REPL manages approvals in-session, and this adapter never
-//! invents tool compatibility the CLI does not offer (the same rule the
-//! headless adapter's probe enforces for unlisted models).
+//! invents tool compatibility the CLI does not offer (the same rule
+//! [`OmpTuiVendor::preflight`] enforces for an unlisted model selector).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -27,11 +27,13 @@ use serde_json::{Value, json};
 
 use crew_protocol::{Classified, ContentClass};
 
+use crate::adapter::AdapterFuture;
+use crate::adapter::error::{AdapterError, AdapterErrorCode};
 use crate::adapter::r#trait::{StartSpec, VendorSessionRef};
 use crate::config::crew::{AdapterConfig, PermissionMode};
 use crate::supervisor::EnvironmentPolicy;
 
-use super::adapter::{LaunchSpec, TuiVendor, VersionVerdict};
+use super::adapter::{LaunchSpec, TuiTimings, TuiVendor, VersionVerdict};
 use super::claude::slug_cwd;
 use super::{Cursor, TranscriptFormat, TuiEvent, parse_jsonl_chunk};
 
@@ -105,10 +107,11 @@ impl OmpTuiVendor {
 
     /// The base argv every launch (fresh or resumed) shares: `--model`
     /// when configured (the config default carries `"qwen"`; the selector
-    /// itself is validated against `omp models --json` by the headless
-    /// adapter's probe -- this vendor never invents one), `--allow-home`
-    /// so a repo-rooted cwd never bounces to a temp dir before the PTY
-    /// is even attached, and `cfg.extra_args` verbatim last.
+    /// itself is validated against `omp models --json` by
+    /// [`OmpTuiVendor::preflight`] before a fresh start ever reaches this
+    /// -- this vendor never invents one), `--allow-home` so a repo-rooted
+    /// cwd never bounces to a temp dir before the PTY is even attached,
+    /// and `cfg.extra_args` verbatim last.
     fn base_args(&self, cfg: &AdapterConfig) -> Vec<String> {
         let mut args = self.permission_args(cfg.permission_mode);
         if let Some(model) = &cfg.model {
@@ -299,6 +302,115 @@ impl TuiVendor for OmpTuiVendor {
     // codex: the filename stem (`<timestamp>_<uuid>`) alone is not the
     // id -- the initial value corrects the moment the tailed `session`
     // line (authoritative) arrives, exactly as codex's rollout meta does.
+
+    /// Validates `cfg.model` (if set) against the installed CLI's own
+    /// `omp models --json` catalog before a fresh start ever spawns the
+    /// interactive REPL. Mirrors the rule the retired headless
+    /// `OmpRpcAdapter`'s `probe()` enforced (crew-v2 gap-closure WP-C
+    /// deleted that adapter along with the enforcement living inside it;
+    /// this restores the rule as a genuine pre-spawn gate on the real
+    /// `start()` path -- stricter than the original, which only ran when
+    /// `crewd adapters`/`crewd conformance` happened to invoke `probe()`,
+    /// never on every real run). `cfg.model` unset means no explicit
+    /// selector was requested, so there is nothing to validate -- the
+    /// vendor picks its own default and this preflight has no opinion on
+    /// it.
+    ///
+    /// `timings.preflight_timeout` bounds the spawn: this runs on the
+    /// daemon's fresh-start hot path while `TuiAdapter::start` holds its
+    /// run lock, so a wedged `omp models --json` must never stall a run
+    /// start indefinitely -- same convention as this module's other
+    /// externally-bounded waits (`readiness_cap`, `discovery_timeout`).
+    fn preflight(
+        &self,
+        _spec: &StartSpec,
+        cfg: &AdapterConfig,
+        timings: &TuiTimings,
+    ) -> AdapterFuture<'_, ()> {
+        let Some(selector) = cfg.model.clone() else {
+            return Box::pin(async { Ok(()) });
+        };
+        let bin = cfg.bin.clone();
+        let timeout = timings.preflight_timeout;
+        Box::pin(async move {
+            let output = tokio::time::timeout(
+                timeout,
+                tokio::process::Command::new(&bin)
+                    .args(["models", "--json"])
+                    // Same convention as `supervisor::process`'s piped spawn
+                    // and `PtyProcess`'s Drop impl: a timed-out future must
+                    // never leak the child it was waiting on. This reaches
+                    // only the direct `omp` child, not a process group (no
+                    // group is created for this one-shot probe) -- accepted
+                    // as proportionate for a short, non-interactive catalog
+                    // fetch, unlike a real vendor session's supervised tree.
+                    .kill_on_drop(true)
+                    .output(),
+            )
+            .await
+            .map_err(|_| {
+                AdapterError::unavailable(
+                    self.kind(),
+                    "start",
+                    format!("`{bin} models --json` did not return within {timeout:?}"),
+                )
+            })?
+            .map_err(|err| {
+                AdapterError::unavailable(
+                    self.kind(),
+                    "start",
+                    format!("omp models --json failed to run: {err}"),
+                )
+            })?;
+            if !output.status.success() {
+                return Err(AdapterError::incompatible_version(
+                    self.kind(),
+                    "start",
+                    "the installed omp binary does not support `models --json`",
+                ));
+            }
+            let catalog: Value = serde_json::from_slice(&output.stdout).map_err(|err| {
+                AdapterError::protocol(
+                    self.kind(),
+                    "start",
+                    format!("omp models --json produced invalid JSON: {err}"),
+                )
+            })?;
+            if catalog_reports_selector(&catalog, &selector) {
+                Ok(())
+            } else {
+                // Capability/config, not a version mismatch: the CLI is
+                // fine, the configured selector simply isn't one it
+                // offers -- the remediation is fixing `crew.json`, not
+                // changing the installed omp version.
+                Err(AdapterError::new(
+                    AdapterErrorCode::CapabilityUnsupported,
+                    self.kind(),
+                    "start",
+                    format!(
+                        "model selector {selector:?} is not reported by `omp models --json`; \
+                         this adapter never invents tool compatibility for an unlisted model"
+                    ),
+                ))
+            }
+        })
+    }
+}
+
+/// Whether `catalog` (the parsed `omp models --json` response) reports
+/// `selector` among its models. Pure -- no I/O -- so
+/// [`OmpTuiVendor::preflight`]'s judgment is unit-testable against a
+/// literal fixture without spawning anything, the same split
+/// [`OmpTuiVendor::version_gate`] uses for its own probed-string verdict.
+fn catalog_reports_selector(catalog: &Value, selector: &str) -> bool {
+    catalog
+        .get("models")
+        .and_then(Value::as_array)
+        .is_some_and(|models| {
+            models
+                .iter()
+                .any(|m| m.get("selector").and_then(Value::as_str) == Some(selector))
+        })
 }
 
 /// The real OMP CLI's session JSONL transcript format: one entry per
@@ -434,6 +546,7 @@ fn map_message(value: &Value, ts: Option<&str>) -> Vec<TuiEvent> {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::time::Duration;
 
     use super::*;
 
@@ -738,5 +851,168 @@ mod tests {
             cursor.offset as usize,
             raw.len() - b"{\"type\":\"mess".len()
         );
+    }
+
+    // ------------------------------------------------------- preflight
+
+    #[test]
+    fn catalog_reports_selector_is_pure_and_exact_match_only() {
+        let catalog = serde_json::json!({
+            "models": [{"selector": "qwen"}, {"selector": "gpt-5"}]
+        });
+        assert!(catalog_reports_selector(&catalog, "qwen"));
+        assert!(catalog_reports_selector(&catalog, "gpt-5"));
+        assert!(!catalog_reports_selector(&catalog, "not-a-real-model"));
+        // A prefix/substring match would silently widen compatibility --
+        // this vendor never invents tool compatibility for an unlisted
+        // model, so the match must be exact.
+        assert!(!catalog_reports_selector(&catalog, "qwen-extra"));
+        assert!(!catalog_reports_selector(&serde_json::json!({}), "qwen"));
+    }
+
+    /// Writes a `/bin/sh` test double for `omp models --json`: records the
+    /// exact argv it was invoked with to `argv_log`, then prints
+    /// `catalog_json` verbatim to stdout and exits 0. Same `/bin/sh`
+    /// test-double convention `omp_conformance.rs`'s `write_double` uses
+    /// for `probe`'s own real-process testing.
+    fn write_models_double(scripts_dir: &Path, argv_log: &Path, catalog_json: &str) -> PathBuf {
+        let script = format!(
+            "#!/bin/sh\necho \"$@\" > \"{argv_log}\"\nprintf '%s\\n' '{catalog_json}'\n",
+            argv_log = argv_log.display(),
+        );
+        let path = scripts_dir.join(format!("fake-omp-models-{}.sh", uuid::Uuid::now_v7()));
+        std::fs::write(&path, script).expect("write test double script");
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn preflight_passes_a_known_selector_and_invokes_models_json_exactly() {
+        let dir = tempfile::Builder::new()
+            .prefix("bat-omp-tui-preflight-")
+            .tempdir_in("/tmp")
+            .expect("temp dir");
+        let argv_log = dir.path().join("argv.log");
+        let script =
+            write_models_double(dir.path(), &argv_log, r#"{"models":[{"selector":"qwen"}]}"#);
+
+        let vendor = OmpTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let mut cfg = default_cfg();
+        cfg.bin = script.to_string_lossy().into_owned();
+        cfg.model = Some("qwen".to_string());
+
+        let result = vendor
+            .preflight(&spec(), &cfg, &TuiTimings::default())
+            .await;
+        assert!(result.is_ok(), "a known selector must pass: {result:?}");
+
+        let argv = std::fs::read_to_string(&argv_log).expect("read recorded argv");
+        assert_eq!(
+            argv.trim(),
+            "models --json",
+            "preflight must invoke exactly `models --json`, recorded: {argv:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_rejects_an_unknown_selector_naming_it_in_the_error() {
+        let dir = tempfile::Builder::new()
+            .prefix("bat-omp-tui-preflight-")
+            .tempdir_in("/tmp")
+            .expect("temp dir");
+        let argv_log = dir.path().join("argv.log");
+        let script =
+            write_models_double(dir.path(), &argv_log, r#"{"models":[{"selector":"qwen"}]}"#);
+
+        let vendor = OmpTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let mut cfg = default_cfg();
+        cfg.bin = script.to_string_lossy().into_owned();
+        cfg.model = Some("not-a-real-model".to_string());
+
+        let err = vendor
+            .preflight(&spec(), &cfg, &TuiTimings::default())
+            .await
+            .expect_err("an unknown selector must be refused");
+        assert!(
+            err.detail().contains("not-a-real-model"),
+            "the rejection must name the unlisted selector: {err:?}"
+        );
+        assert_eq!(err.adapter(), "omp-rpc");
+        // Capability/config fact, not a version mismatch: the remediation
+        // is fixing crew.json's configured model, not the installed omp
+        // binary (round-2 reviewer fold-in).
+        assert_eq!(err.error_code(), AdapterErrorCode::CapabilityUnsupported);
+    }
+
+    #[tokio::test]
+    async fn preflight_is_a_noop_and_never_spawns_when_no_model_is_configured() {
+        let vendor = OmpTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let mut cfg = default_cfg();
+        cfg.model = None;
+        // A binary that cannot possibly exist: if this passed, it did so
+        // only because preflight never tried to spawn it.
+        cfg.bin = "/definitely/does/not/exist/omp-preflight-noop-proof".to_string();
+
+        let result = vendor
+            .preflight(&spec(), &cfg, &TuiTimings::default())
+            .await;
+        assert!(
+            result.is_ok(),
+            "with no configured model there is nothing to validate: {result:?}"
+        );
+    }
+
+    /// Writes a `/bin/sh` test double that sleeps past `sleep_secs` before
+    /// ever printing anything -- a stand-in for a genuinely wedged `omp
+    /// models --json`.
+    fn write_wedged_double(scripts_dir: &Path, sleep_secs: u64) -> PathBuf {
+        let script = format!("#!/bin/sh\nsleep {sleep_secs}\nprintf '%s\\n' '{{}}'\n");
+        let path = scripts_dir.join(format!("fake-omp-wedged-{}.sh", uuid::Uuid::now_v7()));
+        std::fs::write(&path, script).expect("write test double script");
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn preflight_times_out_on_a_wedged_models_json_naming_the_command_and_bound() {
+        let dir = tempfile::Builder::new()
+            .prefix("bat-omp-tui-preflight-")
+            .tempdir_in("/tmp")
+            .expect("temp dir");
+        // Sleeps far past the shortened bound below -- proves the timeout
+        // itself fires rather than the double happening to be fast enough.
+        let script = write_wedged_double(dir.path(), 5);
+
+        let vendor = OmpTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let mut cfg = default_cfg();
+        cfg.bin = script.to_string_lossy().into_owned();
+        cfg.model = Some("qwen".to_string());
+        let timings = TuiTimings {
+            preflight_timeout: Duration::from_millis(200),
+            ..TuiTimings::default()
+        };
+
+        let started = std::time::Instant::now();
+        let err = vendor
+            .preflight(&spec(), &cfg, &timings)
+            .await
+            .expect_err("a wedged command must time out, not hang");
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "preflight must return promptly once the bound elapses, not wait out the full sleep: \
+             took {:?}",
+            started.elapsed()
+        );
+        assert!(
+            err.detail().contains("models --json") && err.detail().contains("200ms"),
+            "the timeout error must name the command and the bound: {err:?}"
+        );
+        assert_eq!(err.error_code(), AdapterErrorCode::Unavailable);
     }
 }

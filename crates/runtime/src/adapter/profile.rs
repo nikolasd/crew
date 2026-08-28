@@ -355,9 +355,10 @@ impl WorkerProfile {
     /// A deterministic `sha256:<hex>` fingerprint over this profile's
     /// content -- everything except `id`, so two registrations of
     /// identical content share one fingerprint but always mint distinct
-    /// ids. This workspace enables `preserve_order` for the conformance
-    /// scrubber. The current field order is fixed by the struct declaration
-    /// plus the canonical sanitized `permissionEnvelope`; the final
+    /// ids. This workspace enables `preserve_order`, so `serde_json::Map` is
+    /// insertion-ordered rather than sorted. The current field order is
+    /// fixed by the struct declaration plus the canonical sanitized
+    /// `permissionEnvelope`; the final
     /// [`crate::canonical_json::canonicalize_in_place`] is defense in depth
     /// for future free-form fields. Content is name-only/never-secret by
     /// construction (see module docs), so the fingerprint itself can never

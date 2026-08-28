@@ -190,19 +190,6 @@ enum Command {
         #[arg(long)]
         socket: Option<PathBuf>,
     },
-    /// Re-record adapter fixtures from a real vendor CLI.
-    Capture {
-        /// Adapter name: claude, codex, copilot, or ompRpc. No "all" --
-        /// capture spends real vendor turns, so it is always explicit.
-        #[arg(long)]
-        adapter: String,
-        /// Regenerate only this fixture filename instead of every entry.
-        #[arg(long)]
-        fixture: Option<String>,
-        /// Print scrubbed output instead of overwriting the committed files.
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
-    },
 }
 
 #[derive(Subcommand)]
@@ -384,11 +371,6 @@ pub async fn run() -> ExitCode {
             repo,
             socket,
         } => run_attach(run_id, state_dir, repo, socket).await,
-        Command::Capture {
-            adapter,
-            fixture,
-            dry_run,
-        } => run_capture(adapter, fixture, dry_run).await,
     }
 }
 
@@ -1245,16 +1227,25 @@ async fn run_conformance(
         }
     };
 
+    // crew-v2 gap-closure WP-C (WP-B M-1 rider): `--mode headless` is a
+    // typed rejection now, for both `--fixture` and `--live` -- never
+    // silently accepted-and-discarded. Before this WP, `--fixture`
+    // ignored `--mode` entirely (always headless-sourced) and `--live
+    // --mode headless` silently reached each adapter's own headless
+    // `live_report`; both dispatch targets are deleted along with the
+    // headless control plane itself (spec §4.6).
+    if matches!(mode, ConformanceModeArg::Headless) {
+        return fail(
+            &"mode: \"headless\" is retired in crew v2 (spec §4.6) -- the headless control \
+              plane has no adapter implementation to dispatch to; use --mode tui (the default)",
+        );
+    }
+
     let mut reports: Vec<serde_json::Value> = Vec::with_capacity(kinds.len());
     let mut typed_reports: Vec<ConformanceReport> = Vec::new();
     for kind in kinds {
         if fixture {
-            // Fixture mode stays HEADLESS-sourced regardless of `--mode`
-            // (unlike the live branch below): CI's fixture-mode
-            // conformance signal is deliberately substituted by the four
-            // `*-tui` suites in a later WP (crew-v2 gap-closure WP-C), not
-            // this one. `--mode` only ever selects which live suite runs.
-            let report = run_fixture_conformance(kind, AdapterMode::Headless).await;
+            let report = run_fixture_conformance(kind, AdapterMode::Tui).await;
             typed_reports.push(report);
         } else {
             match run_live_conformance(kind, matches!(mode, ConformanceModeArg::Tui)).await {
@@ -1376,9 +1367,11 @@ async fn run_adapters(json: bool) -> ExitCode {
     ];
     let mut reports = Vec::with_capacity(kinds.len());
     for kind in kinds {
-        // Headless only, unchanged by WP-B: this command's report shape
-        // (kind names, not `*-tui`) is a documented CLI surface.
-        reports.push(run_fixture_conformance(kind, AdapterMode::Headless).await);
+        // crew-v2 gap-closure WP-C: TUI now, not Headless -- the headless
+        // control plane is retired (spec §4.6) and its adapters deleted.
+        // Report labels are now the `*-tui` ones (`claude-tui`, ...),
+        // matching every other TUI-sourced fixture report.
+        reports.push(run_fixture_conformance(kind, AdapterMode::Tui).await);
     }
 
     if json {
@@ -1497,73 +1490,6 @@ impl Drop for RawModeGuard {
     }
 }
 
-/// Runs `crewd capture`: re-records adapter fixtures from a real vendor CLI,
-/// normalizes known nondeterministic values, and rewrites fixture bytes when
-/// the resulting capture differs from the committed artifact.
-async fn run_capture(adapter: String, fixture: Option<String>, dry_run: bool) -> ExitCode {
-    use crew_runtime::adapter::AdapterKind;
-    use crew_runtime::conformance::capture;
-
-    if adapter == "all" {
-        return fail(
-            &"capture requires a single adapter; \
-        \"all\" would spend a real turn on every vendor CLI",
-        );
-    }
-
-    let kind = match AdapterKind::from_wire_name(&adapter) {
-        Some(kind) => kind,
-        None => {
-            return fail(&format!(
-                "unknown adapter `{adapter}`; expected one of \
-                claude, codex, copilot, or ompRpc"
-            ));
-        }
-    };
-
-    let only = fixture.as_deref();
-
-    match capture::capture_adapter(kind, only, dry_run).await {
-        Ok(outcome) => {
-            for cf in &outcome.written {
-                println!(
-                    "{}: {} frames ({})",
-                    cf.fixture,
-                    cf.frames,
-                    capture_status(cf.unchanged, dry_run)
-                );
-            }
-            if dry_run {
-                println!("dry run: no files written");
-            }
-            if let Some(report) = &outcome.report {
-                println!(
-                    "{}: mode={:?} passed={} scenarios={}",
-                    report.adapter,
-                    report.mode,
-                    report.passed,
-                    report.scenarios.len()
-                );
-                if !report.passed {
-                    return ExitCode::FAILURE;
-                }
-            }
-            ExitCode::SUCCESS
-        }
-        Err(err) => fail(&err),
-    }
-}
-
-/// Describes whether capture bytes already matched, would change, or changed.
-fn capture_status(unchanged: bool, dry_run: bool) -> &'static str {
-    if unchanged {
-        "unchanged"
-    } else if dry_run {
-        "would rewrite"
-    } else {
-        "rewritten"
-    }
-}
 /// Prints an error to stderr and returns `ExitCode::FAILURE`.
 fn fail(err: &dyn std::fmt::Display) -> ExitCode {
     eprintln!("{err}");
@@ -1573,13 +1499,6 @@ fn fail(err: &dyn std::fmt::Display) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn capture_status_distinguishes_unchanged_rewritten_and_would_rewrite() {
-        assert_eq!(capture_status(true, false), "unchanged");
-        assert_eq!(capture_status(false, false), "rewritten");
-        assert_eq!(capture_status(false, true), "would rewrite");
-    }
 
     /// An explicit `--state-dir` always wins outright, before `env`/`home`
     /// are even consulted.

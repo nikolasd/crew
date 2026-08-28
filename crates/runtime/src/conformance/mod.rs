@@ -4,22 +4,23 @@
 //! `crate::adapter::registry::AdapterRegistry` and `crewd adapters --json`
 //! may ever expose to OMP.
 //!
-//! Each adapter owns its own scenario implementations in a `conformance`
-//! submodule beside its `mod.rs` (`crate::adapter::claude::conformance`,
-//! `crate::adapter::codex::conformance`, and so on), covering every name
+//! Each vendor owns its own scenario implementations in a `*_conformance`
+//! module beside `adapter::tui` (`adapter::tui::claude_conformance`,
+//! `adapter::tui::codex_conformance`, and so on), covering every name
 //! in [`scenario::ALL`] exactly once. This module only dispatches and
 //! defines the shared report shape -- it never itself decides pass/fail
 //! for any adapter's scenario.
 //!
-//! **Dispatch axis (crew-v2 gap-closure WP-B):** [`run_fixture_conformance`]
-//! dispatches by `(`[`AdapterKind`]`, `[`AdapterMode`]`)`, not `AdapterKind`
-//! alone -- `Headless` reaches each adapter's own `conformance` submodule
-//! (the four kept headless adapters); `Tui` reaches
-//! `adapter::tui::{claude,codex,copilot,omp}_conformance` instead, whose
-//! fixture suites declare a materially different profile (their vendor's
-//! *TUI* adapter, not its headless one). [`run_live_conformance`] already
-//! took a `tui: bool` before this WP; the two now agree on which control
-//! plane's suite a caller means. `probe_availability` stays kind-only
+//! **Dispatch axis (crew-v2 gap-closure WP-C):** the headless control plane
+//! this module used to dispatch to (`(`[`AdapterKind`]`, `[`AdapterMode`]`)`,
+//! with `Headless` reaching each adapter's own headless `conformance`
+//! submodule) is retired -- `mode: "headless"` stays deserializable but is
+//! typed-rejected before it ever reaches conformance dispatch (spec §4.6).
+//! [`run_fixture_conformance`] and [`run_live_conformance`] both only ever
+//! reach `adapter::tui::{claude,codex,copilot,omp}_conformance` now; the
+//! `AdapterMode` parameter each still takes exists solely so a caller-side
+//! `Headless` request panics/errors loudly at the dispatch boundary rather
+//! than silently degrading. `probe_availability` stays kind-only
 //! (deliberately -- a vendor's installed CLI version does not vary by how
 //! this runtime chooses to invoke it).
 //!
@@ -31,14 +32,12 @@
 //! opt-out [`DISABLE_VENDOR_CLI_ENV`] forbids only the vendor processes
 //! this runtime would spawn purely to *observe* a CLI.
 
-pub mod capture;
 pub mod report;
 pub mod scenario;
-pub mod scrub;
 
 pub use report::{ConformanceMode, ConformanceReport, ScenarioOutcome, ScenarioResult};
 
-use crate::adapter::{AdapterCapabilities, AdapterKind, AdapterMode};
+use crate::adapter::{AdapterKind, AdapterMode};
 use crate::env_flag::env_flag;
 
 /// Set to `"1"` to forbid every vendor-CLI process this runtime would
@@ -154,36 +153,37 @@ pub(crate) static FIXTURE_SUITE_RUNS_SERIAL: std::sync::LazyLock<tokio::sync::Mu
     std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 /// Runs one adapter kind's full fixture conformance suite (never a model
-/// call) for the given control plane and returns its report.
+/// call) and returns its report.
 ///
-/// **Dispatched by `(kind, mode)`, not `kind` alone (crew-v2 gap-closure
-/// WP-B):** `AdapterMode::Headless` reaches the four kept headless
-/// adapters' own `conformance` submodules (unchanged); `AdapterMode::Tui`
-/// reaches `adapter::tui::{claude,codex,copilot,omp}_conformance`'s
-/// fixture suites instead -- the suites that actually feed
-/// `fixture-mode-baseline.json`'s `claude-tui`/`codex-tui`/`copilot-tui`/
-/// `omp-tui` entries. Before WP-B, this function dispatched by `kind`
-/// only, so a `mode: "tui"` run was authorized (via
-/// `adapter::registry::gate_profile`) against its vendor's *headless*
-/// effective capabilities -- a materially different declared profile
-/// (`ProtocolKind::Terminal` vs. `Structured`, for one) than the
-/// `TuiAdapter` actually constructed for it. Every caller of this function
-/// that is not gating a specific run's own requested control plane (the
-/// `crewd conformance`/`adapters --json` CLI surfaces, the fixture
-/// capture tool) still passes `AdapterMode::Headless` explicitly, keeping
-/// their behavior unchanged -- CI's fixture-mode conformance signal stays
-/// headless-sourced until WP-C deliberately substitutes it with the four
-/// `*-tui` suites.
+/// **Dispatched by `(kind, mode)` (crew-v2 gap-closure WP-B), but only
+/// `AdapterMode::Tui` is reachable now (WP-C):** every call reaches
+/// `adapter::tui::{claude,codex,copilot,omp}_conformance`'s fixture
+/// suites -- the suites that feed `fixture-mode-baseline.json`'s
+/// `claude-tui`/`codex-tui`/`copilot-tui`/`omp-tui` entries, and the only
+/// ones CI's fixture-mode conformance signal has been sourced from since
+/// WP-C. `mode` still takes the full `AdapterMode` enum (not just `Tui`)
+/// so a caller-side `Headless` request fails loudly right here (see the
+/// `unreachable!` arm below) rather than the parameter silently narrowing
+/// away the caller's mistake at the type level.
 pub async fn run_fixture_conformance(kind: AdapterKind, mode: AdapterMode) -> ConformanceReport {
     #[cfg(test)]
     FIXTURE_SUITE_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     match mode {
-        AdapterMode::Headless => match kind {
-            AdapterKind::Claude => crate::adapter::claude::conformance::fixture_report().await,
-            AdapterKind::Codex => crate::adapter::codex::conformance::fixture_report().await,
-            AdapterKind::Copilot => crate::adapter::copilot::conformance::fixture_report().await,
-            AdapterKind::OmpRpc => crate::adapter::omp_rpc::conformance::fixture_report().await,
-        },
+        // crew-v2 gap-closure WP-C: the headless control plane is retired
+        // (spec §4.6) and its four adapters' `conformance` submodules are
+        // deleted -- there is nothing left to dispatch a `Headless`
+        // request to. Every caller must reject `Headless` before ever
+        // reaching this function: `gate_profile` does so for a live
+        // submit/resume, and `cli.rs`'s `run_conformance` does so for
+        // `crewd conformance --fixture --mode headless` (a typed
+        // rejection there, not silently accepted-and-discarded -- WP-B
+        // M-1 rider). Reaching this arm at all means one of those callers
+        // regressed; panicking loudly here is far more honest than
+        // fabricating a report for a control plane that no longer exists.
+        AdapterMode::Headless => unreachable!(
+            "run_fixture_conformance called with the retired Headless mode for {kind} -- the \
+             caller must reject Headless before calling this function"
+        ),
         AdapterMode::Tui => {
             use crate::adapter::tui::{
                 claude_conformance, codex_conformance, copilot_conformance, omp_conformance,
@@ -223,15 +223,17 @@ pub async fn run_live_conformance(
             AdapterKind::OmpRpc => omp_conformance::live_report().await,
         }
     } else {
-        // Headless path is still reachable (the four headless adapters are
-        // kept): run each adapter's own headless live_report, labeled by its
-        // plain kind name so the two modes never collide in one report set.
-        match kind {
-            AdapterKind::Claude => crate::adapter::claude::conformance::live_report().await,
-            AdapterKind::Codex => crate::adapter::codex::conformance::live_report().await,
-            AdapterKind::Copilot => crate::adapter::copilot::conformance::live_report().await,
-            AdapterKind::OmpRpc => crate::adapter::omp_rpc::conformance::live_report().await,
-        }
+        // crew-v2 gap-closure WP-C: the headless control plane is retired
+        // (spec §4.6) and its four adapters' `conformance` submodules are
+        // deleted. `cli.rs`'s `run_conformance` already rejects `--mode
+        // headless` before ever calling this function with `tui: false`;
+        // this `Err` is the defense-in-depth boundary for any other
+        // caller that might still pass it.
+        Err(format!(
+            "adapter {kind} was requested with the retired headless control plane (spec §4.6) \
+             -- the headless control plane has no adapter implementation to dispatch to; use \
+             the TUI live report instead"
+        ))
     }
 }
 
@@ -282,13 +284,21 @@ pub async fn probe_availability_with_version(
         }
     }
 
-    let (result, version, _capabilities): (ScenarioResult, Option<String>, AdapterCapabilities) =
-        match kind {
-            AdapterKind::Claude => crate::adapter::claude::conformance::probe_scenario().await,
-            AdapterKind::Codex => crate::adapter::codex::conformance::probe_scenario().await,
-            AdapterKind::Copilot => crate::adapter::copilot::conformance::probe_scenario().await,
-            AdapterKind::OmpRpc => crate::adapter::omp_rpc::conformance::probe().await,
-        };
+    // crew-v2 gap-closure WP-C: dispatches to each TUI vendor's own
+    // lightweight `--version` probe now (the headless ones, and the
+    // adapters they belonged to, are deleted). Deliberately still
+    // kind-only, not mode-aware: a vendor's installed CLI version does
+    // not vary by how this runtime chooses to invoke it, and Tui is the
+    // only mode that reaches live dispatch at all post-retirement.
+    use crate::adapter::tui::{
+        claude_conformance, codex_conformance, copilot_conformance, omp_conformance,
+    };
+    let (result, version) = match kind {
+        AdapterKind::Claude => claude_conformance::probe_with_version().await,
+        AdapterKind::Codex => codex_conformance::probe_with_version().await,
+        AdapterKind::Copilot => copilot_conformance::probe_with_version().await,
+        AdapterKind::OmpRpc => omp_conformance::probe_with_version().await,
+    };
 
     PROBE_CACHE.lock().insert(
         kind,
@@ -309,22 +319,16 @@ mod tests {
         AdapterKind::OmpRpc,
     ];
 
+    /// crew-v2 gap-closure WP-C: `run_fixture_conformance(kind,
+    /// Headless)` is now a defense-in-depth panic, not a working dispatch
+    /// (the headless adapters it used to reach are deleted). Supersedes
+    /// WP-B's `every_adapter_kind_produces_a_headless_fixture_report`,
+    /// which asserted the opposite.
     #[tokio::test]
-    async fn every_adapter_kind_produces_a_headless_fixture_report() {
-        // Every call here increments the process-global FIXTURE_SUITE_RUNS
-        // -- held so a concurrently-running counter-sensitive test
-        // elsewhere (`adapter::registry::conformance_cache_tests`) never
-        // observes our increments as its own.
+    #[should_panic(expected = "retired Headless mode")]
+    async fn run_fixture_conformance_panics_on_headless_not_dispatches_to_it() {
         let _serial = FIXTURE_SUITE_RUNS_SERIAL.lock().await;
-        for kind in ALL_KINDS {
-            let report = run_fixture_conformance(kind, AdapterMode::Headless).await;
-            assert_eq!(report.adapter, kind.wire_name());
-            assert_eq!(report.mode, ConformanceMode::Fixture);
-            assert!(
-                !report.scenarios.is_empty(),
-                "{kind} headless fixture report must run at least one scenario"
-            );
-        }
+        let _ = run_fixture_conformance(AdapterKind::Claude, AdapterMode::Headless).await;
     }
 
     /// WP-B Task 1: the `Tui` half of the new dispatch axis reaches the
@@ -360,18 +364,18 @@ mod tests {
     /// paths visibly and deliberately, not silently.
     #[tokio::test]
     async fn no_in_tree_adapter_declares_managed_nested_in_either_mode() {
+        // crew-v2 gap-closure WP-C: only `Tui` reaches live dispatch now
+        // (`Headless` is a defense-in-depth panic, pinned separately by
+        // `run_fixture_conformance_panics_on_headless_not_dispatches_to_it`).
         let _serial = FIXTURE_SUITE_RUNS_SERIAL.lock().await;
         for kind in ALL_KINDS {
-            for mode in [AdapterMode::Headless, AdapterMode::Tui] {
-                let report = run_fixture_conformance(kind, mode).await;
-                assert_ne!(
-                    report.effective_capabilities.nested,
-                    NestedCapability::Managed,
-                    "{kind} ({mode:?}) declares Managed nested -- DomainAdapterEventSink's \
-                     nested_not_managed flag construction at registry.rs:469/:792 must be \
-                     revisited now that this is no longer vacuously true"
-                );
-            }
+            let report = run_fixture_conformance(kind, AdapterMode::Tui).await;
+            assert_ne!(
+                report.effective_capabilities.nested,
+                NestedCapability::Managed,
+                "{kind} declares Managed nested -- DomainAdapterEventSink's nested_not_managed \
+                 flag construction must be revisited now that this is no longer vacuously true"
+            );
         }
     }
 }

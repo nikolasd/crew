@@ -3,6 +3,26 @@
 > Status: **prep complete, NOT tagged.** Tag/release is held until an explicit `ship` from the
 > repo owner (WP29 scope: prep only).
 
+## Control plane
+
+- [x] **v0.5.0 ships TUI-only.** User ruling 2026-08-27 reverses this checklist's own WP29-era
+      "KEEP ALL FOUR" stance on the headless adapters (see the "Conformance evidence" section
+      below, written under that now-superseded stance): the headless control plane
+      (`adapter::{claude,codex,copilot,omp_rpc}`, one implementation per vendor, driving each
+      vendor's own non-interactive/JSON protocol directly) is retired outright per the crew-v2
+      design spec §4.6, in favor of `adapter::tui::*` as the sole control plane
+      (crew-v2 gap-closure WP-C; `docs/adr/0026-headless-retirement.md`).
+- [x] `mode: "headless"` is deserializable but typed-rejected: an old config/profile/journal entry
+      naming it still parses (never a hard crash on history), but every path that would act on it
+      -- config validation, adapter-registry dispatch, `crewd conformance --mode headless`, live
+      run submission -- returns a typed error naming the retirement, never a silent remap to
+      `tui` and never a silent accept.
+- [x] A pre-drop journal (a run recorded before this retirement, whose stored `WorkerProfile` says
+      `mode: "headless"` explicitly, or omits `mode` entirely -- the pre-`mode`-field default was
+      also headless) terminalizes on recovery with the honest retired-mode reason (naming the
+      retirement and directing the operator to `mode: "tui"`), never "profile unreadable" and
+      never a fabricated vendor-shaped failure.
+
 ## Version
 
 - [x] `crates/runtime/Cargo.toml` → `0.5.0`

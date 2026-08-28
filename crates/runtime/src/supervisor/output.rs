@@ -21,30 +21,6 @@ pub const MAX_STDOUT_FRAME_BYTES: usize = 4 * 1024 * 1024;
 /// discarded first once the cap is reached.
 pub const MAX_STDERR_CAPTURE_BYTES: usize = 25 * 1024 * 1024;
 
-/// Receives a clone of every raw stdout frame decoded by any
-/// `spawn_stdout_reader` task in this process. Installed once, by
-/// `crewd conformance capture` only -- production never installs one,
-/// and the cost when absent is a single `OnceLock::get` returning `None`.
-static FRAME_TAP: std::sync::OnceLock<mpsc::UnboundedSender<Vec<u8>>> = std::sync::OnceLock::new();
-
-/// Installs the process-wide raw-frame tap.
-///
-/// # Errors
-/// Returns `Err` if a tap was already installed -- one capture session
-/// per process, never two competing recorders.
-pub(crate) fn install_frame_tap(tx: mpsc::UnboundedSender<Vec<u8>>) -> Result<(), &'static str> {
-    FRAME_TAP
-        .set(tx)
-        .map_err(|_| "a frame tap is already installed")
-}
-
-fn tap_frame(bytes: &[u8]) {
-    if let Some(tap) = FRAME_TAP.get() {
-        // A closed receiver means the capture session ended; frames are
-        // dropped rather than failing the supervised process.
-        let _ = tap.send(bytes.to_vec());
-    }
-}
 /// Spawns a task that decodes bounded newline-delimited frames from
 /// `stdout` and forwards each to the returned channel. A frame exceeding
 /// `max_frame_bytes` (or any I/O error) ends the task -- the codec never
@@ -58,7 +34,6 @@ pub fn spawn_stdout_reader(stdout: ChildStdout, max_frame_bytes: usize) -> mpsc:
         while let Some(item) = framed.next().await {
             match item {
                 Ok(line) => {
-                    tap_frame(line.as_bytes());
                     if tx.send(line.into_bytes()).await.is_err() {
                         break;
                     }

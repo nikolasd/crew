@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use crew_protocol::{ProjectId, RunId, TaskId, WorkerId};
 use crew_runtime::adapter::{
-    AdapterAuthorization, AdapterCapabilities, AdapterRegistry, ApprovalsCapability,
+    AdapterAuthorization, AdapterCapabilities, AdapterMode, AdapterRegistry, ApprovalsCapability,
     DurabilityCapability, FixtureAuthorization, NativeViewCapability, NestedCapability,
     OmpRpcStartupOptions, ProtocolKind, ResumeCapability, StartupOptions, SteeringCapability,
     UsageCapability, WorkerProfile, WorkspaceControlCapability,
@@ -88,7 +88,14 @@ fn terminal_profile() -> WorkerProfile {
         adapter: "claude".to_string(),
         model: String::new(),
         permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
-        startup_options: StartupOptions::Claude(Default::default()),
+        // crew-v2 gap-closure WP-C: `mode` must be explicit `Tui` now --
+        // `Default::default()`'s `Headless` is retired and gate_profile
+        // refuses it before this test's own scenario (authorization,
+        // duplicate-start, ...) is ever reached.
+        startup_options: StartupOptions::Claude(crew_runtime::adapter::ClaudeStartupOptions {
+            mode: AdapterMode::Tui,
+            ..Default::default()
+        }),
         environment_allowlist: Vec::new(),
         source: "test".to_string(),
     }
@@ -100,7 +107,10 @@ fn terminal_degraded_profile() -> WorkerProfile {
         adapter: "codex".to_string(),
         model: String::new(),
         permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
-        startup_options: StartupOptions::Codex(Default::default()),
+        startup_options: StartupOptions::Codex(crew_runtime::adapter::CodexStartupOptions {
+            mode: AdapterMode::Tui,
+            ..Default::default()
+        }),
         environment_allowlist: Vec::new(),
         source: "test".to_string(),
     }
@@ -112,7 +122,10 @@ fn omp_rpc_profile() -> WorkerProfile {
         adapter: "ompRpc".to_string(),
         model: String::new(),
         permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
-        startup_options: StartupOptions::OmpRpc(OmpRpcStartupOptions::default()),
+        startup_options: StartupOptions::OmpRpc(OmpRpcStartupOptions {
+            mode: AdapterMode::Tui,
+            ..Default::default()
+        }),
         environment_allowlist: Vec::new(),
         source: "test".to_string(),
     }

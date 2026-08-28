@@ -19,6 +19,27 @@
 //! itself, independent of any policy, never lets the switch corrupt
 //! `effective_capabilities`.
 //!
+//! Crew-v2 gap-closure WP-C ruling: fixture mode is TUI-sourced now (spec
+//! §4.6) -- `run_fixture_conformance` only ever reaches
+//! `adapter::tui::*_conformance`, whose golden-fixture scenarios need no
+//! live vendor process for anything except the real `--version`/binary
+//! check `probe` makes. So `PROBE` -- which gates no capability -- is the
+//! *only* scenario the switch skips in fixture mode now; every capability-
+//! gating scenario (`approval`, `follow_up`, `session_resume`,
+//! `isolated_write`, `managed_nesting_rejection`) passes from golden data
+//! regardless of the switch. Phase 2 below therefore proves a narrower
+//! claim than it did against the headless control plane: that the one
+//! scenario the switch *does* skip carries no capability consequence, so
+//! `effective_capabilities` trivially equals `declared_capabilities`. The
+//! deeper claim R68 is actually about -- that a *gated* scenario's skip,
+//! specifically, must never be read as a disproof -- has no live end-to-end
+//! trigger left in fixture mode and is proven synthetically instead, at
+//! the unit level: `conformance::report`'s
+//! `a_skipped_scenario_leaves_its_gated_capability_declared` inline test
+//! (the direct, single-gate R68 proof; its sibling
+//! `a_skip_never_masks_a_real_disproof_of_a_different_gate` additionally
+//! proves a skip on one gate never masks a genuine disproof on another).
+//!
 //! This file deliberately contains exactly **one** test. It mutates the
 //! process-global `CREW_DISABLE_VENDOR_CLI` variable, which
 //! `std::env::set_var` may only change soundly while no other thread is
@@ -54,7 +75,7 @@ async fn the_kill_switch_never_shrinks_effective_capabilities() {
         AdapterKind::Copilot,
         AdapterKind::OmpRpc,
     ] {
-        let report = run_fixture_conformance(kind, AdapterMode::Headless).await;
+        let report = run_fixture_conformance(kind, AdapterMode::Tui).await;
         let skipped: Vec<(&str, String)> = report
             .scenarios
             .iter()
@@ -70,26 +91,19 @@ async fn the_kill_switch_never_shrinks_effective_capabilities() {
         if !skipped.is_empty() {
             any_skipped = true;
         }
-        if kind == AdapterKind::Codex {
-            // Codex's `requires_live_turn_scenario` skips `FOLLOW_UP`
-            // (steering) and `SESSION_RESUME` (resume) under the switch --
-            // confirming these two are genuinely exercised, not merely
-            // present-but-passing or absent, is what makes the
-            // effective==declared assertion above a real R68 proof for
-            // Codex specifically rather than a vacuous one.
-            let skipped_names: std::collections::HashSet<&str> =
-                skipped.iter().map(|(name, _)| *name).collect();
-            assert!(
-                skipped_names.contains(scenario::FOLLOW_UP),
-                "Codex must report FOLLOW_UP (steering) as skipped under the \
-                 switch, or the R68 proof above is vacuous: skipped={skipped:?}"
-            );
-            assert!(
-                skipped_names.contains(scenario::SESSION_RESUME),
-                "Codex must report SESSION_RESUME (resume) as skipped under the \
-                 switch, or the R68 proof above is vacuous: skipped={skipped:?}"
-            );
-        }
+        // TUI fixture mode's only live dependency is `probe`'s real
+        // `--version`/binary check (see the module doc) -- confirming it is
+        // genuinely the scenario the switch skipped, not some other one, is
+        // what makes `any_skipped` below a real proof of *this* invariant
+        // rather than a vacuous one that would also pass if the switch
+        // skipped nothing at all.
+        let skipped_names: std::collections::HashSet<&str> =
+            skipped.iter().map(|(name, _)| *name).collect();
+        assert!(
+            skipped_names.contains(scenario::PROBE),
+            "{kind}: PROBE must report skipped under the switch (its own real \
+             vendor-CLI check), or the R68 proof above is vacuous: skipped={skipped:?}"
+        );
     }
     // At least one adapter must carry a genuinely skipped scenario -- not
     // merely `!report.passed`, which a real, unrelated Fail could also
