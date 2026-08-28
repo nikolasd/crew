@@ -5,7 +5,7 @@
 // drive `registerMonitor` through a fake ExtensionAPI, mirroring
 // tools.test.ts's fake-API pattern.
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -103,6 +103,24 @@ function fakeExtensionContext(widgetCalls: unknown[][]): ExtensionContext {
   } as unknown as ExtensionContext;
 }
 
+function fakeCommandContext(widgetCalls: unknown[][], hasUI: boolean): { ctx: ExtensionContext; notifications: Array<{ message: string; level: string }> } {
+  const notifications: Array<{ message: string; level: string }> = [];
+  const ctx = {
+    hasUI,
+    sessionManager: { getEntries: () => [] },
+    ui: {
+      theme: fakeTheme(),
+      setWidget(...args: unknown[]) {
+        widgetCalls.push(args);
+      },
+      notify(message: string, level: string) {
+        notifications.push({ message, level });
+      },
+    },
+  } as unknown as ExtensionContext;
+  return { ctx, notifications };
+}
+
 test("session_start keeps the widget hidden when the journal has no runs (R56, revised)", async () => {
   const { api, handlers } = createFakeApi();
   const fake = createFakeClient();
@@ -152,6 +170,60 @@ test("/crew renders the box even when empty (explicit command overrides the auto
 
   // The user explicitly asked for the monitor, so the (empty) box renders
   // even with no runs — the asymmetry with session_start.
+  expect(widgetCalls.length).toBe(1);
+  expect(Array.isArray(widgetCalls[0]?.[1])).toBe(true);
+});
+
+test("an unknown /crew subcommand is a usage error, never a silent monitor render", async () => {
+  const { api, commands } = createFakeApi();
+  const fake = createFakeClient();
+  registerMonitor(api, { getClient: async () => fake.client });
+
+  const widgetCalls: unknown[][] = [];
+  const { ctx, notifications } = fakeCommandContext(widgetCalls, true);
+
+  await commands.get("crew")?.handler("bogus", ctx);
+
+  expect(widgetCalls.length).toBe(0);
+  expect(notifications.length).toBe(1);
+  expect(notifications[0]?.message).toContain("Unknown subcommand");
+  expect(notifications[0]?.message).toContain("Usage: /crew");
+  expect(notifications[0]?.level).toBe("error");
+});
+
+test("/crew output console.logs (not notify) outside interactive mode", async () => {
+  const { api, commands } = createFakeApi();
+  const fake = createFakeClient();
+  registerMonitor(api, { getClient: async () => fake.client });
+
+  const widgetCalls: unknown[][] = [];
+  const { ctx, notifications } = fakeCommandContext(widgetCalls, false);
+  const logged: string[] = [];
+  const logSpy = spyOn(console, "log").mockImplementation((message: string) => {
+    logged.push(message);
+  });
+
+  try {
+    await commands.get("crew")?.handler("bogus", ctx);
+  } finally {
+    logSpy.mockRestore();
+  }
+
+  expect(notifications.length).toBe(0);
+  expect(logged.length).toBe(1);
+  expect(logged[0]).toContain("Unknown subcommand");
+});
+
+test("bare /crew still renders the monitor box", async () => {
+  const { api, commands } = createFakeApi();
+  const fake = createFakeClient();
+  registerMonitor(api, { getClient: async () => fake.client });
+
+  const widgetCalls: unknown[][] = [];
+  const { ctx } = fakeCommandContext(widgetCalls, true);
+
+  await commands.get("crew")?.handler("", ctx);
+
   expect(widgetCalls.length).toBe(1);
   expect(Array.isArray(widgetCalls[0]?.[1])).toBe(true);
 });
@@ -246,6 +318,7 @@ test("/crew runs, export, clean, and reopen invoke their scoped RPC contracts", 
   const notifications: string[] = [];
   const cmdCtx = {
     ...fakeExtensionContext([]),
+    hasUI: true,
     cwd: directory,
     ui: {
       ...fakeExtensionContext([]).ui,

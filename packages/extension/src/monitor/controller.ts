@@ -7,7 +7,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { EventEnvelope } from "@nikolasd/crew-protocol";
 
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { CrewClient } from "../client";
 import { attachMilestoneBridge } from "../milestones";
 import { assertCompatiblePiCodingAgentVersion } from "./compat";
@@ -142,6 +142,23 @@ export class MonitorController {
   }
 }
 
+/** Monitor subcommands that talk to the daemon (connect-first). */
+const MONITOR_RPC_SUBCOMMANDS: ReadonlySet<string> = new Set(["runs", "export", "clean", "reopen"]);
+
+/**
+ * Routes command output to the UI in interactive mode and to stdout
+ * otherwise -- `ui.notify` is a no-op outside interactive mode (print/RPC),
+ * and a raw console.log inside it would corrupt the TUI. Mirrors the
+ * pattern of every flat command in index.ts.
+ */
+function respond(cmdCtx: ExtensionCommandContext, text: string, level: "info" | "warning" | "error" = "info"): void {
+  if (cmdCtx.hasUI !== true) {
+    console.log(text);
+  } else {
+    cmdCtx.ui.notify(text, level);
+  }
+}
+
 /** Registers the `/crew` command and the replay-first monitor lifecycle.
  *  Wires the milestone bridge (spec §7.2) onto the monitor's single
  *  subscription so the model is injected with digests on milestones
@@ -212,21 +229,45 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
     description: "Opens the Crew monitor. Subcommands: status <runId>, runs, export [runId], clean, reopen <runId>.",
     handler: async (args, cmdCtx) => {
       const [sub, runId] = args.trim().split(/\s+/, 2);
-      if (sub === "status" && runId !== undefined && runId.length > 0) {
-        const details = controller.renderStatus(runId);
-        cmdCtx.ui.notify(details ?? `No Crew run found for ${runId}.`, details === undefined ? "warning" : "info");
+      const usage = "Usage: /crew [status <runId> | runs | export [runId] | clean | reopen <runId>]";
+
+      if (sub === undefined || sub.length === 0) {
+        await connect(cmdCtx);
+        if (subscribedClient === undefined) {
+          respond(cmdCtx, "Crew runtime is unavailable.", "warning");
+          return;
+        }
+        // An explicit user command renders unconditionally, so /crew against an
+        // empty runtime still shows the (empty) monitor box rather than nothing.
+        refresh(cmdCtx, true);
         return;
       }
+
+      if (sub === "status") {
+        if (runId === undefined || runId.length === 0) {
+          respond(cmdCtx, "Usage: /crew status <runId>", "warning");
+          return;
+        }
+        const details = controller.renderStatus(runId);
+        respond(cmdCtx, details ?? `No Crew run found for ${runId}.`, details === undefined ? "warning" : "info");
+        return;
+      }
+
+      if (!MONITOR_RPC_SUBCOMMANDS.has(sub)) {
+        respond(cmdCtx, `Unknown subcommand "${sub}". ${usage}`, "error");
+        return;
+      }
+
       await connect(cmdCtx);
       const client = subscribedClient;
       if (client === undefined) {
-        cmdCtx.ui.notify("Crew runtime is unavailable.", "warning");
+        respond(cmdCtx, "Crew runtime is unavailable.", "warning");
         return;
       }
       if (sub === "runs") {
         const result = (await client.request("run/list", {})) as { runs?: Array<{ runId?: string; state?: string; workerId?: string }> };
         const runs = result.runs ?? [];
-        cmdCtx.ui.notify(runs.length === 0 ? "No Crew runs recorded." : runs.map((run) => `${run.runId ?? "(unknown)"}  ${run.state ?? "unknown"}  worker ${run.workerId ?? "unknown"}`).join("\n"), "info");
+        respond(cmdCtx, runs.length === 0 ? "No Crew runs recorded." : runs.map((run) => `${run.runId ?? "(unknown)"}  ${run.state ?? "unknown"}  worker ${run.workerId ?? "unknown"}`).join("\n"), "info");
         return;
       }
       if (sub === "export") {
@@ -240,27 +281,23 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
         const output = join(directory, `export-${exportId}.jsonl`);
         await mkdir(directory, { recursive: true });
         await writeFile(output, events.map((event) => JSON.stringify(event)).join("\n") + (events.length > 0 ? "\n" : ""));
-        cmdCtx.ui.notify(`Exported ${events.length} Crew events to ${output}.`, "info");
+        respond(cmdCtx, `Exported ${events.length} Crew events to ${output}.`, "info");
         return;
       }
       if (sub === "clean") {
         const result = (await client.request("retention/clean", {})) as { deletedEvents: number; runsPruned: number };
-        cmdCtx.ui.notify(`Retention clean removed ${result.deletedEvents} events across ${result.runsPruned} maxRuns-pruned runs.`, "info");
+        respond(cmdCtx, `Retention clean removed ${result.deletedEvents} events across ${result.runsPruned} maxRuns-pruned runs.`, "info");
         return;
       }
       if (sub === "reopen") {
         if (runId === undefined || runId.length === 0) {
-          cmdCtx.ui.notify("Usage: /crew reopen <runId>", "warning");
+          respond(cmdCtx, "Usage: /crew reopen <runId>", "warning");
           return;
         }
         const result = (await client.request("pane/reopen", { runId })) as { backend: string; paneRef: string };
-        cmdCtx.ui.notify(result.paneRef.length === 0 ? `No visible backend is available for ${runId}.` : `Reopened ${runId} in ${result.backend}: ${result.paneRef}`, "info");
+        respond(cmdCtx, result.paneRef.length === 0 ? `No visible backend is available for ${runId}.` : `Reopened ${runId} in ${result.backend}: ${result.paneRef}`, "info");
         return;
       }
-      // Deliberately asymmetric with session_start's auto-hide: an explicit
-      // user command renders unconditionally, so /crew against an empty or
-      // dead runtime still shows the (empty) monitor box rather than nothing.
-      refresh(cmdCtx, true);
     },
   });
 
