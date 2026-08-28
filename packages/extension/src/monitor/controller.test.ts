@@ -341,3 +341,127 @@ test("/crew runs, export, clean, and reopen invoke their scoped RPC contracts", 
   expect(notifications).toContain("Retention clean removed 4 events across 1 maxRuns-pruned runs.");
   await rm(directory, { recursive: true, force: true });
 });
+
+test("/crew dispatches a management subcommand and reports through respond", async () => {
+  const { api, commands } = createFakeApi();
+  const fake = createFakeClient();
+  const seen: string[] = [];
+  registerMonitor(api, {
+    getClient: async () => fake.client,
+    management: new Map([
+      [
+        "health",
+        {
+          description: "Runtime health",
+          run: async (args: string) => {
+            seen.push(args);
+            return { text: "Crew runtime: running", isError: false };
+          },
+        },
+      ],
+    ]),
+  });
+
+  const widgetCalls: unknown[][] = [];
+  const { ctx, notifications } = fakeCommandContext(widgetCalls, true);
+
+  await commands.get("crew")?.handler("health", ctx);
+
+  expect(seen).toEqual([""]);
+  expect(widgetCalls.length).toBe(0);
+  expect(notifications[0]?.message).toContain("running");
+  expect(notifications[0]?.level).toBe("info");
+});
+
+test("a management subcommand receives its remaining arguments verbatim", async () => {
+  const { api, commands } = createFakeApi();
+  const fake = createFakeClient();
+  const seen: string[] = [];
+  registerMonitor(api, {
+    getClient: async () => fake.client,
+    management: new Map([
+      [
+        "config",
+        {
+          description: "Config",
+          run: async (args: string) => {
+            seen.push(args);
+            return { text: "ok", isError: false };
+          },
+        },
+      ],
+    ]),
+  });
+
+  const { ctx } = fakeCommandContext([], true);
+  await commands.get("crew")?.handler("config print effective", ctx);
+
+  expect(seen).toEqual(["print effective"]);
+});
+
+test("/crew run <runId> answers from reduced state without connecting", async () => {
+  const { api, commands } = createFakeApi();
+  const fake = createFakeClient();
+  registerMonitor(api, { getClient: async () => fake.client });
+
+  const { ctx, notifications } = fakeCommandContext([], true);
+  await commands.get("crew")?.handler("run missing-run", ctx);
+
+  expect(fake.subscribeCalls).toBe(0);
+  expect(notifications[0]?.message).toContain("No Crew run found for missing-run");
+});
+
+test("/crew run with no runId is a usage error at error level", async () => {
+  const { api, commands } = createFakeApi();
+  const fake = createFakeClient();
+  registerMonitor(api, { getClient: async () => fake.client });
+
+  const widgetCalls: unknown[][] = [];
+  const { ctx, notifications } = fakeCommandContext(widgetCalls, true);
+
+  await commands.get("crew")?.handler("run", ctx);
+
+  expect(widgetCalls.length).toBe(0);
+  expect(notifications.length).toBe(1);
+  expect(notifications[0]?.message).toBe("Usage: /crew run <runId>");
+  expect(notifications[0]?.level).toBe("error");
+});
+
+test("/crew reopen with no runId is a usage error at error level", async () => {
+  const { api, commands } = createFakeApi();
+  const fake = createFakeClient();
+  registerMonitor(api, { getClient: async () => fake.client });
+
+  const { ctx, notifications } = fakeCommandContext([], true);
+
+  await commands.get("crew")?.handler("reopen", ctx);
+
+  expect(notifications.length).toBe(1);
+  expect(notifications[0]?.message).toBe("Usage: /crew reopen <runId>");
+  expect(notifications[0]?.level).toBe("error");
+});
+
+test("/crew clean output console.logs (not notify) outside interactive mode", async () => {
+  // Guards the headless path on a *success* output, not just an error: the
+  // only thing that would catch a future direct `cmdCtx.ui.notify` creeping
+  // back into one of the RPC branches.
+  const { api, commands } = createFakeApi();
+  const fake = createFakeClient();
+  (fake.client as unknown as { request(method: string, params?: unknown): Promise<unknown> }).request = async () => ({ deletedEvents: 4, runsPruned: 1 });
+  registerMonitor(api, { getClient: async () => fake.client });
+
+  const { ctx, notifications } = fakeCommandContext([], false);
+  const logged: string[] = [];
+  const logSpy = spyOn(console, "log").mockImplementation((message: string) => {
+    logged.push(message);
+  });
+
+  try {
+    await commands.get("crew")?.handler("clean", ctx);
+  } finally {
+    logSpy.mockRestore();
+  }
+
+  expect(notifications.length).toBe(0);
+  expect(logged).toEqual(["Retention clean removed 4 events across 1 maxRuns-pruned runs."]);
+});

@@ -1,7 +1,7 @@
 // Wires the monitor's pure model/render layers into the live extension:
 // replay-first startup (resuming from the last persisted sequence),
 // continuous widget updates as events arrive, and the `/crew` /
-// `/crew status <runId>` commands.
+// `/crew run <runId>` commands.
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -23,8 +23,19 @@ const WIDGET_KEY = "crew-monitor";
 /** The slash command that opens or refreshes the monitor. */
 export const MONITOR_COMMAND_NAME = "crew";
 
+/** One management operation surfaced as a /crew subcommand. The handler
+ *  lives in index.ts (it needs the cached-client and doctor-context
+ *  closures); the monitor owns only the dispatch. */
+export interface ManagementSubcommand {
+  readonly description: string;
+  /** Ghost-text hint for the completion dropdown, e.g. "[path | print ...]". */
+  readonly hint?: string;
+  run(args: string, ctx: ExtensionContext): Promise<{ text: string; isError: boolean }>;
+}
+
 export interface MonitorControllerContext {
   getClient(extCtx: ExtensionContext): Promise<CrewClient>;
+  management?: ReadonlyMap<string, ManagementSubcommand>;
 }
 
 /** The subset of `pi.appendEntry`'s session-entry log the controller reads
@@ -134,7 +145,7 @@ export class MonitorController {
     this.#onUpdate = undefined;
   }
 
-  /** Full detail text for `/crew status <runId>`, or `undefined` if no
+  /** Full detail text for `/crew run <runId>`, or `undefined` if no
    *  row exists for that run. */
   renderStatus(runId: string): string | undefined {
     const row = this.#state.rows[runId];
@@ -167,6 +178,11 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
   const controller = new MonitorController();
   attachMilestoneBridge(pi, controller);
   let subscribedClient: CrewClient | undefined;
+
+  /** The single source of truth for the `/crew` subcommand surface: both the
+   *  registration `description` and the handler's `usage` line derive from it,
+   *  so a future management entry cannot silently drift between the two. */
+  const subcommandList = ["run <runId>", "runs", "export [runId]", "clean", "reopen <runId>", ...(ctx.management?.keys() ?? [])];
 
   /**
    * Syncs the widget with the current state: renders the box when there are
@@ -226,10 +242,10 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
   });
 
   pi.registerCommand(MONITOR_COMMAND_NAME, {
-    description: "Opens the Crew monitor. Subcommands: status <runId>, runs, export [runId], clean, reopen <runId>.",
+    description: `Opens the Crew monitor. Subcommands: ${subcommandList.join(", ")}.`,
     handler: async (args, cmdCtx) => {
       const [sub, runId] = args.trim().split(/\s+/, 2);
-      const usage = "Usage: /crew [status <runId> | runs | export [runId] | clean | reopen <runId>]";
+      const usage = `Usage: /crew [${subcommandList.join(" | ")}]`;
 
       if (sub === undefined || sub.length === 0) {
         await connect(cmdCtx);
@@ -243,9 +259,17 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
         return;
       }
 
-      if (sub === "status") {
+      const management = ctx.management?.get(sub);
+      if (management !== undefined) {
+        const rest = args.trim().slice(sub.length).trim();
+        const result = await management.run(rest, cmdCtx);
+        respond(cmdCtx, result.text, result.isError ? "error" : "info");
+        return;
+      }
+
+      if (sub === "run") {
         if (runId === undefined || runId.length === 0) {
-          respond(cmdCtx, "Usage: /crew status <runId>", "warning");
+          respond(cmdCtx, "Usage: /crew run <runId>", "error");
           return;
         }
         const details = controller.renderStatus(runId);
@@ -291,7 +315,7 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
       }
       if (sub === "reopen") {
         if (runId === undefined || runId.length === 0) {
-          respond(cmdCtx, "Usage: /crew reopen <runId>", "warning");
+          respond(cmdCtx, "Usage: /crew reopen <runId>", "error");
           return;
         }
         const result = (await client.request("pane/reopen", { runId })) as { backend: string; paneRef: string };
