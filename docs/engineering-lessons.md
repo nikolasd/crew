@@ -465,3 +465,38 @@ just as much to fixing an existing test as to writing a new one.
 production code path a test can pin. The corrected test itself
 (`the_kill_switch_never_shrinks_effective_capabilities`) and `conformance::report`'s
 `a_skipped_scenario_leaves_its_gated_capability_declared` are what the fix left behind.
+
+---
+
+## Deletion Sweeps
+
+### A deletion sweep must sweep claims, not just references
+
+**Location:** crew-v2 gap-closure WP-A/B/C, broadly -- exemplar:
+`crates/runtime/src/adapter/tui/omp.rs`'s `base_args` doc comment (WP-C review round 1, I-1)
+
+**The bug:** Across three work packages of deletions, nearly every finding that survived review was
+the same shape: a true prose claim -- "validated by X", "proven by Y", "this module owns that
+confirmation" -- that quietly stopped being true the moment its referent changed or was deleted,
+with nothing in the toolchain forcing anyone to notice. The exemplar: WP-C's own inventory step
+(`grep -rn 'adapter::(claude|codex|copilot|omp_rpc)::'`) correctly found and classified every code
+*reference* to the headless adapters before deleting them -- and still missed that
+`adapter/tui/omp.rs`'s `base_args` doc comment made an *assertion about* the headless adapter
+(the model selector "is validated ... by the headless adapter's probe") without ever naming it as a
+path or symbol the grep could match. The inventory swept symbols correctly; the claim hid in prose
+a symbol-grep cannot see.
+
+**The lesson:** `grep` finds references (a path, a type name, an import); it does not find claims (a
+doc comment asserting something is true of, checked by, or owned by a thing being deleted). A
+deletion sweep's inventory step -- however systematic -- only ever proves reference-completeness,
+never claim-completeness. Before trusting an inventory as done, separately ask: what does the
+surviving code (or docs, or a release checklist) *say* about the thing being deleted, independent
+of whether it names it directly? That second pass is prose-shaped, not grep-shaped -- it means
+reading, not searching -- and is exactly what this WP's review rounds kept surfacing one deletion
+sweep after the next: a stale contract comment, a checklist never updated, a schema description
+never touched, a citation pointing at the wrong sibling test. None of these were reference bugs; all
+of them were claims a grep-based inventory has no way to catch.
+
+**Regression tests:** N/A -- this is a review-process lesson, not a single code path. The concrete
+instance this WP left behind is fixed (`OmpTuiVendor::preflight` restores the enforcement `base_args`
+claims, with its own tests); the transferable practice is the takeaway.

@@ -337,6 +337,14 @@ impl TuiVendor for OmpTuiVendor {
                 timeout,
                 tokio::process::Command::new(&bin)
                     .args(["models", "--json"])
+                    // Same convention as `supervisor::process`'s piped spawn
+                    // and `PtyProcess`'s Drop impl: a timed-out future must
+                    // never leak the child it was waiting on. This reaches
+                    // only the direct `omp` child, not a process group (no
+                    // group is created for this one-shot probe) -- accepted
+                    // as proportionate for a short, non-interactive catalog
+                    // fetch, unlike a real vendor session's supervised tree.
+                    .kill_on_drop(true)
                     .output(),
             )
             .await
