@@ -333,6 +333,51 @@ test("crew-status command console.logs (not notify) outside interactive mode", a
   expect(notifications.length).toBe(0);
 });
 
+test("/crew health notifies (not console.logs) in interactive mode", async () => {
+  setEnv("CREW_STATE_DIR", stateDir);
+
+  const { api, commands } = createFakeApi();
+  extension(api);
+  const command = commands.get("crew")!;
+
+  const { ctx, notifications } = fakeCommandContext(repoDir, true);
+  const logSpy = spyOn(console, "log");
+
+  try {
+    await command.handler("health", ctx);
+  } finally {
+    logSpy.mockRestore();
+  }
+
+  expect(notifications.length).toBe(1);
+  expect(notifications[0]).toContain("running");
+  expect(logSpy).not.toHaveBeenCalled();
+});
+
+test("/crew health console.logs (not notify) outside interactive mode", async () => {
+  setEnv("CREW_STATE_DIR", stateDir);
+
+  const { api, commands } = createFakeApi();
+  extension(api);
+  const command = commands.get("crew")!;
+
+  const { ctx, notifications } = fakeCommandContext(repoDir, false);
+  const logged: string[] = [];
+  const logSpy = spyOn(console, "log").mockImplementation((message: string) => {
+    logged.push(message);
+  });
+
+  try {
+    await command.handler("health", ctx);
+  } finally {
+    logSpy.mockRestore();
+  }
+
+  expect(logged.length).toBe(1);
+  expect(logged[0]).toContain("running");
+  expect(notifications.length).toBe(0);
+});
+
 test("the golden runtime/status fixture validates against the canonical schema", () => {
   // Guards fixtures/omp/status-result.json against drift from the real
   // `RuntimeStatus` schema: nothing else in the suite loads this fixture.

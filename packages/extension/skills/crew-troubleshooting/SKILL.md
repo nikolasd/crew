@@ -24,7 +24,7 @@ Follow this sequence to diagnose Crew problems:
 
 ## Live-control failures
 
-- Start with `/crew`, not a poll loop: `runs`, `status <runId>`, and `crew_transcript` expose the durable replay.
+- Start with `/crew`, not a poll loop: `runs`, `run <runId>`, and `crew_transcript` expose the durable replay.
 - `BUDGET_EXCEEDED` means the subtask's snapshotted turn budget is exhausted. Do not resend; change the approved plan budget or stop/finish the run.
 - `WorkerTimeout` is not a daemon kill. Choose `run/timeoutAck` `extend`, `crew_send` a nudge, or `run/timeoutAck` `abort`.
 - `pane/reopen` only works for a live run with its attach socket still bound. A terminal run or absent socket is an honest refusal; use the transcript instead.

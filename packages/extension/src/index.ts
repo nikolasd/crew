@@ -9,7 +9,7 @@
 // this extension starts or reconnects to the per-repository `crewd` runtime
 // once per session, and every tool reuses that connection.
 
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { TASK_SUBAGENT_EVENT_CHANNEL, TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL, type SubagentEventPayload, type SubagentLifecyclePayload, type SubagentProgressPayload } from "@oh-my-pi/pi-coding-agent/task";
 
 import type { CrewClient } from "./client";
@@ -23,6 +23,7 @@ import { runConfigCommand, type ConfigDocument, type ConfigRequest } from "./con
 import { installRuntimeForEnv } from "./install";
 import { registerOrchestrationTools } from "./tools";
 import { registerMonitor } from "./monitor/controller";
+import type { ManagementSubcommand } from "./monitor/controller";
 
 const TOOL_NAME = "crew_health";
 const COMMAND_NAME = "crew-status";
@@ -68,24 +69,10 @@ export default function crewExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand(COMMAND_NAME, {
     description: STATUS_DESCRIPTION,
-    handler: async (_args, extCtx) => {
-      const result = await getRuntimeStatus(statusContextFor(extCtx));
-      const text = result.content.map((block) => block.text).join("\n");
-      // `extCtx.ui.notify` is a no-op outside interactive mode (print/RPC), so
-      // write directly to stdout instead when there is no UI -- this is the
-      // only way `--print` surfaces output for a locally-handled slash
-      // command. In interactive mode, raw console.log would corrupt the TUI,
-      // so route exclusively through `extCtx.ui.notify`.
-      if (!extCtx.hasUI) {
-        console.log(text);
-      } else {
-        extCtx.ui.notify(text, result.isError ? "error" : "info");
-      }
-    },
+    handler: async (_args, ctx) => emitResult(ctx, await healthResult(ctx)),
   });
 
   registerOrchestrationTools(pi, { getClient });
-  registerMonitor(pi, { getClient });
   /**
    * Context builder for the doctor command: resolves the crewd binary path
    * and repository state for direct CLI invocation.
@@ -93,6 +80,52 @@ export default function crewExtension(pi: ExtensionAPI): void {
   function doctorContextFor(cwd: ExtensionContext["cwd"]): DoctorContext {
     return buildDoctorContext(cwd);
   }
+
+  type CommandResult = { text: string; isError: boolean };
+
+  function blocksToResult(result: { content: Array<{ text: string }>; isError?: boolean }): CommandResult {
+    return { text: result.content.map((block) => block.text).join("\n"), isError: result.isError === true };
+  }
+
+  function emitResult(ctx: ExtensionCommandContext, result: CommandResult): void {
+    if (!ctx.hasUI) {
+      console.log(result.text);
+    } else {
+      ctx.ui.notify(result.text, result.isError ? "error" : "info");
+    }
+  }
+
+  async function healthResult(extCtx: ExtensionContext): Promise<CommandResult> {
+    return blocksToResult(await getRuntimeStatus(statusContextFor(extCtx)));
+  }
+
+  async function doctorResult(cwd: string): Promise<CommandResult> {
+    return blocksToResult(await runDoctorCommand(doctorContextFor(cwd)));
+  }
+
+  async function configResult(args: string, cwd: string): Promise<CommandResult> {
+    const [op = "path", ...rest] = args.trim().split(/\s+/).filter(Boolean);
+    if (op !== "path" && op !== "print" && op !== "init") {
+      return { text: `Unknown operation ${op}. Usage: /crew config [path | print [effective|defaults|schema] | init [global] [force]]`, isError: true };
+    }
+    const request = {
+      op,
+      repository: cwd,
+      ...(op === "print" ? { document: (rest[0] as ConfigDocument) ?? "effective" } : {}),
+      ...(op === "init" ? { global: rest.includes("global"), force: rest.includes("force") } : {}),
+    } as ConfigRequest;
+    const { crewdPath } = doctorContextFor(cwd);
+    return blocksToResult(await runConfigCommand({ crewdPath, repository: cwd }, request));
+  }
+
+  registerMonitor(pi, {
+    getClient,
+    management: new Map<string, ManagementSubcommand>([
+      ["health", { description: "Runtime health: connects to or spawns the daemon", run: async (_args, ctx) => healthResult(ctx) }],
+      ["doctor", { description: "Diagnostics that work with no live daemon", run: async (_args, ctx) => doctorResult(ctx.cwd) }],
+      ["config", { description: "Inspect or scaffold crew.json", hint: "[path | print [effective|defaults|schema] | init [global] [force]]", run: async (args, ctx) => configResult(args, ctx.cwd) }],
+    ]),
+  });
 
   pi.registerTool({
     name: "crew_doctor",
@@ -106,15 +139,7 @@ export default function crewExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("crew-doctor", {
     description: "Run diagnostic checks on the Crew runtime state and configuration.",
-    handler: async (_args, ctx) => {
-      const result = await runDoctorCommand(doctorContextFor(ctx.cwd));
-      const text = result.content.map((block) => block.text).join("\n");
-      if (!ctx.hasUI) {
-        console.log(text);
-      } else {
-        ctx.ui.notify(text, result.isError ? "error" : "info");
-      }
-    },
+    handler: async (_args, ctx) => emitResult(ctx, await doctorResult(ctx.cwd)),
   });
 
   const configParams = pi.zod.object({
@@ -146,31 +171,8 @@ export default function crewExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("crew-config", {
-    description: "Inspect or scaffold crew.json. Usage: /crew-config [path | print [effective|defaults|schema] | init [global] [force]]",
-    handler: async (args, ctx) => {
-      const [op = "path", ...rest] = args.trim().split(/\s+/).filter(Boolean);
-      if (op !== "path" && op !== "print" && op !== "init") {
-        const text = `Unknown operation ${op}. Usage: /crew-config [path | print [effective|defaults|schema] | init [global] [force]]`;
-        if (!ctx.hasUI) console.log(text);
-        else ctx.ui.notify(text, "error");
-        return;
-      }
-      const request = {
-        op,
-        repository: ctx.cwd,
-        ...(op === "print" ? { document: (rest[0] as ConfigDocument) ?? "effective" } : {}),
-        ...(op === "init" ? { global: rest.includes("global"), force: rest.includes("force") } : {}),
-      } as ConfigRequest;
-
-      const { crewdPath } = doctorContextFor(ctx.cwd);
-      const result = await runConfigCommand({ crewdPath, repository: ctx.cwd }, request);
-      const text = result.content.map((block) => block.text).join("\n");
-      if (!ctx.hasUI) {
-        console.log(text);
-      } else {
-        ctx.ui.notify(text, result.isError === true ? "error" : "info");
-      }
-    },
+    description: "Inspect or scaffold crew.json. Usage: /crew config [path | print [effective|defaults|schema] | init [global] [force]]",
+    handler: async (args, ctx) => emitResult(ctx, await configResult(args, ctx.cwd)),
   });
 
   pi.registerTool({
