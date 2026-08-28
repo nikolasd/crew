@@ -3,9 +3,7 @@
 //! This workspace enables `serde_json`'s `preserve_order` feature
 //! (`Cargo.toml`), so `serde_json::Map` is insertion-ordered: two
 //! structurally-equal values built in different key orders serialize to
-//! different bytes. The feature is required by the conformance fixture
-//! scrubber (`crate::conformance::scrub`), which must reproduce a vendor's
-//! own key order. Every other caller that hashes JSON or writes it to the
+//! different bytes. Every caller that hashes JSON or writes it to the
 //! journal must therefore canonicalize first -- key order is not a
 //! property anything downstream may depend on.
 

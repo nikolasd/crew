@@ -6,13 +6,9 @@
 //! [`crate::domain::DomainRepository`] directly.
 mod activity;
 mod capability;
-pub mod claude;
-pub mod codex;
-pub mod copilot;
 mod error;
 mod event_sink;
 pub mod mcp_config;
-pub mod omp_rpc;
 mod profile;
 mod profile_store;
 pub mod registry;
@@ -31,12 +27,8 @@ pub use capability::{
     NativeViewCapability, NestedCapability, ProtocolKind, ResumeCapability, SteeringCapability,
     UsageCapability, WorkspaceControlCapability,
 };
-pub use claude::ClaudeAdapter;
-pub use codex::CodexAdapter;
-pub use copilot::CopilotAdapter;
 pub use error::{AdapterError, AdapterErrorCode};
 pub use event_sink::{AdapterEvent, AdapterEventPayload, AdapterEventSink, DomainAdapterEventSink};
-pub use omp_rpc::{OmpRpcAdapter, OmpRpcAdapterOptions};
 pub use profile::{
     AdapterKind, AdapterMode, ClaudeStartupOptions, CodexStartupOptions, CopilotStartupOptions,
     EffectivePolicy, OmpRpcStartupOptions, ProfileError, ProfileId, StartupOptions,

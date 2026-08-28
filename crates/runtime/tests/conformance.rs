@@ -64,7 +64,11 @@ fn adapters_json_reports_all_four_adapters_with_effective_capabilities() {
              which requires every one of the 14 canonical scenarios to have actually run: {scenarios:?}"
         );
     }
-    for expected in ["claude", "codex", "copilot", "ompRpc"] {
+    // crew-v2 gap-closure WP-C: `crewd adapters --json` reports TUI now
+    // (the only mode left; headless is retired, spec §4.6), so labels are
+    // the `*-tui` ones -- `ompRpc`'s TUI label is `"omp-tui"`, not a
+    // mechanical `<wire_name>-tui`.
+    for expected in ["claude-tui", "codex-tui", "copilot-tui", "omp-tui"] {
         assert!(
             seen_kinds.contains(&expected),
             "adapters --json is missing the {expected} entry: {seen_kinds:?}"
@@ -126,7 +130,7 @@ fn conformance_fixture_one_adapter_writes_a_single_element_array() {
         serde_json::from_str(&std::fs::read_to_string(&output_path).unwrap()).unwrap();
     let reports = file_json.as_array().unwrap();
     assert_eq!(reports.len(), 1);
-    assert_eq!(reports[0]["adapter"], "codex");
+    assert_eq!(reports[0]["adapter"], "codex-tui");
     let _ = std::fs::remove_file(&output_path);
 }
 
@@ -189,11 +193,12 @@ fn conformance_requires_exactly_one_of_fixture_or_live() {
 }
 
 /// R52: fixture mode used to reach a real vendor-CLI spawn on every
-/// adapter regardless of the kill switch -- `probe_scenario`, Claude's
-/// `live_process_scenarios`/`cancellation_scope_scenario`, Codex's
-/// `spawn_raw_client`, Copilot's `real_client`, and OMP-RPC's
-/// `resolve_conformance_selector`/`resume_flag_probe` all spawned before
-/// anything consulted `CREW_DISABLE_VENDOR_CLI`.
+/// adapter regardless of the kill switch -- each adapter's own
+/// process/client-spawning scenarios ran before anything consulted
+/// `CREW_DISABLE_VENDOR_CLI`. (crew-v2 gap-closure WP-C: fixture mode is
+/// TUI-sourced now, spec §4.6 -- the headless adapters whose specific
+/// scenario names this comment used to enumerate are retired; the
+/// invariant itself is unchanged and still proven below.)
 ///
 /// `PATH` is scrubbed to `/usr/bin:/bin` so the assertion is meaningful on
 /// a developer machine that does have the vendor CLIs installed: with the

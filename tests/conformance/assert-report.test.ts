@@ -49,14 +49,18 @@ function adapterReport(adapter: string): AdapterConformanceReport {
   };
 }
 
+// crew-v2 gap-closure WP-C: fixture mode is TUI-sourced now (spec §4.6) --
+// the headless control plane and its claude/codex/copilot/ompRpc labels
+// are retired. Every key below is hyphenated, so bracket notation (not
+// dot access) is required throughout this file.
 function validReport(): CombinedReport {
   return {
     timestamp: "2026-08-05T00:00:00Z",
     adapters: {
-      claude: adapterReport("claude"),
-      codex: adapterReport("codex"),
-      copilot: adapterReport("copilot"),
-      ompRpc: adapterReport("ompRpc"),
+      "claude-tui": adapterReport("claude-tui"),
+      "codex-tui": adapterReport("codex-tui"),
+      "copilot-tui": adapterReport("copilot-tui"),
+      "omp-tui": adapterReport("omp-tui"),
     },
   };
 }
@@ -78,42 +82,43 @@ describe("conformance gate", () => {
     expect(() => assertReportComplete(validReport())).not.toThrow();
   });
 
-  test("the four adapters are required under their real wire names", () => {
-    // `ompRpc`, never `omp-rpc` -- the old hyphenated key was why the
-    // previous gate validated a report the CLI could never produce.
+  test("the four adapters are required under their real TUI labels", () => {
+    // "omp-tui", never a mechanical "ompRpc-tui" -- the wrong guess was
+    // exactly why the previous (headless-era) gate validated a report the
+    // CLI could never produce.
     const message = rejectionFor((r) => {
-      const entry = r.adapters.ompRpc;
+      const entry = r.adapters["omp-tui"];
       // biome-ignore lint/performance/noDelete: exercising a missing key
-      delete (r.adapters as Record<string, unknown>).ompRpc;
-      (r.adapters as Record<string, unknown>)["omp-rpc"] = entry;
+      delete (r.adapters as Record<string, unknown>)["omp-tui"];
+      (r.adapters as Record<string, unknown>)["ompRpc-tui"] = entry;
     });
-    expect(message).toContain("missing adapter: ompRpc");
+    expect(message).toContain("missing adapter: omp-tui");
   });
 
   test("a zero-scenario report is rejected as a stub", () => {
     const message = rejectionFor((r) => {
-      (r.adapters.claude as { scenarios: unknown }).scenarios = [];
+      (r.adapters["claude-tui"] as { scenarios: unknown }).scenarios = [];
     });
     expect(message).toContain("zero scenarios");
   });
 
   test("a report where every scenario failed is rejected", () => {
     const message = rejectionFor((r) => {
-      (r.adapters.codex as { scenarios: unknown }).scenarios = scenarios().map((s) => ({ ...s, outcome: "fail" }));
+      (r.adapters["codex-tui"] as { scenarios: unknown }).scenarios = scenarios().map((s) => ({ ...s, outcome: "fail" }));
     });
     expect(message).toContain("no passing scenarios");
   });
 
   test("an adapter whose report names a different adapter is rejected", () => {
     const message = rejectionFor((r) => {
-      (r.adapters.copilot as { adapter: string }).adapter = "claude";
+      (r.adapters["copilot-tui"] as { adapter: string }).adapter = "claude-tui";
     });
     expect(message).toContain("Adapter mismatch");
   });
 
   test("capabilities must be an object, not the old string array", () => {
     const message = rejectionFor((r) => {
-      (r.adapters.claude as { declaredCapabilities: unknown }).declaredCapabilities = [];
+      (r.adapters["claude-tui"] as { declaredCapabilities: unknown }).declaredCapabilities = [];
     });
     expect(message).toContain("declaredCapabilities");
   });
@@ -122,7 +127,7 @@ describe("conformance gate", () => {
 
   test("a capability claimed on the strength of a FAILED scenario is rejected", () => {
     const message = rejectionFor((r) => {
-      const codex = r.adapters.codex;
+      const codex = r.adapters["codex-tui"];
       const resume = codex.scenarios.find((s) => s.name === "session_resume");
       (resume as { outcome: "pass" | "fail" | "skipped"; detail: string }).outcome = "fail";
       (resume as { detail: string }).detail = "vendor refused session/load";
@@ -135,7 +140,7 @@ describe("conformance gate", () => {
 
   test("an effective capability the adapter never declared is rejected", () => {
     const message = rejectionFor((r) => {
-      (r.adapters.claude.effectiveCapabilities as { usage: string }).usage = "tokensAndCost";
+      (r.adapters["claude-tui"].effectiveCapabilities as { usage: string }).usage = "tokensAndCost";
     });
     expect(message).toContain("effectiveCapabilities.usage");
     expect(message).toContain("carried through unchanged");
@@ -145,7 +150,7 @@ describe("conformance gate", () => {
     // The legitimate shape: the scenario failed, so the capability was
     // downgraded rather than claimed. This must NOT be rejected.
     const report = validReport();
-    const copilot = report.adapters.copilot;
+    const copilot = report.adapters["copilot-tui"];
     const resume = copilot.scenarios.find((s) => s.name === "session_resume");
     (resume as { outcome: "pass" | "fail" | "skipped" }).outcome = "fail";
     (copilot.effectiveCapabilities as { resume: string }).resume = "none";
@@ -154,7 +159,7 @@ describe("conformance gate", () => {
 
   test("a missing capability-gating scenario is rejected", () => {
     const message = rejectionFor((r) => {
-      (r.adapters.claude as { scenarios: unknown }).scenarios = scenarios().filter((s) => s.name !== "isolated_write");
+      (r.adapters["claude-tui"] as { scenarios: unknown }).scenarios = scenarios().filter((s) => s.name !== "isolated_write");
     });
     expect(message).toContain("isolated_write");
   });

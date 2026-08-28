@@ -20,6 +20,7 @@ pub mod claude_conformance;
 pub mod codex;
 pub mod codex_conformance;
 pub mod copilot;
+pub mod copilot_compatibility;
 pub mod copilot_conformance;
 pub mod omp;
 pub mod omp_conformance;

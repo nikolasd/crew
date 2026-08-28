@@ -44,10 +44,7 @@ use super::activity::ActivityClock;
 use super::capability::{AdapterCapabilities, NestedCapability};
 use super::event_sink::{AdapterEventSink, DomainAdapterEventSink, SettlementSink};
 use super::mcp_config::AdapterMcpConfig;
-use super::profile::{
-    AdapterKind, AdapterMode, ClaudeStartupOptions, CodexStartupOptions, CopilotStartupOptions,
-    StartupOptions, WorkerProfile,
-};
+use super::profile::{AdapterKind, AdapterMode, StartupOptions, WorkerProfile};
 use super::run_lifecycle::RunLifecycleSink;
 use super::r#trait::{Adapter, AdapterMessage, StartSpec, VendorSessionRef};
 use super::tui::{
@@ -640,9 +637,14 @@ impl RunDriver for AdapterRegistry {
             use crew_protocol::MessageKind;
             let message = match kind {
                 // The one kind with dedicated redirect semantics on the
-                // adapters that support it (TUI interrupt-then-compose,
-                // Codex turn/steer); adapters without it refuse with
-                // capability_unsupported rather than silently degrading.
+                // adapters that support it. crew-v2 gap-closure WP-C: the
+                // headless Codex adapter's protocol-level `turn/steer` is
+                // retired along with the rest of the headless control
+                // plane -- `TuiAdapter`'s interrupt-then-compose
+                // (`TuiVendor::interrupt_sequence` + `compose_input`) is
+                // now the only steer path. Adapters without it refuse
+                // with capability_unsupported rather than silently
+                // degrading.
                 MessageKind::Steer => AdapterMessage::Steer { text: prompt },
                 MessageKind::Answer => AdapterMessage::Answer { text: prompt },
                 MessageKind::PeerMessage => AdapterMessage::PeerMessage { text: prompt },
@@ -758,18 +760,16 @@ async fn watch_settlement(
 /// `resume`/`send`/etc. are never called; it exists only to make
 /// `running.contains_key` true for the duration of construction.
 fn build_placeholder_adapter() -> Arc<dyn Adapter> {
-    Arc::new(super::OmpRpcAdapter::new(
-        WorkerProfile {
-            id: crate::adapter::ProfileId::new(),
-            adapter: "ompRpc".to_string(),
-            model: String::new(),
-            permission_envelope: serde_json::json!({}),
-            startup_options: StartupOptions::OmpRpc(super::OmpRpcStartupOptions::default()),
-            environment_allowlist: Vec::new(),
-            source: "registry-placeholder".to_string(),
-        },
-        super::OmpRpcAdapterOptions::default(),
-        None,
+    // crew-v2 gap-closure WP-C: this used to construct a real (headless)
+    // `OmpRpcAdapter`, deleted along with the rest of the headless
+    // control plane. Any `Adapter` impl works here -- its own doc
+    // comment above already establishes that `start`/`resume`/`send`/etc.
+    // are never called on this value, so `TerminalAdapter` (already the
+    // lightest-weight impl in this crate: a bare harness-name string, no
+    // process, no I/O) is a placeholder in exactly the same
+    // never-actually-used sense the old one was.
+    Arc::new(super::terminal::TerminalAdapter::new(
+        "registry-placeholder".to_string(),
     ))
 }
 
@@ -1316,56 +1316,32 @@ fn build_adapter(
         ));
     }
 
-    // WP26: `profile.model` was silently ignored by the three headless
-    // vendors; resolve it once and thread it into each adapter's startup
-    // options so the launch argv carries it.
-    let profile_model = (!profile.model.is_empty()).then(|| profile.model.clone());
-    let adapter: Arc<dyn Adapter> = match &profile.startup_options {
-        StartupOptions::Claude(options) => Arc::new(super::ClaudeAdapter::new(
-            ClaudeStartupOptions {
-                model: profile_model.clone(),
-                ..options.clone()
-            },
-            repo_root.to_path_buf(),
-            profile.environment_allowlist.clone(),
-            run_id,
-            task_id,
-            worker_id,
-            mcp,
-        )),
-        StartupOptions::Codex(options) => Arc::new(super::CodexAdapter::new(
-            repo_root.to_path_buf(),
-            CodexStartupOptions {
-                model: profile_model.clone(),
-                ..options.clone()
-            },
-            profile.environment_allowlist.clone(),
-            mcp,
-        )),
-        StartupOptions::Copilot(options) => Arc::new(super::CopilotAdapter::new(
-            PathBuf::from("copilot"),
-            repo_root.to_path_buf(),
-            CopilotStartupOptions {
-                model: profile_model.clone(),
-                ..options.clone()
-            },
-            profile.environment_allowlist.clone(),
-            run_id,
-            task_id,
-            worker_id,
-            mcp,
-        )),
-        StartupOptions::OmpRpc(_) => Arc::new(super::OmpRpcAdapter::new(
-            profile.clone(),
-            super::OmpRpcAdapterOptions::default(),
-            broker,
-        )),
-        StartupOptions::TerminalDegraded(opts) => {
-            Arc::new(super::terminal::TerminalAdapter::new(opts.backend.clone()))
-                as Arc<dyn super::r#trait::Adapter>
+    // crew-v2 gap-closure WP-C: every reserved kind's Headless fallback
+    // (three headless vendor adapters, plus ompRpc's) is retired along
+    // with the adapter code itself -- `gate_profile` already refuses a
+    // Headless-mode profile before either `run_one` or `resume_run` ever
+    // calls this function, so reaching here with one is a defense-in-depth
+    // boundary (a bug bypassing that earlier gate), not a normal path.
+    // `TerminalDegraded` carries no adapter kind and is unaffected by any
+    // of this -- it never took the `if` branch above either.
+    let _ = (mcp, broker); // only ever consumed by the deleted headless arms
+    match &profile.startup_options {
+        StartupOptions::Claude(_)
+        | StartupOptions::Codex(_)
+        | StartupOptions::Copilot(_)
+        | StartupOptions::OmpRpc(_) => {
+            let kind = profile
+                .startup_options
+                .adapter_kind()
+                .expect("these four variants always have an AdapterKind");
+            Err(RegistryError::HeadlessControlPlaneRetired(
+                kind.wire_name().to_string(),
+            ))
         }
-    };
-    Ok(adapter)
+        StartupOptions::TerminalDegraded(opts) => Ok(Arc::new(
+            super::terminal::TerminalAdapter::new(opts.backend.clone()),
+        ) as Arc<dyn Adapter>),
+    }
 }
 
 /// Constructs a real `TuiAdapter<ClaudeTuiVendor>` bound to this run's
@@ -1521,18 +1497,6 @@ mod build_adapter_tests {
     use crate::adapter::profile::{
         ClaudeStartupOptions, CodexStartupOptions, CopilotStartupOptions,
     };
-    use crate::coordination::ScopeTokenStore;
-
-    fn mcp_config() -> AdapterMcpConfig {
-        AdapterMcpConfig {
-            scope_tokens: Arc::new(ScopeTokenStore::new()),
-            project_id: crew_protocol::ProjectId::new(),
-            crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
-            state_dir: std::env::temp_dir(),
-            repository: std::env::temp_dir(),
-        }
-    }
-
     /// A real (but throwaway) `DatabaseHandle` plus a broadcast sender,
     /// for `build_adapter`'s trailing `db`/`project_id`/`events_tx`
     /// parameters -- unused by every branch these tests exercise except
@@ -1566,84 +1530,6 @@ mod build_adapter_tests {
             environment_allowlist: Vec::new(),
             source: "test".to_string(),
         }
-    }
-
-    #[tokio::test]
-    async fn claude_branch_accepts_some_mcp_config() {
-        let profile = profile(StartupOptions::Claude(ClaudeStartupOptions::default()));
-        let (db, _dir, events_tx) = db_and_events().await;
-        let result = build_adapter(
-            &profile,
-            std::path::Path::new("/tmp"),
-            RunId::new(),
-            TaskId::new(),
-            WorkerId::new(),
-            Some(mcp_config()),
-            None,
-            None,
-            db,
-            crew_protocol::ProjectId::new(),
-            events_tx,
-            None,
-            None,
-        );
-        assert!(
-            result.is_ok(),
-            "Claude branch must accept Some(mcp): {}",
-            result.err().map(|e| e.to_string()).unwrap_or_default()
-        );
-    }
-
-    #[tokio::test]
-    async fn codex_branch_accepts_some_mcp_config() {
-        let profile = profile(StartupOptions::Codex(CodexStartupOptions::default()));
-        let (db, _dir, events_tx) = db_and_events().await;
-        let result = build_adapter(
-            &profile,
-            std::path::Path::new("/tmp"),
-            RunId::new(),
-            TaskId::new(),
-            WorkerId::new(),
-            Some(mcp_config()),
-            None,
-            None,
-            db,
-            crew_protocol::ProjectId::new(),
-            events_tx,
-            None,
-            None,
-        );
-        assert!(
-            result.is_ok(),
-            "Codex branch must accept Some(mcp): {}",
-            result.err().map(|e| e.to_string()).unwrap_or_default()
-        );
-    }
-
-    #[tokio::test]
-    async fn copilot_branch_accepts_some_mcp_config() {
-        let profile = profile(StartupOptions::Copilot(CopilotStartupOptions::default()));
-        let (db, _dir, events_tx) = db_and_events().await;
-        let result = build_adapter(
-            &profile,
-            std::path::Path::new("/tmp"),
-            RunId::new(),
-            TaskId::new(),
-            WorkerId::new(),
-            Some(mcp_config()),
-            None,
-            None,
-            db,
-            crew_protocol::ProjectId::new(),
-            events_tx,
-            None,
-            None,
-        );
-        assert!(
-            result.is_ok(),
-            "Copilot branch must accept Some(mcp): {}",
-            result.err().map(|e| e.to_string()).unwrap_or_default()
-        );
     }
 
     /// `mode: "tui"` with NO `TuiSupport` supplied must be a typed
@@ -1829,15 +1715,34 @@ mod build_adapter_tests {
         );
     }
 
-    /// `mode: "headless"` (the default) on every reserved adapter kind
-    /// must be completely unaffected by the `mode: "tui"` guard above.
+    /// crew-v2 gap-closure WP-C: `mode: "headless"` (still the
+    /// `AdapterMode` default, for wire-compat with pre-WP13 profiles) on
+    /// every reserved adapter kind is now retired -- `build_adapter`
+    /// refuses it with the typed `HeadlessControlPlaneRetired` error,
+    /// never silently building a (now-deleted) headless adapter. This
+    /// replaces the old
+    /// `headless_mode_is_unaffected_on_every_reserved_kind`, which
+    /// asserted the opposite.
     #[tokio::test]
-    async fn headless_mode_is_unaffected_on_every_reserved_kind() {
+    async fn headless_mode_is_refused_on_every_reserved_kind_not_silently_built() {
         let (db, _dir, events_tx) = db_and_events().await;
-        for options in [
-            StartupOptions::Claude(ClaudeStartupOptions::default()),
-            StartupOptions::Codex(CodexStartupOptions::default()),
-            StartupOptions::Copilot(CopilotStartupOptions::default()),
+        for (options, wire_name) in [
+            (
+                StartupOptions::Claude(ClaudeStartupOptions::default()),
+                "claude",
+            ),
+            (
+                StartupOptions::Codex(CodexStartupOptions::default()),
+                "codex",
+            ),
+            (
+                StartupOptions::Copilot(CopilotStartupOptions::default()),
+                "copilot",
+            ),
+            (
+                StartupOptions::OmpRpc(crate::adapter::profile::OmpRpcStartupOptions::default()),
+                "ompRpc",
+            ),
         ] {
             let profile = profile(options);
             let result = build_adapter(
@@ -1855,11 +1760,17 @@ mod build_adapter_tests {
                 None,
                 None,
             );
-            assert!(
-                result.is_ok(),
-                "headless mode must still build normally: {}",
-                result.err().map(|e| e.to_string()).unwrap_or_default()
-            );
+            // `Arc<dyn Adapter>` (the `Ok` type) has no `Debug` impl, so
+            // `expect_err`/`unwrap_err` (which format it on the panic
+            // path) don't apply here -- match manually instead.
+            match result {
+                Err(err) => assert_eq!(
+                    err,
+                    RegistryError::HeadlessControlPlaneRetired(wire_name.to_string()),
+                    "{wire_name}: must be the typed retirement refusal"
+                ),
+                Ok(_) => panic!("{wire_name}: headless must be refused, not built"),
+            }
         }
     }
 
@@ -2161,7 +2072,22 @@ mod settlement_tests {
             environment_allowlist: Vec::new(),
             source: "test".to_string(),
         };
-        let capabilities = crate::adapter::omp_rpc::OmpRpcAdapter::declared_capabilities();
+        // This test's own `authorize()` call never reads capabilities at
+        // all (see `AdapterAuthorization::authorize`'s doc comment), so
+        // any value proves the concurrency-ceiling point -- deliberately
+        // not read from a specific adapter's `declared_capabilities()`.
+        let capabilities = AdapterCapabilities {
+            protocol: crate::adapter::capability::ProtocolKind::Terminal,
+            resume: crate::adapter::capability::ResumeCapability::Session,
+            steering: crate::adapter::capability::SteeringCapability::ActiveTurn,
+            approvals: crate::adapter::capability::ApprovalsCapability::None,
+            structured_result: false,
+            usage: crate::adapter::capability::UsageCapability::None,
+            nested: NestedCapability::None,
+            native_view: crate::adapter::capability::NativeViewCapability::IndependentTui,
+            workspace_control: crate::adapter::capability::WorkspaceControlCapability::Write,
+            durability: crate::adapter::capability::DurabilityCapability::VendorResumable,
+        };
 
         // Book the one slot, then prove the ceiling is exhausted.
         authorization
@@ -2231,6 +2157,7 @@ mod conformance_cache_tests {
     // `FIXTURE_SUITE_RUNS_SERIAL`, not a module-local lock: this counter is
     // one process-global shared with `conformance::tests` too, in the same
     // unit-test binary -- see that static's own doc comment.
+    use crate::adapter::profile::ClaudeStartupOptions;
     use crate::conformance::{FIXTURE_SUITE_RUNS, FIXTURE_SUITE_RUNS_SERIAL as SERIAL};
     use crew_protocol::{
         ProjectId, Run, RunFlags, RunState, TaskRef, Timestamp, Worker, WorkerProfileRef,

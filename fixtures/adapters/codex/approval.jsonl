@@ -1,2 +1,0 @@
-{"jsonrpc":"2.0","id":7,"method":"execCommandApproval","params":{"callId":"tool-000000000001","conversationId":"11111111-1111-4111-8111-000000000001","command":["rm","-rf","build"],"cwd":"/workspace","parsedCmd":[{"type":"unknown","cmd":["rm","-rf","build"]}],"reason":"cleans the build directory before rebuilding"}}
-{"jsonrpc":"2.0","id":8,"method":"applyPatchApproval","params":{"callId":"tool-000000000002","conversationId":"11111111-1111-4111-8111-000000000001","fileChanges":{"src/lib.rs":{"kind":"update"}},"reason":"apply the fix"}}
