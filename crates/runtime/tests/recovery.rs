@@ -772,6 +772,33 @@ async fn journal_count(db: &DatabaseHandle, run_id: crew_protocol::RunId, marker
     value.as_i64().expect("count is an integer") as usize
 }
 
+/// The lowest `sequence` of a journaled event matching `marker` for this
+/// run, or `None` if it never appears. Used to pin ordering between two
+/// markers, not just their presence (M-3 rider, WP-A review).
+async fn first_journal_sequence(
+    db: &DatabaseHandle,
+    run_id: crew_protocol::RunId,
+    marker: &str,
+) -> Option<i64> {
+    let run_id = run_id.to_string();
+    let marker_owned = marker.to_string();
+    let value = db
+        .run_domain_op(Box::new(move |conn| {
+            // `MIN` over zero matching rows still returns exactly one row
+            // (with a NULL aggregate), never zero rows, so this never needs
+            // `.optional()`.
+            let sequence: Option<i64> = conn.query_row(
+                "SELECT MIN(sequence) FROM events WHERE run_id = ?1 AND event_json LIKE ?2",
+                rusqlite::params![run_id, format!("%{marker_owned}%")],
+                |row| row.get(0),
+            )?;
+            Ok(serde_json::json!(sequence))
+        }))
+        .await
+        .expect("journal sequence query");
+    value.as_i64()
+}
+
 /// Polls until the given journal marker appears (or times out), for
 /// assertions about work the resumed VENDOR does asynchronously.
 async fn wait_for_journalled(
@@ -1155,6 +1182,30 @@ async fn terminalize_takes_the_idempotent_branch_when_the_run_is_already_termina
     assert_eq!(
         journal_count(&scenario.db, scenario.run_id, "\"code\":\"resume_failed\"").await,
         1
+    );
+
+    // M-3 rider (WP-A review): pin the idempotent branch itself, not just
+    // its outcome. The doc comment above claims a specific event order --
+    // `ProcessExited` lands (settling the run to `failed` for real) BEFORE
+    // `terminalize`'s own `resume_failed` write hits the already-terminal
+    // run and takes the idempotent re-read branch. Assert that ordering
+    // directly via journal sequence, rather than only inferring it from the
+    // absence of "state re-read also failed" and the correct end state --
+    // either of those could stay true even if a future change reordered the
+    // two writes for an unrelated reason.
+    let process_exited_seq = first_journal_sequence(&scenario.db, scenario.run_id, "ProcessExited")
+        .await
+        .expect("a real ProcessExited must be journaled for this scenario's fake vendor exit");
+    let resume_failed_seq =
+        first_journal_sequence(&scenario.db, scenario.run_id, "\"code\":\"resume_failed\"")
+            .await
+            .expect("resume_failed must be journaled (asserted via count above)");
+    assert!(
+        process_exited_seq < resume_failed_seq,
+        "ProcessExited (seq {process_exited_seq}) must precede resume_failed (seq \
+         {resume_failed_seq}) in the journal -- that ordering is what forces terminalize's \
+         transition_run call to hit the already-failed run and take the idempotent branch, \
+         rather than the normal working->failed edge"
     );
 
     scenario.db.shutdown().await.expect("shutdown database");

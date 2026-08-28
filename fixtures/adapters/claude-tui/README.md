@@ -17,9 +17,11 @@ Say hi, run 'echo crew-fixture', then ask me exactly one clarifying question. [c
 The newest session file under `~/.claude/projects/<slug>/` was copied, then processed two ways
 before being committed:
 
-1. `crates/runtime/src/conformance/scrub::Scrubber` (the existing fixture scrubber): every
-   timestamp, session id, and other `uuid` rewritten to stable placeholders, secret-shaped strings
-   redacted, `cwd` rewritten to `/workspace/crew`.
+1. `crates/runtime/src/conformance/scrub::Scrubber` (the fixture scrubber that existed at capture
+   time; deleted by crew-v2 gap-closure WP-C along with the headless capture tool it served --
+   this describes how the file was produced, not a currently-runnable tool): every timestamp,
+   session id, and other `uuid` rewritten to stable placeholders, secret-shaped strings redacted,
+   `cwd` rewritten to `/workspace/crew`.
 2. A further, one-off manual pass over every `type: "attachment"` entry's own nested payload
    (`content`/`stdout`/`addedNames`/`addedBlocks`/... fields), replacing bulky text with a short
    placeholder string. These fields carried the *recording agent's own* personal hook/skill/MCP
@@ -51,10 +53,14 @@ confirmed for the interactive PTY path specifically. WP29's live TUI smoke test 
 gap for real -- if it finds the interactive transcript format differs, this fixture (and
 `ClaudeTuiVendor`'s format mapping) gets revisited then, not assumed correct forever.
 
-**Answered:** WP29's live TUI conformance run proved `read_only_start_and_progress` against a real
-interactive `claude` session (PASS) -- the interactive PTY path's on-disk transcript uses the same
-entry shapes this headless capture already covers, so `ClaudeTuiVendor`'s format mapping needed no
-revisiting.
+**Answered, narrowly:** WP29's live TUI conformance run proved `read_only_start_and_progress`
+against a real interactive `claude` session (PASS). That scenario only exercises session-meta
+(`sessionId`/`timestamp` presence) and `assistant`-text mapping -- it confirms *those two* entry
+shapes match between headless and interactive capture, not "the same entry shapes" broadly as
+originally claimed here. It says nothing about `tool_use`, the nine `attachment` subtypes, or the
+question-detection heuristic specifically: none of those were exercised by that scenario, live or
+otherwise, so they remain exactly as unconfirmed for the interactive path as the paragraph above
+already says.
 
 ## What the recording surfaced, beyond the v1 plan's format sketch
 
