@@ -172,9 +172,11 @@ pub enum ClientAuth {
 later and every non-exhaustive `match` in the codebase becomes a compile error pointing you at
 what to update. That is why this codebase leans so hard on enums.
 
-The CLI layer (`crates/runtime/src/cli.rs`) defines six subcommands — `serve`, `status`, `stop`,
-`monitor`, `schema`, and `audit export` — each as a variant of a `Command` enum, and dispatches
-to a typed handler function per variant:
+The CLI layer (`crates/runtime/src/cli.rs`) defines each subcommand — `serve`, `status`, `stop`,
+`monitor`, `schema`, `audit export`, and others (`doctor`, `config`, `conformance`, `adapters`,
+`lease`, `attach`, `coordination-mcp`, `display` — the full, current list is `Command`'s own
+definition, not repeated here since it keeps growing) — as a variant of a `Command` enum, and
+dispatches to a typed handler function per variant. A representative slice:
 
 ```rust
 #[derive(Subcommand)]
@@ -284,10 +286,11 @@ Traits also give you *seams* for testing without a mocking framework: `ipc/mod.r
 `SystemPeerCredentialReader` / `RejectAllWorkerVerifier`, tests inject fakes. That's dependency
 injection, Rust-style: a trait object or generic parameter instead of a DI container.
 
-The runtime crate's `lib.rs` exposes 19 public modules — `adapter`, `approval`, `audit`, `config`,
-`conformance`, `coordination`, `db`, `display`, `doctor`, `domain`, `ipc`, `lifecycle`, `paths`,
-`policy`, `recovery`, `security`, `service`, `supervisor`, `workspace` — each re-exporting its
-key types. When you're lost about where something lives, start from `lib.rs`.
+The runtime crate's `lib.rs` exposes over 20 public modules — `adapter`, `approval`, `audit`,
+`canonical_json`, `config`, `conformance`, `coordination`, `dashboard`, `db`, `display`, `doctor`,
+`domain`, `env_flag`, `ipc`, `lifecycle`, `paths`, `policy`, `recovery`, `security`, `service`,
+`supervisor`, `timeout_sweep`, `workspace` — each re-exporting its key types. When you're lost
+about where something lives, start from `lib.rs`.
 
 **Do now:** pick `RuntimeStatus` in `rpc.rs`, follow it to
 `packages/protocol-ts/src/generated/RuntimeStatus.ts` and to its entry in
@@ -424,12 +427,12 @@ architecture doc promises: stopping event committed → actor closed → socket 
 - **Unit tests** live inside source files in a `#[cfg(test)] mod tests { ... }` block (= "compile
   only when testing"). See the bottom of `security/redaction.rs`, `version.rs`, `ids.rs`, etc.
 - **Integration tests** are files in `crates/runtime/tests/` compiled as separate crates using
-  only the public API — there are 30+ test files covering `paths`, `database`, `redaction_boundary`,
-  `ipc`, `lifecycle`, `domain_repository`, `orchestration_rpc`, `coordination`, `approval`, every
-  adapter (claude, codex, copilot, omp_rpc), every display (terminal, tmux, herdr), audit,
-  conformance, supervisor, workspace (apply, lease, materialize), config, and monitor. The
-  lifecycle suite runs the actual compiled binary via `env!("CARGO_BIN_EXE_crewd")` as real
-  child processes.
+  only the public API — 50+ test files covering `paths`, `database`, `redaction_boundary`,
+  `ipc`, `lifecycle`, `domain_repository`, `orchestration_rpc`, `coordination`, `approval`, the
+  TUI vendor adapters (Claude/Codex/Copilot/OMP-RPC, e.g. `tui_adapter.rs`,
+  `tui_claude_registry.rs`), every display (terminal, tmux, herdr), audit, conformance,
+  supervisor, workspace (apply, lease, materialize), config, and monitor. The lifecycle suite
+  runs the actual compiled binary via `env!("CARGO_BIN_EXE_crewd")` as real child processes.
 - Protocol integration tests live in `crates/protocol/tests/`: `wire_contract.rs`,
   `workspace_contract.rs`, `domain_contract.rs`, `coordination_contract.rs`, `fixtures.rs`.
 - `#[test]` marks a test; `#[tokio::test]` gives it an async runtime; `assert!`, `assert_eq!`

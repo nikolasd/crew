@@ -130,7 +130,7 @@ by a git credential helper). `/crew-install` additionally needs a `GITHUB_TOKEN`
 `GH_TOKEN` environment variable, or that same `gh auth login` session, to download the asset — see
 the README's [Installation](../README.md#installation) section. The `crewd` binary itself resolves
 in two tiers (see
-[`plugin-usage.md`](getting-started.md#how-the-extension-finds-and-starts-crewd)): `OMP_CREW_BINARY`
+[`getting-started.md`](getting-started.md#how-the-extension-finds-and-starts-crewd)): `OMP_CREW_BINARY`
 (a local-development override) if set, otherwise the SHA-256-verified binary
 `/crew-install` cached under the Crew state root — there's no separate binary install
 step beyond that command.
@@ -153,7 +153,7 @@ separate step. `/marketplace upgrade crew@crew` refreshes the extension + skills
 repository; if that bumps the extension's version, re-run `/crew-install` to download the
 matching binary (a version-mismatched cached binary is rejected rather than silently reused). If
 you're testing an unreleased build instead, use the `OMP_CREW_BINARY` override described in
-[`plugin-usage.md`](getting-started.md#how-the-extension-finds-and-starts-crewd) instead of
+[`getting-started.md`](getting-started.md#how-the-extension-finds-and-starts-crewd) instead of
 installing anything.
 
 1. **Stop the running daemon** for any repository you're about to touch: `crewd stop --repo ...`
@@ -185,8 +185,9 @@ installing anything.
 - `crewd adapters --json` reports each adapter's effective capabilities from a fixture run — start
   there before assuming a live-vendor issue.
 - `CREW_DISABLE_VENDOR_CLI=1 cargo test --test conformance` runs the same checks offline; drop the
-  env var (and set the adapter's live-gate var, e.g. `CREW_LIVE_CLAUDE=1`) to exercise the real
-  vendor CLI.
+  env var (unset, not `=0`) to exercise the real vendor CLI via `crewd conformance --live` (see
+  [`cli-reference.md`](cli-reference.md#crewd-conformance)) — there is no per-adapter live-gate
+  variable, one switch gates all four.
 - Confirm the vendor CLI itself is installed and authenticated — a conformance failure here is
   usually the vendor CLI, not Crew.
 
