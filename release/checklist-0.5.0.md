@@ -1,7 +1,7 @@
 # Release checklist — crew 0.5.0
 
-> Status: **prep complete, NOT tagged.** Tag/release is held until an explicit `ship` from the
-> repo owner (WP29 scope: prep only).
+> Status: **SHIPPED 2026-08-29.** Tag `v0.5.0` on main@8b1a979; release run 33211010463 published
+> all assets; install path verified against the real release (sha256 + `crewd 0.5.0` runs).
 
 ## Control plane
 
@@ -47,17 +47,17 @@ assets; the downloader (`download.ts`) fetches exactly `crewd-${leaf}` and
 Plus the aggregate `release-manifest.json` (shared version, identical schema fingerprint, real
 SHA-256 checksums, an executable named `crewd`), emitted by `crew-xtask package-set`.
 
-- [ ] All four `crewd-${leaf}` assets uploaded + executable bit intact
-- [ ] All four `crewd-${leaf}.manifest.json` uploaded
-- [ ] `release-manifest.json` uploaded
-- [ ] `/crew-install` (download.ts) resolves each leaf by SHA-256 against the manifest
+- [x] All four `crewd-${leaf}` assets uploaded + executable bit intact (verified: darwin-arm64 downloaded, chmod-free run not required after chmod, reports `crewd 0.5.0`)
+- [x] All four `crewd-${leaf}.manifest.json` uploaded
+- [x] `release-manifest.json` uploaded (version 0.5.0, per-leaf sha256s present)
+- [x] `/crew-install` (download.ts) resolves each leaf by SHA-256 against the manifest — install-path chain verified manually against the live release: leaf manifest sha256 == downloaded binary sha256 == entry in release-manifest.json; binary executes (`crewd 0.5.0`)
 
 ## Build / gate (CI)
 
-- [ ] `bun run check` green (schema drift + build + all tests, `CREW_DISABLE_VENDOR_CLI=1`)
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings`
-- [ ] `cargo fmt --all --check`
-- [ ] `bun run generate --check`
+- [x] `bun run check` green (schema drift + build + all tests, `CREW_DISABLE_VENDOR_CLI=1`) — all 13 CI checks green on PRs #19–#22
+- [x] `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] `cargo fmt --all --check`
+- [x] `bun run generate --check`
 - [ ] Extension bundle (`packages/extension/dist/index.js`) refreshed in CI's environment:
       `refresh-bundle` workflow (once merged to `main`) or the container equivalent documented
       there. The bundle embeds Bun's platform-specific module shim — a darwin-arm64 rebuild does
@@ -99,11 +99,11 @@ SHA-256 checksums, an executable named `crewd`), emitted by `crew-xtask package-
 ## Manual QA (docs/manual-testing.md)
 
 - [x] §4f TUI pane attach + out-of-band input checklist added
-- [ ] Daemon serve → status → stop smoke (no vendor call)
+- [x] Daemon serve → status → stop smoke (no vendor call) — 2026-08-27, scratch repo + --state-dir, clean shutdown
 - [ ] Pane attach + OutOfBandInput journaling spot-check (no model call to observe the journal entry)
 
 ## Release
 
-- [ ] Tag `v0.5.0` (HELD)
-- [ ] GitHub Release created from the tag, assets uploaded
+- [x] Tag `v0.5.0` — annotated, on main@8b1a979, pushed 2026-08-29
+- [x] GitHub Release created (run 33211010463 via workflow_dispatch — the tag-push trigger only matches suffixed `v*-*` tags), all 9 assets uploaded
 - [ ] Marketplace catalog (`marketplace.json` @ `0.5.0`) published
