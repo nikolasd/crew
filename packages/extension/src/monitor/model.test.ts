@@ -53,6 +53,41 @@ test("a runEvent creates a row with task/worker/state", () => {
   expect(row?.state).toBe("working");
 });
 
+// CREW-9 review requirement: a pane-creation failure (e.g. an
+// unrecognized terminal falling back with no visible mechanism) is
+// journaled as a `diagnostic` event -- this must surface in the widget's
+// row, not be silently dropped, or the operator sees a pane that never
+// appeared with no explanation (the exact failure mode CREW-1/CREW-11
+// already fixed once).
+test("a diagnostic event on an existing run sets latestActivity to its message", () => {
+  const withRow = reduceEvent(EMPTY_MONITOR_STATE, runEvent("run-1", "task-1", "worker-1", "working"));
+  const next = reduceEvent(
+    withRow,
+    envelope({
+      runId: "run-1",
+      event: {
+        type: "diagnostic",
+        payload: { level: "warning", code: "pane_creation_failed", message: "pane creation on osWindow failed, falling back to hidden: no window" },
+      },
+    }),
+  );
+  expect(next.rows["run-1"]?.latestActivity).toBe("pane creation on osWindow failed, falling back to hidden: no window");
+});
+
+test("a diagnostic event with no associated run is a no-op, not a crash", () => {
+  const next = reduceEvent(
+    EMPTY_MONITOR_STATE,
+    envelope({
+      runId: null,
+      event: {
+        type: "diagnostic",
+        payload: { level: "info", code: "worker_mcp_unavailable", message: "workers will start without worker-coordination MCP tools" },
+      },
+    }),
+  );
+  expect(next.rows).toEqual({});
+});
+
 // ---- Evidence events: usage, artifacts, workspace activity. ----
 //
 // All three carry `runId` in their own payload (unlike message/approval/

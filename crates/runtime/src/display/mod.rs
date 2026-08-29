@@ -58,16 +58,30 @@ pub struct PaneRequest {
     pub title: String,
     pub command: Vec<String>,
     pub placement: DisplayPlacement,
+    /// The submitting caller's own `$TERM_PROGRAM` hint (CREW-9). Read
+    /// only by [`OsWindowDisplay`](crate::display::os_window::OsWindowDisplay)
+    /// to target the right terminal application; every other backend
+    /// ignores it.
+    pub launch_program: Option<crew_protocol::HostProgramHint>,
 }
 
 /// A pane [`DisplayBackendTrait::create_pane`] created: which backend
-/// owns it and the backend's own reference to it (a tmux/Herdr pane id;
-/// empty for [`HiddenDisplay`], which owns nothing). The only thing
-/// [`DisplayBackendTrait::close_pane`] needs to close it again.
+/// owns it, the backend's own reference to it (a tmux/Herdr pane id;
+/// empty for [`HiddenDisplay`], which owns nothing), and where it was
+/// *actually* placed. The only thing [`DisplayBackendTrait::close_pane`]
+/// needs to close it again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneHandle {
     pub backend: DisplayBackend,
     pub pane_ref: String,
+    /// What actually happened, which is not always what was requested
+    /// (CREW-9): `OsWindowDisplay` reports `DisplayPlacement::Window` for
+    /// a plain new window (Terminal.app, or Ghostty predating its
+    /// AppleScript tab support) even when a caller asked for `Tab` --
+    /// callers must never be told `Tab` happened when it did not. Every
+    /// backend that genuinely honors the requested placement (tmux,
+    /// Herdr) echoes it back unchanged.
+    pub placement: DisplayPlacement,
 }
 
 /// Result of a command execution — platform-independent, fixture-friendly.
@@ -260,6 +274,7 @@ impl DisplayRegistry {
             selected,
             placement: preference.placement,
             attempts,
+            launch_program: preference.launch_program,
         }
     }
 }

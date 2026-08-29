@@ -127,6 +127,13 @@ impl TmuxDisplay {
                     .to_string(),
             );
         }
+        if req.placement == DisplayPlacement::Window {
+            return Err(
+                "DisplayPlacement::Window is OsWindowDisplay's own actual-outcome placement, \
+                 never a valid request for tmux"
+                    .to_string(),
+            );
+        }
         if !self.inside_a_real_session() {
             return Err(
                 "no active tmux session; refusing to start an ambient one for pane creation"
@@ -137,7 +144,7 @@ impl TmuxDisplay {
         let subcommand = match req.placement {
             DisplayPlacement::Tab => "new-window",
             DisplayPlacement::SplitRight | DisplayPlacement::SplitDown => "split-window",
-            DisplayPlacement::Embedded | DisplayPlacement::Workspace => {
+            DisplayPlacement::Embedded | DisplayPlacement::Workspace | DisplayPlacement::Window => {
                 unreachable!("handled above")
             }
         };
@@ -145,7 +152,7 @@ impl TmuxDisplay {
         match req.placement {
             DisplayPlacement::SplitRight => argv.push("-h".to_string()),
             DisplayPlacement::SplitDown => argv.push("-v".to_string()),
-            DisplayPlacement::Tab | DisplayPlacement::Embedded | DisplayPlacement::Workspace => {}
+            DisplayPlacement::Tab | DisplayPlacement::Embedded | DisplayPlacement::Workspace | DisplayPlacement::Window => {}
         }
         argv.push("-P".to_string());
         argv.push("-F".to_string());
@@ -260,6 +267,7 @@ impl DisplayBackendTrait for TmuxDisplay {
             Ok(PaneHandle {
                 backend: DisplayBackend::Tmux,
                 pane_ref,
+                placement: req.placement,
             })
         })
     }

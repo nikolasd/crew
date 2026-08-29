@@ -235,6 +235,20 @@ function eventPatch(envelope: EventEnvelope): EventPatch | undefined {
         latestActivity: `run ${event.payload.state}`,
       };
     }
+    case "diagnostic": {
+      // No `runId` in the payload itself -- like message/approval/child
+      // events, it travels on the envelope. A diagnostic before any row
+      // exists (e.g. a resolve-time failure) has nothing to attach to and
+      // is correctly a no-op; CREW-10's `lastSubmitError` is the
+      // dedicated surface for that pre-row case.
+      if (runId === null || runId === undefined) {
+        return undefined;
+      }
+      return {
+        runId,
+        latestActivity: event.payload.message,
+      };
+    }
     case "runFlagsEvent": {
       return {
         runId: event.payload.runId,

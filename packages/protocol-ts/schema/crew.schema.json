@@ -2732,6 +2732,11 @@
           "description": "A new workspace (Herdr only; unsupported by tmux).",
           "type": "string",
           "const": "workspace"
+        },
+        {
+          "description": "A new, separate OS-level window (CREW-9) -- not a tab or split of\nthe caller's own terminal at all. `OsWindowDisplay`'s honest report\nof what it actually opened when the target terminal has no\ntab-creation mechanism it can drive (e.g. Terminal.app, or Ghostty\nversions predating its AppleScript support): callers must never\nsee `Tab` echoed back for a placement that was, in fact, a whole\nnew window.",
+          "type": "string",
+          "const": "window"
         }
       ]
     },

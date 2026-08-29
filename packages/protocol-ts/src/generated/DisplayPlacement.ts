@@ -4,4 +4,4 @@
  * Where a display backend places a pane relative to the caller's own
  * terminal. Changes presentation only; never run ownership.
  */
-export type DisplayPlacement = "embedded" | "splitRight" | "splitDown" | "tab" | "workspace";
+export type DisplayPlacement = "embedded" | "splitRight" | "splitDown" | "tab" | "workspace" | "window";

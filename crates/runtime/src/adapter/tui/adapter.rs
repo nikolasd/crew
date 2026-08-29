@@ -414,6 +414,10 @@ pub struct TuiAdapter<V: TuiVendor> {
     panes_dir: PathBuf,
     placement: DisplayPlacement,
     forced_backend: Option<DisplayBackend>,
+    /// The submitting caller's own `$TERM_PROGRAM` hint (CREW-9), from the
+    /// run's resolved `DisplaySelection`. Threaded straight through to
+    /// `PaneAttachRequest`; only `OsWindowDisplay` ever reads it.
+    launch_program: Option<crew_protocol::HostProgramHint>,
     close_on_exit: CloseOnExit,
     timings: TuiTimings,
     /// Resume-time knowledge supplied at construction: see
@@ -437,6 +441,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
         panes_dir: PathBuf,
         placement: DisplayPlacement,
         forced_backend: Option<DisplayBackend>,
+        launch_program: Option<crew_protocol::HostProgramHint>,
         close_on_exit: CloseOnExit,
         timings: TuiTimings,
         resume: ResumeContext,
@@ -451,6 +456,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
             panes_dir,
             placement,
             forced_backend,
+            launch_program,
             close_on_exit,
             timings,
             resume,
@@ -687,6 +693,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
                 adapter: self.kind().to_string(),
                 placement: self.placement,
                 forced_backend: self.forced_backend,
+                launch_program: self.launch_program,
             })
             .await;
         *pane_identity
