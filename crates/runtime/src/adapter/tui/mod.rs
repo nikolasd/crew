@@ -28,6 +28,7 @@ pub use codex::CodexTuiVendor;
 pub use copilot::CopilotTuiVendor;
 pub use omp::OmpTuiVendor;
 mod discovery;
+mod input;
 mod tailer;
 
 use std::collections::BTreeMap;
@@ -406,6 +407,7 @@ where
             discovery_timeout: Duration::from_secs(120),
             tailer_poll: Duration::from_millis(100),
             submit_idle: Duration::from_secs(10),
+            paste_write_timeout: Duration::from_secs(10),
             escalation: EscalationTimings::default(),
             preflight_timeout: Duration::from_secs(8),
         },

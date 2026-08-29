@@ -363,7 +363,12 @@ echo "Welcome to GitHub Copilot CLI!"
 SESSION_ID="44444444-4444-4444-8444-000000000042"
 SESSION="{session_dir}/$SESSION_ID.jsonl"
 printf '%s\n' '{{"type":"session.start","data":{{"sessionId":"'"$SESSION_ID"'","startTime":"2026-01-01T00:00:00.000Z"}}}}' >> "$SESSION"
+CREW_ESC=$(printf '\033')
 while IFS= read -r line; do
+  # A real vendor TUI consumes bracketed-paste framing and keeps only the
+  # pasted content; this double does the same, so the text it echoes back
+  # is the prompt itself rather than the escape sequences around it.
+  line=$(printf '%s' "$line" | tr -d "$CREW_ESC" | sed -e 's/\[200~//g' -e 's/\[201~//g')
   case "$line" in
     *"[crew:"*)
       printf '%s\n' '{{"type":"user.message","data":{{"content":"'"$line"'"}},"id":"u0"}}' >> "$SESSION"
@@ -394,6 +399,7 @@ fn fast_timings() -> TuiTimings {
         discovery_timeout: Duration::from_secs(4),
         tailer_poll: Duration::from_millis(40),
         submit_idle: Duration::from_millis(50),
+        paste_write_timeout: Duration::from_millis(500),
         escalation: crate::supervisor::EscalationTimings::default(),
         preflight_timeout: Duration::from_secs(4),
     }

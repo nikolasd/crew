@@ -53,6 +53,7 @@ use crate::display::{
 use crate::supervisor::{EscalationTimings, PtyProcess};
 
 use super::discovery::{DiscoveryError, find_transcript_by_nonce};
+use super::input::paste_chunks;
 use super::tailer::{TailerHandle, TranscriptTailer};
 use super::{Cursor, TranscriptFormat, TuiEvent};
 
@@ -216,6 +217,11 @@ pub struct TuiTimings {
     /// How long the PTY must stay output-silent before the prompt's Enter
     /// (and queue-style `send`s) are delivered -- see [`ENTER_IDLE_MIN`].
     pub submit_idle: Duration,
+    /// How long a single paste chunk may sit unaccepted by the PTY before
+    /// the prompt is declared undeliverable -- see
+    /// [`PASTE_CHUNK_WRITE_TIMEOUT`], which is this field's production
+    /// value.
+    pub paste_write_timeout: Duration,
     /// SIGINT/SIGTERM/SIGKILL escalation timings for [`PtyProcess`].
     pub escalation: EscalationTimings,
     /// The bound on [`TuiVendor::preflight`]'s own external command, if it
@@ -236,6 +242,7 @@ impl Default for TuiTimings {
             discovery_timeout: Duration::from_secs(8),
             tailer_poll: Duration::from_millis(200),
             submit_idle: ENTER_IDLE_MIN,
+            paste_write_timeout: PASTE_CHUNK_WRITE_TIMEOUT,
             escalation: EscalationTimings::default(),
             preflight_timeout: Duration::from_secs(8),
         }
@@ -260,6 +267,73 @@ const ENTER_IDLE_MIN: Duration = Duration::from_secs(10);
 /// Enter regardless rather than fail the run -- that degrades to today's
 /// single-shot behavior instead of adding a new failure mode.
 const ENTER_IDLE_CAP: Duration = Duration::from_secs(90);
+
+/// Payload bytes per PTY write when delivering a prompt (CREW-4). A
+/// prompt used to travel as one write of arbitrary size; chunking keeps
+/// each write small enough that the vendor's read loop and the tty's own
+/// buffering can drain it between writes, which is what makes the
+/// per-chunk timeout below a meaningful liveness signal rather than a
+/// race against one huge blocking write.
+const PASTE_CHUNK_BYTES: usize = 1024;
+
+/// Pause between paste chunks, giving the vendor's reader and render pass
+/// room to consume the previous one. Deliberately short: it is pacing, not
+/// synchronization -- correctness comes from the framing and the timeout.
+const PASTE_CHUNK_PAUSE: Duration = Duration::from_millis(15);
+
+/// How long a single paste chunk may sit unaccepted before the prompt is
+/// declared undeliverable. `PtyProcess::write_input` resolves only once
+/// the kernel has taken every byte, so a chunk that never completes means
+/// the vendor has stopped reading its stdin -- the one case where the old
+/// single blocking write would hang or silently lose the tail. Failing
+/// here is the "never a silent fragment" half of CREW-4.
+const PASTE_CHUNK_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The prompt-injection half of the readiness gate: the text to type once
+/// the vendor's stdin is wired, and the bound on each chunk's write.
+struct PromptInjection<'a> {
+    text: &'a str,
+    write_timeout: Duration,
+}
+
+/// Writes `text` into the PTY as one bracketed paste, in paced chunks.
+///
+/// The framing makes every byte of `text` content rather than keystrokes,
+/// so a multi-line prompt is no longer submitted line-by-line (CREW-4).
+/// The submit byte is never part of this: callers deliver the vendor's own
+/// submit convention separately, once the TUI is idle.
+async fn write_paste(
+    pty: &Arc<PtyProcess>,
+    kind: &str,
+    op: &'static str,
+    text: &str,
+    write_timeout: Duration,
+) -> Result<(), AdapterError> {
+    let chunks = paste_chunks(text, PASTE_CHUNK_BYTES);
+    let total = chunks.len();
+    for (index, chunk) in chunks.into_iter().enumerate() {
+        match tokio::time::timeout(write_timeout, pty.write_input(&chunk)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => return Err(AdapterError::process(kind, op, err.to_string())),
+            Err(_) => {
+                return Err(AdapterError::process(
+                    kind,
+                    op,
+                    format!(
+                        "the vendor stopped consuming input {} of {total} chunks into a {} byte \
+                         prompt: it was not delivered",
+                        index + 1,
+                        text.len()
+                    ),
+                ));
+            }
+        }
+        if index + 1 < total {
+            tokio::time::sleep(PASTE_CHUNK_PAUSE).await;
+        }
+    }
+    Ok(())
+}
 
 /// Shared, mutable pane identity [`AttachServer`]'s `on_user_input`
 /// callback reads: starts as [`DisplayBackend::Hidden`]/empty (the
@@ -627,25 +701,28 @@ impl<V: TuiVendor> TuiAdapter<V> {
         // was ever sent before, that silence can only mean "idle TUI holding
         // our text", so the Enter lands exactly like a human's keystroke
         // regardless of how fast or slow the vendor's startup render was.
+        // `compose_input`'s contract is message plus exactly one trailing
+        // submit byte; keep only that byte here. The text half is written
+        // by `write_paste` from the original string -- framed as a
+        // bracketed paste and chunked, so a multi-line prompt is content
+        // rather than a sequence of Enters (CREW-4).
         let injected_bytes: Option<Vec<u8>> =
             inject.as_ref().map(|text| self.vendor.compose_input(text));
-        // `compose_input`'s contract is message plus exactly one trailing
-        // CR; split it so phase 1 types the text and phase 2 owns the Enter.
-        let (type_bytes, enter_byte): (Option<&[u8]>, Option<&[u8]>) =
-            match injected_bytes.as_deref() {
-                Some(bytes) => (
-                    Some(&bytes[..bytes.len() - 1]),
-                    Some(&bytes[bytes.len() - 1..]),
-                ),
-                None => (None, None),
-            };
+        let enter_byte: Option<&[u8]> = injected_bytes
+            .as_deref()
+            .map(|bytes| &bytes[bytes.len() - 1..]);
+        let type_text: Option<PromptInjection<'_>> =
+            inject.as_deref().map(|text| PromptInjection {
+                text,
+                write_timeout: self.timings.paste_write_timeout,
+            });
         if let Err(err) = wait_for_readiness(
             &mut readiness_rx,
             self.kind(),
             self.timings.readiness_quiet,
             self.timings.readiness_cap,
             &pty,
-            type_bytes,
+            type_text,
             spawn_instant + INJECT_MIN_DELAY,
         )
         .await
@@ -1031,7 +1108,7 @@ async fn wait_for_readiness(
     quiet: Duration,
     cap: Duration,
     pty: &Arc<PtyProcess>,
-    inject: Option<&[u8]>,
+    inject: Option<PromptInjection<'_>>,
     not_before: tokio::time::Instant,
 ) -> Result<(), AdapterError> {
     let deadline = tokio::time::Instant::now() + cap;
@@ -1059,8 +1136,9 @@ async fn wait_for_readiness(
             if tokio::time::Instant::now() < not_before {
                 tokio::time::sleep_until(not_before).await;
             }
-            if let Some(bytes) = inject
-                && let Err(err) = pty.write_input(bytes).await
+            if let Some(injection) = inject
+                && let Err(err) =
+                    write_paste(pty, kind, "start", injection.text, injection.write_timeout).await
             {
                 return Err(AdapterError::process(
                     kind,
@@ -1394,10 +1472,18 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
             // whole by a vendor TUI running in bracketed-paste mode (the CR
             // becomes paste content instead of a submit), where a lone CR
             // after the text has landed behaves like a human's Enter.
+            // Only the vendor's submit byte comes from `compose_input`; the
+            // text is framed and chunked by `write_paste`, so a multi-line
+            // follow-up cannot be submitted line-by-line (CREW-4).
             let split_at = bytes.len() - 1;
-            if let Err(err) = run.pty.write_input(&bytes[..split_at]).await {
-                return Err(AdapterError::process(self.kind(), "send", err.to_string()));
-            }
+            write_paste(
+                &run.pty,
+                self.kind(),
+                "send",
+                text,
+                self.timings.paste_write_timeout,
+            )
+            .await?;
             // The gap is load-bearing: a CR arriving microseconds after the
             // text is glued into the same input chunk and swallowed (observed
             // against live codex), while a discrete keypress ~150ms later

@@ -340,6 +340,10 @@ enum MockScript {
     /// Prints several bursts of output before going quiet, to exercise
     /// the readiness gate's quiet-window timing.
     Bursty,
+    /// Prints a ready line and then never reads its stdin at all, so the
+    /// tty input buffer fills and a large prompt cannot be delivered --
+    /// the CREW-4 "fail loudly rather than truncate" case.
+    Deaf,
     /// Traps SIGINT/SIGTERM as no-ops, so `cancel(Worker)` must escalate
     /// all the way to SIGKILL -- exercises signal-preserving exit
     /// evidence.
@@ -382,6 +386,7 @@ impl MockTuiVendor {
             MockScript::Reactive => REACTIVE_SCRIPT,
             MockScript::Silent => SILENT_SCRIPT,
             MockScript::Bursty => BURSTY_SCRIPT,
+            MockScript::Deaf => DEAF_SCRIPT,
             MockScript::Stubborn => STUBBORN_SCRIPT,
         };
         let path = self.script_path();
@@ -397,6 +402,7 @@ fn script_file_name(script: MockScript) -> &'static str {
         MockScript::Reactive => "reactive.sh",
         MockScript::Silent => "silent.sh",
         MockScript::Bursty => "bursty.sh",
+        MockScript::Deaf => "deaf.sh",
         MockScript::Stubborn => "stubborn.sh",
     }
 }
@@ -440,6 +446,12 @@ done
 while IFS= read -r line; do
   printf '%s %s\n' "$(date +%s%N)" "$line" >> "$CONTROL_LOG"
 done
+"#;
+
+const DEAF_SCRIPT: &str = r#"#!/bin/sh
+echo "MOCK VENDOR READY (deaf)"
+# Never reads stdin: the tty input buffer fills and stays full.
+sleep 30
 "#;
 
 const STUBBORN_SCRIPT: &str = r#"#!/bin/sh
@@ -512,8 +524,14 @@ impl TuiVendor for MockTuiVendor {
         Arc::new(MockFormat)
     }
 
+    /// Text plus one trailing submit byte -- the same contract every real
+    /// vendor's `compose_input` has (`message` + CR; the mock uses LF so
+    /// its `/bin/sh` `read` loop sees a line). It deliberately does NOT
+    /// flatten embedded newlines any more: that flattening is precisely
+    /// what hid CREW-4, since no prompt this harness sent could ever
+    /// contain the newline that the vendor reads as an Enter.
     fn compose_input(&self, message: &str) -> Vec<u8> {
-        format!("{}\n", message.replace('\n', " ")).into_bytes()
+        format!("{message}\n").into_bytes()
     }
 
     fn interrupt_sequence(&self) -> Vec<u8> {
@@ -542,6 +560,7 @@ fn fast_timings() -> TuiTimings {
         discovery_timeout: Duration::from_secs(4),
         tailer_poll: Duration::from_millis(40),
         submit_idle: Duration::from_millis(50),
+        paste_write_timeout: Duration::from_millis(500),
         escalation: EscalationTimings {
             sigint_to_sigterm: Duration::from_millis(150),
             sigterm_to_sigkill: Duration::from_millis(150),
@@ -1638,4 +1657,217 @@ impl FakeBackendHandle {
     fn close_calls_taken(&self) -> usize {
         *self.close_calls.lock().expect("mutex never poisoned")
     }
+}
+
+// ------------------------------------------------- CREW-4 prompt delivery
+
+/// Bracketed-paste framing, as the adapter must write it. Spelled out
+/// literally here rather than imported: these bytes are the contract this
+/// test exists to pin, so the test should fail if the constant moves.
+const PASTE_START: &str = "\x1b[200~";
+const PASTE_END: &str = "\x1b[201~";
+
+/// A prompt with enough lines to be submitted piecemeal by any vendor
+/// reading raw keystrokes -- the CREW-4 shape.
+fn multi_line_prompt(lines: usize) -> String {
+    (0..lines)
+        .map(|i| format!("line {i} of the prompt"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The core CREW-4 regression: a multi-line prompt must reach the PTY
+/// wrapped in exactly one bracketed paste, with every line intact.
+///
+/// Before the fix the prompt travelled as one unframed write, so every
+/// embedded newline arrived as a literal Enter and the vendor submitted
+/// the prompt line-by-line. Vendor-side paste *handling* is covered by
+/// the per-vendor conformance suites; what this pins is the adapter's own
+/// half of the contract -- the bytes it puts on the wire.
+#[tokio::test]
+async fn a_multi_line_prompt_reaches_the_pty_framed_as_one_intact_paste() {
+    let _guard = SERIAL_PTY.lock().await;
+    let harness = harness().await;
+    let work_dir = tempfile::Builder::new()
+        .prefix("bat-tui-mock-paste-")
+        .tempdir_in("/tmp")
+        .expect("mock work dir");
+    let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Reactive);
+    let control_log = vendor.control_log.clone();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let worker_id = WorkerId::new();
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        fast_timings(),
+        ResumeContext::default(),
+    );
+
+    let prompt = multi_line_prompt(200);
+    let sink = RecordingSink::new();
+    adapter
+        .start(spec(run_id, task_id, worker_id, &prompt), sink.clone())
+        .await
+        .expect("start");
+
+    let delivered = wait_until(
+        || read_control_log(&control_log).contains(PASTE_END),
+        Duration::from_secs(10),
+    )
+    .await;
+    let log = read_control_log(&control_log);
+    assert!(
+        delivered,
+        "the paste must be closed on the pty; log was:\n{log}"
+    );
+
+    assert_eq!(
+        log.matches(PASTE_START).count(),
+        1,
+        "exactly one paste introducer reaches the vendor"
+    );
+    assert_eq!(
+        log.matches(PASTE_END).count(),
+        1,
+        "exactly one paste terminator reaches the vendor"
+    );
+    for i in 0..200 {
+        assert!(
+            log.contains(&format!("line {i} of the prompt")),
+            "line {i} never reached the pty -- the prompt was truncated"
+        );
+    }
+
+    adapter.dispose().await.expect("dispose");
+    harness.shutdown().await;
+}
+
+/// `send()` shares the truncation hazard: a multi-line follow-up is just
+/// as capable of being submitted line-by-line as the initial prompt, so
+/// it must be framed on the same terms.
+#[tokio::test]
+async fn a_multi_line_follow_up_is_framed_as_a_paste_too() {
+    let _guard = SERIAL_PTY.lock().await;
+    let harness = harness().await;
+    let work_dir = tempfile::Builder::new()
+        .prefix("bat-tui-mock-paste-send-")
+        .tempdir_in("/tmp")
+        .expect("mock work dir");
+    let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Reactive);
+    let control_log = vendor.control_log.clone();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let worker_id = WorkerId::new();
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        fast_timings(),
+        ResumeContext::default(),
+    );
+
+    let sink = RecordingSink::new();
+    adapter
+        .start(
+            spec(run_id, task_id, worker_id, "start-prompt"),
+            sink.clone(),
+        )
+        .await
+        .expect("start");
+
+    let follow_up = format!("follow-up-marker\n{}", multi_line_prompt(50));
+    adapter
+        .send(AdapterMessage::FollowUp {
+            text: follow_up.clone(),
+        })
+        .await
+        .expect("send");
+
+    let seen = wait_until(
+        || read_control_log(&control_log).contains("line 49 of the prompt"),
+        Duration::from_secs(10),
+    )
+    .await;
+    let log = read_control_log(&control_log);
+    assert!(
+        seen,
+        "the whole follow-up must reach the pty; log was:\n{log}"
+    );
+    assert!(
+        log.contains("follow-up-marker"),
+        "the follow-up's first line must arrive, not just its tail"
+    );
+    // Two framed pastes by now: the initial prompt's and this follow-up's.
+    // Without this the assertions above pass on the unfixed code, since the
+    // mock's `read` loop logs every line whether or not it was framed.
+    assert_eq!(
+        log.matches(PASTE_START).count(),
+        2,
+        "the follow-up must be framed as its own paste, like the prompt"
+    );
+    assert_eq!(
+        log.matches(PASTE_END).count(),
+        2,
+        "the follow-up's paste must be closed"
+    );
+    for i in 0..50 {
+        assert!(
+            log.contains(&format!("line {i} of the prompt")),
+            "follow-up line {i} never reached the pty"
+        );
+    }
+
+    adapter.dispose().await.expect("dispose");
+    harness.shutdown().await;
+}
+
+/// A vendor that stops consuming its stdin must produce a loud failure,
+/// never a partial prompt. Before CREW-4 the whole prompt was one
+/// unbounded blocking write, so this case either hung the start or lost
+/// the tail with no error anywhere.
+#[tokio::test]
+async fn a_prompt_a_deaf_vendor_never_consumes_fails_the_start_loudly() {
+    let _guard = SERIAL_PTY.lock().await;
+    let harness = harness().await;
+    let work_dir = tempfile::Builder::new()
+        .prefix("bat-tui-mock-deaf-")
+        .tempdir_in("/tmp")
+        .expect("mock work dir");
+    let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Deaf);
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let worker_id = WorkerId::new();
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        fast_timings(),
+        ResumeContext::default(),
+    );
+
+    // Comfortably larger than any tty input buffer, so delivery cannot
+    // complete against a process that never reads.
+    let prompt = multi_line_prompt(20_000);
+    assert!(prompt.len() > 256 * 1024, "fixture must exceed 256KB");
+
+    let sink = RecordingSink::new();
+    let err = adapter
+        .start(spec(run_id, task_id, worker_id, &prompt), sink.clone())
+        .await
+        .expect_err("a prompt that cannot be delivered must fail the start");
+    let message = err.to_string();
+    assert!(
+        message.contains("stopped consuming input"),
+        "the failure must name undeliverable input, not something vaguer; got: {message}"
+    );
+
+    harness.shutdown().await;
 }
