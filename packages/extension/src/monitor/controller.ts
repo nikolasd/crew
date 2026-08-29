@@ -11,7 +11,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@o
 import type { CrewClient } from "../client";
 import { attachMilestoneBridge } from "../milestones";
 import { assertCompatiblePiCodingAgentVersion } from "./compat";
-import { EMPTY_MONITOR_STATE, enrichWorker, enrichWorkspaceMode, hasVisibleRows, type MonitorState, reduceEvent } from "./model";
+import { EMPTY_MONITOR_STATE, enrichWorker, enrichWorkspaceMode, hasVisibleRows, setSubmitError, type MonitorState, reduceEvent } from "./model";
 import { renderRowDetails, renderWidgetBox } from "./render";
 
 /** The custom session-entry type the last-rendered sequence is persisted under. */
@@ -145,6 +145,13 @@ export class MonitorController {
     this.#onUpdate = undefined;
   }
 
+  /** Records a submit failure (pre-journal RPC rejection) and triggers a refresh
+   *  to ensure the error is visible in the widget. */
+  reportSubmitFailure(message: string): void {
+    this.#state = setSubmitError(this.#state, message, new Date().toISOString());
+    this.#onUpdate?.();
+  }
+
   /** Full detail text for `/crew run <runId>`, or `undefined` if no
    *  row exists for that run. */
   renderStatus(runId: string): string | undefined {
@@ -181,11 +188,17 @@ function respond(cmdCtx: ExtensionCommandContext, text: string, level: "info" | 
   }
 }
 
+/** Handle to the monitor for submitting failure notifications. */
+export interface MonitorHandle {
+  reportSubmitFailure(message: string): void;
+}
+
 /** Registers the `/crew` command and the replay-first monitor lifecycle.
  *  Wires the milestone bridge (spec §7.2) onto the monitor's single
  *  subscription so the model is injected with digests on milestones
- *  instead of having to poll the monitor. */
-export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext): void {
+ *  instead of having to poll the monitor. Returns a handle for reporting
+ *  submit failures to the widget. */
+export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext): MonitorHandle {
   const controller = new MonitorController();
   attachMilestoneBridge(pi, controller);
   let subscribedClient: CrewClient | undefined;
@@ -367,4 +380,8 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
     // into a monitor whose subscription no longer exists (R39).
     subscribedClient = undefined;
   });
+
+  return {
+    reportSubmitFailure: (message: string) => controller.reportSubmitFailure(message),
+  };
 }

@@ -161,8 +161,16 @@ export function renderWidgetBox(state: MonitorState, theme: Theme): string[] {
   let lines: string[];
   let colors: ThemeColor[];
   if (totalCount === 0) {
-    lines = ["Crew active, waiting for task submissions"];
-    colors = ["text"];
+    // When there are no rows: show error if one is pending, otherwise show
+    // the waiting message. This ensures the operator sees submit failures
+    // immediately (the widget's most important moment).
+    if (state.lastSubmitError !== undefined) {
+      lines = [state.lastSubmitError.message];
+      colors = ["error"];
+    } else {
+      lines = ["Crew active, waiting for task submissions"];
+      colors = ["text"];
+    }
   } else {
     lines = rows.map(renderRowLine);
     colors = rows.map((row) => stateColor(row.state));

@@ -183,6 +183,21 @@ test("renderWidgetBox wraps the empty-state line in the border, uncolored (CREW-
   expect(lines[1].endsWith("[border]│[/border]")).toBe(true);
 });
 
+test("renderWidgetBox shows submit error in red when there are no rows and an error is pending (CREW-10)", () => {
+  const lines = renderWidgetBox(
+    {
+      rows: {},
+      lastSequence: 0,
+      lastSubmitError: { message: "run/submit failed: invalid task", at: new Date().toISOString() },
+    },
+    fakeTheme(),
+  );
+  expect(lines).toHaveLength(3); // top border, error line, bottom border
+  expect(lines[1]).toContain("[error]run/submit failed: invalid task[/error]");
+  expect(lines[1].startsWith("[border]│[/border]")).toBe(true);
+  expect(lines[1].endsWith("[border]│[/border]")).toBe(true);
+});
+
 test("renderWidgetBox colors each row by its state and ends with a plain bottom border", () => {
   const succeededRow = row({ runId: "run-1", state: "succeeded" });
   const lines = renderWidgetBox(stateOf([succeededRow]), fakeTheme());

@@ -521,3 +521,51 @@ test("a management subcommand's rejection surfaces through respond, never as an 
   expect(notifications[0]?.message).toContain("no crewd binary installed");
   expect(notifications[0]?.level).toBe("error");
 });
+
+test("reportSubmitFailure shows the error in the widget when there are no rows (CREW-10)", async () => {
+  const { api, handlers } = createFakeApi();
+  const fake = createFakeClient();
+  const monitor = registerMonitor(api, { getClient: async () => fake.client });
+
+  const widgetCalls: unknown[][] = [];
+  const extCtx = fakeExtensionContext(widgetCalls);
+
+  await handlers.get("session_start")?.(undefined, extCtx);
+  expect(widgetCalls.length).toBe(1);
+  // Empty state shows "waiting for task submissions"
+  const emptyWidget = widgetCalls[0]?.[1] as string[];
+  expect(emptyWidget.some((line) => line.includes("waiting for task submissions"))).toBe(true);
+
+  // Report a failure
+  monitor.reportSubmitFailure("run/submit failed: invalid task");
+
+  // Widget should update to show the error
+  expect(widgetCalls.length).toBe(2);
+  const errorWidget = widgetCalls[1]?.[1] as string[];
+  expect(errorWidget.some((line) => line.includes("run/submit failed: invalid task"))).toBe(true);
+});
+
+test("error is cleared on the first run row (CREW-10)", async () => {
+  const { api, handlers } = createFakeApi();
+  const fake = createFakeClient();
+  const monitor = registerMonitor(api, { getClient: async () => fake.client });
+
+  const widgetCalls: unknown[][] = [];
+  const extCtx = fakeExtensionContext(widgetCalls);
+
+  await handlers.get("session_start")?.(undefined, extCtx);
+  monitor.reportSubmitFailure("run/submit failed: test error");
+  expect(widgetCalls.length).toBe(2);
+  // Should show error
+  const errorWidget = widgetCalls[1]?.[1] as string[];
+  expect(errorWidget.some((line) => line.includes("run/submit failed: test error"))).toBe(true);
+
+  // Now a run event arrives
+  fake.onEvent?.(runEventEnvelope(1));
+
+  expect(widgetCalls.length).toBe(3);
+  // Widget should update after the run event
+  const runWidget = widgetCalls[2]?.[1] as string[];
+  // The key test: error should not be in the widget after a run row exists
+  expect(runWidget.every((line) => !line.includes("run/submit failed"))).toBe(true);
+});
