@@ -114,7 +114,7 @@ test("stateColor falls back to the theme's default text color for an unrecognize
 });
 
 test("renderWidgetHeader returns the ship-wheel icon and the Crew label", () => {
-  expect(renderWidgetHeader()).toBe("\u{F1091} Crew");
+  expect(renderWidgetHeader()).toBe("\u{F0833} Crew");
 });
 
 test("a row line includes the state icon alongside the state word", () => {

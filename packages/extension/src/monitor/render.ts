@@ -18,7 +18,7 @@ export const MAX_WIDGET_ROWS = 7;
  * Counts Unicode code points rather than UTF-16 code units. Every Nerd Font
  * icon this module uses (`HELM_ICON`, every `STATE_ICONS` entry) is on the
  * astral plane (code point > U+FFFF), so it's stored as a UTF-16 surrogate
- * pair — `"\u{F1091}".length === 2`, not 1. `.length`-based width/pad math
+ * pair — `"\u{F0833}".length === 2`, not 1. `.length`-based width/pad math
  * would measure any icon-bearing string 1 unit too wide per icon relative to
  * how many character cells it actually occupies. `Array.from` iterates a
  * string by code point, correctly counting each surrogate pair as one unit.
@@ -34,7 +34,7 @@ function codePointLength(text: string): number {
 }
 
 /** Nerd Font Material Design ship-wheel icon for the Crew widget header. */
-const HELM_ICON = "\u{F1091}";
+const HELM_ICON = "\u{F0833}";
 const WIDGET_HEADER_TEXT = "Crew";
 
 const STATE_ICONS: Record<string, string> = {
