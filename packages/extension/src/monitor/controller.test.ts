@@ -490,3 +490,32 @@ test("/crew completes subcommands from both the monitor set and the management m
 
   expect(complete!("zzz")).toBeNull();
 });
+
+test("a management subcommand's rejection surfaces through respond, never as an unhandled exception", async () => {
+  const { api, commands } = createFakeApi();
+  const fake = createFakeClient();
+  registerMonitor(api, {
+    getClient: async () => fake.client,
+    management: new Map([
+      [
+        "doctor",
+        {
+          description: "Diagnostics",
+          run: async () => {
+            throw new Error("no crewd binary installed for version 0.5.0; run /crew-install to download it, or set OMP_CREW_BINARY to a local build");
+          },
+        },
+      ],
+    ]),
+  });
+
+  const widgetCalls: unknown[][] = [];
+  const { ctx, notifications } = fakeCommandContext(widgetCalls, true);
+
+  await commands.get("crew")?.handler("doctor", ctx);
+
+  expect(widgetCalls.length).toBe(0);
+  expect(notifications.length).toBe(1);
+  expect(notifications[0]?.message).toContain("no crewd binary installed");
+  expect(notifications[0]?.level).toBe("error");
+});

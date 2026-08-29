@@ -99,8 +99,18 @@ export default function crewExtension(pi: ExtensionAPI): void {
     pi.registerCommand(oldName, {
       description: `Deprecated: use ${replacement}.`,
       handler: async (args, ctx) => {
-        const result = await run(args, ctx);
-        emitResult(ctx, { text: `Note: /${oldName} is deprecated; use ${replacement}.\n${result.text}`, isError: result.isError });
+        const notice = `Note: /${oldName} is deprecated; use ${replacement}.`;
+        try {
+          const result = await run(args, ctx);
+          emitResult(ctx, { text: `${notice}\n${result.text}`, isError: result.isError });
+        } catch (err) {
+          // `run` (health/doctor/config) can throw before producing a result --
+          // e.g. resolving the crewd binary fails on a fresh-install machine,
+          // exactly the machine most likely to hit this forwarder. That must
+          // surface through emitResult, not escape as an unhandled rejection.
+          const message = err instanceof Error ? err.message : String(err);
+          emitResult(ctx, { text: `${notice}\n${message}`, isError: true });
+        }
       },
     });
   }

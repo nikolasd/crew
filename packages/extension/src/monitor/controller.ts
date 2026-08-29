@@ -284,8 +284,17 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
       const management = ctx.management?.get(sub);
       if (management !== undefined) {
         const rest = args.trim().slice(sub.length).trim();
-        const result = await management.run(rest, cmdCtx);
-        respond(cmdCtx, result.text, result.isError ? "error" : "info");
+        try {
+          const result = await management.run(rest, cmdCtx);
+          respond(cmdCtx, result.text, result.isError ? "error" : "info");
+        } catch (err) {
+          // A management handler (health/doctor/config, in index.ts) can throw
+          // before producing any result -- e.g. resolving the crewd binary
+          // fails on a fresh-install machine. That must surface through
+          // `respond`, not escape as an unhandled rejection past the command
+          // dispatcher.
+          respond(cmdCtx, err instanceof Error ? err.message : String(err), "error");
+        }
         return;
       }
 

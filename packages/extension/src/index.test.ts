@@ -457,6 +457,42 @@ test("/crew config print bogus is a usage error with the error level, before any
   expect(notifications[0]?.level).toBe("error");
 });
 
+test("the crew-doctor forwarder surfaces a real BinarySelectionError through emitResult, not as a thrown exception", async () => {
+  setEnv("CREW_STATE_DIR", stateDir);
+  // Explicitly clear the dev-binary override so resolveCrewd hits its real
+  // "no crewd binary installed" path -- this is the fresh-install machine
+  // this test guards, and other tests in this file depend on the override
+  // being restored afterward.
+  const previousOverride = process.env.OMP_CREW_BINARY;
+  delete process.env.OMP_CREW_BINARY;
+
+  const notifications: Array<{ message: string; level: string }> = [];
+  const ctx = {
+    cwd: repoDir,
+    hasUI: true,
+    ui: { notify: (message: string, level: string) => notifications.push({ message, level }) },
+    sessionManager: { getSessionId: () => "test-session-id-12345" },
+  } as unknown as ExtensionCommandContext;
+
+  try {
+    const { api, commands } = createFakeApi();
+    extension(api);
+
+    await commands.get("crew-doctor")!.handler("", ctx);
+
+    expect(notifications.length).toBe(1);
+    expect(notifications[0]?.message).toContain("deprecated; use /crew doctor");
+    expect(notifications[0]?.message).toContain("OMP_CREW_BINARY");
+    expect(notifications[0]?.level).toBe("error");
+  } finally {
+    if (previousOverride === undefined) {
+      delete process.env.OMP_CREW_BINARY;
+    } else {
+      process.env.OMP_CREW_BINARY = previousOverride;
+    }
+  }
+});
+
 test("the golden runtime/status fixture validates against the canonical schema", () => {
   // Guards fixtures/omp/status-result.json against drift from the real
   // `RuntimeStatus` schema: nothing else in the suite loads this fixture.
