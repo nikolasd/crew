@@ -12647,7 +12647,12 @@ function registerProfileTool(pi, ctx) {
         source: "omp"
       });
       if (result.isError !== true && input.model !== undefined && configuredModel === undefined) {
-        persistConfiguredModel(extCtx.cwd, input.adapter, input.model);
+        try {
+          persistConfiguredModel(extCtx.cwd, input.adapter, input.model);
+        } catch (err) {
+          const message = err instanceof CrewConfigError ? err.message : err instanceof Error ? err.message : String(err);
+          result.content.push({ type: "text", text: `Warning: model was registered but not persisted for future sessions: ${message}` });
+        }
       }
       return result;
     }
