@@ -112,7 +112,7 @@ This project is licensed under the [MIT License](LICENSE). See the LICENSE file 
 
 ## Known Limitations
 
-This is a pre-1.0 project. The review backlog is empty — the one open item is an unreproduced test-flake watch, tracked in the maintainer's local, gitignored `REVIEW.md` (resolution history lives in [`docs/journal.md`](docs/journal.md)). What remains below are environment and protocol walls, verified against the current codebase. Every adapter is installed and authenticated here, and live TUI conformance runs against all four — claude, codex, and omp-rpc are fully green, while copilot alone is blocked on a confirmed vendor monthly-quota wall (raw reports under [`release/live-conformance/`](release/live-conformance/) with an erratum). None of the below is a "requires a vendor CLI" caveat.
+This is a pre-1.0 project. The review backlog is empty — the one open item is an unreproduced test-flake watch, tracked in the maintainer's local, gitignored `REVIEW.md` (engineering lessons from closed reviews live in [`docs/engineering-lessons.md`](docs/engineering-lessons.md)). What remains below are environment and protocol walls, verified against the current codebase. Every adapter is installed and authenticated here, and live TUI conformance runs against all four — claude, codex, and omp-rpc are fully green, while copilot alone is blocked on a confirmed vendor monthly-quota wall (raw reports under [`release/live-conformance/`](release/live-conformance/) with an erratum). None of the below is a "requires a vendor CLI" caveat.
 
 - **ACP v1 has no durable session handle, so Copilot cannot resume across processes.** A session
   that completed a real turn answers `session/load` with `Resource not found`, which fails

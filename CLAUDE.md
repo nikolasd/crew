@@ -167,6 +167,6 @@ These are enforced in review, not just style preference:
 
 ## Source-of-truth docs (read before assuming a gap is unintentional)
 
-- `REVIEW.md` (gitignored — present on the maintainer's machine, not in fresh clones) — open implementation gaps and findings by severity, verified against the current code (not planning docs); check before re-reporting something already tracked. Resolution history: `docs/journal.md`.
+- `REVIEW.md` (gitignored — present on the maintainer's machine, not in fresh clones) — open implementation gaps and findings by severity, verified against the current code (not planning docs); check before re-reporting something already tracked. Engineering lessons from closed findings: `docs/engineering-lessons.md`.
 - `docs/future-features.md` — items deliberately deferred, each with a decision trigger.
 - `docs/engineering-lessons.md` — past bugs and the invariant/test that now guards against each.
