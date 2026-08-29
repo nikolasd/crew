@@ -300,6 +300,7 @@ test("renders a degraded fixture via runFlagsEvent", () => {
           policyQuarantined: false,
           workspaceDirty: false,
           childrenActive: false,
+          turnSettled: false,
         },
       },
     },
