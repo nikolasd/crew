@@ -502,7 +502,7 @@ test("a management subcommand's rejection surfaces through respond, never as an 
         {
           description: "Diagnostics",
           run: async () => {
-            throw new Error("no crewd binary installed for version 0.5.0; run /crew-install to download it, or set OMP_CREW_BINARY to a local build");
+            throw new Error("no crewd binary installed for this version; run /crew-install to download it, or set OMP_CREW_BINARY to a local build");
           },
         },
       ],

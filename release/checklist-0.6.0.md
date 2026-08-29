@@ -23,7 +23,7 @@ otherwise untouched by this release.
 - [x] `packages/extension/package.json` → `0.6.0` (source of truth for `check_version_coherence`)
 - [x] `.claude-plugin/marketplace.json` → `metadata.version` + `plugins[].version` → `0.6.0`
 - [x] `Cargo.lock` refreshed via `cargo check --workspace` (never hand-edited)
-- [ ] `crates/xtask` (`0.4.0`), `packages/protocol-ts` (`0.1.0`), and `crates/fake-worker`
+- [x] `crates/xtask` (`0.4.0`), `packages/protocol-ts` (`0.1.0`), and `crates/fake-worker`
       (`0.1.0`) left at their own helper versions — deliberately outside the coherence check
 
 ## Release assets (GitHub Release, from `release.yml`)
@@ -54,7 +54,8 @@ string is baked into the binary (`CARGO_PKG_VERSION`) and the manifest.
 ## Build / gate (CI)
 
 - [ ] `bun run check` green (schema drift + build + all tests, `CREW_DISABLE_VENDOR_CLI=1`) — all
-      CI checks green on the release PR/merge
+      CI checks green on the release PR/merge (CI only — includes `build`; never run locally on
+      this branch)
 - [ ] `cargo clippy --all-targets --all-features -- -D warnings`
 - [ ] `cargo fmt --all --check`
 - [ ] `bun run generate --check` (version coherence at 0.6.0)
@@ -81,13 +82,35 @@ string is baked into the binary (`CARGO_PKG_VERSION`) and the manifest.
       still-UNPROVEN turn-level interrupt (`interrupt_sequence`/Steer) carried forward as a known
       gap, not a 0.6.0 regression.
 
+## Manual QA (docs/manual-testing.md §2)
+
+**Complete BEFORE tagging v0.6.0 — the interactive surface is exactly what this release ships,
+and the suite only exercises a fake `ExtensionAPI`.** `docs/manual-testing.md` §2 ("The embedded
+monitor") is the walkthrough to run this against; it already reflects the new subcommand surface
+(Task 5 sweep). Each row needs a real OMP session — nothing here is covered by `bun test`:
+
+- [ ] Bare `/crew` renders the monitor box
+- [ ] Typing `/crew ` shows the completion dropdown with all eight subcommands (`health`, `run`,
+      `runs`, `export`, `clean`, `reopen`, `doctor`, `config`), with ghost-text hints on `run`,
+      `export`, and `reopen`
+- [ ] `/crew health`, `/crew doctor`, and `/crew config path` each produce visible output
+      interactively
+- [ ] `/crew-status` shows the deprecation notice prepended to the normal health output (one
+      notification, not two)
+- [ ] `/crew bogus` shows the usage error — no monitor render
+- [ ] The same commands under `--print` (headless) write to stdout instead of notifying
+
 ## Release
 
 - [ ] Tag `v0.6.0` — annotated, on the bundle-refreshed main commit (see Build/gate above)
 - [ ] **A plain `v0.6.0` tag push does NOT trigger `release.yml`** — its push trigger matches only
       suffixed `v[0-9]+.[0-9]+.[0-9]+-*` tags. Publish via `workflow_dispatch` with `ref: v0.6.0`;
       the workflow publishes iff the ref is a `v*` tag whose value matches
-      `packages/extension/package.json`'s version.
+      `packages/extension/package.json`'s version. Two distinct failure modes to know apart when
+      dispatching: a `ref` that IS a `v*` tag but whose value does NOT match the package version
+      hard-fails the run (red = wrong tag — the mismatch is caught and the run stops); a `ref` that
+      is a branch name (not a tag at all) runs a silent dry run that publishes nothing (green but
+      empty — you passed a branch, not a tag, and the workflow has nothing to fail on).
 - [ ] All 9 assets verified (4 binaries + 4 manifests + `release-manifest.json`)
 - [ ] Install-path chain verified against the live release (download a leaf binary, sha256 matches
       both manifests, executes reporting `crewd 0.6.0`)
