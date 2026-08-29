@@ -364,7 +364,14 @@ export class CrewClient {
     this.#closed = true;
     this.#failPending(this.#closeReason ?? new Error("connection closed by runtime"));
     for (const listener of this.#closeListeners) {
-      listener();
+      // One listener throwing must not abort the rest -- they are
+      // independent observers (e.g. the monitor's reconnect trigger),
+      // never a pipeline where the next depends on the previous.
+      try {
+        listener();
+      } catch {
+        // Best-effort notification; a listener's own failure is its problem.
+      }
     }
     this.#closeListeners.clear();
   }

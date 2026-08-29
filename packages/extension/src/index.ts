@@ -19,7 +19,7 @@ import { buildStatusContext } from "./context";
 import { normalizeEventPayload, normalizeLifecyclePayload, normalizeProgressPayload } from "./omp-native/events";
 import { OMP_NATIVE_FACT_ENTRY_TYPE, persistedCorrelations, persistedFacts, type SessionEntryLike } from "./omp-native/persistence";
 import { OmpNativeReconciler, createOmpProcessEpoch, reconcileAcrossRestart, reconcileWithRuntime } from "./omp-native/reconcile";
-import { resolveClient, getRuntimeStatus, type GetRuntimeStatusContext } from "./status";
+import { resolveClient, resolveClientWithoutSpawning, getRuntimeStatus, type GetRuntimeStatusContext } from "./status";
 import { runDoctorCommand, buildDoctorContext, type DoctorContext } from "./doctor";
 import { runConfigCommand, type ConfigDocument, type ConfigRequest } from "./config";
 import { installRuntimeForEnv } from "./install";
@@ -57,6 +57,14 @@ export default function crewExtension(pi: ExtensionAPI): void {
    */
   async function getClient(extCtx: ExtensionContext): Promise<CrewClient> {
     return resolveClient(statusContextFor(extCtx));
+  }
+
+  /** Like `getClient`, but never spawns -- passed to the monitor's automatic
+   *  background reconnect loop only (CREW-5), so an intentionally
+   *  idle-exited daemon (ADR-0008) stays exited instead of the loop
+   *  respawning it forever. */
+  async function getClientWithoutSpawning(extCtx: ExtensionContext): Promise<CrewClient> {
+    return resolveClientWithoutSpawning(statusContextFor(extCtx));
   }
 
   pi.registerTool({
@@ -155,6 +163,7 @@ export default function crewExtension(pi: ExtensionAPI): void {
   // assertion: crew-status, crew, crew-doctor, crew-config, crew-install.
   registerMonitor(pi, {
     getClient,
+    getClientWithoutSpawning,
     management: new Map<string, ManagementSubcommand>([
       ["health", { description: "Runtime health: connects to or spawns the daemon", run: async (_args, ctx) => healthResult(ctx) }],
       ["doctor", { description: "Diagnostics that work with no live daemon", run: async (_args, ctx) => doctorResult(ctx.cwd) }],

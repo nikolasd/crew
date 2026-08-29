@@ -386,6 +386,104 @@ test("CREW-5: session_shutdown cancels a pending automatic reconnect", async () 
   expect(fake.subscribeCalls).toBe(1);
 });
 
+test("CREW-5 review should-fix: a close firing AFTER session_shutdown does not re-arm a reconnect", async () => {
+  // Production's own session_shutdown handler (index.ts) runs *after*
+  // registerMonitor's -- it closes the shared cached client, which fires
+  // this listener's onClose after the monitor's own cleanup already ran.
+  // A bare clearTimeout in the shutdown handler cannot defend against a
+  // close arriving afterward and scheduling a brand new timer; only a
+  // sticky flag can.
+  const { api, handlers } = createFakeApi();
+  const fake = createFakeClient();
+  registerMonitor(api, {
+    getClient: async () => {
+      fake.reopen();
+      return fake.client;
+    },
+  });
+
+  const widgetCalls: unknown[][] = [];
+  const extCtx = fakeExtensionContext(widgetCalls);
+
+  await handlers.get("session_start")?.(undefined, extCtx);
+  expect(fake.subscribeCalls).toBe(1);
+
+  await handlers.get("session_shutdown")?.(undefined, extCtx);
+  // Simulates index.ts's later session_shutdown handler closing the same
+  // shared cached client after registerMonitor's own handler already ran.
+  fake.simulateClose();
+
+  await new Promise<void>((resolve) => setTimeout(resolve, 400));
+  expect(fake.subscribeCalls).toBe(1);
+});
+
+test("CREW-5 review should-fix: automatic reconnect uses a no-spawn client resolver, never the spawning one (ADR-0008)", async () => {
+  // Without this, the automatic loop calling the same spawn-on-demand
+  // resolver as session_start/`/crew` would silently convert an
+  // intentional daemon idle-exit into "never idle": the loop would just
+  // spawn a fresh one every time, forever, for a session doing nothing.
+  const { api, handlers } = createFakeApi();
+  const fake = createFakeClient();
+  let spawningCalls = 0;
+  let noSpawnCalls = 0;
+  registerMonitor(api, {
+    getClient: async () => {
+      spawningCalls += 1;
+      fake.reopen();
+      return fake.client;
+    },
+    getClientWithoutSpawning: async () => {
+      noSpawnCalls += 1;
+      fake.reopen();
+      return fake.client;
+    },
+  });
+
+  const widgetCalls: unknown[][] = [];
+  const extCtx = fakeExtensionContext(widgetCalls);
+
+  await handlers.get("session_start")?.(undefined, extCtx);
+  expect(spawningCalls).toBe(1);
+  expect(noSpawnCalls).toBe(0);
+
+  fake.simulateClose();
+  await new Promise<void>((resolve) => setTimeout(resolve, 400));
+
+  expect(fake.subscribeCalls).toBe(2);
+  expect(noSpawnCalls).toBe(1);
+  expect(spawningCalls).toBe(1); // unchanged -- the automatic path never spawns
+});
+
+test("CREW-5 review should-fix: a new session_start re-arms automatic reconnect after a prior session's shutdown", async () => {
+  // Guards against a too-blunt fix for the shutdown-ordering hazard: the
+  // shuttingDown flag must not stay stuck forever once set -- a fresh
+  // session in the same extension instance needs its own working
+  // auto-reconnect, not one silently disarmed by a previous session's
+  // cleanup.
+  const { api, handlers } = createFakeApi();
+  const fake = createFakeClient();
+  registerMonitor(api, {
+    getClient: async () => {
+      fake.reopen();
+      return fake.client;
+    },
+  });
+
+  const widgetCalls: unknown[][] = [];
+  const extCtx = fakeExtensionContext(widgetCalls);
+
+  await handlers.get("session_start")?.(undefined, extCtx);
+  await handlers.get("session_shutdown")?.(undefined, extCtx);
+
+  // A fresh session in the same extension instance.
+  await handlers.get("session_start")?.(undefined, extCtx);
+  expect(fake.subscribeCalls).toBe(2);
+
+  fake.simulateClose();
+  await new Promise<void>((resolve) => setTimeout(resolve, 400));
+  expect(fake.subscribeCalls).toBe(3);
+});
+
 test("/crew runs, export, clean, and reopen invoke their scoped RPC contracts", async () => {
   const { api, commands } = createFakeApi();
   const fake = createFakeClient();

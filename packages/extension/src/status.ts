@@ -3,7 +3,7 @@
 // every orchestration tool and the monitor: connect to (or spawn) the
 // repository's `crewd` runtime, call `runtime/status`, and shape the
 
-import { BinarySelectionError, ensureRuntime, type EnsureRuntimeOptions } from "./runtime";
+import { BinarySelectionError, connectIfRunning, ensureRuntime, type EnsureRuntimeOptions } from "./runtime";
 import { BinaryIntegrityError, UnsupportedPlatformError } from "./platform";
 import type { CrewClient } from "./client";
 import type { RuntimeStatus } from "@nikolasd/crew-protocol";
@@ -53,16 +53,14 @@ export interface GetRuntimeStatusContext {
 }
 
 /**
- * Returns a live client for `ctx`, reusing the cached one only while its
- * socket is still open. A closed cached client is closed again (to release
- * its listeners) and dropped before reconnecting, so a daemon idle-exit or
- * socket failure repairs itself on the next call instead of breaking every
- * tool for the rest of the session.
- *
- * @throws whatever `ensureRuntime` throws when the runtime cannot be
- * reached or started.
+ * Shared cache-then-connect shape both {@link resolveClient} and
+ * {@link resolveClientWithoutSpawning} follow: reuse the cached client while
+ * its socket is still open; otherwise close and drop it (to release its
+ * listeners) before asking `connector` to produce a fresh one, which gets
+ * cached in turn. A daemon idle-exit or socket failure repairs itself on the
+ * next call this way, regardless of which `connector` a caller uses.
  */
-export async function resolveClient(ctx: GetRuntimeStatusContext): Promise<CrewClient> {
+async function resolveClientVia(ctx: GetRuntimeStatusContext, connector: (options: EnsureRuntimeOptions) => Promise<CrewClient>): Promise<CrewClient> {
   const cached = ctx.cache.get();
   if (cached !== undefined) {
     if (!cached.isClosed) {
@@ -75,9 +73,43 @@ export async function resolveClient(ctx: GetRuntimeStatusContext): Promise<CrewC
     }
     ctx.cache.set(undefined);
   }
-  const { client } = await ensureRuntime(ctx.ensureRuntimeOptions);
+  const client = await connector(ctx.ensureRuntimeOptions);
   ctx.cache.set(client);
   return client;
+}
+
+/**
+ * Returns a live client for `ctx`, connecting (or spawning) the repository's
+ * runtime on demand. For user-initiated paths only (a tool call, `/crew`) --
+ * see {@link resolveClientWithoutSpawning} for the automatic-reconnect
+ * counterpart that must never spawn.
+ *
+ * @throws whatever `ensureRuntime` throws when the runtime cannot be
+ * reached or started.
+ */
+export async function resolveClient(ctx: GetRuntimeStatusContext): Promise<CrewClient> {
+  return resolveClientVia(ctx, async (options) => (await ensureRuntime(options)).client);
+}
+
+/**
+ * Like {@link resolveClient}, but never spawns a new runtime -- only
+ * re-attaches to one that is already listening. For the monitor's automatic
+ * background reconnect loop after an unexpected close (CREW-5): a spawn
+ * belongs to a user-initiated path, not to a timer that would otherwise
+ * silently convert an intentional idle-exit (ADR-0008) into "never idle" by
+ * respawning the daemon every time it exits.
+ *
+ * @throws if the cached client is closed or absent and no runtime is
+ * currently listening for this repository.
+ */
+export async function resolveClientWithoutSpawning(ctx: GetRuntimeStatusContext): Promise<CrewClient> {
+  return resolveClientVia(ctx, async (options) => {
+    const client = await connectIfRunning(options);
+    if (client === undefined) {
+      throw new Error("no Crew runtime is currently listening for this repository");
+    }
+    return client;
+  });
 }
 const GENERIC_FAILURE_MESSAGE = "The Crew runtime is not reachable for this repository. Run the doctor command below for details.";
 

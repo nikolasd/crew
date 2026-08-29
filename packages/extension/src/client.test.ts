@@ -489,3 +489,29 @@ test("onClose's returned unsubscribe stops further notifications", async () => {
     await new Promise<void>((resolve) => fakeServer.close(() => resolve()));
   }
 });
+
+test("a throwing onClose listener does not stop other listeners from firing", async () => {
+  const fakeSocketPath = mkdtempSync("/tmp/bat-ts-f-") + "/fake.sock";
+  const fakeServer: Server = createServer(() => {});
+  await new Promise<void>((resolve) => fakeServer.listen(fakeSocketPath, resolve));
+
+  const client = new CrewClient({ socketPath: fakeSocketPath });
+  try {
+    await client.whenConnected();
+    let secondCalled = false;
+    client.onClose(() => {
+      throw new Error("boom");
+    });
+    const second = new Promise<void>((resolve) => {
+      client.onClose(() => {
+        secondCalled = true;
+        resolve();
+      });
+    });
+    client.close();
+    await second;
+    expect(secondCalled).toBe(true);
+  } finally {
+    await new Promise<void>((resolve) => fakeServer.close(() => resolve()));
+  }
+});

@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { join } from "node:path";
 
 import type { CrewClient } from "./client";
-import { BinarySelectionError, buildServeArgs, ensureRuntime, type EnsureRuntimeOptions, repositoryId, repositoryIdFromRoot } from "./runtime";
+import { BinarySelectionError, buildServeArgs, connectIfRunning, ensureRuntime, type EnsureRuntimeOptions, repositoryId, repositoryIdFromRoot } from "./runtime";
 
 interface RepoIdCase {
   name: string;
@@ -340,6 +340,42 @@ test("a second ensureRuntime caller connects to the same runtime", async () => {
   expect(status.running).toBe(true);
 
   // Exactly one repo directory (one runtime) exists.
+  const repos = join(stateDir, "repos");
+  expect(readdirSync(repos).length).toBe(1);
+});
+
+// CREW-5 review should-fix: the monitor's automatic reconnect loop must
+// never resurrect a runtime that idle-exited on purpose (ADR-0008) --
+// `connectIfRunning` is the no-spawn counterpart `ensureRuntime` lacked.
+
+test("connectIfRunning returns undefined and spawns nothing when no runtime is listening", async () => {
+  const stateDir = newStateDir();
+  const repository = newRepo();
+
+  const client = await connectIfRunning(baseOptions(stateDir, repository));
+  expect(client).toBeUndefined();
+
+  // No repo directory at all -- proof nothing was spawned, not just that
+  // this call didn't keep a reference to it.
+  expect(existsSync(join(stateDir, "repos"))).toBe(false);
+});
+
+test("connectIfRunning re-attaches to an already-running daemon without spawning a second one", async () => {
+  const stateDir = newStateDir();
+  const repository = newRepo();
+
+  const { client: first, childStarted } = await ensureRuntime(baseOptions(stateDir, repository));
+  openClients.push(first);
+  expect(childStarted).toBe(true);
+
+  const second = await connectIfRunning(baseOptions(stateDir, repository));
+  expect(second).toBeDefined();
+  openClients.push(second!);
+
+  const status = (await second!.request("runtime/status")) as { running: boolean };
+  expect(status.running).toBe(true);
+
+  // Still exactly one runtime -- connectIfRunning re-attached, not spawned.
   const repos = join(stateDir, "repos");
   expect(readdirSync(repos).length).toBe(1);
 });
