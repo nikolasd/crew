@@ -283,6 +283,12 @@ fn map_entry(value: &Value) -> (Vec<TuiEvent>, Option<String>) {
             if let Some(content) = value.pointer("/message/content").and_then(Value::as_array) {
                 events.extend(map_assistant_content(content, ts.as_deref()));
             }
+            // The vendor's own turn boundary (CREW-3 / ADR-0027). Pushed
+            // after the content so the answer is journaled before the
+            // boundary that tells the leader it is readable.
+            if ends_turn(value) {
+                events.push(TuiEvent::TurnEnded);
+            }
         }
         // A vendor-generated conversation summary (compaction); this
         // adapter has no `AdapterEventPayload` shape for one and nothing
@@ -295,6 +301,46 @@ fn map_entry(value: &Value) -> (Vec<TuiEvent>, Option<String>) {
     }
 
     (events, entry_id)
+}
+
+/// Whether this assistant entry ends the run's own turn.
+///
+/// Claude publishes the boundary the other two vendors send explicitly:
+/// `message.stop_reason` is `tool_use` while the turn continues and
+/// `end_turn`/`stop_sequence` once it is over. Every real entry carries one
+/// (4426 of 4426 measured across the 25 most recent local transcripts), so
+/// an entry without one is a shape this parser has never seen and is not
+/// guessed either way.
+///
+/// A `isSidechain` entry is a subagent's turn, never the parent run's --
+/// letting one settle the run that spawned it would end a run while its
+/// own work is still going. The flag is always present on a real entry;
+/// it was `false` on all 7811 assistant entries available locally, so this
+/// guard is written from the format's documented meaning rather than from
+/// an observed positive case.
+///
+/// An `isApiErrorMessage` entry deliberately still ends the turn. Such an
+/// entry carries `stop_reason: "stop_sequence"` and the CLI returns to its
+/// prompt, so the turn really is over; suppressing the boundary here would
+/// hang the run forever in exactly the case the leader most needs to hear
+/// about. The error text itself is surfaced as ordinary assistant content.
+/// Recording the turn as *failed* rather than merely ended needs a terminal
+/// edge, which ADR-0027 wave 2 deliberately does not introduce -- it is
+/// wave 3's `run/finish`.
+fn ends_turn(value: &Value) -> bool {
+    if value
+        .get("isSidechain")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    matches!(
+        value
+            .pointer("/message/stop_reason")
+            .and_then(Value::as_str),
+        Some("end_turn" | "stop_sequence")
+    )
 }
 
 /// Maps one assistant entry's content blocks to events, in order.
@@ -624,6 +670,96 @@ mod tests {
             TuiEvent::SessionMeta { vendor_session_id } if vendor_session_id == "sess-1"
         ));
         assert_eq!(cursor.offset, raw.len() as u64);
+    }
+
+    // ------------------------------------------------- turn end (CREW-3)
+
+    /// One assistant entry, with `stop_reason` and the CREW-3 guard flags
+    /// spelled the way the real CLI writes them (both flags are always
+    /// present on a real entry, not optional).
+    fn assistant_entry(stop_reason: &str, sidechain: bool, api_error: bool) -> Vec<u8> {
+        line(serde_json::json!({
+            "type": "assistant",
+            "sessionId": "sess-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "isSidechain": sidechain,
+            "isApiErrorMessage": api_error,
+            "message": {
+                "stop_reason": stop_reason,
+                "content": [{"type": "text", "text": "the answer"}],
+            },
+        }))
+    }
+
+    fn events_of(raw: &[u8]) -> Vec<TuiEvent> {
+        ClaudeTranscriptFormat
+            .parse(raw, &Cursor::start())
+            .into_iter()
+            .map(|(e, _)| e)
+            .collect()
+    }
+
+    fn ended_turn(raw: &[u8]) -> bool {
+        events_of(raw)
+            .iter()
+            .any(|e| matches!(e, TuiEvent::TurnEnded))
+    }
+
+    #[test]
+    fn stop_reason_end_turn_ends_the_turn() {
+        assert!(ended_turn(&assistant_entry("end_turn", false, false)));
+    }
+
+    #[test]
+    fn stop_reason_stop_sequence_ends_the_turn() {
+        assert!(ended_turn(&assistant_entry("stop_sequence", false, false)));
+    }
+
+    #[test]
+    fn stop_reason_tool_use_does_not_end_the_turn() {
+        assert!(
+            !ended_turn(&assistant_entry("tool_use", false, false)),
+            "a turn that is about to call a tool is still running"
+        );
+    }
+
+    #[test]
+    fn the_turn_end_follows_the_assistant_text_it_completes() {
+        let events = events_of(&assistant_entry("end_turn", false, false));
+        let text_at = events
+            .iter()
+            .position(|e| matches!(e, TuiEvent::AssistantText { .. }))
+            .expect("the entry's text must still be surfaced");
+        let end_at = events
+            .iter()
+            .position(|e| matches!(e, TuiEvent::TurnEnded))
+            .expect("the entry must end the turn");
+        assert!(
+            text_at < end_at,
+            "the answer must be journaled before the boundary that lets the leader read it"
+        );
+    }
+
+    #[test]
+    fn a_sidechain_entry_never_ends_the_parent_runs_turn() {
+        assert!(
+            !ended_turn(&assistant_entry("end_turn", true, false)),
+            "a subagent finishing its own turn must not settle the run that spawned it"
+        );
+    }
+
+    #[test]
+    fn an_entry_with_no_stop_reason_does_not_end_the_turn() {
+        // Every real entry carries one (4426 of 4426 measured), so an entry
+        // without one is a shape this parser has never seen -- it must not
+        // be guessed either way.
+        let raw = line(serde_json::json!({
+            "type": "assistant",
+            "sessionId": "sess-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"content": [{"type": "text", "text": "hi"}]},
+        }));
+        assert!(!ended_turn(&raw));
     }
 
     #[test]
