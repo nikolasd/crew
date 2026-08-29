@@ -5,8 +5,8 @@
 // `plan/get`.
 //
 // The daemon stores and enforces nothing about *routing* -- OMP owns the task
-// graph. A plan is persisted leader intent plus the `writes`/`turn_budget`
-// metadata later guards read (WP19/WP20).
+// graph. A plan is persisted leader intent plus `writes`/`turn_budget` metadata
+// for budget tracking and approval gates.
 
 import type { AgentToolResult, ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { existsSync, readFileSync } from "node:fs";
@@ -72,7 +72,7 @@ export function registerPlanTool(pi: ExtensionAPI, ctx: OrchestrationToolContext
           description: pi.zod.string().describe("The instruction this subtask executes."),
           adapter: pi.zod.string().describe("The adapter (claude, codex, copilot, ompNative) that executes this subtask."),
           writes: pi.zod.boolean().optional().describe("Whether this subtask may write to the repository (drives the approval gate)."),
-          turnBudget: pi.zod.number().int().optional().describe("Optional per-subtask turn budget (enforced by WP19)."),
+          turnBudget: pi.zod.number().int().optional().describe("Optional per-subtask turn budget, snapshotted into the run's budget row."),
         }),
       )
       .optional()
