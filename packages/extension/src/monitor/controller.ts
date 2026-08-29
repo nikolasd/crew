@@ -23,6 +23,14 @@ const WIDGET_KEY = "crew-monitor";
 /** The slash command that opens or refreshes the monitor. */
 export const MONITOR_COMMAND_NAME = "crew";
 
+/** CREW-5: delay before the first automatic reconnect attempt after the live
+ *  subscription's client closes unexpectedly (e.g. a daemon restart or idle
+ *  exit) -- doubles on each further failed attempt, capped at
+ *  {@link RECONNECT_MAX_DELAY_MS}, so the monitor never needs the user to
+ *  type `/crew` just to notice the runtime came back. */
+const RECONNECT_INITIAL_DELAY_MS = 250;
+const RECONNECT_MAX_DELAY_MS = 30_000;
+
 /** One management operation surfaced as a /crew subcommand. The handler
  *  lives in index.ts (it needs the cached-client and doctor-context
  *  closures); the monitor owns only the dispatch. */
@@ -35,6 +43,18 @@ export interface ManagementSubcommand {
 
 export interface MonitorControllerContext {
   getClient(extCtx: ExtensionContext): Promise<CrewClient>;
+  /**
+   * Like `getClient`, but must never spawn a new runtime -- only re-attach
+   * to one that is already listening (see `resolveClientWithoutSpawning` in
+   * status.ts). Used exclusively by the automatic background reconnect
+   * loop after an unexpected close (CREW-5): a spawn belongs to a
+   * user-initiated path (`getClient`'s callers: session_start, `/crew`),
+   * not to a timer that would otherwise silently convert an intentional
+   * daemon idle-exit (ADR-0008) into "never idle" by respawning it forever.
+   * Falls back to `getClient` when omitted, so a caller that doesn't care
+   * about this distinction (tests) is unaffected.
+   */
+  getClientWithoutSpawning?(extCtx: ExtensionContext): Promise<CrewClient>;
   management?: ReadonlyMap<string, ManagementSubcommand>;
 }
 
@@ -189,6 +209,18 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
   const controller = new MonitorController();
   attachMilestoneBridge(pi, controller);
   let subscribedClient: CrewClient | undefined;
+  /** Guards against two overlapping `connect()` calls -- the automatic
+   *  reconnect loop and a user-typed `/crew` can otherwise race and each
+   *  resolve their own client, leaking whichever one loses. */
+  let connecting = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
+  /** Set for good by session_shutdown. A `clearTimeout` alone cannot defend
+   *  against a close arriving *after* shutdown's own cleanup already ran
+   *  (production's index.ts closes the shared cached client in its own,
+   *  later-registered session_shutdown handler) and scheduling a brand new
+   *  timer -- `scheduleReconnect` checks this flag first, unconditionally. */
+  let shuttingDown = false;
 
   /** The single source of truth for the `/crew` subcommand surface: both the
    *  registration `description` and the handler's `usage` line derive from it,
@@ -210,21 +242,30 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
     pi.appendEntry(MONITOR_ENTRY_TYPE, { sequence: Number(state.lastSequence) });
   }
 
-  async function connect(extCtx: ExtensionContext): Promise<void> {
+  /**
+   * @param resolveClient Which of `ctx.getClient`/`ctx.getClientWithoutSpawning`
+   * to resolve the client through. Defaults to the spawning `getClient` --
+   * every caller except the automatic reconnect loop wants that.
+   */
+  async function connect(extCtx: ExtensionContext, resolveClient: (extCtx: ExtensionContext) => Promise<CrewClient> = ctx.getClient): Promise<void> {
+    if (connecting) {
+      return;
+    }
     if (subscribedClient !== undefined && !subscribedClient.isClosed) {
       return;
     }
-    if (subscribedClient !== undefined) {
-      // The prior subscription is dead with it; drop it before resubscribing.
-      controller.stop();
-      subscribedClient = undefined;
-    }
-    // Resume from whichever is further ahead: what was persisted to the
-    // session log, or what this controller has already reduced in memory.
-    // `reduceEvent` ignores an event at or below a row's applied sequence,
-    // so overlapping replay is a no-op rather than a double-count.
-    const fromSequence = Math.max(lastPersistedSequence(extCtx.sessionManager.getEntries() as SessionEntryLike[]), Number(controller.getState().lastSequence));
+    connecting = true;
     try {
+      if (subscribedClient !== undefined) {
+        // The prior subscription is dead with it; drop it before resubscribing.
+        controller.stop();
+        subscribedClient = undefined;
+      }
+      // Resume from whichever is further ahead: what was persisted to the
+      // session log, or what this controller has already reduced in memory.
+      // `reduceEvent` ignores an event at or below a row's applied sequence,
+      // so overlapping replay is a no-op rather than a double-count.
+      const fromSequence = Math.max(lastPersistedSequence(extCtx.sessionManager.getEntries() as SessionEntryLike[]), Number(controller.getState().lastSequence));
       try {
         assertCompatiblePiCodingAgentVersion();
       } catch (err) {
@@ -232,14 +273,59 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
           error: err instanceof Error ? err.message : String(err),
         });
       }
-      const client = await ctx.getClient(extCtx);
+      const client = await resolveClient(extCtx);
       controller.start(client, fromSequence, () => refresh(extCtx));
       subscribedClient = client;
+      // A live connection is proof the runtime is reachable again; reset the
+      // backoff so the *next* unexpected drop starts retrying quickly, and
+      // un-stick a shutdown flag left from an earlier session -- a fresh
+      // session_start must be able to auto-reconnect again for its own
+      // lifetime, not stay silently disarmed by a previous one's shutdown.
+      reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
+      shuttingDown = false;
+      client.onClose(() => scheduleReconnect(extCtx));
     } catch (err) {
       pi.logger.warn("crew monitor: runtime unavailable", {
         error: err instanceof Error ? err.message : String(err),
       });
+    } finally {
+      connecting = false;
     }
+  }
+
+  /**
+   * Schedules an automatic `connect()` retry after {@link reconnectDelayMs},
+   * doubling it (capped) for next time, through `ctx.getClientWithoutSpawning`
+   * (falling back to `ctx.getClient` when the context doesn't distinguish) --
+   * never the spawning resolver, so an intentionally idle-exited daemon
+   * (ADR-0008) stays exited instead of being silently respawned forever by a
+   * background timer. This is what makes a daemon restart mid-session
+   * recoverable on its own (CREW-5): without it, the live subscription's
+   * client silently goes dark and the widget stays blind until the user
+   * happens to type `/crew` or invoke a tool. A no-op once shutdown has run,
+   * or if a retry is already pending -- one client can only close once, but
+   * this keeps the function safe to call from more than one place regardless.
+   */
+  function scheduleReconnect(extCtx: ExtensionContext): void {
+    if (shuttingDown || reconnectTimer !== undefined) {
+      return;
+    }
+    const delay = reconnectDelayMs;
+    reconnectDelayMs = Math.min(reconnectDelayMs * 2, RECONNECT_MAX_DELAY_MS);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
+      void connect(extCtx, ctx.getClientWithoutSpawning ?? ctx.getClient).then(() => {
+        if (subscribedClient !== undefined) {
+          // Resumed: replay already ran refresh() per event via
+          // controller.start()'s onUpdate, but a healthy, still-empty
+          // runtime needs an explicit render too (mirrors session_start).
+          refresh(extCtx);
+        } else {
+          // Still down -- keep retrying with the next, larger delay.
+          scheduleReconnect(extCtx);
+        }
+      });
+    }, delay);
   }
 
   pi.on("session_start", async (_event, extCtx) => {
@@ -361,10 +447,24 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
   });
 
   pi.on("session_shutdown", async () => {
+    // Set first, synchronously, before anything else: production's own
+    // session_shutdown handler (index.ts) is registered *after* this one
+    // and closes the same shared cached client, which fires this session's
+    // onClose listener (asynchronously, on a later tick -- never before
+    // this handler returns) straight into `scheduleReconnect`. A bare
+    // `clearTimeout` below only cancels a retry already pending; it cannot
+    // stop that later call from arming a brand new one. The flag can.
+    shuttingDown = true;
     controller.stop();
     // Drop the client reference too, exactly as the dead-subscription repair
     // path in connect() does -- otherwise a later connect() early-returns
     // into a monitor whose subscription no longer exists (R39).
     subscribedClient = undefined;
+    // Cancel any retry already pending.
+    if (reconnectTimer !== undefined) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+    }
+    reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
   });
 }

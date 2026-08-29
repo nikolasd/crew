@@ -10625,6 +10625,7 @@ class CrewClient {
   #closeReason;
   #pending = new Map;
   #subscribers = new Set;
+  #closeListeners = new Set;
   #ready;
   constructor(options) {
     this.#socket = createConnection({ path: options.socketPath });
@@ -10685,6 +10686,16 @@ class CrewClient {
   }
   get isClosed() {
     return this.#closed;
+  }
+  onClose(listener) {
+    if (this.#closed) {
+      queueMicrotask(listener);
+      return () => {};
+    }
+    this.#closeListeners.add(listener);
+    return () => {
+      this.#closeListeners.delete(listener);
+    };
   }
   #send(method, params) {
     return new Promise((resolve, reject) => {
@@ -10807,6 +10818,12 @@ class CrewClient {
   #onClose() {
     this.#closed = true;
     this.#failPending(this.#closeReason ?? new Error("connection closed by runtime"));
+    for (const listener of this.#closeListeners) {
+      try {
+        listener();
+      } catch {}
+    }
+    this.#closeListeners.clear();
   }
   #failPending(reason) {
     for (const pending of this.#pending.values()) {
@@ -10883,6 +10900,10 @@ async function ensureRuntime(options) {
   child.unref();
   const client = await connectWithBackoff(socketPath, options.repository, options.sessionId);
   return { client, childStarted: true };
+}
+async function connectIfRunning(options) {
+  const socketPath = socketPathFor(options.stateDir, options.repository);
+  return tryConnect(socketPath, options.repository, options.sessionId);
 }
 function socketPathFor(stateDir, repository) {
   return join2(stateDir, "repos", repositoryId(repository), "runtime.sock");
@@ -11355,7 +11376,7 @@ async function reconcileWithRuntime(client, correlation) {
 }
 
 // src/status.ts
-async function resolveClient(ctx) {
+async function resolveClientVia(ctx, connector) {
   const cached = ctx.cache.get();
   if (cached !== undefined) {
     if (!cached.isClosed) {
@@ -11366,9 +11387,21 @@ async function resolveClient(ctx) {
     } catch {}
     ctx.cache.set(undefined);
   }
-  const { client } = await ensureRuntime(ctx.ensureRuntimeOptions);
+  const client = await connector(ctx.ensureRuntimeOptions);
   ctx.cache.set(client);
   return client;
+}
+async function resolveClient(ctx) {
+  return resolveClientVia(ctx, async (options) => (await ensureRuntime(options)).client);
+}
+async function resolveClientWithoutSpawning(ctx) {
+  return resolveClientVia(ctx, async (options) => {
+    const client = await connectIfRunning(options);
+    if (client === undefined) {
+      throw new Error("no Crew runtime is currently listening for this repository");
+    }
+    return client;
+  });
 }
 var GENERIC_FAILURE_MESSAGE = "The Crew runtime is not reachable for this repository. Run the doctor command below for details.";
 async function getRuntimeStatus(ctx) {
@@ -13184,6 +13217,8 @@ function shortId(id) {
 var MONITOR_ENTRY_TYPE = "crew-monitor";
 var WIDGET_KEY = "crew-monitor";
 var MONITOR_COMMAND_NAME = "crew";
+var RECONNECT_INITIAL_DELAY_MS = 250;
+var RECONNECT_MAX_DELAY_MS = 30000;
 function lastPersistedSequence(entries) {
   for (let i = entries.length - 1;i >= 0; i--) {
     const entry = entries[i];
@@ -13268,6 +13303,10 @@ function registerMonitor(pi, ctx) {
   const controller = new MonitorController;
   attachMilestoneBridge(pi, controller);
   let subscribedClient;
+  let connecting = false;
+  let reconnectTimer;
+  let reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
+  let shuttingDown = false;
   const subcommandList = ["run <runId>", "runs", "export [runId]", "clean", "reopen <runId>", ...ctx.management?.keys() ?? []];
   function refresh(extCtx, force = false) {
     const state = controller.getState();
@@ -13275,16 +13314,20 @@ function registerMonitor(pi, ctx) {
     extCtx.ui.setWidget(WIDGET_KEY, content, { placement: "aboveEditor" });
     pi.appendEntry(MONITOR_ENTRY_TYPE, { sequence: Number(state.lastSequence) });
   }
-  async function connect(extCtx) {
+  async function connect(extCtx, resolveClient2 = ctx.getClient) {
+    if (connecting) {
+      return;
+    }
     if (subscribedClient !== undefined && !subscribedClient.isClosed) {
       return;
     }
-    if (subscribedClient !== undefined) {
-      controller.stop();
-      subscribedClient = undefined;
-    }
-    const fromSequence = Math.max(lastPersistedSequence(extCtx.sessionManager.getEntries()), Number(controller.getState().lastSequence));
+    connecting = true;
     try {
+      if (subscribedClient !== undefined) {
+        controller.stop();
+        subscribedClient = undefined;
+      }
+      const fromSequence = Math.max(lastPersistedSequence(extCtx.sessionManager.getEntries()), Number(controller.getState().lastSequence));
       try {
         assertCompatiblePiCodingAgentVersion();
       } catch (err) {
@@ -13292,14 +13335,36 @@ function registerMonitor(pi, ctx) {
           error: err instanceof Error ? err.message : String(err)
         });
       }
-      const client = await ctx.getClient(extCtx);
+      const client = await resolveClient2(extCtx);
       controller.start(client, fromSequence, () => refresh(extCtx));
       subscribedClient = client;
+      reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
+      shuttingDown = false;
+      client.onClose(() => scheduleReconnect(extCtx));
     } catch (err) {
       pi.logger.warn("crew monitor: runtime unavailable", {
         error: err instanceof Error ? err.message : String(err)
       });
+    } finally {
+      connecting = false;
     }
+  }
+  function scheduleReconnect(extCtx) {
+    if (shuttingDown || reconnectTimer !== undefined) {
+      return;
+    }
+    const delay = reconnectDelayMs;
+    reconnectDelayMs = Math.min(reconnectDelayMs * 2, RECONNECT_MAX_DELAY_MS);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
+      connect(extCtx, ctx.getClientWithoutSpawning ?? ctx.getClient).then(() => {
+        if (subscribedClient !== undefined) {
+          refresh(extCtx);
+        } else {
+          scheduleReconnect(extCtx);
+        }
+      });
+    }, delay);
   }
   pi.on("session_start", async (_event, extCtx) => {
     await connect(extCtx);
@@ -13401,8 +13466,14 @@ function registerMonitor(pi, ctx) {
     }
   });
   pi.on("session_shutdown", async () => {
+    shuttingDown = true;
     controller.stop();
     subscribedClient = undefined;
+    if (reconnectTimer !== undefined) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+    }
+    reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
   });
 }
 
@@ -13427,6 +13498,9 @@ function crewExtension(pi) {
   }
   async function getClient(extCtx) {
     return resolveClient(statusContextFor(extCtx));
+  }
+  async function getClientWithoutSpawning(extCtx) {
+    return resolveClientWithoutSpawning(statusContextFor(extCtx));
   }
   pi.registerTool({
     name: TOOL_NAME,
@@ -13500,6 +13574,7 @@ ${result.text}`, isError: result.isError });
   }
   registerMonitor(pi, {
     getClient,
+    getClientWithoutSpawning,
     management: new Map([
       ["health", { description: "Runtime health: connects to or spawns the daemon", run: async (_args, ctx) => healthResult(ctx) }],
       ["doctor", { description: "Diagnostics that work with no live daemon", run: async (_args, ctx) => doctorResult(ctx.cwd) }],
