@@ -35,7 +35,7 @@ pub use coordination::{
 pub use display::PaneReopenResult;
 pub use display::{
     DisplayBackend, DisplayConfig, DisplayPlacement, DisplayPreference, DisplaySelection,
-    DisplayStatus,
+    DisplayStatus, HostProgramHint,
 };
 pub use event::RunFlags;
 pub use event::{

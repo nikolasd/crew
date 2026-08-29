@@ -430,6 +430,7 @@ where
         panes_dir,
         DisplayPlacement::SplitRight,
         None,
+        None,
         CloseOnExit::Always,
         TuiTimings {
             readiness_quiet: Duration::from_millis(300),

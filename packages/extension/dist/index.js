@@ -9763,6 +9763,17 @@ terminal. Changes presentation only; never run ownership.`,
           description: "A new workspace (Herdr only; unsupported by tmux).",
           type: "string",
           const: "workspace"
+        },
+        {
+          description: `A new, separate OS-level window (CREW-9) -- not a tab or split of
+the caller's own terminal at all. \`OsWindowDisplay\`'s honest report
+of what it actually opened when the target terminal has no
+tab-creation mechanism it can drive (e.g. Terminal.app, or Ghostty
+versions predating its AppleScript support): callers must never
+see \`Tab\` echoed back for a placement that was, in fact, a whole
+new window.`,
+          type: "string",
+          const: "window"
         }
       ]
     },
@@ -11970,6 +11981,22 @@ async function callOrchestration(client, method, params) {
 function renderSummary(method, result) {
   return `${method}: ${JSON.stringify(result)}`;
 }
+function launchProgramHint(env = process.env) {
+  switch (env.TERM_PROGRAM) {
+    case "Apple_Terminal":
+      return "appleTerminal";
+    case "iTerm.app":
+      return "iTerm2";
+    case "ghostty":
+      return "ghostty";
+    default:
+      return;
+  }
+}
+function displayPreferenceFragment(env = process.env) {
+  const hint = launchProgramHint(env);
+  return hint === undefined ? {} : { displayPreference: { ordered: [], placement: "embedded", launchProgram: hint } };
+}
 
 // src/tools/approvals.ts
 var CREW_APPROVAL_TOOL_NAME = "crew_approval";
@@ -12189,7 +12216,8 @@ function registerSpawnTool(pi, ctx) {
         planId: input.planId,
         subtaskId: input.subtaskId,
         ...input.workspaceMode !== undefined ? { workspaceMode: input.workspaceMode } : {},
-        ...input.priority !== undefined ? { priority: input.priority } : {}
+        ...input.priority !== undefined ? { priority: input.priority } : {},
+        ...displayPreferenceFragment()
       });
       if (result.isError && ctx.reportSubmitFailure !== undefined) {
         const msg = result.details?.message ?? "run/submit failed";
@@ -12573,7 +12601,8 @@ function registerRunTool(pi, ctx) {
             prompt: input.prompt,
             workerId: input.workerId,
             workspaceMode: input.workspaceMode,
-            priority: input.priority
+            priority: input.priority,
+            ...displayPreferenceFragment()
           });
           if (result.isError && ctx.reportSubmitFailure !== undefined) {
             const msg = result.details?.message ?? "run/submit failed";
@@ -12592,7 +12621,8 @@ function registerRunTool(pi, ctx) {
             priorRunId: input.priorRunId,
             workerId: input.workerId,
             prompt: input.prompt,
-            workspaceMode: input.workspaceMode
+            workspaceMode: input.workspaceMode,
+            ...displayPreferenceFragment()
           });
           if (result.isError && ctx.reportSubmitFailure !== undefined) {
             const msg = result.details?.message ?? "run/retry failed";
@@ -13059,6 +13089,15 @@ function eventPatch(envelope) {
         workerId: event.payload.workerId,
         state: event.payload.state,
         latestActivity: `run ${event.payload.state}`
+      };
+    }
+    case "diagnostic": {
+      if (runId === null || runId === undefined) {
+        return;
+      }
+      return {
+        runId,
+        latestActivity: event.payload.message
       };
     }
     case "runFlagsEvent": {

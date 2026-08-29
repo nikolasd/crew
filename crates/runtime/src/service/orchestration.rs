@@ -1013,6 +1013,7 @@ impl OrchestrationService {
             .unwrap_or(crew_protocol::DisplayPreference {
                 ordered: Vec::new(),
                 placement: crew_protocol::DisplayPlacement::Embedded,
+                launch_program: None,
             });
         let display = Some(self.display.resolve(&display_preference));
 
@@ -1208,6 +1209,7 @@ impl OrchestrationService {
             .unwrap_or(crew_protocol::DisplayPreference {
                 ordered: Vec::new(),
                 placement: crew_protocol::DisplayPlacement::Embedded,
+                launch_program: None,
             });
         let display = Some(self.display.resolve(&display_preference));
 
@@ -2839,6 +2841,12 @@ impl OrchestrationService {
                     adapter,
                     placement: crew_protocol::DisplayPlacement::SplitRight,
                     forced_backend: None,
+                    // `pane/reopen` has no caller-supplied displayPreference
+                    // to read a launch-program hint from (unlike the
+                    // original submit) and doesn't accept one today; falls
+                    // back to OsWindowDisplay's own default, same as an
+                    // absent hint always does.
+                    launch_program: None,
                 },
                 principal.instance_id.clone(),
             )

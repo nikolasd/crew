@@ -146,10 +146,11 @@ impl DisplayBackendTrait for FakeBackend {
         crew_protocol::DisplayStatus::new(self.wire_backend, true, false)
     }
 
-    fn create_pane(&self, _req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
+    fn create_pane(&self, req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
         let handle = PaneHandle {
             backend: self.wire_backend,
             pane_ref: self.pane_ref.clone(),
+            placement: req.placement,
         };
         Box::pin(async move { Ok(handle) })
     }
@@ -689,6 +690,7 @@ fn build_adapter(
         Arc::clone(&harness.pane_coordinator),
         harness.panes_dir.clone(),
         DisplayPlacement::SplitRight,
+        None,
         None,
         CloseOnExit::Always,
         timings,

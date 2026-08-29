@@ -57,3 +57,53 @@ export async function callOrchestration(client: CrewClient, method: string, para
 function renderSummary(method: string, result: unknown): string {
   return `${method}: ${JSON.stringify(result)}`;
 }
+
+/** Wire values `run/submit`/`run/retry`'s `displayPreference.launchProgram`
+ *  accepts (CREW-9) -- must match `crates/protocol/src/display.rs`'s
+ *  `HostProgramHint` exactly. A closed set, never a raw string: this value
+ *  ends up selecting and parameterizing an `osascript` invocation on the
+ *  daemon side, so `$TERM_PROGRAM` content must never reach it unmapped --
+ *  see `HostProgramHint`'s own doc comment. */
+export type LaunchProgramHint = "appleTerminal" | "iTerm2" | "ghostty";
+
+/**
+ * Maps `$TERM_PROGRAM` to one of the closed set of programs
+ * `OsWindowDisplay` knows how to target directly, or `undefined` for
+ * anything else this build doesn't recognize.
+ *
+ * `$TERM_PROGRAM` names whatever process launched *this one* -- which may
+ * be a multiplexer (`tmux`) or something else entirely, not necessarily
+ * the terminal emulator the user is sitting in. An unrecognized value
+ * (including a multiplexer's) is harmless here: tmux/herdr already win
+ * backend resolution before `OsWindowDisplay` is ever reached, so this
+ * hint only matters once resolution has already fallen through to a bare
+ * terminal window, and `undefined` degrades to today's default there.
+ */
+export function launchProgramHint(env: Readonly<Record<string, string | undefined>> = process.env): LaunchProgramHint | undefined {
+  switch (env.TERM_PROGRAM) {
+    case "Apple_Terminal":
+      return "appleTerminal";
+    case "iTerm.app":
+      return "iTerm2";
+    case "ghostty":
+      return "ghostty";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * The `displayPreference` fragment to spread into a `run/submit`/
+ * `run/retry` params object, or `{}` when there is no recognized hint --
+ * this is deliberately the *whole* key, not just `launchProgram` alone,
+ * because `DisplayPreference.placement`/`ordered` are required fields on
+ * the wire: sending a bare `{launchProgram}` without them would be
+ * rejected as malformed. `ordered: []`/`placement: "embedded"` are
+ * exactly the daemon's own defaults when `displayPreference` is absent
+ * entirely, so this changes nothing about resolution besides adding the
+ * hint.
+ */
+export function displayPreferenceFragment(env: Readonly<Record<string, string | undefined>> = process.env): { displayPreference?: { ordered: []; placement: "embedded"; launchProgram: LaunchProgramHint } } {
+  const hint = launchProgramHint(env);
+  return hint === undefined ? {} : { displayPreference: { ordered: [], placement: "embedded", launchProgram: hint } };
+}
