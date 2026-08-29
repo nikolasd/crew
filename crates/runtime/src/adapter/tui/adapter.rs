@@ -53,7 +53,7 @@ use crate::display::{
 use crate::supervisor::{EscalationTimings, PtyProcess};
 
 use super::discovery::{DiscoveryError, find_transcript_by_nonce};
-use super::input::paste_chunks;
+use super::input::{PASTE_CHUNK_BYTES, paste_chunks};
 use super::tailer::{TailerHandle, TranscriptTailer};
 use super::{Cursor, TranscriptFormat, TuiEvent};
 
@@ -146,6 +146,16 @@ pub trait TuiVendor: Send + Sync + 'static {
 
     /// Composes a message into the exact bytes to write to the PTY (text
     /// plus this vendor's own submit convention).
+    ///
+    /// **Contract:** the return value must be `message`'s bytes verbatim
+    /// followed by exactly one trailing submit byte. The adapter shell
+    /// splits the two and uses only that trailing byte: the text half is
+    /// delivered by `write_paste`, which frames it as a bracketed paste
+    /// and chunks it (CREW-4), so a vendor that transformed the text here
+    /// would have its transformation silently discarded. A vendor needing
+    /// a different submit convention changes the trailing byte; one
+    /// needing to rewrite the text has no supported way to do it here.
+    /// Debug builds assert this at both call sites.
     fn compose_input(&self, message: &str) -> Vec<u8>;
 
     /// The byte sequence this vendor's CLI interprets as "stop the current
@@ -267,14 +277,6 @@ const ENTER_IDLE_MIN: Duration = Duration::from_secs(10);
 /// Enter regardless rather than fail the run -- that degrades to today's
 /// single-shot behavior instead of adding a new failure mode.
 const ENTER_IDLE_CAP: Duration = Duration::from_secs(90);
-
-/// Payload bytes per PTY write when delivering a prompt (CREW-4). A
-/// prompt used to travel as one write of arbitrary size; chunking keeps
-/// each write small enough that the vendor's read loop and the tty's own
-/// buffering can drain it between writes, which is what makes the
-/// per-chunk timeout below a meaningful liveness signal rather than a
-/// race against one huge blocking write.
-const PASTE_CHUNK_BYTES: usize = 1024;
 
 /// Pause between paste chunks, giving the vendor's reader and render pass
 /// room to consume the previous one. Deliberately short: it is pacing, not
@@ -706,8 +708,17 @@ impl<V: TuiVendor> TuiAdapter<V> {
         // by `write_paste` from the original string -- framed as a
         // bracketed paste and chunked, so a multi-line prompt is content
         // rather than a sequence of Enters (CREW-4).
-        let injected_bytes: Option<Vec<u8>> =
-            inject.as_ref().map(|text| self.vendor.compose_input(text));
+        let injected_bytes: Option<Vec<u8>> = inject.as_ref().map(|text| {
+            let bytes = self.vendor.compose_input(text);
+            debug_assert_eq!(
+                &bytes[..bytes.len() - 1],
+                text.as_bytes(),
+                "{}: compose_input must pass the message through verbatim plus one submit \
+                 byte -- the adapter delivers the text itself (see the trait doc)",
+                self.kind()
+            );
+            bytes
+        });
         let enter_byte: Option<&[u8]> = injected_bytes
             .as_deref()
             .map(|bytes| &bytes[bytes.len() - 1..]);
@@ -1455,6 +1466,13 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                 .await
                 .map_err(|e| AdapterError::process(self.kind(), "send", e.to_string()))?;
             let bytes = self.vendor.compose_input(text);
+            debug_assert_eq!(
+                &bytes[..bytes.len() - 1],
+                text.as_bytes(),
+                "{}: compose_input must pass the message through verbatim plus one submit \
+                 byte -- the adapter delivers the text itself (see the trait doc)",
+                self.kind()
+            );
             // Queue-style messages must land in an IDLE REPL: codex drops
             // keystrokes typed mid-turn outright. Wait for output silence
             // first; if a vendor never goes quiet the cap expires and the

@@ -23,6 +23,14 @@ pub(crate) const PASTE_START: &[u8] = b"\x1b[200~";
 /// Bracketed-paste terminator -- `ESC [ 2 0 1 ~`.
 pub(crate) const PASTE_END: &[u8] = b"\x1b[201~";
 
+/// Payload bytes per PTY write when delivering a prompt. A prompt used to
+/// travel as one write of arbitrary size; chunking keeps each write small
+/// enough that the vendor's read loop and the tty's own buffering can
+/// drain it between writes, which is what makes the adapter's per-chunk
+/// write timeout a meaningful liveness signal rather than a race against
+/// one huge blocking write.
+pub(crate) const PASTE_CHUNK_BYTES: usize = 1024;
+
 /// The smallest chunk this module will emit: a chunk has to be able to
 /// hold a framing marker plus at least one 4-byte UTF-8 scalar, or
 /// chunking could make no forward progress.
@@ -194,23 +202,19 @@ mod tests {
             };
             assert!(multi_line.len() >= target);
             assert_eq!(
-                delivered_payload(&paste_chunks(&multi_line, PASTE_CHUNK_TEST_BYTES)),
+                delivered_payload(&paste_chunks(&multi_line, PASTE_CHUNK_BYTES)),
                 multi_line,
                 "a {target}-byte multi-line prompt must arrive intact"
             );
 
             let single_line = "x".repeat(target);
             assert_eq!(
-                delivered_payload(&paste_chunks(&single_line, PASTE_CHUNK_TEST_BYTES)),
+                delivered_payload(&paste_chunks(&single_line, PASTE_CHUNK_BYTES)),
                 single_line,
                 "a {target}-byte single-line prompt must arrive intact"
             );
         }
     }
-
-    /// The production chunk size, so the matrix above exercises the real
-    /// number of writes rather than a test-only one.
-    const PASTE_CHUNK_TEST_BYTES: usize = 1024;
 
     #[test]
     fn a_multibyte_scalar_is_never_split_across_chunks() {
