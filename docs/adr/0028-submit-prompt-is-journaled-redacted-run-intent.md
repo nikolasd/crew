@@ -115,7 +115,27 @@ The two exposure classes are therefore *different rather than nested*, and it is
 | submit prompt (this decision) | yes | yes | **yes** |
 
 So this decision produces a system where the redacted content is the widely distributed one and the
-unredacted content is the narrowly held one — defensible, but only while stated. Closing the
+unredacted content is the narrowly held one — defensible, but only while stated.
+
+**The cause is structural, and worth naming because it is larger than one missing call.** There are
+two paths by which an event becomes durable, and only one of them is the boundary ADR-0006
+describes. `DatabaseHandle::append_event` takes a `PersistableEvent` — a type with no public
+constructor, obtainable only from `Redactor::sanitize` — and that is the path ADR-0006's tests scan.
+`DomainRepository::append_and_apply` takes a plain `&RuntimeEvent` and inserts its serialization
+into `events.event_json` directly, with no boundary type anywhere in the signature. Every domain
+event is written that way.
+
+The consequence is that redaction on the domain-event path is *convention*, which is the precise
+thing ADR-0006 was written to eliminate — "a convention is only as strong as the discipline of
+whoever adds the next call site." The message payload is not an oversight by one author; it is what
+that missing boundary produces by default. This decision's own prompt event is redacted by the same
+convention: `run/submit` classifies and sanitizes before calling `record_run_prompt`, and nothing in
+the type system requires it to. The method's doc comment says so outright rather than implying a
+guarantee it cannot make.
+
+Extending the type boundary to the domain-event path is the real fix and is out of scope here — it
+touches every domain mutation, not one call site. Stated so that whoever picks up the message-payload
+work sizes it correctly, and does not conclude that adding one `sanitize` call closes the class. Closing the
 message-path gap is its own decision with its own security reasoning, and is tracked separately; it
 is not folded in here, because a decision about run intent should not quietly also change how
 message content is persisted. The false doc comment is corrected as part of this change, since
@@ -167,5 +187,10 @@ plausible.
   secondary" framing above.
 * Constrained by [ADR-0020](0020-per-mutation-event-broadcast-is-not-optional.md) — the prompt event
   commits and broadcasts in one call like every other mutation.
-* Proven the way ADR-0006's boundary is proven: by byte-scanning the database, WAL, and log in
-  `crates/runtime/tests/redaction_boundary.rs`, not by asserting on a redactor's return value.
+* Proven in `crates/runtime/tests/orchestration_rpc.rs` at the RPC boundary: a submit whose prompt
+  contains a vendor-key-shaped string journals an event that does not contain it and does contain
+  the surrounding text. Mutation-checked — bypassing `sanitize_fragment` fails that test and only
+  that test. Deliberately *not* claimed to be proven by `redaction_boundary.rs`'s byte-scan: that
+  file is one test in its own binary by design (it installs a process-global `tracing` subscriber),
+  and it exercises the `PersistableEvent` path, which — see below — is not the path a domain event
+  takes.

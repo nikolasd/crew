@@ -217,6 +217,13 @@ pub struct OrchestrationService {
     /// `policyOverrides` can be re-merged against them at submit time
     /// rather than being authorized under a policy it did not request.
     config_paths: Option<Vec<std::path::PathBuf>>,
+    /// The redactor every piece of caller-supplied content crosses before
+    /// it becomes durable (ADR-0006). Built once from the startup policy's
+    /// `org_security_patterns` in [`Self::with_policy`], so `run/submit`
+    /// gains no new failure mode from compiling a regex per call, and the
+    /// org rules cannot be silently dropped by a fallback. Built-in rules
+    /// only when no policy was supplied (tests and embeddings).
+    redactor: Arc<crate::security::redaction::Redactor>,
     /// The display backends this machine can attach a run's pane to.
     /// Resolved once per `run/submit` against the caller's
     /// `displayPreference`, so an adapter never re-probes.
@@ -284,6 +291,7 @@ impl OrchestrationService {
             repository,
             policy: None,
             config_paths: None,
+            redactor: Arc::new(crate::security::redaction::Redactor::new()),
             display: Arc::new(crate::display::DisplayRegistry::with_default_backends(
                 crew_protocol::DisplayConfig::default(),
             )),
@@ -336,6 +344,16 @@ impl OrchestrationService {
                 height: None,
             },
         ));
+        // An invalid org pattern already failed the daemon at startup
+        // (`lifecycle.rs` builds its own redactor from the same list before
+        // anything serves), and `doctor` validates them too -- so reaching
+        // this fallback means a caller constructed the service directly
+        // with a policy nobody validated. Keeping the built-in rules is the
+        // safe direction: fewer patterns, never zero.
+        self.redactor = Arc::new(
+            crate::security::redaction::Redactor::with_org_rules(&policy.org_security_patterns)
+                .unwrap_or_else(|_| crate::security::redaction::Redactor::new()),
+        );
         self.config_paths = Some(config_paths);
         self.policy = Some(policy);
         self
@@ -1061,6 +1079,48 @@ impl OrchestrationService {
             .await
             .map_err(ServiceError::from)?;
         self.broadcast(&mut submit_result);
+
+        // ADR-0028: the prompt is durable run intent, journaled here --
+        // after the run row exists (an event naming a run that does not
+        // exist is worse than a run with no prompt event) and *before*
+        // `start_queued_run` spawns anything, so invariant 4's "intent
+        // persisted before side effects" holds by construction rather than
+        // by ordering that a later edit could quietly invert.
+        //
+        // A second op rather than the submit closure: `embed_envelope`
+        // carries exactly one envelope, and every committed event must
+        // broadcast (ADR-0020), so two commits need two round trips. Submit
+        // is not a hot path.
+        //
+        // The prompt crosses the ADR-0006 boundary first, classified
+        // `Visible`: a leader-authored prompt is meant to be readable, so
+        // the secret denylist applies and the text survives. A prompt that
+        // redacts to nothing at all journals nothing -- there is no intent
+        // left to record, and an empty event would assert otherwise.
+        if let Some(prompt) = prompt.as_deref() {
+            let classified = crew_protocol::Classified {
+                class: crew_protocol::ContentClass::Visible,
+                value: prompt.to_string(),
+            };
+            if let Some(redacted) = self.redactor.sanitize_fragment(&classified)
+                && !redacted.trim().is_empty()
+            {
+                let mut prompt_result = self
+                    .db
+                    .run_domain_op(Box::new(move |conn| {
+                        let mut repo = DomainRepository::new(conn, project_id);
+                        let committed =
+                            repo.record_run_prompt(run_id, task_id, worker_id, redacted)?;
+                        Ok(embed_envelope(
+                            json!({ "sequence": committed.sequence }),
+                            &committed.envelope,
+                        ))
+                    }))
+                    .await
+                    .map_err(ServiceError::from)?;
+                self.broadcast(&mut prompt_result);
+            }
+        }
 
         let workspace_path = self
             .start_queued_run(

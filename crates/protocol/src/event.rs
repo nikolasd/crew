@@ -489,6 +489,25 @@ pub enum RuntimeEvent {
         run_id: RunId,
         flags: RunFlags,
     },
+    /// The prompt a run was submitted with, journaled as durable run
+    /// intent (ADR-0028) so every consumer of a run's journal can read the
+    /// question its transcript answers.
+    ///
+    /// `prompt` has already crossed the ADR-0006 boundary: the submitting
+    /// service classifies it `Visible` and passes it through
+    /// `Redactor::sanitize_fragment`, so secret-shaped substrings are
+    /// masked before this event is ever constructed. Carries no `kind`,
+    /// like `RunFlagsEvent` -- there is one thing it can mean.
+    ///
+    /// A run submitted without a prompt produces no event at all rather
+    /// than one carrying an empty string, so absence stays distinguishable
+    /// from an empty prompt.
+    RunPromptEvent {
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        prompt: String,
+    },
     /// A message was recorded, sent, acknowledged, or failed.
     MessageEvent {
         kind: RuntimeEventKind,
