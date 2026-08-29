@@ -146,6 +146,23 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     let lock = acquire_lock(&paths)?;
 
     init_logging(opts.foreground, &paths.log)?;
+
+    // CREW-15: remove attach sockets left behind by a daemon that died
+    // without cleaning up. Nothing else ever did, and `pane/reopen` treats
+    // a live socket as proof of a reopenable pane -- so a stale file used
+    // to make it claim a pane that was not there. Runs after the lock is
+    // won (only one daemon per repository sweeps at a time) and keyed on
+    // liveness, never ownership: since CREW-1 this directory is per-user
+    // and shared across every repository, so another repository's live
+    // sockets sit beside ours and must survive.
+    let swept = crate::display::pane_socket::sweep_stale(&paths.panes).await;
+    if !swept.is_empty() {
+        tracing::info!(
+            count = swept.len(),
+            "removed stale pane attach sockets left by a previous daemon"
+        );
+    }
+
     tracing::info!(
         project_id = %paths.project_id,
         pid = std::process::id(),
