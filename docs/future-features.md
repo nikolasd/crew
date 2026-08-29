@@ -5,7 +5,7 @@ consciously deferred features — nice-to-have, not blocking any planned milesto
 includes the concrete scenarios that would justify implementation. For genuinely open
 implementation gaps (as opposed to deferred nice-to-haves): the open-items backlog is the
 maintainer's local, gitignored `REVIEW.md` (not present in a fresh clone; its resolution
-history lives in [`journal.md`](journal.md)) — that record, not this one, is the single
+history lives in [`docs/adr/`](adr/)) — that record, not this one, is the single
 source of truth for unfinished work.
 
 **Status:** All deferred. Revisit when a scenario becomes real.
@@ -39,7 +39,11 @@ An operator builds a web dashboard that wants to be a *display backend* — not 
 
 **2. Liveness-aware display routing**
 
-You run both Herdr (terminal) and a web dashboard. Herdr crashes. Today the `DisplaySelector` still thinks Herdr is available (registered at startup, nothing tells the runtime it died). A new run gets routed to the dead backend, events go nowhere. `display/heartbeat` with expiry would detect the crash and remove it from the available set.
+You run both Herdr (terminal) and a web dashboard. Herdr crashes. The `DisplaySelector` still thinks Herdr is available — registered at startup, with nothing telling the runtime it died — so a new run gets routed to a dead backend.
+
+Partly narrowed since this was written: `display::pane_socket::is_live` established a connect-probe definition of pane liveness, used by `pane/reopen` and by the startup sweep that unlinks dead sockets ([ADR-0027](adr/0027-turn-end-settles-a-run.md)). That answers "is this *pane* alive" for a Crew-owned attach socket. It does not answer "is this *backend* still able to accept new panes", which is what routing needs, and it says nothing about a backend that never had a Crew socket in the first place. So the scenario stands, but its premise is no longer "nothing detects a dead backend" — it is that pane-level liveness does not generalize to backend-level routing.
+
+**Cross-note:** the crewd-served web monitor ([CREW-12](adr/)) must be scoped as a **read-only viewer** built on `events/subscribe` + `events/replay`. If it is instead allowed to receive routed runs, it becomes a display backend and this entry's trigger fires — a registration surface would then be required rather than deferred.
 
 **3. Multi-tenant / shared daemon**
 
@@ -213,6 +217,18 @@ operator was reported as depending on the headless path specifically. Retiring i
 than keeping it permanently inert, follows the same reasoning as the Org Governance Enforcement
 entry above: an unreachable-in-practice code path is a liability, not a free option.
 
+Subsequent work removed most of the *practical* pressure that would have argued for bringing it
+back. The three complaints that made a headless plane attractive were that driving a real TUI is
+fragile about input, opaque about completion, and unverifiable about delivery. Each now has an
+answer in the TUI path itself: prompts are delivered as one bracketed paste in paced chunks with a
+bounded write, so a vendor that stops reading fails loudly instead of truncating silently; a run
+reaches a settled state from the vendor's own end-of-turn boundary rather than only from process
+exit, with `run/finish` for the leader and an inactivity backstop for an abandoned turn
+([ADR-0027](adr/0027-turn-end-settles-a-run.md)); and post-submit verification compares what the
+vendor actually recorded against what was sent, so a truncating composer fails the run rather than
+producing a plausible-looking short answer. A headless plane would have to beat that, not merely
+match a PTY's old weaknesses.
+
 ### Decision trigger
 
 Implement a non-interactive control plane again only if a concrete deployment needs to drive a
@@ -220,42 +236,6 @@ vendor CLI without a PTY (e.g. a headless CI runner with no pane backend availab
 the TUI path is confirmed unworkable for it — not merely inconvenient. Any reintroduction should
 design fresh against the vendor CLIs' current protocols rather than resurrect the deleted code,
 since the vendor wire formats this was built against may themselves have moved on by then.
-
----
-
-## Org Config: URL or File Path Support
-
-**Specified by:** TODO.md Feature Requests section (retired 2026-08-06)
-**Status:** the local org config layer this describes was itself retired by the crew-v2
-design (spec §2.2/§12; removed by crew-v2 gap-closure WP5) — the entry below is preserved as
-a record of the pre-crew-v2 idea, relevant again only if the org config layer itself returns.
-**References:** `crates/runtime/src/config/merge.rs` (`load_layer`, no longer part of the
-crate -- orphaned, pending deletion)
-
-### What it is
-
-Org-level config currently loads only from a local file path
-(`--org-config /etc/crew/org.yaml`). This would let it also accept an
-`http://`/`https://` URL, fetching and parsing the YAML remotely — e.g.
-`--org-config https://config.example.com/org.yaml` — so a central org can
-publish one config that every install pulls from instead of distributing
-a file to each machine.
-
-### Why deferred
-
-No operator has asked for this; it's a speculative convenience, not a
-reported gap. It also isn't a small bolt-on: it adds a network dependency
-and a new failure mode (DNS, TLS, timeout, transient outage) to daemon
-startup, which today is entirely offline-safe. Doing it properly means
-deciding TLS certificate validation policy, timeout/retry behavior, and
-whether/how to cache the last-fetched config so a network blip doesn't
-prevent the daemon from starting at all.
-
-### Decision trigger
-
-Implement when an operator needs centrally-managed org config across
-multiple machines/repos and file distribution (config management, shared
-filesystem, etc.) is a real deployment problem for them.
 
 ---
 
@@ -355,7 +335,70 @@ Deprecation forwarders give users a grace period to migrate from the old command
 
 ### Decision trigger
 
-The first release cut after v0.6.0 (which ships the forwarders). Removing them shrinks the registered-command list — update the exact-list assertion in `packages/extension/src/index.test.ts` (the `["crew-status", "crew", ...]` line) and delete the forwarder test in the same commit.
+**Armed.** v0.6.0 has shipped, so this is scheduled for the next release cut rather than waiting on a condition — the only remaining question is when that cut happens, not whether the trigger has fired.
+
+Removing them shrinks the registered-command list, so the same commit must update the exact-list assertion in `packages/extension/src/index.test.ts` (the `["crew-status", "crew", ...]` line) and delete the forwarder test. `/crew-install` is permanent and stays.
+
+---
+
+## True tabs for Terminal.app (and pre-1.3.0 Ghostty)
+
+**Specified by:** deferred from CREW-9's first cut (2026-08-29)
+**References:** `crates/runtime/src/display/os_window.rs`,
+[`docs/adr/0025-crew-v2-tui-control-plane.md`](adr/0025-crew-v2-tui-control-plane.md)
+
+### What it is
+
+CREW-9 made worker panes follow the host terminal instead of always assuming Terminal.app, and two
+of the three supported targets already open a **real tab** in the window the user is looking at:
+
+| Target | Shipped behaviour |
+|---|---|
+| iTerm2 | real tab (`create tab with default profile`, then `write text`) |
+| Ghostty 1.3.0+ | real tab (`new tab in window 1 with configuration {command:...}`) |
+| Ghostty pre-1.3.0 | plain new window (`open -na Ghostty --args -e`) |
+| Terminal.app, or an absent/unrecognized hint | plain new window (`do script`, then `activate`) |
+
+What remains deferred is a real tab for the last two rows. Both report
+`DisplayPlacement::Window` honestly rather than claiming a tab they did not open, so this is a UX
+gap, not a correctness one.
+
+### Why deferred
+
+**Terminal.app has no externally-triggerable tab-creation command.** Its AppleScript dictionary
+exposes `do script`, which opens a window; there is no supported "open a tab in the frontmost
+window running this command". The known workaround is synthesizing a ⌘T keystroke through System
+Events, which requires Accessibility permission, breaks silently when that permission is absent or
+revoked, and depends on keyboard-shortcut configuration the user can change. Trading a reliable
+window for an unreliable tab is the wrong direction — especially against a backend whose previous
+bug was opening windows the user never saw.
+
+**Ghostty pre-1.3.0 has no AppleScript tab command at all.** The shipped code feature-detects this
+by attempting the command and falling back, rather than checking a version string, so those installs
+degrade to a window automatically and resolve themselves as users upgrade. A non-AppleScript CLI
+path for tab creation is tracked upstream as
+[ghostty-org/ghostty#12136](https://github.com/ghostty-org/ghostty/issues/12136) ("CLI: support
+opening new tabs in an existing window"), still unimplemented — AppleScript is the path that shipped
+in 1.3.0. If the CLI path lands it would also serve installs where scripting is unavailable or
+undesirable.
+
+The honest framing: for iTerm2 and current Ghostty, "panes follow the host" already means a tab in
+the window you are working in. For Terminal.app it means a foregrounded window of the right
+application, which is a large improvement over the pre-CREW-9 behaviour of an un-activated window of
+the *wrong* application, and may simply be good enough.
+
+### Decision trigger
+
+Either of:
+
+1. **Upstream support lands** — Terminal.app gains a scriptable tab command (unlikely), or Ghostty
+   ships a CLI/IPC path worth using in place of AppleScript.
+2. **Real complaints about the new-window UX.** Not speculation about it: an operator on
+   Terminal.app saying the window-per-worker behaviour is disruptive in practice. Until then the
+   window is reliable and the tab is not.
+
+Explicitly *not* a trigger: wanting parity across terminals for its own sake. The placement is
+reported honestly per backend, so a caller that cares can already tell what it got.
 
 ---
 
@@ -363,6 +406,6 @@ The first release cut after v0.6.0 (which ships the forwarders). Removing them s
 
 1. **Adding a future feature:** Append a new section with the feature name, what it is, concrete scenarios that justify it, why it's deferred, and a decision trigger.
 2. **Revisiting:** When a scenario becomes real, implement the feature and remove it from this document.
-3. **Closing without implementing:** If a feature is no longer relevant, move it to `docs/journal.md` with a "retired" note and remove it from here.
+3. **Closing without implementing:** If a feature is no longer relevant, remove it from here and record the retirement in an ADR (or in [engineering-lessons.md](engineering-lessons.md) if the reason is a lesson rather than a decision).
 
 This document is **not** a TODO list — it's a design parking lot. Items here are consciously deferred, not forgotten.

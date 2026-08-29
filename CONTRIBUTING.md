@@ -185,7 +185,6 @@ When contributing, consider updating documentation:
 - **docs/compatibility.md** — supported platforms and the adapter conformance matrix
 - **docs/engineering-lessons.md** — hard-won lessons from real bugs, cross-referenced by file/ADR
 - **docs/future-features.md** — consciously deferred features with decision triggers
-- **docs/journal.md** — the commit-by-commit narrative of how the codebase got this way
 - **docs/adr/** — architectural decisions
 
 ## Questions?

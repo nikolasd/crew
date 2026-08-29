@@ -7,7 +7,8 @@ the [README](../README.md) and want the engineering detail behind it.
 behind the current shape of the system. This is not a build guide (see
 [getting-started.md](getting-started.md), the developer manual) and not a tool-usage guide (see
 [plugin-usage.md](plugin-usage.md), the user manual). It describes the system as it stands today,
-with no history in it — for how it got this way, see [journal.md](journal.md) and [`docs/adr/`](adr/).
+with no history in it — for how it got this way, see [`docs/adr/`](adr/) and
+[engineering-lessons.md](engineering-lessons.md).
 
 **Related ADRs:** [0001](adr/0001-omp-extension-with-separate-rust-daemon.md),
 [0002](adr/0002-rust-canonical-protocol-with-generated-bindings.md),
@@ -257,7 +258,7 @@ graph TB
         AR2[audit/retention.rs]
         CF[conformance/scenario.rs]
         CR[conformance/report.rs]
-        CFG[config/merge.rs]
+        CFG[config/crew.rs]
         PE[policy/evaluate.rs]
     end
 
@@ -368,8 +369,8 @@ graph TB
 - **Conformance Report** ([`crates/runtime/src/conformance/report.rs`](crates/runtime/src/conformance/report.rs)): Conformance test reporting
 
 #### Configuration and Policy
-- **Config Merge** ([`crates/runtime/src/config/merge.rs`](crates/runtime/src/config/merge.rs)): Layers org/repo/user/per-run YAML with strict unknown-key rejection into an immutable, SHA-256-fingerprinted `RuntimePolicy`; hashed JSON bytes are recursively key-sorted because this workspace enables `preserve_order`, and fingerprinting must not depend on input key order
-- **Policy Evaluator** ([`crates/runtime/src/policy/evaluate.rs`](crates/runtime/src/policy/evaluate.rs)): `PolicyEvaluator` implements `AdapterAuthorization` against a `RuntimePolicy` (model allowlist, concurrency ceiling) — wired into production via `lifecycle::serve()`, same as the real `ScopeTokenVerifier` `workerMcp` credential store (see the maintainer's local, gitignored `REVIEW.md` for remaining gaps; resolution history in [`journal.md`](journal.md))
+- **Config** ([`crates/runtime/src/config/crew.rs`](crates/runtime/src/config/crew.rs)): Loads the layered crew config with strict unknown-key rejection and produces its SHA-256 `fingerprint`; [`config/mod.rs`](crates/runtime/src/config/mod.rs)'s `RuntimePolicy::from_crew_config` adapts it into the immutable policy the runtime reads. Hashed JSON bytes are explicitly key-sorted because this workspace enables `preserve_order`, and fingerprinting must not depend on input key order. (`config/merge.rs` is the retired pre-crew-v2 layering module — orphaned, not declared as a module and not compiled; see [future-features.md](future-features.md).)
+- **Policy Evaluator** ([`crates/runtime/src/policy/evaluate.rs`](crates/runtime/src/policy/evaluate.rs)): `PolicyEvaluator` implements `AdapterAuthorization` against a `RuntimePolicy` (model allowlist, concurrency ceiling) — wired into production via `lifecycle::serve()`, same as the real `ScopeTokenVerifier` `workerMcp` credential store (see the maintainer's local, gitignored `REVIEW.md` for remaining gaps)
 
 ## Level 4: Code (C4-4)
 
@@ -756,20 +757,31 @@ sequenceDiagram
    | evidence | edge |
    |---|---|
    | `ProcessStarted` | `queued -> starting` |
-   | any other payload except `ProcessExited` | up to `working` |
+   | `TurnEnded` | up to `waitingUser` — non-terminal ([ADR-0027](adr/0027-turn-end-settles-a-run.md)) |
+   | any other payload except `ProcessExited`/`TurnEnded` | up to `working` |
    | `ProcessExited { exit_code: Some(0), signal: None }` | `-> succeeded` |
    | `ProcessExited` with a non-zero code or a signal | `-> failed` |
    | `ProcessExited` with no code and no signal | `-> lost` |
 
-   The terminal edge is committed durably before the settlement signal that releases the run's
-   concurrency slot.
+   A TUI vendor never exits, so `ProcessExited` alone would leave such a run non-terminal forever.
+   `TurnEnded` is the vendor's own end-of-turn boundary, journaled as durable evidence and driving a
+   **non-terminal** edge: the boundary says the *turn* ended, never that the *task* succeeded, so
+   only the leader closes a run (`run/finish`), with an inactivity backstop settling an abandoned one
+   to `lost`. A run parked this way carries the `turnSettled` flag, which is what lets a snapshot
+   reader tell "the answer is ready" from "the worker asked a question" — both are `waitingUser`.
+
+   Two ordering properties hold. The state edge is committed durably before the signal it triggers,
+   as it always was. And the concurrency slot is released on the **first of a turn boundary or a
+   process exit**, so the ceiling bounds runs *actively taking a turn* rather than sessions that
+   merely exist — which is why a second cap, `limits.maxLiveSessions`, bounds live sessions and makes
+   the honest bound on concurrent turns `maxConcurrentWorkers + maxLiveSessions`.
 
 ## Known Deferred Items
 
 Consciously deferred features, each with a decision trigger, live in
 [`future-features.md`](future-features.md). Open defects and watch items live in the
 maintainer's local, gitignored `REVIEW.md` (not present in a fresh clone); their resolution
-history lives in [`journal.md`](journal.md).
+history lives in [`docs/adr/`](adr/) and [engineering-lessons.md](engineering-lessons.md).
 
 ## Appendix A: Quick Reference
 
