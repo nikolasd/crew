@@ -376,8 +376,11 @@ bug was opening windows the user never saw.
 **Ghostty pre-1.3.0 has no AppleScript tab command at all.** The shipped code feature-detects this
 by attempting the command and falling back, rather than checking a version string, so those installs
 degrade to a window automatically and resolve themselves as users upgrade. A non-AppleScript CLI
-path for tab creation has been discussed upstream (reported as `ghostty#12136`; not independently
-verified here) — if that lands it would also serve installs where scripting is unavailable.
+path for tab creation is tracked upstream as
+[ghostty-org/ghostty#12136](https://github.com/ghostty-org/ghostty/issues/12136) ("CLI: support
+opening new tabs in an existing window"), still unimplemented — AppleScript is the path that shipped
+in 1.3.0. If the CLI path lands it would also serve installs where scripting is unavailable or
+undesirable.
 
 The honest framing: for iTerm2 and current Ghostty, "panes follow the host" already means a tab in
 the window you are working in. For Terminal.app it means a foregrounded window of the right
