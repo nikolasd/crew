@@ -16,22 +16,27 @@ import { registerMonitor } from "./controller";
 
 type SessionHandler = (event: unknown, extCtx: ExtensionContext) => Promise<void>;
 
+interface FakeCommand {
+  handler: (args: string, ctx: ExtensionContext) => Promise<void>;
+  getArgumentCompletions?: (prefix: string) => Array<{ value: string; description?: string; hint?: string }> | null;
+}
+
 interface FakeHarness {
   readonly api: ExtensionAPI;
   readonly handlers: Map<string, SessionHandler>;
-  readonly commands: Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>;
+  readonly commands: Map<string, FakeCommand>;
 }
 
 function createFakeApi(): FakeHarness {
   const handlers = new Map<string, SessionHandler>();
-  const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>();
+  const commands = new Map<string, FakeCommand>();
   const api = {
     logger: { debug() {}, info() {}, warn() {}, error() {} },
     appendEntry() {},
     on(event: string, handler: SessionHandler) {
       handlers.set(event, handler);
     },
-    registerCommand(name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) {
+    registerCommand(name: string, options: FakeCommand) {
       commands.set(name, options);
     },
   };
@@ -464,4 +469,24 @@ test("/crew clean output console.logs (not notify) outside interactive mode", as
 
   expect(notifications.length).toBe(0);
   expect(logged).toEqual(["Retention clean removed 4 events across 1 maxRuns-pruned runs."]);
+});
+
+test("/crew completes subcommands from both the monitor set and the management map", async () => {
+  const { api, commands } = createFakeApi();
+  const fake = createFakeClient();
+  registerMonitor(api, {
+    getClient: async () => fake.client,
+    management: new Map([["health", { description: "Runtime health", run: async () => ({ text: "", isError: false }) }]]),
+  });
+
+  const complete = commands.get("crew")?.getArgumentCompletions;
+  expect(complete).toBeDefined();
+
+  const all = complete!("");
+  expect(all?.map((item) => item.value)).toEqual(["health", "run", "runs", "export", "clean", "reopen"]);
+
+  const runOnly = complete!("run");
+  expect(runOnly?.map((item) => item.value)).toEqual(["run", "runs"]);
+
+  expect(complete!("zzz")).toBeNull();
 });

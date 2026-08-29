@@ -156,6 +156,17 @@ export class MonitorController {
 /** Monitor subcommands that talk to the daemon (connect-first). */
 const MONITOR_RPC_SUBCOMMANDS: ReadonlySet<string> = new Set(["runs", "export", "clean", "reopen"]);
 
+/** Completion metadata for the monitor's own subcommands, for the `/crew`
+ *  argument dropdown. Management entries (from `ctx.management`) are
+ *  prepended ahead of these at completion time. */
+const MONITOR_COMPLETIONS = [
+  { value: "run", label: "run", description: "Details for one run", hint: "<runId>" },
+  { value: "runs", label: "runs", description: "List all Crew runs" },
+  { value: "export", label: "export", description: "Export events to .omp/crew/", hint: "[runId]" },
+  { value: "clean", label: "clean", description: "Retention clean of terminal event history" },
+  { value: "reopen", label: "reopen", description: "Reopen a live run's pane", hint: "<runId>" },
+] as const;
+
 /**
  * Routes command output to the UI in interactive mode and to stdout
  * otherwise -- `ui.notify` is a no-op outside interactive mode (print/RPC),
@@ -243,6 +254,17 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
 
   pi.registerCommand(MONITOR_COMMAND_NAME, {
     description: `Opens the Crew monitor. Subcommands: ${subcommandList.join(", ")}.`,
+    getArgumentCompletions: (argumentPrefix: string): Array<{ value: string; label: string; description?: string; hint?: string }> | null => {
+      const managementItems = [...(ctx.management?.entries() ?? [])].map(([name, sub]) => ({
+        value: name,
+        label: name,
+        description: sub.description,
+        ...(sub.hint !== undefined ? { hint: sub.hint } : {}),
+      }));
+      const prefix = argumentPrefix.trimStart();
+      const matches = [...managementItems, ...MONITOR_COMPLETIONS].filter((item) => item.value.startsWith(prefix));
+      return matches.length === 0 ? null : matches;
+    },
     handler: async (args, cmdCtx) => {
       const [sub, runId] = args.trim().split(/\s+/, 2);
       const usage = `Usage: /crew [${subcommandList.join(" | ")}]`;
