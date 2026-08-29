@@ -10625,6 +10625,7 @@ class CrewClient {
   #closeReason;
   #pending = new Map;
   #subscribers = new Set;
+  #closeListeners = new Set;
   #ready;
   constructor(options) {
     this.#socket = createConnection({ path: options.socketPath });
@@ -10685,6 +10686,16 @@ class CrewClient {
   }
   get isClosed() {
     return this.#closed;
+  }
+  onClose(listener) {
+    if (this.#closed) {
+      queueMicrotask(listener);
+      return () => {};
+    }
+    this.#closeListeners.add(listener);
+    return () => {
+      this.#closeListeners.delete(listener);
+    };
   }
   #send(method, params) {
     return new Promise((resolve, reject) => {
@@ -10807,6 +10818,12 @@ class CrewClient {
   #onClose() {
     this.#closed = true;
     this.#failPending(this.#closeReason ?? new Error("connection closed by runtime"));
+    for (const listener of this.#closeListeners) {
+      try {
+        listener();
+      } catch {}
+    }
+    this.#closeListeners.clear();
   }
   #failPending(reason) {
     for (const pending of this.#pending.values()) {
@@ -10883,6 +10900,10 @@ async function ensureRuntime(options) {
   child.unref();
   const client = await connectWithBackoff(socketPath, options.repository, options.sessionId);
   return { client, childStarted: true };
+}
+async function connectIfRunning(options) {
+  const socketPath = socketPathFor(options.stateDir, options.repository);
+  return tryConnect(socketPath, options.repository, options.sessionId);
 }
 function socketPathFor(stateDir, repository) {
   return join2(stateDir, "repos", repositoryId(repository), "runtime.sock");
@@ -11355,7 +11376,7 @@ async function reconcileWithRuntime(client, correlation) {
 }
 
 // src/status.ts
-async function resolveClient(ctx) {
+async function resolveClientVia(ctx, connector) {
   const cached = ctx.cache.get();
   if (cached !== undefined) {
     if (!cached.isClosed) {
@@ -11366,9 +11387,21 @@ async function resolveClient(ctx) {
     } catch {}
     ctx.cache.set(undefined);
   }
-  const { client } = await ensureRuntime(ctx.ensureRuntimeOptions);
+  const client = await connector(ctx.ensureRuntimeOptions);
   ctx.cache.set(client);
   return client;
+}
+async function resolveClient(ctx) {
+  return resolveClientVia(ctx, async (options) => (await ensureRuntime(options)).client);
+}
+async function resolveClientWithoutSpawning(ctx) {
+  return resolveClientVia(ctx, async (options) => {
+    const client = await connectIfRunning(options);
+    if (client === undefined) {
+      throw new Error("no Crew runtime is currently listening for this repository");
+    }
+    return client;
+  });
 }
 var GENERIC_FAILURE_MESSAGE = "The Crew runtime is not reachable for this repository. Run the doctor command below for details.";
 async function getRuntimeStatus(ctx) {
@@ -12017,7 +12050,7 @@ function registerSpawnTool(pi, ctx) {
   pi.registerTool({
     name: CREW_SPAWN_TOOL_NAME,
     label: "Crew Spawn",
-    description: "Use after crew_plan is approved to execute one subtask. Resolves the subtask from the plan, reuses an idle worker of its adapter (or creates one), and submits a run with the subtask description as the prompt, tagging it with the plan and subtask ids so later budget/write guards (WP19/WP20) can find the metadata.",
+    description: "Use after crew_plan is approved to execute one subtask. Resolves the subtask from the plan, reuses an idle worker of its adapter (or creates one), and submits a run with the subtask description as the prompt, tagging it with the plan and subtask ids for budget tracking and supervision.",
     parameters: params,
     approval: "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -12054,7 +12087,7 @@ function registerSpawnTool(pi, ctx) {
           isError: true
         };
       }
-      return callOrchestration(client, "run/submit", {
+      const result = await callOrchestration(client, "run/submit", {
         taskId: input.taskId,
         workerId,
         prompt: subtask.description,
@@ -12063,6 +12096,11 @@ function registerSpawnTool(pi, ctx) {
         ...input.workspaceMode !== undefined ? { workspaceMode: input.workspaceMode } : {},
         ...input.priority !== undefined ? { priority: input.priority } : {}
       });
+      if (result.isError && ctx.reportSubmitFailure !== undefined) {
+        const msg = result.details?.message ?? "run/submit failed";
+        ctx.reportSubmitFailure(`crew_spawn: run/submit failed: ${msg}`);
+      }
+      return result;
     }
   });
 }
@@ -12105,7 +12143,7 @@ function registerStatusTool(pi, ctx) {
   pi.registerTool({
     name: CREW_STATUS_TOOL_NAME,
     label: "Crew Status",
-    description: "Use to read the current run list for a task (or all tasks) as a situation snapshot. Budget/escalation summaries are attached by the daemon once WP19/WP20 land; until then this returns the base run/list projection.",
+    description: "Use to read the current run list for a task (or all tasks) as a situation snapshot (the base run/list projection).",
     parameters: params,
     approval: "read",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -12175,7 +12213,7 @@ function registerFinishTool(pi, ctx) {
   pi.registerTool({
     name: CREW_FINISH_TOOL_NAME,
     label: "Crew Finish",
-    description: "Use to cancel the remaining live runs of a plan once the leader is done. Takes the explicit run ids you spawned (the run->plan linkage that would enumerate them automatically lands in WP19). Workspace release is left to the leader -- never automatic.",
+    description: "Use to cancel the remaining live runs of a plan once the leader is done. Takes the explicit run ids you spawned. Workspace release is left to the leader -- never automatic.",
     parameters: params,
     approval: "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -12282,7 +12320,7 @@ function registerPlanTool(pi, ctx) {
       description: pi.zod.string().describe("The instruction this subtask executes."),
       adapter: pi.zod.string().describe("The adapter (claude, codex, copilot, ompNative) that executes this subtask."),
       writes: pi.zod.boolean().optional().describe("Whether this subtask may write to the repository (drives the approval gate)."),
-      turnBudget: pi.zod.number().int().optional().describe("Optional per-subtask turn budget (enforced by WP19).")
+      turnBudget: pi.zod.number().int().optional().describe("Optional per-subtask turn budget, snapshotted into the run's budget row.")
     })).optional().describe("Required for propose: the decomposition.")
   });
   pi.registerTool({
@@ -12365,14 +12403,14 @@ function registerProfileTool(pi, ctx) {
   const params = pi.zod.object({
     adapter: pi.zod.string().describe("The adapter name this profile launches, e.g. claude, codex, copilot, ompRpc, terminalDegraded."),
     model: pi.zod.string().describe("The model identifier this profile uses."),
-    startupOptions: pi.zod.record(pi.zod.string(), pi.zod.unknown()).describe("Adapter-specific startup options, tagged by adapter kind, e.g. { claude: { ... } } or { codex: { ... } }."),
+    startupOptions: pi.zod.record(pi.zod.string(), pi.zod.unknown()).describe("Adapter-specific startup options, tagged by adapter kind. REQUIRED: include mode:'tui' for reserved adapters. Example: { claude: { mode: 'tui' } }. Headless mode is retired. Other options depend on the adapter (see crew-orchestration skill)."),
     environmentAllowlist: pi.zod.array(pi.zod.string()).optional().describe("Environment variable names this profile's process is allowed to read."),
     permissionEnvelope: pi.zod.record(pi.zod.string(), pi.zod.unknown()).optional()
   });
   pi.registerTool({
     name: CREW_PROFILE_TOOL_NAME,
     label: "Crew Profile",
-    description: "Use to register a reusable worker profile (adapter, model, startup options, environment allowlist) before provisioning workers against it. Call this once per adapter/model combination, then pass the returned profileId to crew_worker { op: 'create', profileId } instead of repeating fingerprint/adapter/model/permissionEnvelope on every worker. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
+    description: "Register a reusable worker profile (adapter, model, startup options with mode:'tui', environment allowlist) before provisioning workers. Call this once per adapter/model combination, then pass the returned profileId to crew_worker { op: 'create', profileId }. The profile-first flow (crew_profile \u2192 crew_worker \u2192 crew_run) replaces the legacy fingerprint/adapter/model pattern. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
     parameters: params,
     approval: () => "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -12434,27 +12472,39 @@ function registerRunTool(pi, ctx) {
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
       const client = await ctx.getClient(extCtx);
       switch (input.op) {
-        case "submit":
-          return callOrchestration(client, "run/submit", {
+        case "submit": {
+          const result = await callOrchestration(client, "run/submit", {
             taskId: input.taskId,
             prompt: input.prompt,
             workerId: input.workerId,
             workspaceMode: input.workspaceMode,
             priority: input.priority
           });
+          if (result.isError && ctx.reportSubmitFailure !== undefined) {
+            const msg = result.details?.message ?? "run/submit failed";
+            ctx.reportSubmitFailure(`run/submit failed: ${msg}`);
+          }
+          return result;
+        }
         case "list":
           return callOrchestration(client, "run/list", { taskId: input.taskId });
         case "get":
           return callOrchestration(client, "run/get", { runId: input.runId });
         case "result":
           return callOrchestration(client, "run/result", { runId: input.runId });
-        case "retry":
-          return callOrchestration(client, "run/retry", {
+        case "retry": {
+          const result = await callOrchestration(client, "run/retry", {
             priorRunId: input.priorRunId,
             workerId: input.workerId,
             prompt: input.prompt,
             workspaceMode: input.workspaceMode
           });
+          if (result.isError && ctx.reportSubmitFailure !== undefined) {
+            const msg = result.details?.message ?? "run/retry failed";
+            ctx.reportSubmitFailure(`run/retry failed: ${msg}`);
+          }
+          return result;
+        }
         case "cancel":
           return callOrchestration(client, "run/cancel", { runId: input.runId });
       }
@@ -12543,10 +12593,10 @@ var CREW_WORKER_TOOL_NAME = "crew_worker";
 function registerWorkerTool(pi, ctx) {
   const params = pi.zod.object({
     op: pi.zod.enum(["create", "list", "get"]).describe("Which worker operation to perform."),
-    fingerprint: pi.zod.string().optional().describe("Required for create: a fingerprint of the harness binary + version."),
-    adapter: pi.zod.string().optional().describe("Required for create: the adapter name, e.g. claude, codex, copilot, ompNative."),
-    model: pi.zod.string().optional().describe("Required for create: the model identifier this worker uses."),
-    profileId: pi.zod.string().optional().describe("Optional profile id for the worker identity."),
+    fingerprint: pi.zod.string().optional().describe("Legacy create field. Rejected (PROFILE_REQUIRED) for reserved adapters (claude, codex, copilot, ompRpc) -- use profileId instead."),
+    adapter: pi.zod.string().optional().describe("Legacy create field. Rejected (PROFILE_REQUIRED) for reserved adapters -- use profileId instead."),
+    model: pi.zod.string().optional().describe("Legacy create field. Rejected (PROFILE_REQUIRED) for reserved adapters -- use profileId instead."),
+    profileId: pi.zod.string().optional().describe("Required for create with reserved adapters (claude, codex, copilot, ompRpc). Register a profile with crew_profile first, then pass its id here."),
     permissionEnvelope: pi.zod.record(pi.zod.string(), pi.zod.unknown()).optional(),
     parentWorkerId: pi.zod.string().optional().describe("Parent worker id, if spawned as a child."),
     workerId: pi.zod.string().optional().describe("Required for get: the worker id to fetch.")
@@ -12554,7 +12604,7 @@ function registerWorkerTool(pi, ctx) {
   pi.registerTool({
     name: CREW_WORKER_TOOL_NAME,
     label: "Crew Worker",
-    description: "Use to find or provision external AI harness workers (Claude, Codex, Copilot, OMP-RPC) that execute tasks. Use op: 'list' to see available workers for a repository (call before submitting a run), op: 'get' to fetch details of a specific worker, or op: 'create' to provision a new worker identity for a specific harness/model combination (requires fingerprint, adapter, model). You need a workerId from crew_worker { op: 'list' } to submit a run with crew_run { op: 'submit' }.",
+    description: "Use to find or provision external AI harness workers (Claude, Codex, Copilot, OMP-RPC) that execute tasks. Required flow: (1) crew_profile { adapter, model, startupOptions } to register a profile with mode:'tui', (2) crew_worker { op: 'create', profileId } to provision the worker, (3) crew_run { op: 'submit', workerId, prompt } to execute. Use op: 'list' to see available workers for a repository (call before submitting a run), op: 'get' to fetch details of a specific worker.",
     parameters: params,
     approval: (args) => typeof args === "object" && args !== null && ("op" in args) && args.op === "create" ? "exec" : "read",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -12825,18 +12875,21 @@ var EMPTY_FLAGS = {
   childrenActive: false
 };
 var EMPTY_MONITOR_STATE = { rows: {}, lastSequence: 0 };
-function hasVisibleRows(state) {
-  return Object.keys(state.rows).length > 0;
+function setSubmitError(state, message, at) {
+  return { ...state, lastSubmitError: { message, at } };
+}
+function clearSubmitError(state) {
+  return { ...state, lastSubmitError: undefined };
 }
 function reduceEvent(state, envelope) {
   const lastSequence = envelope.sequence > state.lastSequence ? envelope.sequence : state.lastSequence;
   const patch = eventPatch(envelope);
   if (patch === undefined) {
-    return { rows: state.rows, lastSequence };
+    return { rows: state.rows, lastSequence, lastSubmitError: state.lastSubmitError };
   }
   const existing = state.rows[patch.runId];
   if (existing !== undefined && envelope.sequence <= existing.lastAppliedSequence) {
-    return { rows: state.rows, lastSequence };
+    return { rows: state.rows, lastSequence, lastSubmitError: state.lastSubmitError };
   }
   const base = existing ?? {
     runId: patch.runId,
@@ -12863,10 +12916,10 @@ function reduceEvent(state, envelope) {
     lastEventAt: envelope.timestamp,
     lastAppliedSequence: envelope.sequence
   };
-  return {
+  return clearSubmitError({
     rows: { ...state.rows, [patch.runId]: updated },
     lastSequence
-  };
+  });
 }
 function enrichWorker(state, runId, adapter, model) {
   const row = state.rows[runId];
@@ -13111,8 +13164,13 @@ function renderWidgetBox(state, theme) {
   let lines;
   let colors;
   if (totalCount === 0) {
-    lines = ["No Crew runs yet."];
-    colors = ["text"];
+    if (state.lastSubmitError !== undefined) {
+      lines = [state.lastSubmitError.message];
+      colors = ["error"];
+    } else {
+      lines = ["Crew active, waiting for task submissions"];
+      colors = ["text"];
+    }
   } else {
     lines = rows.map(renderRowLine);
     colors = rows.map((row) => stateColor(row.state));
@@ -13184,6 +13242,8 @@ function shortId(id) {
 var MONITOR_ENTRY_TYPE = "crew-monitor";
 var WIDGET_KEY = "crew-monitor";
 var MONITOR_COMMAND_NAME = "crew";
+var RECONNECT_INITIAL_DELAY_MS = 250;
+var RECONNECT_MAX_DELAY_MS = 30000;
 function lastPersistedSequence(entries) {
   for (let i = entries.length - 1;i >= 0; i--) {
     const entry = entries[i];
@@ -13244,6 +13304,10 @@ class MonitorController {
     this.#unsubscribe = undefined;
     this.#onUpdate = undefined;
   }
+  reportSubmitFailure(message) {
+    this.#state = setSubmitError(this.#state, message, new Date().toISOString());
+    this.#onUpdate?.();
+  }
   renderStatus(runId) {
     const row = this.#state.rows[runId];
     return row === undefined ? undefined : renderRowDetails(row);
@@ -13268,23 +13332,32 @@ function registerMonitor(pi, ctx) {
   const controller = new MonitorController;
   attachMilestoneBridge(pi, controller);
   let subscribedClient;
+  let connecting = false;
+  let reconnectTimer;
+  let reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
+  let shuttingDown = false;
   const subcommandList = ["run <runId>", "runs", "export [runId]", "clean", "reopen <runId>", ...ctx.management?.keys() ?? []];
   function refresh(extCtx, force = false) {
     const state = controller.getState();
-    const content = force || hasVisibleRows(state) ? renderWidgetBox(state, extCtx.ui.theme) : undefined;
+    const isConnected = subscribedClient !== undefined && !subscribedClient.isClosed;
+    const content = force || isConnected ? renderWidgetBox(state, extCtx.ui.theme) : undefined;
     extCtx.ui.setWidget(WIDGET_KEY, content, { placement: "aboveEditor" });
     pi.appendEntry(MONITOR_ENTRY_TYPE, { sequence: Number(state.lastSequence) });
   }
-  async function connect(extCtx) {
+  async function connect(extCtx, resolveClient2 = ctx.getClient) {
+    if (connecting) {
+      return;
+    }
     if (subscribedClient !== undefined && !subscribedClient.isClosed) {
       return;
     }
-    if (subscribedClient !== undefined) {
-      controller.stop();
-      subscribedClient = undefined;
-    }
-    const fromSequence = Math.max(lastPersistedSequence(extCtx.sessionManager.getEntries()), Number(controller.getState().lastSequence));
+    connecting = true;
     try {
+      if (subscribedClient !== undefined) {
+        controller.stop();
+        subscribedClient = undefined;
+      }
+      const fromSequence = Math.max(lastPersistedSequence(extCtx.sessionManager.getEntries()), Number(controller.getState().lastSequence));
       try {
         assertCompatiblePiCodingAgentVersion();
       } catch (err) {
@@ -13292,18 +13365,40 @@ function registerMonitor(pi, ctx) {
           error: err instanceof Error ? err.message : String(err)
         });
       }
-      const client = await ctx.getClient(extCtx);
+      const client = await resolveClient2(extCtx);
       controller.start(client, fromSequence, () => refresh(extCtx));
       subscribedClient = client;
+      reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
+      shuttingDown = false;
+      client.onClose(() => scheduleReconnect(extCtx));
     } catch (err) {
       pi.logger.warn("crew monitor: runtime unavailable", {
         error: err instanceof Error ? err.message : String(err)
       });
+    } finally {
+      connecting = false;
     }
+  }
+  function scheduleReconnect(extCtx) {
+    if (shuttingDown || reconnectTimer !== undefined) {
+      return;
+    }
+    const delay = reconnectDelayMs;
+    reconnectDelayMs = Math.min(reconnectDelayMs * 2, RECONNECT_MAX_DELAY_MS);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
+      connect(extCtx, ctx.getClientWithoutSpawning ?? ctx.getClient).then(() => {
+        if (subscribedClient !== undefined) {
+          refresh(extCtx);
+        } else {
+          scheduleReconnect(extCtx);
+        }
+      });
+    }, delay);
   }
   pi.on("session_start", async (_event, extCtx) => {
     await connect(extCtx);
-    if (subscribedClient !== undefined) {
+    if (subscribedClient !== undefined && !subscribedClient.isClosed) {
       refresh(extCtx);
     }
   });
@@ -13401,9 +13496,18 @@ function registerMonitor(pi, ctx) {
     }
   });
   pi.on("session_shutdown", async () => {
+    shuttingDown = true;
     controller.stop();
     subscribedClient = undefined;
+    if (reconnectTimer !== undefined) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+    }
+    reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
   });
+  return {
+    reportSubmitFailure: (message) => controller.reportSubmitFailure(message)
+  };
 }
 
 // src/index.ts
@@ -13428,6 +13532,9 @@ function crewExtension(pi) {
   async function getClient(extCtx) {
     return resolveClient(statusContextFor(extCtx));
   }
+  async function getClientWithoutSpawning(extCtx) {
+    return resolveClientWithoutSpawning(statusContextFor(extCtx));
+  }
   pi.registerTool({
     name: TOOL_NAME,
     label: "Crew Health",
@@ -13438,7 +13545,7 @@ function crewExtension(pi) {
     }
   });
   registerDeprecatedForwarder(COMMAND_NAME, "/crew health", (_args, ctx) => healthResult(ctx));
-  registerOrchestrationTools(pi, { getClient });
+  registerOrchestrationTools(pi, { getClient, reportSubmitFailure: (message) => monitorHandle.reportSubmitFailure(message) });
   function doctorContextFor(cwd) {
     return buildDoctorContext(cwd);
   }
@@ -13498,8 +13605,9 @@ ${result.text}`, isError: result.isError });
     const { crewdPath } = doctorContextFor(cwd);
     return blocksToResult(await runConfigCommand({ crewdPath, repository: cwd }, request));
   }
-  registerMonitor(pi, {
+  const monitorHandle = registerMonitor(pi, {
     getClient,
+    getClientWithoutSpawning,
     management: new Map([
       ["health", { description: "Runtime health: connects to or spawns the daemon", run: async (_args, ctx) => healthResult(ctx) }],
       ["doctor", { description: "Diagnostics that work with no live daemon", run: async (_args, ctx) => doctorResult(ctx.cwd) }],

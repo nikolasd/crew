@@ -12,6 +12,8 @@ import { CrewClient, JsonRpcRemoteError } from "../client";
 /** Resolves the cached (or newly connected) runtime client for `cwd`. */
 export interface OrchestrationToolContext {
   getClient(extCtx: ExtensionContext): Promise<CrewClient>;
+  /** Optional callback to report a run/submit failure to the monitor. */
+  reportSubmitFailure?: (message: string) => void;
 }
 
 /** The stable, structured shape of a mapped JSON-RPC tool error. */

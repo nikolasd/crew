@@ -19,7 +19,7 @@ import { buildStatusContext } from "./context";
 import { normalizeEventPayload, normalizeLifecyclePayload, normalizeProgressPayload } from "./omp-native/events";
 import { OMP_NATIVE_FACT_ENTRY_TYPE, persistedCorrelations, persistedFacts, type SessionEntryLike } from "./omp-native/persistence";
 import { OmpNativeReconciler, createOmpProcessEpoch, reconcileAcrossRestart, reconcileWithRuntime } from "./omp-native/reconcile";
-import { resolveClient, getRuntimeStatus, type GetRuntimeStatusContext } from "./status";
+import { resolveClient, resolveClientWithoutSpawning, getRuntimeStatus, type GetRuntimeStatusContext } from "./status";
 import { runDoctorCommand, buildDoctorContext, type DoctorContext } from "./doctor";
 import { runConfigCommand, type ConfigDocument, type ConfigRequest } from "./config";
 import { installRuntimeForEnv } from "./install";
@@ -59,6 +59,14 @@ export default function crewExtension(pi: ExtensionAPI): void {
     return resolveClient(statusContextFor(extCtx));
   }
 
+  /** Like `getClient`, but never spawns -- passed to the monitor's automatic
+   *  background reconnect loop only (CREW-5), so an intentionally
+   *  idle-exited daemon (ADR-0008) stays exited instead of the loop
+   *  respawning it forever. */
+  async function getClientWithoutSpawning(extCtx: ExtensionContext): Promise<CrewClient> {
+    return resolveClientWithoutSpawning(statusContextFor(extCtx));
+  }
+
   pi.registerTool({
     name: TOOL_NAME,
     label: "Crew Health",
@@ -71,7 +79,7 @@ export default function crewExtension(pi: ExtensionAPI): void {
 
   registerDeprecatedForwarder(COMMAND_NAME, "/crew health", (_args, ctx) => healthResult(ctx));
 
-  registerOrchestrationTools(pi, { getClient });
+  registerOrchestrationTools(pi, { getClient, reportSubmitFailure: (message) => monitorHandle.reportSubmitFailure(message) });
   /**
    * Context builder for the doctor command: resolves the crewd binary path
    * and repository state for direct CLI invocation.
@@ -153,8 +161,9 @@ export default function crewExtension(pi: ExtensionAPI): void {
 
   // Registration order is user-visible and pinned by index.test.ts's exact-list
   // assertion: crew-status, crew, crew-doctor, crew-config, crew-install.
-  registerMonitor(pi, {
+  const monitorHandle = registerMonitor(pi, {
     getClient,
+    getClientWithoutSpawning,
     management: new Map<string, ManagementSubcommand>([
       ["health", { description: "Runtime health: connects to or spawns the daemon", run: async (_args, ctx) => healthResult(ctx) }],
       ["doctor", { description: "Diagnostics that work with no live daemon", run: async (_args, ctx) => doctorResult(ctx.cwd) }],

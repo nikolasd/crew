@@ -87,6 +87,11 @@ export interface MonitorState {
   /** The highest sequence number observed across every row, for resuming
    *  a subscription from the right point after a reconnect. */
   readonly lastSequence: number;
+  /** The last failed run/submit RPC attempt (pre-journal), or undefined if
+   *  no failure has been reported. Cleared when the first run row is created
+   *  (proof that a submission succeeded). Used to show an error state when
+   *  crew is active but all submissions have failed. */
+  readonly lastSubmitError?: { message: string; at: string };
 }
 
 /** The initial, empty monitor state. */
@@ -96,6 +101,16 @@ export const EMPTY_MONITOR_STATE: MonitorState = { rows: {}, lastSequence: 0 };
  *  decision (the box is only shown when there is something to show). */
 export function hasVisibleRows(state: MonitorState): boolean {
   return Object.keys(state.rows).length > 0;
+}
+
+/** Sets the last submit failure (a pre-journal RPC error). */
+export function setSubmitError(state: MonitorState, message: string, at: string): MonitorState {
+  return { ...state, lastSubmitError: { message, at } };
+}
+
+/** Clears the last submit failure (called on first successful run event). */
+export function clearSubmitError(state: MonitorState): MonitorState {
+  return { ...state, lastSubmitError: undefined };
 }
 
 /**
@@ -108,12 +123,12 @@ export function reduceEvent(state: MonitorState, envelope: EventEnvelope): Monit
   const lastSequence = envelope.sequence > state.lastSequence ? envelope.sequence : state.lastSequence;
   const patch = eventPatch(envelope);
   if (patch === undefined) {
-    return { rows: state.rows, lastSequence };
+    return { rows: state.rows, lastSequence, lastSubmitError: state.lastSubmitError };
   }
 
   const existing = state.rows[patch.runId];
   if (existing !== undefined && envelope.sequence <= existing.lastAppliedSequence) {
-    return { rows: state.rows, lastSequence };
+    return { rows: state.rows, lastSequence, lastSubmitError: state.lastSubmitError };
   }
 
   const base: MonitorRow = existing ?? {
@@ -143,10 +158,12 @@ export function reduceEvent(state: MonitorState, envelope: EventEnvelope): Monit
     lastAppliedSequence: envelope.sequence,
   };
 
-  return {
+  // Clear any stale submit error once a run row is created/updated: the
+  // row's existence proves the submission succeeded.
+  return clearSubmitError({
     rows: { ...state.rows, [patch.runId]: updated },
     lastSequence,
-  };
+  });
 }
 
 /** Applies every envelope in `envelopes`, in the order given. */

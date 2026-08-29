@@ -141,6 +141,25 @@ export async function ensureRuntime(options: EnsureRuntimeOptions): Promise<Ensu
 }
 
 /**
+ * Connects to the runtime for `options.repository` ONLY if one is already
+ * listening -- never selects a binary, never spawns. Returns `undefined`
+ * (not a thrown error) when nothing answers, so a caller can tell "not
+ * there" apart from "there but broken" without parsing an error.
+ *
+ * This is `ensureRuntime`'s step 1 exposed on its own, for callers that must
+ * re-attach to a runtime that is still around without resurrecting one that
+ * deliberately idle-exited (ADR-0008's self-shutdown). The monitor's
+ * automatic background reconnect loop (CREW-5) is the reason this exists:
+ * `ensureRuntime`'s spawn-on-demand belongs to user-initiated paths (a tool
+ * call, `/crew`), not to a timer that would otherwise keep respawning an
+ * idle daemon forever.
+ */
+export async function connectIfRunning(options: Pick<EnsureRuntimeOptions, "stateDir" | "repository" | "sessionId">): Promise<CrewClient | undefined> {
+  const socketPath = socketPathFor(options.stateDir, options.repository);
+  return tryConnect(socketPath, options.repository, options.sessionId);
+}
+
+/**
  * The deterministic socket path for a repository, derived exactly as the Rust
  * runtime derives it: SHA-256 of the canonical VCS root, first 16 bytes hex.
  */

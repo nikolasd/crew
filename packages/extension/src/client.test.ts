@@ -402,3 +402,116 @@ test("JsonRpcRemoteError carries the JSON-RPC error code", () => {
   expect(err.code).toBe(-32602);
   expect(err).toBeInstanceOf(Error);
 });
+
+test("onClose fires when the server drops the connection", async () => {
+  // CREW-5: the monitor needs a reactive signal that its subscription's
+  // socket died (a daemon restart) so it can reconnect on its own, instead
+  // of only ever repairing on the next explicit tool call or `/crew`.
+  const fakeSocketPath = mkdtempSync("/tmp/bat-ts-f-") + "/fake.sock";
+  let serverSocket: Socket | undefined;
+  const fakeServer: Server = createServer((socket: Socket) => {
+    serverSocket = socket;
+  });
+  await new Promise<void>((resolve) => fakeServer.listen(fakeSocketPath, resolve));
+
+  const client = new CrewClient({ socketPath: fakeSocketPath });
+  try {
+    await client.whenConnected();
+    const closed = new Promise<void>((resolve) => client.onClose(resolve));
+    serverSocket?.destroy();
+    await closed;
+    expect(client.isClosed).toBe(true);
+  } finally {
+    client.close();
+    await new Promise<void>((resolve) => fakeServer.close(() => resolve()));
+  }
+});
+
+test("onClose also fires for a self-initiated close", async () => {
+  // `#onClose` is the one path every closing route (server drop, socket
+  // error, or our own `close()`) eventually funnels through, so a caller
+  // must not have to distinguish which one happened.
+  const fakeSocketPath = mkdtempSync("/tmp/bat-ts-f-") + "/fake.sock";
+  const fakeServer: Server = createServer(() => {});
+  await new Promise<void>((resolve) => fakeServer.listen(fakeSocketPath, resolve));
+
+  const client = new CrewClient({ socketPath: fakeSocketPath });
+  try {
+    await client.whenConnected();
+    const closed = new Promise<void>((resolve) => client.onClose(resolve));
+    client.close();
+    await closed;
+  } finally {
+    await new Promise<void>((resolve) => fakeServer.close(() => resolve()));
+  }
+});
+
+test("onClose registered after the client already closed still fires", async () => {
+  // A caller that races the close (e.g. resolves a client just as the
+  // daemon exits) must not register a listener for a close that already
+  // happened and then wait forever.
+  const fakeSocketPath = mkdtempSync("/tmp/bat-ts-f-") + "/fake.sock";
+  const fakeServer: Server = createServer(() => {});
+  await new Promise<void>((resolve) => fakeServer.listen(fakeSocketPath, resolve));
+
+  const client = new CrewClient({ socketPath: fakeSocketPath });
+  try {
+    await client.whenConnected();
+    client.close();
+    await new Promise<void>((resolve) => client.onClose(resolve));
+  } finally {
+    await new Promise<void>((resolve) => fakeServer.close(() => resolve()));
+  }
+});
+
+test("onClose's returned unsubscribe stops further notifications", async () => {
+  const fakeSocketPath = mkdtempSync("/tmp/bat-ts-f-") + "/fake.sock";
+  let serverSocket: Socket | undefined;
+  const fakeServer: Server = createServer((socket: Socket) => {
+    serverSocket = socket;
+  });
+  await new Promise<void>((resolve) => fakeServer.listen(fakeSocketPath, resolve));
+
+  const client = new CrewClient({ socketPath: fakeSocketPath });
+  try {
+    await client.whenConnected();
+    let calls = 0;
+    const unsubscribe = client.onClose(() => {
+      calls += 1;
+    });
+    unsubscribe();
+    serverSocket?.destroy();
+    // Give the close event a turn to (not) fire before asserting.
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    expect(calls).toBe(0);
+  } finally {
+    client.close();
+    await new Promise<void>((resolve) => fakeServer.close(() => resolve()));
+  }
+});
+
+test("a throwing onClose listener does not stop other listeners from firing", async () => {
+  const fakeSocketPath = mkdtempSync("/tmp/bat-ts-f-") + "/fake.sock";
+  const fakeServer: Server = createServer(() => {});
+  await new Promise<void>((resolve) => fakeServer.listen(fakeSocketPath, resolve));
+
+  const client = new CrewClient({ socketPath: fakeSocketPath });
+  try {
+    await client.whenConnected();
+    let secondCalled = false;
+    client.onClose(() => {
+      throw new Error("boom");
+    });
+    const second = new Promise<void>((resolve) => {
+      client.onClose(() => {
+        secondCalled = true;
+        resolve();
+      });
+    });
+    client.close();
+    await second;
+    expect(secondCalled).toBe(true);
+  } finally {
+    await new Promise<void>((resolve) => fakeServer.close(() => resolve()));
+  }
+});

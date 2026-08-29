@@ -41,8 +41,7 @@ export function registerSpawnTool(pi: ExtensionAPI, ctx: OrchestrationToolContex
   pi.registerTool({
     name: CREW_SPAWN_TOOL_NAME,
     label: "Crew Spawn",
-    description:
-      "Use after crew_plan is approved to execute one subtask. Resolves the subtask from the plan, reuses an idle worker of its adapter (or creates one), and submits a run with the subtask description as the prompt, tagging it with the plan and subtask ids so later budget/write guards (WP19/WP20) can find the metadata.",
+    description: "Use after crew_plan is approved to execute one subtask. Resolves the subtask from the plan, reuses an idle worker of its adapter (or creates one), and submits a run with the subtask description as the prompt, tagging it with the plan and subtask ids for budget tracking and supervision.",
     parameters: params,
     approval: "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx): Promise<AgentToolResult<unknown>> {
@@ -80,7 +79,7 @@ export function registerSpawnTool(pi: ExtensionAPI, ctx: OrchestrationToolContex
         };
       }
 
-      return callOrchestration(client, "run/submit", {
+      const result = await callOrchestration(client, "run/submit", {
         taskId: input.taskId,
         workerId,
         prompt: subtask.description,
@@ -89,6 +88,11 @@ export function registerSpawnTool(pi: ExtensionAPI, ctx: OrchestrationToolContex
         ...(input.workspaceMode !== undefined ? { workspaceMode: input.workspaceMode } : {}),
         ...(input.priority !== undefined ? { priority: input.priority } : {}),
       });
+      if (result.isError && ctx.reportSubmitFailure !== undefined) {
+        const msg = (result.details as { message?: string })?.message ?? "run/submit failed";
+        ctx.reportSubmitFailure(`crew_spawn: run/submit failed: ${msg}`);
+      }
+      return result;
     },
   });
 }
@@ -139,7 +143,7 @@ export function registerStatusTool(pi: ExtensionAPI, ctx: OrchestrationToolConte
   pi.registerTool({
     name: CREW_STATUS_TOOL_NAME,
     label: "Crew Status",
-    description: "Use to read the current run list for a task (or all tasks) as a situation snapshot. Budget/escalation summaries are attached by the daemon once WP19/WP20 land; until then this returns the base run/list projection.",
+    description: "Use to read the current run list for a task (or all tasks) as a situation snapshot (the base run/list projection).",
     parameters: params,
     approval: "read",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx): Promise<AgentToolResult<unknown>> {
@@ -223,7 +227,7 @@ export function registerFinishTool(pi: ExtensionAPI, ctx: OrchestrationToolConte
   pi.registerTool({
     name: CREW_FINISH_TOOL_NAME,
     label: "Crew Finish",
-    description: "Use to cancel the remaining live runs of a plan once the leader is done. Takes the explicit run ids you spawned (the run->plan linkage that would enumerate them automatically lands in WP19). Workspace release is left to the leader -- never automatic.",
+    description: "Use to cancel the remaining live runs of a plan once the leader is done. Takes the explicit run ids you spawned. Workspace release is left to the leader -- never automatic.",
     parameters: params,
     approval: "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx): Promise<AgentToolResult<unknown>> {
