@@ -356,7 +356,12 @@ fn write_double(scripts_dir: &std::path::Path, session_dir: &std::path::Path) ->
 echo "Welcome to Codex!"
 SESSION_ID="33333333-3333-4333-8333-000000000042"
 ROLLOUT="{session_dir}/rollout-2026-01-01T00-00-00-$SESSION_ID.jsonl"
+CREW_ESC=$(printf '\033')
 while IFS= read -r line; do
+  # A real vendor TUI consumes bracketed-paste framing and keeps only the
+  # pasted content; this double does the same, so the text it echoes back
+  # is the prompt itself rather than the escape sequences around it.
+  line=$(printf '%s' "$line" | tr -d "$CREW_ESC" | sed -e 's/\[200~//g' -e 's/\[201~//g')
   case "$line" in
     *"[crew:"*)
       printf '%s\n' '{{"type":"session_meta","timestamp":"2026-01-01T00:00:00Z","payload":{{"session_id":"'"$SESSION_ID"'","id":"'"$SESSION_ID"'","cwd":"/workspace/crew"}}}}' >> "$ROLLOUT"
@@ -387,6 +392,7 @@ fn fast_timings() -> TuiTimings {
         discovery_timeout: Duration::from_secs(4),
         tailer_poll: Duration::from_millis(40),
         submit_idle: Duration::from_millis(50),
+        paste_write_timeout: Duration::from_millis(500),
         escalation: crate::supervisor::EscalationTimings::default(),
         preflight_timeout: Duration::from_secs(4),
     }

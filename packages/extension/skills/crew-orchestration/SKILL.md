@@ -9,10 +9,20 @@ description: >-
 
 Crew executes durable worker runs. OMP owns the task graph and the leader's decisions; Crew persists, supervises, and replays the work.
 
+## Worker provisioning flow (profile-first)
+
+To run any task via Claude, Codex, Copilot, or OMP-RPC:
+
+1. **Register a profile** — `crew_profile { adapter: "claude", model: "sonnet", startupOptions: { claude: { mode: "tui" } } }`. The profile captures adapter, model, startup options (with **required** `mode: "tui"`; headless is retired), and environment allowlist. Receives a `profileId`.
+2. **Create a worker** — `crew_worker { op: "create", profileId }`. The worker identity binds to that profile permanently. Receives a `workerId`.
+3. **Submit a run** — `crew_run { op: "submit", taskId, workerId, prompt }` to execute a task. The prompt is the full instruction; Crew stores identity, not prose.
+
+**Important:** The legacy flow (fingerprint, adapter, model on every worker create) is rejected. Always use profiles.
+
 ## Leader flow
 
 1. `crew_plan { op: "propose", runId, subtasks }` proposes a decomposition. The configured approval gate decides whether it may proceed; a write-capable plan can remain proposed for a human decision.
-2. `crew_spawn { planId, subtaskId, prompt }` starts one approved subtask. It reuses a compatible idle worker or creates one, then links the submitted run to the plan.
+2. `crew_spawn { planId, subtaskId, prompt }` starts one approved subtask. It reuses a compatible idle worker or creates one (profile-first via profileId from the plan), then links the submitted run to the plan.
 3. Read milestone digests from `/crew`. The monitor is the live projection and reports questions, timeouts, budgets, escalations, and terminal edges; request `result` only after its terminal milestone.
 4. `crew_send { runId, text, kind }` steers, answers, or follows up. Use one communication channel: Crew messages for worker coordination, never the same instruction through a vendor CLI, pane, and another agent channel.
 5. `crew_stop { runId, outcome: "done" | "abort" }` ends one run. `crew_finish { runIds }` closes only the named plan runs; it never releases a workspace lease behind the leader's back.

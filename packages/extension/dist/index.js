@@ -12017,7 +12017,7 @@ function registerSpawnTool(pi, ctx) {
   pi.registerTool({
     name: CREW_SPAWN_TOOL_NAME,
     label: "Crew Spawn",
-    description: "Use after crew_plan is approved to execute one subtask. Resolves the subtask from the plan, reuses an idle worker of its adapter (or creates one), and submits a run with the subtask description as the prompt, tagging it with the plan and subtask ids so later budget/write guards (WP19/WP20) can find the metadata.",
+    description: "Use after crew_plan is approved to execute one subtask. Resolves the subtask from the plan, reuses an idle worker of its adapter (or creates one), and submits a run with the subtask description as the prompt, tagging it with the plan and subtask ids for budget tracking and supervision.",
     parameters: params,
     approval: "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -12105,7 +12105,7 @@ function registerStatusTool(pi, ctx) {
   pi.registerTool({
     name: CREW_STATUS_TOOL_NAME,
     label: "Crew Status",
-    description: "Use to read the current run list for a task (or all tasks) as a situation snapshot. Budget/escalation summaries are attached by the daemon once WP19/WP20 land; until then this returns the base run/list projection.",
+    description: "Use to read the current run list for a task (or all tasks) as a situation snapshot (the base run/list projection).",
     parameters: params,
     approval: "read",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -12175,7 +12175,7 @@ function registerFinishTool(pi, ctx) {
   pi.registerTool({
     name: CREW_FINISH_TOOL_NAME,
     label: "Crew Finish",
-    description: "Use to cancel the remaining live runs of a plan once the leader is done. Takes the explicit run ids you spawned (the run->plan linkage that would enumerate them automatically lands in WP19). Workspace release is left to the leader -- never automatic.",
+    description: "Use to cancel the remaining live runs of a plan once the leader is done. Takes the explicit run ids you spawned. Workspace release is left to the leader -- never automatic.",
     parameters: params,
     approval: "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -12282,7 +12282,7 @@ function registerPlanTool(pi, ctx) {
       description: pi.zod.string().describe("The instruction this subtask executes."),
       adapter: pi.zod.string().describe("The adapter (claude, codex, copilot, ompNative) that executes this subtask."),
       writes: pi.zod.boolean().optional().describe("Whether this subtask may write to the repository (drives the approval gate)."),
-      turnBudget: pi.zod.number().int().optional().describe("Optional per-subtask turn budget (enforced by WP19).")
+      turnBudget: pi.zod.number().int().optional().describe("Optional per-subtask turn budget, snapshotted into the run's budget row.")
     })).optional().describe("Required for propose: the decomposition.")
   });
   pi.registerTool({
@@ -12365,14 +12365,14 @@ function registerProfileTool(pi, ctx) {
   const params = pi.zod.object({
     adapter: pi.zod.string().describe("The adapter name this profile launches, e.g. claude, codex, copilot, ompRpc, terminalDegraded."),
     model: pi.zod.string().describe("The model identifier this profile uses."),
-    startupOptions: pi.zod.record(pi.zod.string(), pi.zod.unknown()).describe("Adapter-specific startup options, tagged by adapter kind, e.g. { claude: { ... } } or { codex: { ... } }."),
+    startupOptions: pi.zod.record(pi.zod.string(), pi.zod.unknown()).describe("Adapter-specific startup options, tagged by adapter kind. REQUIRED: include mode:'tui' for reserved adapters. Example: { claude: { mode: 'tui' } }. Headless mode is retired. Other options depend on the adapter (see crew-orchestration skill)."),
     environmentAllowlist: pi.zod.array(pi.zod.string()).optional().describe("Environment variable names this profile's process is allowed to read."),
     permissionEnvelope: pi.zod.record(pi.zod.string(), pi.zod.unknown()).optional()
   });
   pi.registerTool({
     name: CREW_PROFILE_TOOL_NAME,
     label: "Crew Profile",
-    description: "Use to register a reusable worker profile (adapter, model, startup options, environment allowlist) before provisioning workers against it. Call this once per adapter/model combination, then pass the returned profileId to crew_worker { op: 'create', profileId } instead of repeating fingerprint/adapter/model/permissionEnvelope on every worker. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
+    description: "Register a reusable worker profile (adapter, model, startup options with mode:'tui', environment allowlist) before provisioning workers. Call this once per adapter/model combination, then pass the returned profileId to crew_worker { op: 'create', profileId }. The profile-first flow (crew_profile \u2192 crew_worker \u2192 crew_run) replaces the legacy fingerprint/adapter/model pattern. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
     parameters: params,
     approval: () => "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -12543,10 +12543,10 @@ var CREW_WORKER_TOOL_NAME = "crew_worker";
 function registerWorkerTool(pi, ctx) {
   const params = pi.zod.object({
     op: pi.zod.enum(["create", "list", "get"]).describe("Which worker operation to perform."),
-    fingerprint: pi.zod.string().optional().describe("Required for create: a fingerprint of the harness binary + version."),
-    adapter: pi.zod.string().optional().describe("Required for create: the adapter name, e.g. claude, codex, copilot, ompNative."),
-    model: pi.zod.string().optional().describe("Required for create: the model identifier this worker uses."),
-    profileId: pi.zod.string().optional().describe("Optional profile id for the worker identity."),
+    fingerprint: pi.zod.string().optional().describe("Legacy create field. Rejected (PROFILE_REQUIRED) for reserved adapters (claude, codex, copilot, ompRpc) -- use profileId instead."),
+    adapter: pi.zod.string().optional().describe("Legacy create field. Rejected (PROFILE_REQUIRED) for reserved adapters -- use profileId instead."),
+    model: pi.zod.string().optional().describe("Legacy create field. Rejected (PROFILE_REQUIRED) for reserved adapters -- use profileId instead."),
+    profileId: pi.zod.string().optional().describe("Required for create with reserved adapters (claude, codex, copilot, ompRpc). Register a profile with crew_profile first, then pass its id here."),
     permissionEnvelope: pi.zod.record(pi.zod.string(), pi.zod.unknown()).optional(),
     parentWorkerId: pi.zod.string().optional().describe("Parent worker id, if spawned as a child."),
     workerId: pi.zod.string().optional().describe("Required for get: the worker id to fetch.")
@@ -12554,7 +12554,7 @@ function registerWorkerTool(pi, ctx) {
   pi.registerTool({
     name: CREW_WORKER_TOOL_NAME,
     label: "Crew Worker",
-    description: "Use to find or provision external AI harness workers (Claude, Codex, Copilot, OMP-RPC) that execute tasks. Use op: 'list' to see available workers for a repository (call before submitting a run), op: 'get' to fetch details of a specific worker, or op: 'create' to provision a new worker identity for a specific harness/model combination (requires fingerprint, adapter, model). You need a workerId from crew_worker { op: 'list' } to submit a run with crew_run { op: 'submit' }.",
+    description: "Use to find or provision external AI harness workers (Claude, Codex, Copilot, OMP-RPC) that execute tasks. Required flow: (1) crew_profile { adapter, model, startupOptions } to register a profile with mode:'tui', (2) crew_worker { op: 'create', profileId } to provision the worker, (3) crew_run { op: 'submit', workerId, prompt } to execute. Use op: 'list' to see available workers for a repository (call before submitting a run), op: 'get' to fetch details of a specific worker.",
     parameters: params,
     approval: (args) => typeof args === "object" && args !== null && ("op" in args) && args.op === "create" ? "exec" : "read",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
