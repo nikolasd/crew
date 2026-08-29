@@ -356,6 +356,54 @@ same evidence the adapter registry uses to gate what a worker profile is allowed
 crewd adapters [--json]
 ```
 
+## Troubleshooting
+
+### `serve` exits with code 73
+
+There is no TCP port to conflict on — `crewd` communicates over a Unix domain socket, and `serve`
+has no `--port` flag. Exit **73** (`EX_TEMPFAIL`) means the repository's `runtime.lock` is already
+held by a live `crewd serve` process; it prints that process's identity (pid, project id, socket
+path) as JSON on stdout when it happens.
+
+Usually this isn't an error to fix — connect to the existing runtime instead of starting another:
+`crewd status --repo <path> --state-dir <same state-dir>`. If you're sure it should have exited
+(e.g. a previous test run leaked it), find and stop it: `ps aux | grep crewd`, then `crewd stop
+--repo <path> --state-dir <state-dir>` or `kill <pid>`.
+
+### Database connection errors
+
+Crew has no configurable database URL — the SQLite file is always `<runtime-dir>/runtime.db`,
+where `<runtime-dir>` is `<state-dir>/repos/<repository-id>/`, derived automatically from
+`--state-dir` and `--repo`. A "failed to open database" error almost always means that directory
+doesn't exist or isn't writable: confirm the state dir resolves the way you expect (see
+[above](#before-you-start-state-directories)), then check `crewd doctor --json`, which reports this
+directly as the `state_dir_writable` and `database_connectivity` checks.
+
+### Permission errors
+
+Check file permissions: `ls -ld <state-dir>` — Crew expects its state directory at mode `0700` and
+its socket at `0600`, both owned by the user running `crewd`. **Do not widen permissions** (e.g.
+`chmod 755`) to work around this — that defeats the same-user isolation the redaction/security
+boundary depends on, and `doctor`'s `state_dir_writable`/`socket_permissions` checks will simply
+fail again with a different reason. If ownership is wrong, fix ownership (`chown`) or remove the
+directory and let `crewd` recreate it at the correct mode.
+
+### A run wasn't recovered the way you expected
+
+Recovery isn't configurable from the CLI — `recover_paused`/`recover_waiting` are the only fields
+on `RecoveryConfig`, and there's no flag to trigger recovery on demand; it only ever runs
+automatically, once, inside `crewd serve` at startup (see `serve`'s own entry above). If a run
+looks like it should have been recovered and wasn't:
+
+1. Confirm it's actually eligible: the startup sweep touches `queued`/`starting`/`working` runs
+   only — `paused`/`waitingUser`/`waitingPeer` runs are left alone unless recovery was built with
+   `recover_paused`/`recover_waiting` enabled.
+2. Recovery only runs at `serve` startup, not continuously — a run that goes silent while the
+   daemon is up stays where it is until the next restart, deliberately: a quiet run is not a dead
+   run while its supervisor is alive.
+3. Use `crewd doctor --json`'s `stale_runs` check to see runs silent for longer than five minutes,
+   without waiting for a restart.
+
 ## Exit codes
 
 | Code | Meaning |
