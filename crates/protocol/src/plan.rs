@@ -2,12 +2,10 @@
 //! (`plan/propose`, `plan/decide`, `plan/get`) and the run-timeout
 //! acknowledgement (`run/timeoutAck`).
 //!
-//! Only the wire-facing result shapes are defined here: the actual
-//! propose/decide/get/timeoutAck orchestration lands in a later work
-//! package (crew v2 gap closure WP17/WP21). Until then the daemon refuses
-//! every one of these methods with a "not yet implemented" JSON-RPC error
-//! (`crate::service::orchestration`); this module exists so extension code
-//! can be written against a stable wire contract in the meantime.
+//! Wire-facing result shapes only: the actual propose/decide/get/timeoutAck
+//! orchestration implementation lives in `crate::service::orchestration`
+//! (WP17 landed `plan/*`, WP21 added `run/timeoutAck`). The methods are
+//! fully implemented and reachable via the daemon's JSON-RPC interface.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
