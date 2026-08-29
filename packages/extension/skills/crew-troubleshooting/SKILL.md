@@ -10,7 +10,7 @@ description: >-
 
 Essential facts invisible from the tool schemas:
 
-- **Profile-first worker provisioning:** Reserved adapters (claude, codex, copilot, ompRpc) require profiles. Use `crew_profile { adapter, model, startupOptions: { mode: "tui" } }` first, then `crew_worker { profileId }`, then `crew_run`. See the crew-orchestration skill for the full flow.
+- **Profile-first worker provisioning:** Reserved adapters (claude, codex, copilot, ompRpc) require profiles. Use `crew_profile { adapter, model, startupOptions: { <adapter>: { mode: "tui" } } }` (startup options are tagged by adapter kind, e.g. `{ claude: { mode: "tui" } }`) first, then `crew_worker { profileId }`, then `crew_run`. See the crew-orchestration skill for the full flow.
 - **Crew stores no task text of its own.** The `prompt` argument must be supplied on every `run/submit` **and every `run/retry`**. Retry does not remember the prior prompt — you must pass it again.
 - **Every Crew tool returns the daemon's JSON result verbatim under `details`.** Read ids (`taskId`, `workerId`, `runId`, `leaseId`, etc.) from there. Never invent or guess them.
 
