@@ -129,7 +129,7 @@ test("registers crew_health plus every orchestration tool, and every slash comma
     "crew_config",
     "crew_install",
   ]);
-  expect([...commands.keys()]).toEqual(["crew-status", "crew", "crew-doctor", "crew-config", "crew-install"]);
+  expect([...commands.keys()]).toEqual(["crew", "crew-install"]);
 });
 
 // ---- Live-daemon path: a real foreground `crewd` the tool must reach. ----
@@ -304,53 +304,6 @@ test("crew_health surfaces a typed BinaryIntegrityError code without leaking its
   expect(serialized).not.toContain(sensitivePath);
 });
 
-test("crew-status command notifies (not console.logs) in interactive mode", async () => {
-  setEnv("CREW_STATE_DIR", stateDir);
-
-  const { api, commands } = createFakeApi();
-  extension(api);
-  const command = commands.get("crew-status")!;
-
-  const { ctx, notifications } = fakeCommandContext(repoDir, true);
-  const logSpy = spyOn(console, "log");
-
-  try {
-    await command.handler("", ctx);
-  } finally {
-    logSpy.mockRestore();
-  }
-
-  expect(notifications.length).toBe(1);
-  expect(notifications[0]).toContain("running");
-  // A raw console.log in interactive mode would corrupt the TUI.
-  expect(logSpy).not.toHaveBeenCalled();
-});
-
-test("crew-status command console.logs (not notify) outside interactive mode", async () => {
-  setEnv("CREW_STATE_DIR", stateDir);
-
-  const { api, commands } = createFakeApi();
-  extension(api);
-  const command = commands.get("crew-status")!;
-
-  const { ctx, notifications } = fakeCommandContext(repoDir, false);
-  const logged: string[] = [];
-  const logSpy = spyOn(console, "log").mockImplementation((message: string) => {
-    logged.push(message);
-  });
-
-  try {
-    await command.handler("", ctx);
-  } finally {
-    logSpy.mockRestore();
-  }
-
-  expect(logged.length).toBe(1);
-  expect(logged[0]).toContain("running");
-  // ctx.ui.notify must not be called when hasUI is false; print/RPC relies on console.log only
-  expect(notifications.length).toBe(0);
-});
-
 test("/crew health notifies (not console.logs) in interactive mode", async () => {
   setEnv("CREW_STATE_DIR", stateDir);
 
@@ -396,50 +349,6 @@ test("/crew health console.logs (not notify) outside interactive mode", async ()
   expect(notifications.length).toBe(0);
 });
 
-test("the hyphenated management commands forward with a deprecation notice", async () => {
-  setEnv("CREW_STATE_DIR", stateDir);
-
-  const { api, commands } = createFakeApi();
-  extension(api);
-
-  const { ctx, notifications } = fakeCommandContext(repoDir, true);
-  await commands.get("crew-status")!.handler("", ctx);
-
-  expect(notifications.length).toBe(1);
-  expect(notifications[0]).toContain("deprecated; use /crew health");
-  expect(notifications[0]).toContain("running");
-});
-
-test("the crew-doctor forwarder notes deprecation and appends doctor output", async () => {
-  setEnv("CREW_STATE_DIR", stateDir);
-  setEnv("OMP_CREW_BINARY", CREWD);
-
-  const { api, commands } = createFakeApi();
-  extension(api);
-
-  const { ctx, notifications } = fakeCommandContext(repoDir, true);
-  await commands.get("crew-doctor")!.handler("", ctx);
-
-  expect(notifications.length).toBe(1);
-  expect(notifications[0]).toContain("deprecated; use /crew doctor");
-  expect(notifications[0]).toContain("Doctor check:");
-});
-
-test("the crew-config forwarder notes deprecation and appends config output", async () => {
-  setEnv("CREW_STATE_DIR", stateDir);
-  setEnv("OMP_CREW_BINARY", CREWD);
-
-  const { api, commands } = createFakeApi();
-  extension(api);
-
-  const { ctx, notifications } = fakeCommandContext(repoDir, true);
-  await commands.get("crew-config")!.handler("path", ctx);
-
-  expect(notifications.length).toBe(1);
-  expect(notifications[0]).toContain("deprecated; use /crew config");
-  expect(notifications[0]).toContain("crew.json");
-});
-
 test("/crew config reaches configResult (not healthResult) through the management map", async () => {
   setEnv("CREW_STATE_DIR", stateDir);
   setEnv("OMP_CREW_BINARY", CREWD);
@@ -467,36 +376,6 @@ test("/crew config print bogus is a usage error with the error level, before any
   expect(notifications.length).toBe(1);
   expect(notifications[0]?.message).toContain("Unknown document bogus");
   expect(notifications[0]?.level).toBe("error");
-});
-
-test("the crew-doctor forwarder surfaces a real BinarySelectionError through emitResult, not as a thrown exception", async () => {
-  setEnv("CREW_STATE_DIR", stateDir);
-  // Explicitly clear the dev-binary override so resolveCrewd hits its real
-  // "no crewd binary installed" path -- this is the fresh-install machine
-  // this test guards, and other tests in this file depend on the override
-  // being restored afterward.
-  const previousOverride = process.env.OMP_CREW_BINARY;
-  delete process.env.OMP_CREW_BINARY;
-
-  const { ctx, notifications } = fakeCommandContextWithLevels(repoDir, true);
-
-  try {
-    const { api, commands } = createFakeApi();
-    extension(api);
-
-    await commands.get("crew-doctor")!.handler("", ctx);
-
-    expect(notifications.length).toBe(1);
-    expect(notifications[0]?.message).toContain("deprecated; use /crew doctor");
-    expect(notifications[0]?.message).toContain("OMP_CREW_BINARY");
-    expect(notifications[0]?.level).toBe("error");
-  } finally {
-    if (previousOverride === undefined) {
-      delete process.env.OMP_CREW_BINARY;
-    } else {
-      process.env.OMP_CREW_BINARY = previousOverride;
-    }
-  }
 });
 
 test("the golden runtime/status fixture validates against the canonical schema", () => {

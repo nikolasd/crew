@@ -28,7 +28,6 @@ import { registerMonitor } from "./monitor/controller";
 import type { ManagementSubcommand } from "./monitor/controller";
 
 const TOOL_NAME = "crew_health";
-const COMMAND_NAME = "crew-status";
 const STATUS_DESCRIPTION = "Use to verify the Crew runtime is reachable and healthy before orchestration operations. Returns connection status, runtime identity, and binary source. Call this if you're unsure the daemon is running, or after a connection failure.";
 const INSTALL_TOOL_NAME = "crew_install";
 
@@ -77,8 +76,6 @@ export default function crewExtension(pi: ExtensionAPI): void {
     },
   });
 
-  registerDeprecatedForwarder(COMMAND_NAME, "/crew health", (_args, ctx) => healthResult(ctx));
-
   registerOrchestrationTools(pi, { getClient, reportSubmitFailure: (message) => monitorHandle.reportSubmitFailure(message) });
   /**
    * Context builder for the doctor command: resolves the crewd binary path
@@ -105,31 +102,6 @@ export default function crewExtension(pi: ExtensionAPI): void {
   /** Registers a deprecated hyphenated command that forwards to `run`'s
    *  result with a one-line deprecation notice prepended to the same
    *  message -- never emitted as a second notification. */
-  function registerDeprecatedForwarder(oldName: string, replacement: string, run: (args: string, ctx: ExtensionCommandContext) => Promise<CommandResult>): void {
-    pi.registerCommand(oldName, {
-      description: `Deprecated: use ${replacement}.`,
-      handler: async (args, ctx) => {
-        const notice = `Note: /${oldName} is deprecated; use ${replacement}.`;
-        let result: CommandResult;
-        try {
-          result = await run(args, ctx);
-        } catch (err) {
-          // `run` (health/doctor/config) can throw before producing a result --
-          // e.g. resolving the crewd binary fails on a fresh-install machine,
-          // exactly the machine most likely to hit this forwarder. That must
-          // surface through emitResult, not escape as an unhandled rejection.
-          // The try wraps only `run`'s own work, so a failure in emitResult
-          // itself is never re-caught and re-reported through the same
-          // channel that just failed.
-          const message = err instanceof Error ? err.message : String(err);
-          emitResult(ctx, { text: `${notice}\n${message}`, isError: true });
-          return;
-        }
-        emitResult(ctx, { text: `${notice}\n${result.text}`, isError: result.isError });
-      },
-    });
-  }
-
   async function healthResult(extCtx: ExtensionContext): Promise<CommandResult> {
     return blocksToResult(await getRuntimeStatus(statusContextFor(extCtx)));
   }
@@ -160,7 +132,7 @@ export default function crewExtension(pi: ExtensionAPI): void {
   }
 
   // Registration order is user-visible and pinned by index.test.ts's exact-list
-  // assertion: crew-status, crew, crew-doctor, crew-config, crew-install.
+  // assertion: crew, crew-install.
   const monitorHandle = registerMonitor(pi, {
     getClient,
     getClientWithoutSpawning,
@@ -180,8 +152,6 @@ export default function crewExtension(pi: ExtensionAPI): void {
       return runDoctorCommand(doctorContextFor(ctx.cwd));
     },
   });
-
-  registerDeprecatedForwarder("crew-doctor", "/crew doctor", (_args, ctx) => doctorResult(ctx.cwd));
 
   const configParams = pi.zod.object({
     op: pi.zod.enum(["path", "print", "init"]).describe("Which config operation to perform."),
@@ -210,8 +180,6 @@ export default function crewExtension(pi: ExtensionAPI): void {
       return runConfigCommand({ crewdPath, repository: extCtx.cwd }, request);
     },
   });
-
-  registerDeprecatedForwarder("crew-config", "/crew config", (args, ctx) => configResult(args, ctx.cwd));
 
   pi.registerTool({
     name: INSTALL_TOOL_NAME,
