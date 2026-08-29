@@ -11,9 +11,11 @@
 //! command to actually point at. This module is fully exercised here
 //! against a fake [`super::DisplayBackendTrait`].
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use parking_lot::Mutex;
 use serde_json::json;
 use tokio::sync::broadcast;
 
@@ -81,6 +83,17 @@ pub struct PaneAttachOutcome {
 
 /// Resolves, opens, and later closes one run's Crew-owned pane, and owns
 /// journaling both ends of its lifetime.
+/// How many Crew-owned panes may be live at once before further attaches
+/// degrade to `Hidden` (ADR-0027 wave 3).
+///
+/// A TUI vendor outlives the turn that opened it, so panes accumulate: every
+/// finished-but-unclosed worker keeps a window or split on the user's
+/// screen, and nothing bounded that. The cap is what stops a long session
+/// from burying the user's own terminal under workers they are done with.
+/// Deliberately generous -- it is a backstop against unbounded growth, not
+/// a workflow limit.
+pub const DEFAULT_MAX_LIVE_PANES: usize = 16;
+
 pub struct PaneCoordinator {
     registry: Arc<DisplayRegistry>,
     db: Arc<DatabaseHandle>,
@@ -92,6 +105,11 @@ pub struct PaneCoordinator {
     crewd_path: PathBuf,
     state_dir: PathBuf,
     repository: PathBuf,
+    /// The runs that currently hold a real (non-hidden) pane. A set rather
+    /// than a counter so re-attaching the same run is idempotent and a
+    /// detach cannot double-decrement.
+    live_panes: Arc<Mutex<HashSet<RunId>>>,
+    max_live_panes: usize,
 }
 
 impl PaneCoordinator {
@@ -114,7 +132,38 @@ impl PaneCoordinator {
             crewd_path,
             state_dir,
             repository,
+            live_panes: Arc::new(Mutex::new(HashSet::new())),
+            max_live_panes: DEFAULT_MAX_LIVE_PANES,
         }
+    }
+
+    /// Overrides the live-pane cap. Chainable so the nine existing
+    /// `new()` call sites stay untouched.
+    #[must_use]
+    pub fn with_max_live_panes(mut self, max: usize) -> Self {
+        self.max_live_panes = max;
+        self
+    }
+
+    /// Reserves a live-pane slot for `run_id`, or reports the cap is full.
+    ///
+    /// Idempotent per run: a run that already holds a pane (a reopen)
+    /// re-reserves its own slot rather than consuming a second one.
+    fn reserve_pane(&self, run_id: RunId) -> bool {
+        let mut live = self.live_panes.lock();
+        if live.contains(&run_id) {
+            return true;
+        }
+        if live.len() >= self.max_live_panes {
+            return false;
+        }
+        live.insert(run_id);
+        true
+    }
+
+    /// Releases `run_id`'s live-pane slot.
+    fn release_pane(&self, run_id: RunId) {
+        self.live_panes.lock().remove(&run_id);
     }
 
     /// Resolves a backend (forced backend first, then herdr/tmux/
@@ -125,6 +174,21 @@ impl PaneCoordinator {
     /// the run: it is journaled as a diagnostic and this falls back to
     /// `Hidden` (an empty `pane_ref`) instead of propagating the error.
     pub async fn attach(&self, req: PaneAttachRequest) -> PaneAttachOutcome {
+        // ADR-0027 wave 3: a TUI vendor outlives its turn, so panes
+        // accumulate. Past the cap, degrade to hidden -- and journal why,
+        // rather than silently reporting a pane that was never opened.
+        if !self.reserve_pane(req.run_id) {
+            self.journal_diagnostic(
+                req.run_id,
+                format!(
+                    "live pane cap of {} reached, attaching hidden instead; close a finished \
+                     worker's pane to free one",
+                    self.max_live_panes
+                ),
+            )
+            .await;
+            return self.attach_hidden(req.run_id, req.placement).await;
+        }
         let candidates = ordered_candidates(req.forced_backend);
         let selection = self.registry.resolve(&crew_protocol::DisplayPreference {
             ordered: candidates,
@@ -157,6 +221,8 @@ impl PaneCoordinator {
                 }
             }
             Err(err) => {
+                // No real pane exists, so the reservation must not be held.
+                self.release_pane(req.run_id);
                 self.journal_diagnostic(
                     req.run_id,
                     format!("pane creation on {backend} failed, falling back to hidden: {err}"),
@@ -252,6 +318,11 @@ impl PaneCoordinator {
         succeeded: bool,
         close_on_exit: CloseOnExit,
     ) {
+        // Freed whatever the close policy decides below: a run that has
+        // settled is no longer holding a pane the cap should count, and a
+        // `Never` policy leaving the window on screen is the user's own
+        // pane from here on, not one Crew will ever close.
+        self.release_pane(outcome.run_id);
         let should_close = match close_on_exit {
             CloseOnExit::Always => true,
             CloseOnExit::OnSuccess => succeeded,
@@ -739,6 +810,123 @@ mod tests {
             events_rx.try_recv().is_err(),
             "Never must never journal a detach or close the pane"
         );
+        db.shutdown().await.expect("shutdown database");
+    }
+    // ------------------------------ live-pane cap (CREW-3 wave 3)
+
+    fn working_registry() -> DisplayRegistry {
+        let mut registry = DisplayRegistry::new();
+        registry.register(Box::new(
+            FakeBackend::new("tmux", DisplayBackend::Tmux, true).succeeding("w1:p1"),
+        ));
+        registry.register(Box::new(super::super::HiddenDisplay::new(
+            DisplayConfig::default(),
+        )));
+        registry
+    }
+
+    /// A TUI vendor outlives its turn, so panes accumulate with nothing
+    /// bounding them. Past the cap an attach degrades to hidden -- and says
+    /// so, rather than reporting a pane nobody opened.
+    #[tokio::test]
+    async fn attach_degrades_to_hidden_once_the_live_pane_cap_is_reached() {
+        let (db, _dir) = harness().await;
+        let (events_tx, _events_rx) = broadcast::channel(64);
+        let coordinator =
+            coordinator(working_registry(), Arc::clone(&db), events_tx).with_max_live_panes(2);
+
+        let first = coordinator.attach(attach_request(None)).await;
+        let second = coordinator.attach(attach_request(None)).await;
+        assert_eq!(first.backend, DisplayBackend::Tmux);
+        assert_eq!(second.backend, DisplayBackend::Tmux);
+
+        let third = coordinator.attach(attach_request(None)).await;
+        assert_eq!(
+            third.backend,
+            DisplayBackend::Hidden,
+            "the third pane exceeds the cap of 2"
+        );
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// Detaching frees the slot: the cap bounds *live* panes, not panes
+    /// ever opened.
+    #[tokio::test]
+    async fn detaching_frees_a_live_pane_slot() {
+        let (db, _dir) = harness().await;
+        let (events_tx, _events_rx) = broadcast::channel(64);
+        let coordinator =
+            coordinator(working_registry(), Arc::clone(&db), events_tx).with_max_live_panes(1);
+
+        let first = coordinator.attach(attach_request(None)).await;
+        assert_eq!(first.backend, DisplayBackend::Tmux);
+        assert_eq!(
+            coordinator.attach(attach_request(None)).await.backend,
+            DisplayBackend::Hidden,
+            "the cap of 1 is full"
+        );
+
+        coordinator.detach(&first, true, CloseOnExit::Always).await;
+
+        assert_eq!(
+            coordinator.attach(attach_request(None)).await.backend,
+            DisplayBackend::Tmux,
+            "the freed slot must be reusable"
+        );
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// Re-attaching the same run (a pane reopen) must not consume a second
+    /// slot, or reopening would eat the cap.
+    #[tokio::test]
+    async fn re_attaching_the_same_run_does_not_consume_a_second_slot() {
+        let (db, _dir) = harness().await;
+        let (events_tx, _events_rx) = broadcast::channel(64);
+        let coordinator =
+            coordinator(working_registry(), Arc::clone(&db), events_tx).with_max_live_panes(1);
+
+        let req = attach_request(None);
+        assert_eq!(
+            coordinator.attach(req.clone()).await.backend,
+            DisplayBackend::Tmux
+        );
+        assert_eq!(
+            coordinator.attach(req).await.backend,
+            DisplayBackend::Tmux,
+            "the same run re-attaching holds its own slot, not a new one"
+        );
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// A backend failure falls back to hidden, and must not leave a
+    /// reservation behind for a pane that does not exist.
+    #[tokio::test]
+    async fn a_failed_pane_creation_does_not_hold_a_slot() {
+        let (db, _dir) = harness().await;
+        let (events_tx, _events_rx) = broadcast::channel(64);
+        let mut registry = DisplayRegistry::new();
+        registry.register(Box::new(
+            FakeBackend::new("tmux", DisplayBackend::Tmux, true).failing("tmux exploded"),
+        ));
+        registry.register(Box::new(super::super::HiddenDisplay::new(
+            DisplayConfig::default(),
+        )));
+        let failing = coordinator(registry, Arc::clone(&db), events_tx).with_max_live_panes(1);
+
+        let failed = failing.attach(attach_request(None)).await;
+        assert_eq!(failed.backend, DisplayBackend::Hidden);
+
+        // The cap of 1 must still be entirely free.
+        let (tx2, _rx2) = broadcast::channel(64);
+        let second = coordinator(working_registry(), Arc::clone(&db), tx2).with_max_live_panes(1);
+        assert_eq!(
+            second.attach(attach_request(None)).await.backend,
+            DisplayBackend::Tmux
+        );
+
         db.shutdown().await.expect("shutdown database");
     }
 }
