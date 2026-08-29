@@ -457,7 +457,8 @@ fn codex_reviewer_profile(environment_allowlist: Vec<&str>) -> Value {
         "startupOptions": {
             "codex": {
                 "sandboxMode": "workspace-write",
-                "approvalPolicy": "on-request"
+                "approvalPolicy": "on-request",
+                "mode": "tui"
             }
         },
         "environmentAllowlist": environment_allowlist,

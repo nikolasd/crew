@@ -8,10 +8,12 @@
 //! root -- deterministic across restarts, unlike [`ProjectId::new`]'s
 //! random UUIDv7.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crew_protocol::ProjectId;
+use nix::unistd::Uid;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -70,10 +72,18 @@ pub struct RuntimePaths {
     pub log: PathBuf,
     /// `<root>/artifacts/`, created mode `0700`.
     pub artifacts: PathBuf,
-    /// `<root>/panes/`, created mode `0700`. Holds one per-worker attach
-    /// socket per active run (see [`Self::pane_socket`]); the attach
-    /// server binds a fresh socket here and removes it on stop, but the
-    /// directory itself persists across runs like `artifacts`.
+    /// A short, private, per-user directory (created mode `0700`) holding
+    /// one per-worker attach socket per active run across *every*
+    /// repository this user runs Crew against (see [`Self::pane_socket`]).
+    /// Deliberately **not** nested under `root` (CREW-1): a run id is
+    /// already a globally unique UUIDv7, so the socket never needed
+    /// per-repository namespacing for correctness -- only the durable
+    /// state below does -- and `<root>/panes/<run-id>.sock`'s fixed
+    /// ~97-byte suffix after `$HOME` overflows macOS's 104-byte
+    /// `sun_path` for any real home directory. See [`pane_socket_root`]
+    /// for the actual resolved location. The attach server binds a fresh
+    /// socket here and removes it on stop, but the directory itself
+    /// persists across runs.
     pub panes: PathBuf,
 }
 
@@ -123,7 +133,7 @@ impl RuntimePaths {
 
         let root = state_root.join("repos").join(&repository_id);
         let artifacts = root.join("artifacts");
-        let panes = root.join("panes");
+        let panes = pane_socket_root();
 
         ensure_private_dir(&root)?;
         ensure_private_dir(&artifacts)?;
@@ -187,6 +197,55 @@ fn discover_vcs_root(canonical: &Path) -> Option<PathBuf> {
     }
 }
 
+/// The short, per-user directory ephemeral pane-attach sockets bind under
+/// (CREW-1). Reads the real environment and the real effective uid; see
+/// [`pane_socket_root_with`] for the pure, testable resolution logic.
+fn pane_socket_root() -> PathBuf {
+    let env: HashMap<String, String> = std::env::vars().collect();
+    pane_socket_root_with(&env, Uid::current().as_raw())
+}
+
+/// Resolves the pane-socket directory for a given environment and uid,
+/// without touching the real process environment -- what makes this
+/// testable deterministically (the same pattern
+/// [`crate::security::StateRoot::resolve_with`] uses).
+///
+/// Prefers `$XDG_RUNTIME_DIR/crew` (short, private, and -- critically --
+/// not world-writable: typically `/run/user/<uid>` on systemd Linux, so it
+/// carries no new symlink-attack surface) when it is set and a socket
+/// bound under it would still fit the platform `sun_path` bound. Falls
+/// back to `/tmp/crew-<uid>` otherwise, whether because `$XDG_RUNTIME_DIR`
+/// is unset (the common case on macOS) or because some unusual value of
+/// it would itself overflow -- `/tmp/crew-<uid>` is always short enough.
+/// Both candidates are created via [`ensure_private_dir`], whose symlink
+/// rejection is what makes the `/tmp` fallback safe despite sitting
+/// directly under a world-writable parent (see
+/// [`crate::security::SecurityError::UntrustedSymlink`]).
+fn pane_socket_root_with(env: &HashMap<String, String>, uid: u32) -> PathBuf {
+    let fallback = PathBuf::from(format!("/tmp/crew-{uid}"));
+    let xdg_runtime_dir = env
+        .get("XDG_RUNTIME_DIR")
+        .map(String::as_str)
+        .filter(|value| !value.is_empty());
+    let Some(xdg_runtime_dir) = xdg_runtime_dir else {
+        return fallback;
+    };
+    let candidate = PathBuf::from(xdg_runtime_dir).join("crew");
+    if pane_socket_dir_fits(&candidate) {
+        candidate
+    } else {
+        fallback
+    }
+}
+
+/// Whether a candidate pane-socket directory leaves room for the longest
+/// name [`RuntimePaths::pane_socket`] ever joins onto it: a 36-character
+/// UUID (a [`crew_protocol::RunId`]'s canonical form) plus `.sock`.
+fn pane_socket_dir_fits(dir: &Path) -> bool {
+    let longest_run_id = "0".repeat(36);
+    crate::ipc::socket_path_within_limit(&dir.join(format!("{longest_run_id}.sock")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,7 +292,17 @@ mod tests {
         let paths = RuntimePaths::resolve(state_root.path(), repo.path()).unwrap();
 
         assert!(paths.panes.is_dir());
-        assert_eq!(paths.panes, paths.root.join("panes"));
+        // CREW-1: panes is deliberately NOT nested under root any more -- a
+        // run id is already a globally unique UUIDv7, so the socket never
+        // needed per-repository namespacing, and nesting it under root's
+        // long `<state_root>/repos/<id>/` prefix is exactly what overflowed
+        // the platform sun_path bound.
+        assert!(
+            !paths.panes.starts_with(&paths.root),
+            "panes must not be nested under the per-repository root: {:?} vs {:?}",
+            paths.panes,
+            paths.root
+        );
         let mode = fs::metadata(&paths.panes).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700, "panes directory must be created owner-only");
     }
@@ -250,6 +319,82 @@ mod tests {
         assert_eq!(
             paths.pane_socket(&run_id),
             paths.panes.join(format!("{run_id}.sock"))
+        );
+    }
+
+    /// CREW-1 regression: even under an unrealistically long state root
+    /// (simulating a long `$HOME`), the pane socket path must still fit the
+    /// platform `sun_path` bound -- the entire point of no longer nesting
+    /// `panes` under `root`.
+    #[test]
+    fn resolve_keeps_the_pane_socket_within_sun_path_under_a_very_long_state_root() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir(repo.path().join(".git")).unwrap();
+        let base = tempfile::tempdir().unwrap();
+        // A deliberately long path segment, simulating a long real-world
+        // $HOME (e.g. a corporate-managed macOS home directory nested
+        // several levels under /Users/<long.name>/Library/...).
+        let long_state_root = base
+            .path()
+            .join("a-very-long-simulated-home-directory-segment-used-only-for-this-regression-test")
+            .join("Library")
+            .join("Application Support")
+            .join("omp")
+            .join("crew");
+        fs::create_dir_all(&long_state_root).unwrap();
+
+        let paths = RuntimePaths::resolve(&long_state_root, repo.path()).unwrap();
+        let run_id = crew_protocol::RunId::new();
+
+        assert!(
+            crate::ipc::socket_path_within_limit(&paths.pane_socket(&run_id)),
+            "pane socket path overflows sun_path even under a long state root: {:?}",
+            paths.pane_socket(&run_id)
+        );
+    }
+
+    #[test]
+    fn pane_socket_root_with_falls_back_to_tmp_when_xdg_runtime_dir_is_unset() {
+        let env = HashMap::new();
+        assert_eq!(
+            pane_socket_root_with(&env, 501),
+            PathBuf::from("/tmp/crew-501")
+        );
+    }
+
+    #[test]
+    fn pane_socket_root_with_falls_back_to_tmp_when_xdg_runtime_dir_is_empty() {
+        let mut env = HashMap::new();
+        env.insert("XDG_RUNTIME_DIR".to_string(), String::new());
+        assert_eq!(
+            pane_socket_root_with(&env, 501),
+            PathBuf::from("/tmp/crew-501")
+        );
+    }
+
+    #[test]
+    fn pane_socket_root_with_prefers_xdg_runtime_dir_when_it_fits() {
+        let mut env = HashMap::new();
+        env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/501".to_string());
+        assert_eq!(
+            pane_socket_root_with(&env, 501),
+            PathBuf::from("/run/user/501/crew")
+        );
+    }
+
+    /// CREW-1 rider: `$XDG_RUNTIME_DIR` is env-supplied and unbounded --
+    /// an unusually long value must not be trusted blindly. A deliberately
+    /// long one must fall back to the always-short `/tmp/crew-<uid>` form
+    /// rather than produce a socket path that itself overflows.
+    #[test]
+    fn pane_socket_root_with_falls_back_to_tmp_when_xdg_runtime_dir_would_overflow() {
+        let mut env = HashMap::new();
+        let long_xdg_runtime_dir = format!("/run/user/{}", "0".repeat(200));
+        env.insert("XDG_RUNTIME_DIR".to_string(), long_xdg_runtime_dir);
+        assert_eq!(
+            pane_socket_root_with(&env, 501),
+            PathBuf::from("/tmp/crew-501"),
+            "an overflowing XDG_RUNTIME_DIR must fall back to the tmp form"
         );
     }
 }

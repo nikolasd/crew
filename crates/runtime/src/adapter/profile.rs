@@ -178,6 +178,21 @@ impl StartupOptions {
             Self::TerminalDegraded(_) => None,
         }
     }
+
+    /// The [`AdapterMode`] this variant declares, or `None` for
+    /// `TerminalDegraded` (which has no `mode` field at all -- it wraps an
+    /// arbitrary underlying harness rather than replacing one of the four
+    /// reserved [`AdapterKind`]s).
+    #[must_use]
+    pub fn mode(&self) -> Option<AdapterMode> {
+        match self {
+            Self::Claude(opts) => Some(opts.mode),
+            Self::Codex(opts) => Some(opts.mode),
+            Self::Copilot(opts) => Some(opts.mode),
+            Self::OmpRpc(opts) => Some(opts.mode),
+            Self::TerminalDegraded(_) => None,
+        }
+    }
 }
 
 /// Whether a supervised adapter process runs attached to a terminal UI or
@@ -302,6 +317,20 @@ pub enum ProfileError {
         "permissionEnvelope contains a secret-shaped value; use environmentAllowlist for credentials instead"
     )]
     SecretShapedPermissionEnvelope,
+    /// CREW-7: `mode: "headless"` (explicit, or omitted and defaulted by
+    /// [`AdapterMode`]'s own wire-compat `#[default]`) was given at
+    /// `profile/register` time. Rejected here, at registration, rather
+    /// than only at dispatch (`RegistryError::HeadlessControlPlaneRetired`)
+    /// -- that dispatch-time check stays exactly as it is (it must, so a
+    /// pre-retirement historical profile still resumes and fails
+    /// identically); this is the register-time backstop for a *new*
+    /// profile, so a caller finds out immediately rather than after a
+    /// confusing delay at first submit.
+    #[error(
+        "adapter {adapter:?} was registered with mode: \"headless\" (or no mode at all, which \
+         defaults to it), which is retired in crew v2 -- register with mode: \"tui\" instead"
+    )]
+    RetiredHeadlessMode { adapter: String },
 }
 
 impl WorkerProfile {
@@ -348,6 +377,11 @@ impl WorkerProfile {
         }
         if permission_envelope_contains_secret_shape(&self.permission_envelope) {
             return Err(ProfileError::SecretShapedPermissionEnvelope);
+        }
+        if self.startup_options.mode() == Some(AdapterMode::Headless) {
+            return Err(ProfileError::RetiredHeadlessMode {
+                adapter: self.adapter.clone(),
+            });
         }
         Ok(())
     }
@@ -454,6 +488,101 @@ impl EffectivePolicy {
 impl Default for EffectivePolicy {
     fn default() -> Self {
         Self::baseline()
+    }
+}
+
+#[cfg(test)]
+mod retired_headless_registration_tests {
+    use super::*;
+
+    fn claude_profile(startup_options: ClaudeStartupOptions) -> WorkerProfile {
+        WorkerProfile {
+            id: ProfileId::new(),
+            adapter: "claude".to_string(),
+            model: "claude-sonnet-4-5".to_string(),
+            permission_envelope: serde_json::json!({}),
+            startup_options: StartupOptions::Claude(startup_options),
+            environment_allowlist: vec![],
+            source: "test".to_string(),
+        }
+    }
+
+    /// CREW-7: a *new* `profile/register` request must be rejected up
+    /// front for a reserved adapter kind whose mode is explicitly the
+    /// retired `Headless` -- not accepted only to fail later, at first
+    /// submit, with a confusing delay (the existing
+    /// `RegistryError::HeadlessControlPlaneRetired`, which stays reachable
+    /// unchanged for a historical resumed profile; this is the
+    /// register-time backstop for a brand new one).
+    #[test]
+    fn validate_rejects_an_explicitly_headless_profile() {
+        let profile = claude_profile(ClaudeStartupOptions {
+            mode: AdapterMode::Headless,
+            ..Default::default()
+        });
+        let err = profile
+            .validate(&EffectivePolicy::baseline())
+            .expect_err("a headless-mode profile must not validate");
+        assert!(
+            matches!(err, ProfileError::RetiredHeadlessMode { .. }),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    /// The same rejection must fire when `mode` is *omitted* entirely --
+    /// serde's own wire-compat default (`AdapterMode::default() ==
+    /// Headless`, kept for historical deserialization) would otherwise let
+    /// a mode-less profile register fine today and only fail once a run
+    /// actually tries to submit against it.
+    #[test]
+    fn validate_rejects_a_profile_with_mode_omitted() {
+        let startup_options: ClaudeStartupOptions = serde_json::from_value(serde_json::json!({
+            "allowedTools": null,
+            "permissionMode": null,
+            "maxTurns": null,
+        }))
+        .unwrap();
+        let profile = claude_profile(startup_options);
+        let err = profile
+            .validate(&EffectivePolicy::baseline())
+            .expect_err("a mode-less profile defaults to Headless and must not validate");
+        assert!(
+            matches!(err, ProfileError::RetiredHeadlessMode { .. }),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_an_explicit_tui_profile() {
+        let profile = claude_profile(ClaudeStartupOptions {
+            mode: AdapterMode::Tui,
+            ..Default::default()
+        });
+        profile
+            .validate(&EffectivePolicy::baseline())
+            .expect("an explicit tui-mode profile must validate");
+    }
+
+    /// `TerminalDegraded` carries no `mode` field at all (it wraps an
+    /// arbitrary underlying harness rather than one of the four reserved
+    /// [`AdapterKind`]s) -- the retired-headless check must not touch it.
+    #[test]
+    fn validate_ignores_terminal_degraded_which_has_no_mode() {
+        let profile = WorkerProfile {
+            id: ProfileId::new(),
+            adapter: "some-harness".to_string(),
+            model: "claude-sonnet-4-5".to_string(),
+            permission_envelope: serde_json::json!({}),
+            startup_options: StartupOptions::TerminalDegraded(TerminalDegradedStartupOptions {
+                backend: "tmux".to_string(),
+                underlying_adapter: Some("claude".to_string()),
+            }),
+            environment_allowlist: vec![],
+            source: "test".to_string(),
+        };
+        profile
+            .validate(&EffectivePolicy::baseline())
+            .expect("terminalDegraded has no mode to reject");
     }
 }
 
