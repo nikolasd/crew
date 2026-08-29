@@ -37,7 +37,8 @@ bun run build
 # Bundle caveat: the committed dist embeds Bun's platform-specific module shim, so a rebuild on a
 # different platform (e.g. macOS/arm64) does NOT byte-match CI's linux-x64 `bundle-check` (observed
 # with Bun 1.3.14). Refresh the committed bundle via the `refresh-bundle` workflow, or a linux-x64
-# build, before committing — see README/CONTRIBUTING.
+# build, before committing — see README/CONTRIBUTING. Note: `bun run check` builds to a temp dir
+# and does not modify the committed dist.
 # Formatting
 bun run format:check   # Biome (TS/JS)
 bun run format:write
