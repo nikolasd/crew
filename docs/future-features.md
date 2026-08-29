@@ -341,6 +341,64 @@ Removing them shrinks the registered-command list, so the same commit must updat
 
 ---
 
+## True tabs for Terminal.app (and pre-1.3.0 Ghostty)
+
+**Specified by:** deferred from CREW-9's first cut (2026-08-29)
+**References:** `crates/runtime/src/display/os_window.rs`,
+[`docs/adr/0025-crew-v2-tui-control-plane.md`](adr/0025-crew-v2-tui-control-plane.md)
+
+### What it is
+
+CREW-9 made worker panes follow the host terminal instead of always assuming Terminal.app, and two
+of the three supported targets already open a **real tab** in the window the user is looking at:
+
+| Target | Shipped behaviour |
+|---|---|
+| iTerm2 | real tab (`create tab with default profile`, then `write text`) |
+| Ghostty 1.3.0+ | real tab (`new tab in window 1 with configuration {command:...}`) |
+| Ghostty pre-1.3.0 | plain new window (`open -na Ghostty --args -e`) |
+| Terminal.app, or an absent/unrecognized hint | plain new window (`do script`, then `activate`) |
+
+What remains deferred is a real tab for the last two rows. Both report
+`DisplayPlacement::Window` honestly rather than claiming a tab they did not open, so this is a UX
+gap, not a correctness one.
+
+### Why deferred
+
+**Terminal.app has no externally-triggerable tab-creation command.** Its AppleScript dictionary
+exposes `do script`, which opens a window; there is no supported "open a tab in the frontmost
+window running this command". The known workaround is synthesizing a ⌘T keystroke through System
+Events, which requires Accessibility permission, breaks silently when that permission is absent or
+revoked, and depends on keyboard-shortcut configuration the user can change. Trading a reliable
+window for an unreliable tab is the wrong direction — especially against a backend whose previous
+bug was opening windows the user never saw.
+
+**Ghostty pre-1.3.0 has no AppleScript tab command at all.** The shipped code feature-detects this
+by attempting the command and falling back, rather than checking a version string, so those installs
+degrade to a window automatically and resolve themselves as users upgrade. A non-AppleScript CLI
+path for tab creation has been discussed upstream (reported as `ghostty#12136`; not independently
+verified here) — if that lands it would also serve installs where scripting is unavailable.
+
+The honest framing: for iTerm2 and current Ghostty, "panes follow the host" already means a tab in
+the window you are working in. For Terminal.app it means a foregrounded window of the right
+application, which is a large improvement over the pre-CREW-9 behaviour of an un-activated window of
+the *wrong* application, and may simply be good enough.
+
+### Decision trigger
+
+Either of:
+
+1. **Upstream support lands** — Terminal.app gains a scriptable tab command (unlikely), or Ghostty
+   ships a CLI/IPC path worth using in place of AppleScript.
+2. **Real complaints about the new-window UX.** Not speculation about it: an operator on
+   Terminal.app saying the window-per-worker behaviour is disruptive in practice. Until then the
+   window is reliable and the tab is not.
+
+Explicitly *not* a trigger: wanting parity across terminals for its own sake. The placement is
+reported honestly per backend, so a caller that cares can already tell what it got.
+
+---
+
 ## How to use this document
 
 1. **Adding a future feature:** Append a new section with the feature name, what it is, concrete scenarios that justify it, why it's deferred, and a decision trigger.
