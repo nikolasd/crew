@@ -30,6 +30,7 @@ pub use omp::OmpTuiVendor;
 mod discovery;
 mod input;
 mod tailer;
+mod verify;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -171,6 +172,27 @@ pub enum TuiEvent {
 /// exactly-once).
 pub trait TranscriptFormat: Send + Sync {
     fn parse(&self, raw: &[u8], cursor: &Cursor) -> Vec<(TuiEvent, Cursor)>;
+
+    /// The user-authored prompt text this transcript entry records, if it
+    /// is one (CREW-13).
+    ///
+    /// Deliberately separate from [`Self::parse`]: a user entry produces
+    /// no `TuiEvent` and must not start doing so. For a fresh start it is
+    /// the prompt this adapter just injected, already journaled by the
+    /// adapter shell; for a resumed session it is prior conversation this
+    /// adapter did not cause. Surfacing it as an event would duplicate the
+    /// first and fabricate the second. This accessor exists for exactly
+    /// one purpose -- verifying, once, that the vendor recorded the whole
+    /// prompt -- and is read straight off the transcript rather than
+    /// flowing through the event pipeline.
+    ///
+    /// Returning `None` (the default) disables that verification for a
+    /// vendor, which is why it is not a required method: a format whose
+    /// user-entry shape is unknown must not fail runs over it.
+    fn recorded_prompt(&self, entry: &serde_json::Value) -> Option<String> {
+        let _ = entry;
+        None
+    }
 }
 
 /// Shared JSONL cursor math for [`TranscriptFormat`] implementations:

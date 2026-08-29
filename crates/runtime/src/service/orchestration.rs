@@ -382,6 +382,7 @@ impl OrchestrationService {
             CrewMethod::RunResult => self.run_result(params).await,
             CrewMethod::RunRetry => self.run_retry(principal, params).await,
             CrewMethod::RunCancel => self.run_cancel(principal, params).await,
+            CrewMethod::RunFinish => self.run_finish(principal, params).await,
             CrewMethod::MessageSend => self.message_send(principal, params).await,
             CrewMethod::MessageList => self.message_list(params).await,
             CrewMethod::ApprovalList => self.approval_list(params).await,
@@ -1285,6 +1286,135 @@ impl OrchestrationService {
                 .expect("DisplaySelection always serializes to JSON");
         }
         Ok(result)
+    }
+
+    /// `run/finish` is the leader closing a run it considers done
+    /// (ADR-0027). A TUI vendor never exits, so no process exit will ever
+    /// settle the run for us: the leader ends the conversation, and only
+    /// the leader can judge whether the task actually succeeded -- so
+    /// `outcome` is stated, never inferred from the vendor's own turn
+    /// markers (which say a turn ended, not that it went well).
+    ///
+    /// Shaped like [`Self::run_cancel`]: guarded transitions committed
+    /// inside the database actor and broadcast in the same call, side
+    /// effects afterwards, and `degradedControl` recorded if the vendor
+    /// process outlives its teardown.
+    ///
+    /// Unlike cancel, this needs a *walk*. `cancelled` is a legal edge from
+    /// every non-terminal state, but `waitingUser -> succeeded` is not
+    /// (`RunState::can_transition_to`) -- which is exactly the state a
+    /// settled turn parks in. So the run is walked through `working` the
+    /// same way `RunLifecycleSink` walks an exit that arrives during a
+    /// wait, one guarded commit and broadcast per hop, rather than adding
+    /// an edge to ADR-0012's relation to make a single hop legal.
+    async fn run_finish(
+        &self,
+        principal: &ClientPrincipal,
+        params: &Value,
+    ) -> Result<Value, ServiceError> {
+        let run_id = parse_run_id(params.get("runId"))?;
+        let target = match params.get("outcome").and_then(Value::as_str) {
+            None | Some("succeeded") => "succeeded",
+            Some("failed") => "failed",
+            Some(other) => {
+                return Err(ServiceError::invalid_params(format!(
+                    "outcome {other:?} is not a finish outcome; use \"succeeded\" or \"failed\""
+                )));
+            }
+        };
+        let project_id = self.project_id;
+        let principal_instance_id = principal.instance_id.clone();
+
+        let run = self
+            .db
+            .run_domain_op(query::run_get_op(run_id))
+            .await
+            .map_err(ServiceError::from)?;
+        let state = run["state"].as_str().unwrap_or_default().to_string();
+        if RunState::try_from(state.as_str())
+            .map(|s| s.is_terminal())
+            .unwrap_or(false)
+        {
+            return Err(ServiceError::invalid_params(format!(
+                "run {run_id} is already finished (state: {state})"
+            )));
+        }
+
+        // The hops toward the target, in order. `working` is walked through
+        // only when the run is parked in a wait -- from `working` itself the
+        // terminal edge is already legal.
+        let mut hops: Vec<&str> = Vec::new();
+        if matches!(state.as_str(), "waitingUser" | "waitingPeer" | "paused") {
+            hops.push("working");
+        }
+        hops.push(target);
+
+        let mut last = Value::Null;
+        for hop in hops {
+            let to = RunState::try_from(hop)
+                .map_err(|err| ServiceError::internal(format!("invalid finish hop: {err}")))?;
+            let instance_id = principal_instance_id.clone();
+            let mut committed = self
+                .db
+                .run_domain_op(Box::new(move |conn| {
+                    let mut repo = DomainRepository::new(conn, project_id);
+                    repo.transition_run(run_id, &to, Some(&instance_id))
+                        .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                }))
+                .await
+                .map_err(ServiceError::from)?;
+            self.broadcast(&mut committed);
+            last = committed;
+        }
+
+        // The run is settled, so the marker that described its pause must
+        // not outlive it -- a terminal run reading `turnSettled` would tell
+        // `run/get` the answer is still waiting to be collected.
+        if run["flags"]["turnSettled"].as_bool().unwrap_or(false) {
+            match self
+                .db
+                .run_domain_op(Box::new(move |conn| {
+                    DomainRepository::new(conn, project_id)
+                        .set_run_flag(run_id, crate::domain::RunFlag::TurnSettled, false)
+                        .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                }))
+                .await
+            {
+                Ok(mut cleared) => self.broadcast(&mut cleared),
+                Err(err) => tracing::warn!(
+                    error = %err,
+                    run_id = %run_id,
+                    "failed to clear turnSettled while finishing a run"
+                ),
+            }
+        }
+
+        // Tear the vendor session down. Identical treatment to cancel's: a
+        // real kill failure leaves the run journaled terminal while a
+        // process may still be live, which `degradedControl` makes visible.
+        if let Some(driver) = &self.run_driver
+            && let Err(err) = driver.cancel_run(run_id, CancelScope::Worker).await
+        {
+            tracing::warn!(error = %err, run_id = %run_id, "failed to stop a finished run's adapter");
+            match self
+                .db
+                .run_domain_op(Box::new(move |conn| {
+                    DomainRepository::new(conn, project_id)
+                        .set_run_flag(run_id, crate::domain::RunFlag::DegradedControl, true)
+                        .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                }))
+                .await
+            {
+                Ok(mut flagged) => self.broadcast(&mut flagged),
+                Err(flag_err) => tracing::warn!(
+                    error = %flag_err,
+                    run_id = %run_id,
+                    "failed to record degradedControl after a finish teardown failure"
+                ),
+            }
+        }
+
+        Ok(last)
     }
 
     /// OMP may request cancellation; the transition is applied only after
@@ -2266,6 +2396,21 @@ impl OrchestrationService {
         // A genuine success, symmetrically, must advance the message past
         // `recorded` -- leaving it there forever regardless of outcome is
         // exactly the deliveryState inversion this branch exists to avoid.
+        // Read before delivery: the adapter's own events will clear the
+        // flag the moment the follow-up turn starts producing output, so
+        // reading afterwards would miss the very admissions this records.
+        let run_was_turn_settled = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                DomainRepository::new(conn, project_id)
+                    .read_run_flags(run_id)
+                    .map(|flags| json!(flags.turn_settled))
+            }))
+            .await
+            .ok()
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+
         if let Some(driver) = self.run_driver.clone() {
             match driver
                 .send_follow_up(
@@ -2278,6 +2423,43 @@ impl OrchestrationService {
                 .await
             {
                 Ok(()) => {
+                    // ADR-0027 wave 3: a follow-up delivered to a run
+                    // parked by a finished turn is admitted on that run's
+                    // own burst allowance, outside the concurrency
+                    // ceiling -- it is never refused. Journal it, so burst
+                    // usage is visible evidence rather than something an
+                    // operator discovers by finding more turns running
+                    // than the ceiling allows.
+                    if run_was_turn_settled {
+                        let mut burst = self
+                            .db
+                            .run_domain_op(Box::new(move |conn| {
+                                DomainRepository::new(conn, project_id)
+                                    .record_diagnostic(
+                                        run_id,
+                                        crew_protocol::DiagnosticLevel::Info,
+                                        "turn_admitted_over_ceiling",
+                                        "follow-up turn admitted on this run's burst allowance, \
+                                         outside the concurrency ceiling"
+                                            .to_string(),
+                                    )
+                                    .map(|c| {
+                                        embed_envelope(
+                                            json!({ "sequence": c.sequence }),
+                                            &c.envelope,
+                                        )
+                                    })
+                            }))
+                            .await;
+                        match burst {
+                            Ok(ref mut value) => self.broadcast(value),
+                            Err(ref err) => tracing::warn!(
+                                error = %err,
+                                run_id = %run_id,
+                                "failed to journal a burst-allowance admission"
+                            ),
+                        }
+                    }
                     let mut sent = self
                         .db
                         .run_domain_op(Box::new(move |conn| {
@@ -2627,15 +2809,15 @@ impl OrchestrationService {
         let state = facts["state"]
             .as_str()
             .ok_or_else(|| ServiceError::internal("pane/reopen read malformed run state"))?;
-        if matches!(state, "succeeded" | "failed" | "cancelled" | "lost") {
-            return Err(ServiceError::invalid_params(format!(
-                "cannot reopen pane for terminal run {run_id} ({state})"
-            )));
-        }
+        // Deliberately NOT gated on the run's state (ADR-0027 wave 3). A
+        // TUI vendor outlives its turn, so a settled -- even finished --
+        // run can still have a live pane, and that is exactly the moment
+        // someone wants to look at it. What decides reopenability is
+        // whether a pane is actually there.
         let socket = deps.panes_dir.join(format!("{run_id}.sock"));
-        if !socket.exists() {
+        if !crate::display::pane_socket::is_live(&socket).await {
             return Err(ServiceError::invalid_params(format!(
-                "run {run_id} has no live attach socket"
+                "run {run_id} has no live attach socket (state: {state})"
             )));
         }
         let worker_id = crew_protocol::WorkerId::parse(

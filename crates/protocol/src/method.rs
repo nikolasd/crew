@@ -58,6 +58,11 @@ pub enum CrewMethod {
     RunRetry,
     #[serde(rename = "run/cancel")]
     RunCancel,
+    /// The leader closes a run it considers done (ADR-0027). A TUI vendor
+    /// never exits, so a run is a conversation the leader ends -- this is
+    /// that ending, distinct from `run/cancel`'s abort.
+    #[serde(rename = "run/finish")]
+    RunFinish,
     #[serde(rename = "run/result")]
     RunResult,
 

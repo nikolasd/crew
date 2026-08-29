@@ -124,10 +124,60 @@ questions this design turned on are recorded here as part of the decision:
 
 * `run/finish`, shaped exactly like `run_cancel`: a guarded `transition_run` in one database-actor
   closure, the committed envelope broadcast in the same call, side effects afterward, and
-  `degradedControl` set if tearing down a live vendor process fails.
-* The inactivity backstop settling to `lost`.
-* The settlement seam itself: slot release at turn-end, the pane coordinator's cap on live idle
-  sessions, and `pane/reopen`'s gate re-keyed from run state to pane liveness.
+  `degradedControl` set if tearing down a live vendor process fails. It differs from cancel in one
+  way: `cancelled` is a legal edge from every non-terminal state, but `waitingUser -> succeeded` is
+  not, and `waitingUser` is exactly where a settled turn parks — so finish *walks* through `working`,
+  one guarded commit and broadcast per hop, rather than widening ADR-0012's relation to make the hop
+  legal. `outcome` is stated by the leader (`succeeded` or `failed`), never inferred from the
+  vendor's turn markers.
+* The inactivity backstop settling to `lost`, gated on `waitingUser` **and** `turnSettled` together
+  in one transaction. That pairing is the safety property: a `waitingUser` that means "the worker
+  asked a question", an approval wait, a `waitingPeer` and a `paused` run must all survive a timeout
+  untouched. It is also the second thing the `turnSettled` column buys beyond snapshot readability —
+  without it there is no way to distinguish an abandoned answer from a run that is merely quiet.
+* `pane/reopen`'s gate re-keyed from run state to pane liveness, and the stale-socket sweep
+  (CREW-15). One definition of "live pane" — a connect probe, the only portable proof of a listener —
+  shared by the gate and the sweep. The sweep is keyed on liveness and never on ownership, because
+  the pane directory is per-*user* and shared across every repository, so another repository's live
+  sockets sit beside this daemon's dead ones and must survive.
+* Two caps, deliberately separate (see "The concurrency bound" below).
+
+### The concurrency bound
+
+The concurrency slot is released at the first of a turn boundary or a process exit, so the ceiling
+means "actively taking a turn" rather than "has a session open". A follow-up turn on an existing run
+is **never refused**: it is admitted on that run's own burst allowance, which cannot stack because a
+run has one PTY and one turn at a time. Such an admission is journaled as evidence, so burst usage is
+visible rather than discovered by finding more turns running than the ceiling allows.
+
+That leaves a bound to state honestly, because releasing the slot at turn-end **removes** the bound
+that exists today. Today a run pins its slot forever, so live runs never exceed the ceiling, and that
+accident is what currently bounds concurrent turns. Once the slot is released, a leader can
+accumulate arbitrarily many parked runs — each admitted singly under the ceiling — and then steer
+them all at once.
+
+So a second, independent cap is required: `limits.maxLiveSessions` bounds the sessions that *exist*,
+including those parked between turns, enforced at new-run admission in the adapter registry with a
+typed refusal. The resulting bound is:
+
+> concurrent active turns ≤ `limits.maxConcurrentWorkers` + `limits.maxLiveSessions`
+
+Default `maxLiveSessions` is 16, four times the default ceiling of 4: parked sessions are the normal
+resting state for TUI workers, so the cap has to leave room for several finished-but-steerable runs
+per actively-working one while still bounding a session that never closes anything. It is clamped up
+to at least the ceiling, since a smaller value would refuse new runs before the ceiling ever applied.
+
+**The pane cap is not the concurrency bound**, and it is worth being explicit because it looks like
+one. `PaneCoordinator`'s cap bounds panes — screen real estate — and a run resolving to `hidden`
+occupies no screen, so it neither consumes that cap nor is refused by it. A hidden-display setup
+therefore has no pane cap at all, which would leave concurrent turns unbounded if the pane cap were
+doing this job. The resource worth bounding for concurrency is the vendor process and its PTY, which
+exists whether or not the user wants windows — hence the session cap living in the registry, where
+live sessions are actually tracked.
+
+The refusal lands on `run/submit`, not on `message/send`: declining to create the N+1th worker is the
+same shape of refusal the concurrency ceiling already has, whereas failing to steer a worker that
+already exists would be a new and worse failure mode.
 
 ### Positive Consequences
 

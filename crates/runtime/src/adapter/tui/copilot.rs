@@ -220,6 +220,17 @@ impl TranscriptFormat for CopilotSessionFormat {
     fn parse(&self, raw: &[u8], cursor: &Cursor) -> Vec<(TuiEvent, Cursor)> {
         parse_jsonl_chunk(raw, cursor, map_entry)
     }
+
+    /// The `user.message` entry's `data.content`.
+    fn recorded_prompt(&self, entry: &Value) -> Option<String> {
+        if entry.get("type").and_then(Value::as_str) != Some("user.message") {
+            return None;
+        }
+        entry
+            .pointer("/data/content")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }
 }
 
 /// Maps one parsed transcript entry to its events plus its own `id`

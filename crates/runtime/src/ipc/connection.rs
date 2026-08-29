@@ -458,6 +458,7 @@ async fn dispatch(
         | CrewMethod::RunResult
         | CrewMethod::RunRetry
         | CrewMethod::RunCancel
+        | CrewMethod::RunFinish
         | CrewMethod::MessageSend
         | CrewMethod::MessageList
         | CrewMethod::ApprovalList

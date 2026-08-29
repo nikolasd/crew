@@ -246,6 +246,20 @@ impl TranscriptFormat for ClaudeTranscriptFormat {
     fn parse(&self, raw: &[u8], cursor: &Cursor) -> Vec<(TuiEvent, Cursor)> {
         parse_jsonl_chunk(raw, cursor, map_entry)
     }
+
+    /// A `user` entry's `message.content`, when it is a plain string.
+    /// Real entries also carry `content` as an array of blocks (tool
+    /// results, attachments); those are not a typed prompt and are not
+    /// what this verification compares against.
+    fn recorded_prompt(&self, entry: &Value) -> Option<String> {
+        if entry.get("type").and_then(Value::as_str) != Some("user") {
+            return None;
+        }
+        entry
+            .pointer("/message/content")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }
 }
 
 /// Maps one parsed transcript entry to its events plus its own `uuid`

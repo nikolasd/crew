@@ -11,7 +11,8 @@ use std::sync::Arc;
 
 use crew_protocol::{ProjectId, RunId, TaskId, WorkerId};
 use crew_runtime::adapter::{
-    Adapter, AdapterEvent, AdapterEventPayload, AdapterEventSink, CancelScope, StartSpec,
+    ActivityClock, Adapter, AdapterEvent, AdapterEventPayload, AdapterEventSink, CancelScope,
+    RunLifecycleSink, StartSpec,
 };
 use crew_runtime::db::DatabaseHandle;
 use crew_runtime::domain::DomainRepository;
@@ -5423,5 +5424,322 @@ async fn retention_clean_and_pane_reopen_are_omp_only_and_route_to_daemon_suppor
             .as_str()
             .unwrap_or_default()
             .contains("own")
+    );
+}
+
+// ------------------------------------------- run/finish (CREW-3 wave 3)
+
+/// Seeds events through the real `RunLifecycleSink` -- so a seeded
+/// `TurnEnded` produces the same `working -> waitingUser` edge and
+/// `turnSettled` flag production does -- and records `cancel_run` calls,
+/// so a test can assert `run/finish` tore the vendor session down.
+#[derive(Default)]
+struct SettlingRunDriver {
+    cancel_calls: parking_lot::Mutex<Vec<(RunId, CancelScope)>>,
+}
+
+impl SettlingRunDriver {
+    fn cancel_calls(&self) -> Vec<(RunId, CancelScope)> {
+        self.cancel_calls.lock().clone()
+    }
+}
+
+impl RunDriver for SettlingRunDriver {
+    fn active_run_count(&self) -> usize {
+        0
+    }
+
+    fn start(&self, ctx: RunDriverContext) -> AdapterFuture<'static, Result<(), String>> {
+        Box::pin(async move {
+            let inner: Arc<dyn AdapterEventSink> = Arc::new(
+                crew_runtime::adapter::DomainAdapterEventSink::new(
+                    ctx.db.clone(),
+                    ctx.project_id,
+                    ctx.events_tx.clone(),
+                    Vec::new(),
+                    false,
+                    Arc::clone(&ctx.violation_service),
+                    false,
+                )
+                .expect("seed patterns always compile"),
+            );
+            let sink = RunLifecycleSink::wrap(
+                inner,
+                ctx.db.clone(),
+                ctx.project_id,
+                ctx.events_tx.clone(),
+                ctx.run_id,
+                Arc::new(ActivityClock::new()),
+            );
+            for payload in [
+                AdapterEventPayload::MessageFinal {
+                    role: "result".to_string(),
+                    text: crew_protocol::Classified {
+                        class: crew_protocol::ContentClass::Visible,
+                        value: "the finished answer".to_string(),
+                    },
+                },
+                AdapterEventPayload::TurnEnded {
+                    outcome: crew_protocol::TurnOutcome::Normal,
+                },
+            ] {
+                sink.emit(AdapterEvent {
+                    run_id: ctx.run_id,
+                    task_id: ctx.task_id,
+                    worker_id: ctx.worker_id,
+                    payload,
+                    cursor: None,
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })
+    }
+
+    fn send_follow_up(
+        &self,
+        _run_id: RunId,
+        _task_id: TaskId,
+        _worker_id: WorkerId,
+        _prompt: String,
+        _kind: crew_protocol::MessageKind,
+    ) -> AdapterFuture<'static, Result<(), String>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn running_adapter(&self, _run_id: RunId) -> Option<Arc<dyn Adapter>> {
+        None
+    }
+
+    fn cancel_run(
+        &self,
+        run_id: RunId,
+        scope: CancelScope,
+    ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
+        self.cancel_calls.lock().push((run_id, scope));
+        Box::pin(async { Ok(crew_runtime::service::CancelOutcome::Cancelled) })
+    }
+}
+
+/// Submits a run against `adapter: "fake"`, returning its id. Mirrors the
+/// other suites' helper; ids start at 2 because `initialize` consumed 1.
+async fn submit_fake_run(client: &mut Client) -> String {
+    let task = client
+        .call(
+            2,
+            "task/upsert",
+            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
+        )
+        .await;
+    let task_id = task["result"]["taskId"].as_str().unwrap().to_string();
+    let worker = client
+        .call(
+            3,
+            "worker/create",
+            json!({ "fingerprint": "sha256:f", "adapter": "fake", "model": "m" }),
+        )
+        .await;
+    let worker_id = worker["result"]["workerId"].as_str().unwrap().to_string();
+    let submit = client
+        .call(
+            4,
+            "run/submit",
+            json!({ "taskId": task_id, "workerId": worker_id }),
+        )
+        .await;
+    assert!(
+        submit.get("error").is_none(),
+        "run/submit failed: {submit:?}"
+    );
+    submit["result"]["runId"].as_str().unwrap().to_string()
+}
+
+async fn wait_for_state(client: &mut Client, id: i64, run_id: &str, want: &str) -> bool {
+    for _ in 0..50 {
+        let get = client.call(id, "run/get", json!({ "runId": run_id })).await;
+        if get["result"]["state"].as_str() == Some(want) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    false
+}
+
+/// The leader closes the conversation. `waitingUser -> succeeded` is not a
+/// legal single edge, so this also pins that `run/finish` walks the run
+/// through `working` rather than failing or inventing an edge.
+#[tokio::test]
+async fn run_finish_settles_a_settled_turn_as_succeeded_and_tears_down_the_worker() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let run_id = submit_fake_run(&mut client).await;
+    assert!(
+        wait_for_state(&mut client, 5, &run_id, "waitingUser").await,
+        "the seeded turn boundary must park the run first"
+    );
+
+    let finish = client
+        .call(6, "run/finish", json!({ "runId": run_id }))
+        .await;
+    assert!(
+        finish.get("error").is_none(),
+        "run/finish must succeed on a settled turn: {finish:?}"
+    );
+
+    let get = client.call(7, "run/get", json!({ "runId": run_id })).await;
+    assert_eq!(
+        get["result"]["state"], "succeeded",
+        "the leader's finish settles the run: {get:?}"
+    );
+    assert_eq!(
+        get["result"]["flags"]["turnSettled"], false,
+        "the turn-settled marker must not outlive the run it parked: {get:?}"
+    );
+
+    let calls = driver.cancel_calls();
+    assert_eq!(
+        calls.len(),
+        1,
+        "finish must tear the vendor session down, like cancel does"
+    );
+    assert_eq!(calls[0].1, CancelScope::Worker);
+
+    let result = client
+        .call(8, "run/result", json!({ "runId": run_id }))
+        .await;
+    assert_eq!(result["result"]["resultText"], "the finished answer");
+    assert_eq!(result["result"]["state"], "succeeded");
+}
+
+/// The leader may also close a conversation as failed -- an apiError turn
+/// is the case ADR-0027 names, and the runtime must never decide that on
+/// its own.
+#[tokio::test]
+async fn run_finish_can_settle_a_run_as_failed_when_the_leader_says_so() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let run_id = submit_fake_run(&mut client).await;
+    assert!(wait_for_state(&mut client, 5, &run_id, "waitingUser").await);
+
+    let finish = client
+        .call(
+            6,
+            "run/finish",
+            json!({ "runId": run_id, "outcome": "failed" }),
+        )
+        .await;
+    assert!(finish.get("error").is_none(), "{finish:?}");
+
+    let get = client.call(7, "run/get", json!({ "runId": run_id })).await;
+    assert_eq!(get["result"]["state"], "failed", "{get:?}");
+}
+
+/// A terminal run has nothing left to finish, and saying so is better than
+/// silently succeeding on a run someone else already settled.
+#[tokio::test]
+async fn run_finish_refuses_an_already_terminal_run() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let run_id = submit_fake_run(&mut client).await;
+    assert!(wait_for_state(&mut client, 5, &run_id, "waitingUser").await);
+
+    let first = client
+        .call(6, "run/finish", json!({ "runId": run_id }))
+        .await;
+    assert!(first.get("error").is_none(), "{first:?}");
+
+    let second = client
+        .call(7, "run/finish", json!({ "runId": run_id }))
+        .await;
+    assert_eq!(second["error"]["code"], -32602, "{second:?}");
+    assert!(
+        second["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("already finished"),
+        "the refusal must say why: {second:?}"
+    );
+}
+
+/// An unknown `outcome` must be refused rather than quietly treated as
+/// success -- the whole point of the field is that the leader states the
+/// verdict explicitly.
+#[tokio::test]
+async fn run_finish_refuses_an_unknown_outcome() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let run_id = submit_fake_run(&mut client).await;
+    assert!(wait_for_state(&mut client, 5, &run_id, "waitingUser").await);
+
+    let finish = client
+        .call(
+            6,
+            "run/finish",
+            json!({ "runId": run_id, "outcome": "cancelled" }),
+        )
+        .await;
+    assert_eq!(finish["error"]["code"], -32602, "{finish:?}");
+}
+
+// ------------------- pane/reopen liveness gate (CREW-3 wave 3 / CREW-15)
+
+/// The gate used to be `socket.exists()`, which a crashed daemon's leftover
+/// file satisfies forever. A stale file must now be refused: the run may
+/// well be non-terminal (so the old state check passed it too), and the old
+/// code would have gone on to attach to a socket with nothing behind it.
+#[tokio::test]
+async fn pane_reopen_refuses_a_stale_socket_file_with_no_listener() {
+    let panes = tempfile::Builder::new()
+        .prefix("crew-reopen-stale-")
+        .tempdir_in("/tmp")
+        .expect("panes dir");
+    let panes_path = panes.path().to_path_buf();
+    let harness = Harness::start({
+        let panes_path = panes_path.clone();
+        move |c| {
+            c.run_driver = Some(Arc::new(FakeRunDriver));
+            c.pane_reopen = Some(crew_runtime::ipc::PaneReopenConfig {
+                panes_dir: panes_path,
+                state_dir: std::path::PathBuf::from("/tmp"),
+                crewd_path: std::path::PathBuf::from("/bin/true"),
+                display_registry: Arc::new(crew_runtime::display::DisplayRegistry::default()),
+            });
+        }
+    })
+    .await;
+    let mut omp = omp_client(&harness, "omp-1").await;
+    let (_task, _worker, run_id) = submit_run_with_driver(&mut omp, "omp-1").await;
+
+    // A socket file with no listener: exactly what a daemon that died
+    // without cleaning up leaves behind.
+    let socket = panes_path.join(format!("{run_id}.sock"));
+    {
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind");
+    }
+    assert!(socket.exists(), "the stale file is present");
+
+    let reopen = omp.call(9, "pane/reopen", json!({ "runId": run_id })).await;
+    assert_eq!(reopen["error"]["code"], -32602, "{reopen:?}");
+    let message = reopen["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("no live attach socket"),
+        "the refusal must name pane liveness, not mere absence: {reopen:?}"
     );
 }

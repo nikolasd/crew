@@ -275,6 +275,22 @@ impl TranscriptFormat for CodexRolloutFormat {
     fn parse(&self, raw: &[u8], cursor: &Cursor) -> Vec<(TuiEvent, Cursor)> {
         parse_jsonl_chunk(raw, cursor, map_entry)
     }
+
+    /// The `user_message` event's own text -- codex echoes the prompt it
+    /// received back into its rollout.
+    fn recorded_prompt(&self, entry: &Value) -> Option<String> {
+        if entry.get("type").and_then(Value::as_str) != Some("event_msg") {
+            return None;
+        }
+        let payload = entry.get("payload")?;
+        if payload.get("type").and_then(Value::as_str) != Some("user_message") {
+            return None;
+        }
+        payload
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }
 }
 
 /// Maps one parsed rollout entry to its events plus its own entry id
