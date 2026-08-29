@@ -1398,7 +1398,9 @@ fn build_tui_adapter<V: TuiVendor>(
         .as_ref()
         .map(|selection| selection.placement)
         .unwrap_or(DisplayPlacement::SplitRight);
-    let launch_program = display.as_ref().and_then(|selection| selection.launch_program);
+    let launch_program = display
+        .as_ref()
+        .and_then(|selection| selection.launch_program);
     Arc::new(TuiAdapter::new(
         vendor,
         cfg,

@@ -62,7 +62,9 @@
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-use crew_protocol::{DisplayBackend, DisplayConfig, DisplayPlacement, DisplayStatus, HostProgramHint};
+use crew_protocol::{
+    DisplayBackend, DisplayConfig, DisplayPlacement, DisplayStatus, HostProgramHint,
+};
 
 use super::{
     CommandExecutor, CommandResult, DisplayBackendTrait, DisplayFuture, PaneHandle, PaneRequest,
