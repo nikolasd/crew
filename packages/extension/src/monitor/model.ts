@@ -21,6 +21,11 @@ export interface MonitorFlags {
   readonly policyQuarantined: boolean;
   readonly workspaceDirty: boolean;
   readonly childrenActive: boolean;
+  /** The run is parked in `waitingUser` because its vendor finished a TURN,
+   *  not because the worker asked a question. Both reach the same state, so
+   *  without this the widget cannot tell "the answer is ready" from "the
+   *  worker needs you" (ADR-0027). */
+  readonly turnSettled: boolean;
 }
 
 /** A run's Crew-owned display pane, as of the latest `displayEvent`. */
@@ -40,6 +45,7 @@ const EMPTY_FLAGS: MonitorFlags = {
   policyQuarantined: false,
   workspaceDirty: false,
   childrenActive: false,
+  turnSettled: false,
 };
 
 /** One monitor row: the replayable view of a single run. */
@@ -227,6 +233,7 @@ function eventPatch(envelope: EventEnvelope): EventPatch | undefined {
           protocolUnhealthy: event.payload.flags.protocolUnhealthy,
           policyQuarantined: event.payload.flags.policyQuarantined,
           workspaceDirty: event.payload.flags.workspaceDirty,
+          turnSettled: event.payload.flags.turnSettled,
           childrenActive: event.payload.flags.childrenActive,
         },
       };

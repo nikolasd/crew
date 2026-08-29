@@ -4,7 +4,7 @@ import type { ExtensionAPI, ExtensionContext, Theme, ThemeColor } from "@oh-my-p
 
 import { assertCompatiblePiCodingAgentVersion, PiCodingAgentVersionError } from "./compat";
 import type { MonitorRow, MonitorState } from "./model";
-import { MAX_WIDGET_ROWS, renderRowDetails, renderRowLine, renderWidgetBox, stateIcon, stateColor, renderWidgetHeader } from "./render";
+import { MAX_WIDGET_ROWS, displayState, renderRowDetails, renderRowLine, renderWidgetBox, stateIcon, stateColor, renderWidgetHeader } from "./render";
 
 function row(overrides: Partial<MonitorRow>): MonitorRow {
   return {
@@ -19,6 +19,7 @@ function row(overrides: Partial<MonitorRow>): MonitorRow {
       policyQuarantined: false,
       workspaceDirty: false,
       childrenActive: false,
+      turnSettled: false,
     },
     pendingApprovalCount: 0,
     openViolations: {},
@@ -69,6 +70,7 @@ test("a row line includes state, harness/model, flags, and pending approvals", (
         policyQuarantined: false,
         workspaceDirty: false,
         childrenActive: false,
+        turnSettled: false,
       },
       pendingApprovalCount: 2,
     }),
@@ -143,6 +145,7 @@ test("renderRowDetails names the decision surface for a run with children active
       policyQuarantined: false,
       workspaceDirty: false,
       childrenActive: true,
+      turnSettled: false,
     },
   });
   const details = renderRowDetails(withChildren);
@@ -318,4 +321,48 @@ test("a no-model fixture extension compiles and runs pi.appendEntry + ctx.ui.set
 
   expect(appendedEntries).toEqual([{ customType: "crew-monitor", data: { sequence: 1 } }]);
   expect(widgets).toEqual([{ key: "crew-monitor", content: ["fixture"], options: { placement: "aboveEditor" } }]);
+});
+
+test("a finished turn reads as turnReady, not as a pending question", () => {
+  const flags = {
+    degradedControl: false,
+    needsReconciliation: false,
+    protocolUnhealthy: false,
+    policyQuarantined: false,
+    workspaceDirty: false,
+    childrenActive: false,
+    turnSettled: true,
+  };
+  const settled = row({ state: "waitingUser", flags });
+
+  // Both cases are `waitingUser` in the runtime; the flag is the only thing
+  // that separates "the answer is ready" from "the worker needs you", and a
+  // reader must not have to guess which one they are looking at.
+  expect(displayState(settled)).toBe("turnReady");
+  expect(stateColor(displayState(settled))).toBe("success");
+  expect(renderRowLine(settled)).toContain("turnReady");
+
+  const asking = row({ state: "waitingUser", flags: { ...flags, turnSettled: false } });
+  expect(displayState(asking)).toBe("waitingUser");
+  expect(stateColor(displayState(asking))).toBe("warning");
+  expect(renderRowLine(asking)).toContain("waitingUser");
+});
+
+test("the detail view names the real run state and annotates a settled turn", () => {
+  const details = renderRowDetails(
+    row({
+      state: "waitingUser",
+      flags: {
+        degradedControl: false,
+        needsReconciliation: false,
+        protocolUnhealthy: false,
+        policyQuarantined: false,
+        workspaceDirty: false,
+        childrenActive: false,
+        turnSettled: true,
+      },
+    }),
+  );
+  const stateLine = details.split("\n").find((line) => line.startsWith("State:"));
+  expect(stateLine).toBe("State: waitingUser (turn ready)");
 });

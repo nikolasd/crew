@@ -123,6 +123,64 @@ impl RunLifecycle {
         Ok(())
     }
 
+    /// Whether the run's `turnSettled` flag is currently set. `false` on a
+    /// read failure, so a transient database error can never un-park a
+    /// wait this sink has no positive evidence about.
+    async fn turn_settled(&self) -> bool {
+        let project_id = self.project_id;
+        let run_id = self.run_id;
+        self.db
+            .run_domain_op(Box::new(move |conn| {
+                DomainRepository::new(conn, project_id)
+                    .read_run_flags(run_id)
+                    .map(|flags| json!(flags.turn_settled))
+            }))
+            .await
+            .ok()
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+    }
+
+    /// Sets or clears the run's `turnSettled` flag, committing and
+    /// broadcasting in the same call like every other mutation here
+    /// (invariant 7).
+    ///
+    /// The flag is what lets a snapshot reader tell the two ways a run
+    /// reaches `waitingUser` apart -- a finished turn versus a worker's
+    /// question -- since the state alone cannot (ADR-0027).
+    async fn set_turn_settled(&self, value: bool) {
+        let project_id = self.project_id;
+        let run_id = self.run_id;
+        let outcome = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                DomainRepository::new(conn, project_id)
+                    .set_run_flag(run_id, crate::domain::RunFlag::TurnSettled, value)
+                    .map(|committed| {
+                        embed_envelope(
+                            json!({ "sequence": committed.sequence }),
+                            &committed.envelope,
+                        )
+                    })
+            }))
+            .await;
+        match outcome {
+            Ok(mut result) => {
+                if let Some(envelope) = take_envelope(&mut result) {
+                    let _ = self.events_tx.send(envelope);
+                }
+            }
+            // The edge itself is already durable; a failed flag write
+            // costs the monitor its distinction, not correctness.
+            Err(err) => tracing::warn!(
+                error = %err,
+                run_id = %run_id,
+                value,
+                "failed to write the turnSettled run flag"
+            ),
+        }
+    }
+
     /// Commits the legal hops from the run's current state toward `target` --
     /// at most three, since `queued -> starting -> working -> terminal` is the
     /// longest legal path. Stops on a terminal state (a terminal state always
@@ -197,8 +255,20 @@ impl RunLifecycle {
                 self.walk_to(&state("working")).await;
                 true
             }
-            // At-or-past `working` (`waitingUser`, `waitingPeer`, `paused`) or
-            // terminal: vendor output must never clobber those states.
+            // A run parked by a finished TURN starts working again the
+            // moment its vendor produces anything: the leader steered it
+            // (ADR-0027 -- a run is a conversation). Gated on the flag so
+            // this only ever un-parks a turn-settled wait; a `waitingUser`
+            // that means "the worker asked a question" (or an approval
+            // wait, or `waitingPeer`/`paused`) is still never clobbered by
+            // vendor output.
+            "waitingUser" if self.turn_settled().await => {
+                self.set_turn_settled(false).await;
+                self.walk_to(&state("working")).await;
+                true
+            }
+            // At-or-past `working` (`waitingPeer`, `paused`, a question
+            // wait) or terminal: vendor output must never clobber those.
             _ => true,
         }
     }
@@ -223,7 +293,10 @@ impl RunLifecycle {
         match current.to_string().as_str() {
             // A run that never got its `working` edge (codex journals no
             // `ProcessStarted`) still walks there hop-by-hop first.
-            "queued" | "starting" | "working" => self.walk_to(&state("waitingUser")).await,
+            "queued" | "starting" | "working" => {
+                self.walk_to(&state("waitingUser")).await;
+                self.set_turn_settled(true).await;
+            }
             // Already waiting on someone, paused, or terminal: a turn
             // boundary must not clobber any of those.
             _ => {}
@@ -363,7 +436,13 @@ impl AdapterEventSink for RunLifecycleSink {
                         // way to `waitingUser` when the run had not got
                         // there yet.
                         self.lifecycle.observe_turn_ended().await;
-                        self.working_observed.store(true, Ordering::Relaxed);
+                        // Reopen the latch: the run is parked, not working,
+                        // so the NEXT vendor event has to be evaluated
+                        // again -- that is what un-parks a steered run.
+                        // Leaving it set made a follow-up turn's output
+                        // skip `observe_vendor_activity` entirely and
+                        // stranded the run in `waitingUser`.
+                        self.working_observed.store(false, Ordering::Relaxed);
                     } else if !self.working_observed.load(Ordering::Relaxed)
                         && self.lifecycle.observe_vendor_activity().await
                     {
@@ -754,6 +833,171 @@ mod tests {
             }
             other => panic!("expected the waitingUser edge, got {other:?}"),
         }
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    async fn run_flags(
+        db: &Arc<DatabaseHandle>,
+        project_id: ProjectId,
+        run_id: RunId,
+    ) -> crew_protocol::RunFlags {
+        let value = db
+            .run_domain_op(Box::new(move |conn| {
+                DomainRepository::new(conn, project_id)
+                    .read_run_flags(run_id)
+                    .map(|flags| serde_json::to_value(flags).expect("flags serialize"))
+            }))
+            .await
+            .expect("read run flags");
+        serde_json::from_value(value).expect("flags deserialize")
+    }
+
+    /// The distinction a snapshot reader needs: both a finished turn and a
+    /// worker's question land a run in `waitingUser`, so the state alone
+    /// cannot tell them apart.
+    #[tokio::test]
+    async fn a_turn_end_marks_the_run_turn_settled() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
+        drive_to_state(&db, project_id, run_id, "working").await;
+        let (tx, _rx) = broadcast::channel(64);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
+
+        assert!(
+            !run_flags(&db, project_id, run_id).await.turn_settled,
+            "a working run is not turn-settled"
+        );
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::TurnEnded {
+                outcome: crew_protocol::TurnOutcome::Normal,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+
+        assert_eq!(run_state(&db, run_id).await, "waitingUser");
+        assert!(
+            run_flags(&db, project_id, run_id).await.turn_settled,
+            "the wait must be marked as a finished turn, not a question"
+        );
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// A run parked by a finished turn goes back to work when the leader
+    /// steers it -- and the flag must not outlive the pause it described,
+    /// or a snapshot reader would keep seeing "the answer is ready" for a
+    /// run that is busy again.
+    #[tokio::test]
+    async fn vendor_activity_after_a_turn_end_resumes_work_and_clears_the_flag() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
+        drive_to_state(&db, project_id, run_id, "working").await;
+        let (tx, _rx) = broadcast::channel(64);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::TurnEnded {
+                outcome: crew_protocol::TurnOutcome::Normal,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+        assert_eq!(run_state(&db, run_id).await, "waitingUser");
+
+        // The follow-up turn's first output.
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::MessageChunk {
+                role: "assistant".to_string(),
+                text: crew_protocol::Classified {
+                    class: crew_protocol::ContentClass::Visible,
+                    value: "working on it".to_string(),
+                },
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+
+        assert_eq!(
+            run_state(&db, run_id).await,
+            "working",
+            "a steered run is working again"
+        );
+        assert!(
+            !run_flags(&db, project_id, run_id).await.turn_settled,
+            "the turn-settled marker must be cleared once the run resumes"
+        );
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// The gate that keeps the un-park narrow: a `waitingUser` that is NOT
+    /// turn-settled (a worker's question, an approval wait) must still
+    /// never be clobbered by vendor output.
+    #[tokio::test]
+    async fn vendor_activity_never_un_parks_a_wait_that_is_not_turn_settled() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
+        drive_to_state(&db, project_id, run_id, "waitingUser").await;
+        let (tx, _rx) = broadcast::channel(64);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::MessageChunk {
+                role: "assistant".to_string(),
+                text: crew_protocol::Classified {
+                    class: crew_protocol::ContentClass::Visible,
+                    value: "still thinking out loud".to_string(),
+                },
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+
+        assert_eq!(
+            run_state(&db, run_id).await,
+            "waitingUser",
+            "a question wait is not a finished turn and must survive vendor output"
+        );
         db.shutdown().await.expect("shutdown database");
     }
 

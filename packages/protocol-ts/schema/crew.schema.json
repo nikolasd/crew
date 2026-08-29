@@ -2255,7 +2255,7 @@
       "type": "string"
     },
     "RunFlags": {
-      "description": "Independent boolean flags on a run.\n\n`degradedControl`, `needsReconciliation`, `protocolUnhealthy`,\n`policyQuarantined`, `workspaceDirty`, and `childrenActive` are all\nindependent booleans.",
+      "description": "Independent boolean flags on a run.\n\n`degradedControl`, `needsReconciliation`, `protocolUnhealthy`,\n`policyQuarantined`, `workspaceDirty`, `childrenActive`, and\n`turnSettled` are all independent booleans.",
       "type": "object",
       "properties": {
         "degradedControl": {
@@ -2275,6 +2275,11 @@
         },
         "childrenActive": {
           "type": "boolean"
+        },
+        "turnSettled": {
+          "description": "The run is in `waitingUser` because its vendor finished a TURN\n(ADR-0027), not because the worker asked a question. Both reach the\nsame state, and a snapshot reader (`run/get`, the monitor) cannot\notherwise tell \"the answer is ready\" from \"the worker needs you\" --\nthis is the distinction.\n\nCleared when the run goes back to work, so it never outlives the\npause it describes. `#[serde(default)]` because the journal is\nappend-only: `RunFlags` payloads written before this field existed\nmust still deserialize on replay.",
+          "type": "boolean",
+          "default": false
         }
       },
       "additionalProperties": false,

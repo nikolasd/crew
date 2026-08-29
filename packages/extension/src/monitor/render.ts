@@ -41,6 +41,7 @@ const STATE_ICONS: Record<string, string> = {
   starting: "\u{F14DF}",
   working: "\u{F1461}",
   waitingUser: "\u{F0B5A}",
+  turnReady: "\u{F05E1}",
   waitingPeer: "\u{F000F}",
   paused: "\u{F03E6}",
   succeeded: "\u{F05E1}",
@@ -65,6 +66,7 @@ const STATE_COLORS: Record<string, ThemeColor> = {
   starting: "accent",
   working: "accent",
   waitingUser: "warning",
+  turnReady: "success",
   waitingPeer: "warning",
   paused: "muted",
   succeeded: "success",
@@ -97,9 +99,24 @@ function selectRows(state: MonitorState): { rows: MonitorRow[]; totalCount: numb
   return { rows: rows.slice(0, MAX_WIDGET_ROWS), totalCount: rows.length };
 }
 
+/**
+ * The state key a row DISPLAYS as, which is not always its run state.
+ *
+ * A run reaches `waitingUser` two ways -- its vendor finished a turn, or the
+ * worker asked a question -- and they want opposite reactions from the
+ * reader: one says the answer is ready, the other says you are being asked
+ * for something. The runtime distinguishes them with the `turnSettled` flag
+ * (ADR-0027); this turns that into the synthetic `turnReady` key, which has
+ * its own icon and color. Every other state displays as itself.
+ */
+export function displayState(row: MonitorRow): string {
+  return row.state === "waitingUser" && row.flags.turnSettled ? "turnReady" : row.state;
+}
+
 /** Renders one row as a single concise line. */
 export function renderRowLine(row: MonitorRow): string {
-  const parts = [shortId(row.runId), `${stateIcon(row.state)} ${row.state}`];
+  const display = displayState(row);
+  const parts = [shortId(row.runId), `${stateIcon(display)} ${display}`];
   const harness = harnessLabel(row);
   if (harness !== undefined) {
     parts.push(harness);
@@ -165,7 +182,7 @@ export function renderWidgetBox(state: MonitorState, theme: Theme): string[] {
     colors = ["text"];
   } else {
     lines = rows.map(renderRowLine);
-    colors = rows.map((row) => stateColor(row.state));
+    colors = rows.map((row) => stateColor(displayState(row)));
     if (totalCount > MAX_WIDGET_ROWS) {
       lines.push(`… ${totalCount - MAX_WIDGET_ROWS} more; use /crew status <runId> for full details.`);
       colors.push("muted");
@@ -177,7 +194,11 @@ export function renderWidgetBox(state: MonitorState, theme: Theme): string[] {
 
 /** Renders the full detail block for `/crew status <runId>`. */
 export function renderRowDetails(row: MonitorRow): string {
-  const lines = [`Run: ${row.runId}`, `Task: ${row.taskId}`, `Worker: ${row.workerId}`, `State: ${row.state}`];
+  // The detail view names the real run state and annotates it, rather than
+  // substituting the display key: someone reading the details wants the
+  // state the runtime actually stored.
+  const stateLine = row.state === "waitingUser" && row.flags.turnSettled ? `State: ${row.state} (turn ready)` : `State: ${row.state}`;
+  const lines = [`Run: ${row.runId}`, `Task: ${row.taskId}`, `Worker: ${row.workerId}`, stateLine];
   const harness = harnessLabel(row);
   if (harness !== undefined) {
     lines.push(`Harness/model: ${harness}`);

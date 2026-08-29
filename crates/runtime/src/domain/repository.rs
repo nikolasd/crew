@@ -168,6 +168,7 @@ pub enum RunFlag {
     PolicyQuarantined,
     WorkspaceDirty,
     ChildrenActive,
+    TurnSettled,
 }
 
 impl RunFlag {
@@ -179,6 +180,7 @@ impl RunFlag {
             RunFlag::PolicyQuarantined => flags.policy_quarantined = value,
             RunFlag::WorkspaceDirty => flags.workspace_dirty = value,
             RunFlag::ChildrenActive => flags.children_active = value,
+            RunFlag::TurnSettled => flags.turn_settled = value,
         }
     }
 }
@@ -700,8 +702,9 @@ impl<'c> DomainRepository<'c> {
                     "INSERT INTO runs (run_id, task_id, worker_id, state,
                        flags_degraded_control, flags_needs_reconciliation, flags_protocol_unhealthy,
                        flags_policy_quarantined, flags_workspace_dirty, flags_children_active,
+                       flags_turn_settled,
                        vendor_session_id, created_at, started_at, completed_at, policy_fingerprint)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                     rusqlite::params![
                         run.run_id.to_string(),
                         run.task_id.to_string(),
@@ -713,6 +716,7 @@ impl<'c> DomainRepository<'c> {
                         run.flags.policy_quarantined as i64,
                         run.flags.workspace_dirty as i64,
                         run.flags.children_active as i64,
+                        run.flags.turn_settled as i64,
                         run.vendor_session_id,
                         now.as_str(),
                         run.started_at.as_ref().map(|t| t.as_str().to_string()),
@@ -918,11 +922,15 @@ impl<'c> DomainRepository<'c> {
     ///
     /// # Errors
     /// Returns [`DomainError::NotFound`] if `run_id` does not exist.
-    fn read_run_flags(&self, run_id: crew_protocol::RunId) -> Result<RunFlags, DomainError> {
+    pub(crate) fn read_run_flags(
+        &self,
+        run_id: crew_protocol::RunId,
+    ) -> Result<RunFlags, DomainError> {
         self.conn
             .query_row(
                 "SELECT flags_degraded_control, flags_needs_reconciliation, flags_protocol_unhealthy,
-                        flags_policy_quarantined, flags_workspace_dirty, flags_children_active
+                        flags_policy_quarantined, flags_workspace_dirty, flags_children_active,
+                        flags_turn_settled
                  FROM runs WHERE run_id = ?1",
                 [run_id.to_string()],
                 |row| {
@@ -933,6 +941,7 @@ impl<'c> DomainRepository<'c> {
                         policy_quarantined: row.get::<_, i64>(3)? != 0,
                         workspace_dirty: row.get::<_, i64>(4)? != 0,
                         children_active: row.get::<_, i64>(5)? != 0,
+                        turn_settled: row.get::<_, i64>(6)? != 0,
                     })
                 },
             )
@@ -962,8 +971,9 @@ impl<'c> DomainRepository<'c> {
                 "UPDATE runs SET
                    flags_degraded_control = ?1, flags_needs_reconciliation = ?2,
                    flags_protocol_unhealthy = ?3, flags_policy_quarantined = ?4,
-                   flags_workspace_dirty = ?5, flags_children_active = ?6
-                 WHERE run_id = ?7",
+                   flags_workspace_dirty = ?5, flags_children_active = ?6,
+                   flags_turn_settled = ?7
+                 WHERE run_id = ?8",
                 rusqlite::params![
                     flags.degraded_control as i64,
                     flags.needs_reconciliation as i64,
@@ -971,6 +981,7 @@ impl<'c> DomainRepository<'c> {
                     flags.policy_quarantined as i64,
                     flags.workspace_dirty as i64,
                     flags.children_active as i64,
+                    flags.turn_settled as i64,
                     run_id.to_string(),
                 ],
             )?;
