@@ -13278,7 +13278,7 @@ function renderWidgetBox(state, theme) {
     lines = rows.map(renderRowLine);
     colors = rows.map((row) => stateColor(displayState(row)));
     if (totalCount > MAX_WIDGET_ROWS) {
-      lines.push(`\u2026 ${totalCount - MAX_WIDGET_ROWS} more; use /crew status <runId> for full details.`);
+      lines.push(`\u2026 ${totalCount - MAX_WIDGET_ROWS} more; use /crew run <runId> for full details.`);
       colors.push("muted");
     }
   }

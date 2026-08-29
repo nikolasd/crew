@@ -124,7 +124,7 @@ test("a row line includes the state icon alongside the state word", () => {
   expect(line).toContain(`${stateIcon("succeeded")} succeeded`);
 });
 
-test("renderRowDetails includes worker, action-relevant fields, and timestamps for /crew status", () => {
+test("renderRowDetails includes worker, action-relevant fields, and timestamps for /crew run", () => {
   const details = renderRowDetails(row({ workspaceMode: "isolated", latestActivity: "question sent", adapter: "codex", model: "gpt-5" }));
   expect(details).toContain("Run: run-1");
   expect(details).toContain("Task: task-1");
@@ -221,7 +221,7 @@ test("renderWidgetBox appends a muted overflow line beyond MAX_WIDGET_ROWS", () 
   expect(lines).toHaveLength(MAX_WIDGET_ROWS + 3);
   const overflowLine = lines[lines.length - 2];
   expect(overflowLine).toContain("[muted]");
-  expect(overflowLine).toContain("more; use /crew status <runId> for full details.");
+  expect(overflowLine).toContain("more; use /crew run <runId> for full details.");
 });
 
 test("renderWidgetBox produces a top border, every content line, and the bottom border at equal total width", () => {
