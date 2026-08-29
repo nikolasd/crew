@@ -168,6 +168,7 @@ pub enum RunFlag {
     PolicyQuarantined,
     WorkspaceDirty,
     ChildrenActive,
+    TurnSettled,
 }
 
 impl RunFlag {
@@ -179,6 +180,7 @@ impl RunFlag {
             RunFlag::PolicyQuarantined => flags.policy_quarantined = value,
             RunFlag::WorkspaceDirty => flags.workspace_dirty = value,
             RunFlag::ChildrenActive => flags.children_active = value,
+            RunFlag::TurnSettled => flags.turn_settled = value,
         }
     }
 }
@@ -700,8 +702,9 @@ impl<'c> DomainRepository<'c> {
                     "INSERT INTO runs (run_id, task_id, worker_id, state,
                        flags_degraded_control, flags_needs_reconciliation, flags_protocol_unhealthy,
                        flags_policy_quarantined, flags_workspace_dirty, flags_children_active,
+                       flags_turn_settled,
                        vendor_session_id, created_at, started_at, completed_at, policy_fingerprint)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                     rusqlite::params![
                         run.run_id.to_string(),
                         run.task_id.to_string(),
@@ -713,6 +716,7 @@ impl<'c> DomainRepository<'c> {
                         run.flags.policy_quarantined as i64,
                         run.flags.workspace_dirty as i64,
                         run.flags.children_active as i64,
+                        run.flags.turn_settled as i64,
                         run.vendor_session_id,
                         now.as_str(),
                         run.started_at.as_ref().map(|t| t.as_str().to_string()),
@@ -918,11 +922,15 @@ impl<'c> DomainRepository<'c> {
     ///
     /// # Errors
     /// Returns [`DomainError::NotFound`] if `run_id` does not exist.
-    fn read_run_flags(&self, run_id: crew_protocol::RunId) -> Result<RunFlags, DomainError> {
+    pub(crate) fn read_run_flags(
+        &self,
+        run_id: crew_protocol::RunId,
+    ) -> Result<RunFlags, DomainError> {
         self.conn
             .query_row(
                 "SELECT flags_degraded_control, flags_needs_reconciliation, flags_protocol_unhealthy,
-                        flags_policy_quarantined, flags_workspace_dirty, flags_children_active
+                        flags_policy_quarantined, flags_workspace_dirty, flags_children_active,
+                        flags_turn_settled
                  FROM runs WHERE run_id = ?1",
                 [run_id.to_string()],
                 |row| {
@@ -933,6 +941,7 @@ impl<'c> DomainRepository<'c> {
                         policy_quarantined: row.get::<_, i64>(3)? != 0,
                         workspace_dirty: row.get::<_, i64>(4)? != 0,
                         children_active: row.get::<_, i64>(5)? != 0,
+                        turn_settled: row.get::<_, i64>(6)? != 0,
                     })
                 },
             )
@@ -962,8 +971,9 @@ impl<'c> DomainRepository<'c> {
                 "UPDATE runs SET
                    flags_degraded_control = ?1, flags_needs_reconciliation = ?2,
                    flags_protocol_unhealthy = ?3, flags_policy_quarantined = ?4,
-                   flags_workspace_dirty = ?5, flags_children_active = ?6
-                 WHERE run_id = ?7",
+                   flags_workspace_dirty = ?5, flags_children_active = ?6,
+                   flags_turn_settled = ?7
+                 WHERE run_id = ?8",
                 rusqlite::params![
                     flags.degraded_control as i64,
                     flags.needs_reconciliation as i64,
@@ -971,6 +981,7 @@ impl<'c> DomainRepository<'c> {
                     flags.policy_quarantined as i64,
                     flags.workspace_dirty as i64,
                     flags.children_active as i64,
+                    flags.turn_settled as i64,
                     run_id.to_string(),
                 ],
             )?;
@@ -1681,6 +1692,47 @@ impl<'c> DomainRepository<'c> {
             Some(run_id),
             |_tx| Ok(()),
         )?))
+    }
+
+    /// ADR-0027 wave 3's inactivity backstop: settles a run whose vendor
+    /// finished a turn that the leader then never closed.
+    ///
+    /// Settles to `lost`, never `succeeded`. The runtime observed only
+    /// silence, and ADR-0015's precedent is to name that uncertainty rather
+    /// than guess an outcome -- a success reached by nobody looking would be
+    /// a fabricated fact. The run's journaled result text stays readable
+    /// either way, since `run/result` reads any terminal state.
+    ///
+    /// Returns `None` unless the run is parked in `waitingUser` **and**
+    /// flagged `turnSettled`. That pairing is the whole safety property: a
+    /// `waitingUser` that means "the worker asked a question" or "an
+    /// approval is pending" must never be settled by a timeout, and neither
+    /// must a `waitingPeer` or a `paused` run. The read and the transition
+    /// share one transaction so a leader finishing the run concurrently
+    /// cannot be raced.
+    pub fn settle_abandoned_turn(
+        &mut self,
+        run_id: RunId,
+    ) -> Result<Option<Committed>, DomainError> {
+        let Some((state, turn_settled)): Option<(String, i64)> = self
+            .conn
+            .query_row(
+                "SELECT state, flags_turn_settled FROM runs WHERE run_id = ?1",
+                [run_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        if state != "waitingUser" || turn_settled == 0 {
+            return Ok(None);
+        }
+        let to = RunState::try_from("lost").map_err(|_| DomainError::NotFound {
+            kind: "run-state",
+            id: "lost".to_string(),
+        })?;
+        self.transition_run(run_id, &to, None).map(Some)
     }
 
     /// Updates a message's delivery state. Emits the matching `Message*`
@@ -3500,6 +3552,86 @@ mod tests {
             )
             .unwrap();
         assert_eq!(turns_used, 0, "answers must not consume turns");
+    }
+
+    /// The backstop settles a turn nobody closed -- to `lost`, because
+    /// silence is not evidence of success.
+    #[test]
+    fn the_backstop_settles_an_abandoned_settled_turn_as_lost() {
+        let mut conn = open_test_db();
+        let project_id = ProjectId::new();
+        let (run_id, _task_id, _worker_id) = seed_budgeted_run(&mut conn, project_id, 10);
+        let mut repo = DomainRepository::new(&mut conn, project_id);
+        for state in ["starting", "working", "waitingUser"] {
+            let target = RunState::try_from(state).unwrap();
+            repo.transition_run(run_id, &target, None)
+                .expect("drive to waitingUser");
+        }
+        repo.set_run_flag(run_id, RunFlag::TurnSettled, true)
+            .expect("mark the wait as a finished turn");
+
+        let committed = repo
+            .settle_abandoned_turn(run_id)
+            .expect("settle")
+            .expect("an abandoned settled turn must be settled");
+        match committed.envelope.event {
+            RuntimeEvent::RunEvent { ref state, .. } => assert_eq!(state.as_str(), "lost"),
+            ref other => panic!("expected a RunEvent, got {other:?}"),
+        }
+        // This layer only settles the state; clearing the marker is the
+        // sweep's job, so it is still set here.
+        assert!(repo.read_run_flags(run_id).unwrap().turn_settled);
+    }
+
+    /// The safety property: a wait that is not a finished turn -- a
+    /// question, an approval -- must survive the backstop untouched.
+    #[test]
+    fn the_backstop_never_settles_a_wait_that_is_not_a_finished_turn() {
+        let mut conn = open_test_db();
+        let project_id = ProjectId::new();
+        let (run_id, _task_id, _worker_id) = seed_budgeted_run(&mut conn, project_id, 10);
+        let mut repo = DomainRepository::new(&mut conn, project_id);
+        for state in ["starting", "working", "waitingUser"] {
+            let target = RunState::try_from(state).unwrap();
+            repo.transition_run(run_id, &target, None)
+                .expect("drive to waitingUser");
+        }
+        // No turnSettled flag: this run is waiting on a human, not holding
+        // a finished answer.
+
+        assert!(
+            repo.settle_abandoned_turn(run_id)
+                .expect("settle")
+                .is_none(),
+            "a question wait must never be settled by a timeout"
+        );
+        assert!(
+            !repo.read_run_flags(run_id).unwrap().turn_settled,
+            "sanity: the flag really is unset"
+        );
+    }
+
+    /// A run still working is not abandoned, however quiet it has been.
+    #[test]
+    fn the_backstop_never_settles_a_working_run() {
+        let mut conn = open_test_db();
+        let project_id = ProjectId::new();
+        let (run_id, _task_id, _worker_id) = seed_budgeted_run(&mut conn, project_id, 10);
+        let mut repo = DomainRepository::new(&mut conn, project_id);
+        for state in ["starting", "working"] {
+            let target = RunState::try_from(state).unwrap();
+            repo.transition_run(run_id, &target, None)
+                .expect("drive to working");
+        }
+        repo.set_run_flag(run_id, RunFlag::TurnSettled, true)
+            .expect("set the flag even though the state does not match");
+
+        assert!(
+            repo.settle_abandoned_turn(run_id)
+                .expect("settle")
+                .is_none(),
+            "the state and the flag must BOTH hold; the flag alone is not enough"
+        );
     }
 
     #[test]

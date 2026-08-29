@@ -55,6 +55,7 @@ use crate::supervisor::{EscalationTimings, PtyProcess};
 use super::discovery::{DiscoveryError, find_transcript_by_nonce};
 use super::input::{PASTE_CHUNK_BYTES, paste_chunks};
 use super::tailer::{TailerHandle, TranscriptTailer};
+use super::verify::{PromptVerdict, verify_recorded_prompt};
 use super::{Cursor, TranscriptFormat, TuiEvent};
 
 /// Interactive-TUI launch instructions a [`TuiVendor`] builds: argv, cwd,
@@ -806,6 +807,51 @@ impl<V: TuiVendor> TuiAdapter<V> {
             }
         };
 
+        // CREW-13: confirm the vendor recorded the WHOLE prompt, not just
+        // the tail. Discovery only proves the nonce arrived, and the nonce
+        // is appended -- so a vendor that accepted every byte and then
+        // truncated in its own composer passes discovery and looks like a
+        // success. Only compared for a fresh injection: a resume has no
+        // prompt of its own to verify, and its transcript's prior turns
+        // belong to earlier runs.
+        if let Some(injected) = inject.as_deref()
+            && let Ok(raw) = tokio::fs::read(&transcript_path).await
+        {
+            match verify_recorded_prompt(
+                &raw,
+                self.vendor.format().as_ref(),
+                injected,
+                &discovery_key,
+            ) {
+                PromptVerdict::Intact | PromptVerdict::Unverifiable => {}
+                PromptVerdict::Corrupted {
+                    expected_len,
+                    recorded_len,
+                    detail,
+                } => {
+                    return self
+                        .fail_start(
+                            pty,
+                            attach,
+                            pane_outcome,
+                            sink,
+                            run_id,
+                            task_id,
+                            worker_id,
+                            AdapterError::process(
+                                self.kind(),
+                                "start",
+                                format!(
+                                    "the vendor recorded {recorded_len} characters of a \
+                                     {expected_len}-character prompt: {detail}"
+                                ),
+                            ),
+                        )
+                        .await;
+                }
+            }
+        }
+
         // A best-effort initial guess (never a full path -- see
         // `TuiVendor::session_id_from_transcript_path`'s doc comment);
         // the first real `SessionMeta` entry the tailer encounters
@@ -1098,7 +1144,17 @@ async fn emit_tui_event(
             )
             .await;
         }
-        TuiEvent::TurnEnded => {}
+        TuiEvent::TurnEnded { outcome } => {
+            emit(
+                sink,
+                run_id,
+                task_id,
+                worker_id,
+                AdapterEventPayload::TurnEnded { outcome },
+                cursor,
+            )
+            .await;
+        }
         TuiEvent::Raw { entry_type } => {
             tracing::debug!(entry_type, run_id = %run_id, "tui transcript: unrecognized entry");
         }
@@ -1651,26 +1707,37 @@ mod tests {
         events.into_iter().map(|e| (e, cursor.clone())).collect()
     }
 
+    /// A turn boundary is journaled evidence (ADR-0027), so it emits --
+    /// and being the line's last emitting event, it is the one that
+    /// carries the cursor. That is what stops a resume from re-delivering
+    /// the boundary and settling the same turn twice. (The original
+    /// regression this replaced -- a trailing NON-emitting event stealing
+    /// the cursor -- is still guarded by the `Raw` test below.)
     #[test]
-    fn a_trailing_turn_ended_does_not_take_the_cursor_from_the_message_before_it() {
+    fn a_trailing_turn_ended_carries_the_cursor_itself() {
         let cursor = Cursor {
             offset: 10,
             last_entry_id: Some("e1".to_string()),
         };
         let placements = cursor_placements(tagged(
-            vec![text("first"), TuiEvent::TurnEnded],
+            vec![
+                text("first"),
+                TuiEvent::TurnEnded {
+                    outcome: crew_protocol::TurnOutcome::Normal,
+                },
+            ],
             cursor.clone(),
         ));
 
         assert_eq!(placements.len(), 2);
         assert_eq!(
-            placements[0].1,
-            Some(cursor),
-            "the AssistantText, this line's only emitting event, must carry the cursor"
+            placements[0].1, None,
+            "the AssistantText shares its line with a later emitting event"
         );
         assert_eq!(
-            placements[1].1, None,
-            "TurnEnded emits nothing and must never carry a cursor"
+            placements[1].1,
+            Some(cursor),
+            "the turn boundary is the line's last emitting event and carries the cursor"
         );
     }
 
@@ -1757,9 +1824,11 @@ mod tests {
     fn a_line_where_nothing_emits_persists_no_cursor_at_all() {
         let placements = cursor_placements(tagged(
             vec![
-                TuiEvent::TurnEnded,
                 TuiEvent::Raw {
                     entry_type: "unknown".to_string(),
+                },
+                TuiEvent::Raw {
+                    entry_type: "also-unknown".to_string(),
                 },
             ],
             Cursor::start(),

@@ -162,6 +162,22 @@ pub enum RegistryError {
     /// without its own journal/sink wiring could only run unsupervised.
     #[error("resume support was never supplied (set_resume_support); cannot resume run {0}")]
     ResumeUnsupported(RunId),
+    /// The live-session cap is full (ADR-0027 wave 3). Distinct from the
+    /// concurrency ceiling: that one bounds runs actively taking a turn,
+    /// this one bounds sessions that EXIST, including the ones parked
+    /// between turns. A TUI vendor outlives its turn, so without this cap
+    /// parked sessions accumulate without limit -- and since a follow-up
+    /// turn is never refused, so would concurrent turns.
+    ///
+    /// Refused here, at new-run admission, and never on `message/send`:
+    /// steering a worker that already exists must not fail because of a
+    /// cap, whereas declining to create the N+1th worker is the same shape
+    /// of refusal the concurrency ceiling already has.
+    #[error(
+        "the live-session cap of {cap} is full ({live} sessions alive, including ones parked \
+         between turns); finish or cancel a run before starting another"
+    )]
+    LiveSessionCapReached { cap: usize, live: usize },
     /// `mode: "headless"` was requested for a reserved adapter kind
     /// (crew-v2 gap-closure WP-C, spec §4.6: crew v2 is TUI-only). This is
     /// distinct from [`Self::TuiModeUnavailable`]: that one names a
@@ -254,6 +270,11 @@ pub struct AdapterRegistry {
     /// calls [`Self::set_activity_clock`] (chiefly tests) simply never
     /// has timeouts to sweep.
     activity: Mutex<Option<Arc<ActivityClock>>>,
+    /// The live-session cap (ADR-0027 wave 3), from the daemon's startup
+    /// policy. `None` means uncapped -- a caller that never calls
+    /// [`Self::set_max_live_sessions`] (chiefly tests) behaves exactly as
+    /// before this cap existed.
+    max_live_sessions: Mutex<Option<usize>>,
 }
 
 impl AdapterRegistry {
@@ -273,8 +294,16 @@ impl AdapterRegistry {
             tui: Mutex::new(None),
             resume_support: Mutex::new(None),
             activity: Mutex::new(None),
+            max_live_sessions: Mutex::new(None),
             running: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Sets the live-session cap from the daemon's startup policy. A
+    /// setter rather than a constructor argument for the same reason the
+    /// others here are: the policy is merged after this registry is built.
+    pub fn set_max_live_sessions(&self, cap: u32) {
+        *self.max_live_sessions.lock() = Some(cap as usize);
     }
 
     /// Supplies the real [`CoordinationBroker`] for this registry's
@@ -386,10 +415,10 @@ impl AdapterRegistry {
 
         let result = self.resume_one(run_id, session, cursor).await;
         match result {
-            Ok((adapter, settled)) => {
+            Ok((adapter, settled, slot_free)) => {
                 self.running.lock().insert(run_id, adapter);
                 let running_for_watcher = Arc::clone(&self.running);
-                let authorization_for_watcher = Arc::clone(&self.authorization);
+                tokio::spawn(watch_slot(slot_free, Arc::clone(&self.authorization)));
                 // A resumed TUI run owns its own pane lifecycle through
                 // its adapter, same as a fresh one. `resume_run` carries
                 // no `DisplaySelection` -- recovery callers do not resolve
@@ -403,7 +432,6 @@ impl AdapterRegistry {
                 tokio::spawn(watch_settlement(
                     settled,
                     running_for_watcher,
-                    authorization_for_watcher,
                     display,
                     Arc::clone(&support.db),
                     support.project_id,
@@ -428,7 +456,14 @@ impl AdapterRegistry {
         run_id: RunId,
         session: VendorSessionRef,
         cursor: Option<Cursor>,
-    ) -> Result<(Arc<dyn Adapter>, oneshot::Receiver<()>), String> {
+    ) -> Result<
+        (
+            Arc<dyn Adapter>,
+            oneshot::Receiver<()>,
+            oneshot::Receiver<()>,
+        ),
+        String,
+    > {
         let Some(support) = self.resume_support.lock().clone() else {
             return Err(RegistryError::ResumeUnsupported(run_id).into());
         };
@@ -526,12 +561,12 @@ impl AdapterRegistry {
             run_id,
             self.activity_clock(),
         );
-        let (sink, settled) = SettlementSink::wrap(sink);
+        let (sink, settled, slot_free) = SettlementSink::wrap(sink);
         if let Err(err) = adapter.resume(session, sink).await {
             self.authorization.release();
             return Err(err.to_string());
         }
-        Ok((adapter, settled))
+        Ok((adapter, settled, slot_free))
     }
 }
 
@@ -548,6 +583,10 @@ impl RunDriver for AdapterRegistry {
         let tui = self.tui.lock().clone();
         let org_security_patterns = self.org_security_patterns.clone();
         let running = Arc::clone(&self.running);
+        // Read under the registry's own lock, before the async block: a
+        // per-run policy override may only TIGHTEN a shared cap, never
+        // raise one, exactly as the concurrency ceiling behaves.
+        let configured_cap = *self.max_live_sessions.lock();
 
         Box::pin(async move {
             // Reserve the run-id slot atomically with the duplicate
@@ -559,6 +598,26 @@ impl RunDriver for AdapterRegistry {
                 let mut guard = running.lock();
                 if guard.contains_key(&ctx.run_id) {
                     return Err(RegistryError::DuplicateStart(ctx.run_id).into());
+                }
+                // The live-session cap, checked under the same lock as the
+                // duplicate check so two concurrent starts cannot both see
+                // room for the last session.
+                let cap = match (
+                    configured_cap,
+                    ctx.policy.as_deref().map(|p| p.max_live_sessions as usize),
+                ) {
+                    (Some(startup), Some(per_run)) => Some(startup.min(per_run)),
+                    (Some(only), None) | (None, Some(only)) => Some(only),
+                    (None, None) => None,
+                };
+                if let Some(cap) = cap
+                    && guard.len() >= cap
+                {
+                    return Err(RegistryError::LiveSessionCapReached {
+                        cap,
+                        live: guard.len(),
+                    }
+                    .into());
                 }
                 // A placeholder; overwritten with the real adapter once
                 // constructed below. Never observable from outside this
@@ -579,10 +638,12 @@ impl RunDriver for AdapterRegistry {
             )
             .await
             {
-                Ok((adapter, settled, pane_lifecycle_owned_by_adapter)) => {
+                Ok((adapter, settled, slot_free, pane_lifecycle_owned_by_adapter)) => {
                     running.lock().insert(run_id, adapter);
                     let running_for_watcher = Arc::clone(&running);
-                    let authorization_for_watcher = Arc::clone(&authorization);
+                    // The slot is released at the first turn boundary,
+                    // independently of the session teardown below.
+                    tokio::spawn(watch_slot(slot_free, Arc::clone(&authorization)));
                     // A TUI-mode run's own `TuiAdapter` already attaches
                     // and detaches its pane for real, through the
                     // `PaneCoordinator` built in `build_adapter` --
@@ -600,7 +661,6 @@ impl RunDriver for AdapterRegistry {
                     tokio::spawn(watch_settlement(
                         settled,
                         running_for_watcher,
-                        authorization_for_watcher,
                         display,
                         db,
                         project_id,
@@ -734,7 +794,6 @@ async fn emit_pane_detached(
 async fn watch_settlement(
     settled: oneshot::Receiver<()>,
     running: Arc<Mutex<HashMap<RunId, Arc<dyn Adapter>>>>,
-    authorization: Arc<dyn AdapterAuthorization>,
     display: Option<crew_protocol::DisplaySelection>,
     db: Arc<crate::db::DatabaseHandle>,
     project_id: crew_protocol::ProjectId,
@@ -747,12 +806,37 @@ async fn watch_settlement(
     if let Some(adapter) = evicted {
         let _ = adapter.dispose().await;
     }
-    authorization.release();
     if let Some(selection) = display
         && let Some(backend) = selection.selected
     {
         emit_pane_detached(&db, project_id, run_id, backend, selection.placement).await;
     }
+}
+
+/// Releases this run's concurrency slot the moment it stops taking a turn
+/// -- the first of a turn boundary or a process exit (ADR-0027 wave 3).
+///
+/// Split out of [`watch_settlement`] because the two are no longer the
+/// same moment. A TUI vendor's session outlives its turn, so holding the
+/// slot until the process exits would pin capacity for a run that is
+/// merely parked; releasing it at the boundary is what makes the ceiling
+/// mean "actively taking a turn". Session teardown stays on the exit
+/// signal, where it belongs.
+///
+/// Follow-up turns deliberately re-acquire nothing: they are admitted on
+/// the run's own implicit allowance, which cannot stack because a run has
+/// one PTY and one turn at a time. The resulting bound is
+/// `concurrency_ceiling + max_live_sessions`, documented in ADR-0027.
+async fn watch_slot(
+    slot_free: oneshot::Receiver<()>,
+    authorization: Arc<dyn AdapterAuthorization>,
+) {
+    if slot_free.await.is_err() {
+        // The sink was dropped without ever firing (a start that failed
+        // before any event): the slot was already released on that path.
+        return;
+    }
+    authorization.release();
 }
 
 /// A never-started, immediately-idle placeholder occupying the run-id
@@ -781,7 +865,15 @@ async fn run_one(
     broker: Option<Arc<CoordinationBroker>>,
     tui: Option<Arc<TuiSupport>>,
     org_security_patterns: Vec<String>,
-) -> Result<(Arc<dyn Adapter>, oneshot::Receiver<()>, bool), String> {
+) -> Result<
+    (
+        Arc<dyn Adapter>,
+        oneshot::Receiver<()>,
+        oneshot::Receiver<()>,
+        bool,
+    ),
+    String,
+> {
     let profile = resolve_profile(ctx).await.map_err(String::from)?;
 
     let mode = requested_mode(&profile.startup_options).unwrap_or_default();
@@ -850,7 +942,7 @@ async fn run_one(
         ctx.run_id,
         Arc::clone(&ctx.activity),
     );
-    let (sink, settled) = SettlementSink::wrap(sink);
+    let (sink, settled, slot_free) = SettlementSink::wrap(sink);
     if let Err(err) = adapter
         .start(
             StartSpec {
@@ -874,7 +966,7 @@ async fn run_one(
         authorization.release();
         return Err(err.to_string());
     }
-    Ok((adapter, settled, pane_lifecycle_owned_by_adapter))
+    Ok((adapter, settled, slot_free, pane_lifecycle_owned_by_adapter))
 }
 
 /// The resolved profile snapshot for one worker, read through the domain
@@ -1961,7 +2053,7 @@ mod settlement_tests {
     }
 
     #[tokio::test]
-    async fn an_observed_exit_evicts_the_adapter_and_releases_the_slot() {
+    async fn an_observed_exit_evicts_the_adapter() {
         let (db, _dir) = harness().await;
         let project_id = ProjectId::new();
         let run_id = RunId::new();
@@ -1975,7 +2067,6 @@ mod settlement_tests {
         watch_settlement(
             rx,
             Arc::clone(&running),
-            Arc::clone(&authorization) as Arc<dyn AdapterAuthorization>,
             None,
             Arc::clone(&db),
             project_id,
@@ -1983,14 +2074,17 @@ mod settlement_tests {
         )
         .await;
 
-        assert_eq!(
-            authorization.release_count(),
-            1,
-            "expected exactly one release"
-        );
         assert!(
             running.lock().get(&run_id).is_none(),
             "adapter should have been evicted"
+        );
+        // Releasing the slot is no longer this watcher's job: since
+        // ADR-0027 wave 3 the slot is freed at the first TURN boundary by
+        // `watch_slot`, while teardown stays here on the process exit.
+        assert_eq!(
+            authorization.release_count(),
+            0,
+            "settlement tears the session down; it does not free the slot"
         );
         db.shutdown().await.expect("shutdown database");
     }
@@ -2010,7 +2104,6 @@ mod settlement_tests {
         watch_settlement(
             rx,
             Arc::clone(&running),
-            Arc::clone(&authorization) as Arc<dyn AdapterAuthorization>,
             None,
             Arc::clone(&db),
             project_id,
@@ -2018,6 +2111,13 @@ mod settlement_tests {
         )
         .await;
 
+        let (slot_tx, slot_rx) = oneshot::channel();
+        drop(slot_tx);
+        watch_slot(
+            slot_rx,
+            Arc::clone(&authorization) as Arc<dyn AdapterAuthorization>,
+        )
+        .await;
         assert_eq!(
             authorization.release_count(),
             0,
@@ -2055,6 +2155,7 @@ mod settlement_tests {
             display_backend: crate::config::crew::DisplayBackend::Auto,
             retention: "30d".to_string(),
             concurrency_ceiling: 1,
+            max_live_sessions: 16,
             org_security_patterns: vec![],
             copy_max_bytes: crate::workspace::DEFAULT_COPY_MAX_BYTES,
             copy_max_files: crate::workspace::DEFAULT_COPY_MAX_FILES,
@@ -2102,14 +2203,16 @@ mod settlement_tests {
         );
 
         // Settle via the REAL chain: ProcessExited -> SettlementSink ->
-        // watch_settlement -> AdapterAuthorization::release.
+        // watch_slot -> AdapterAuthorization::release. An exit still frees
+        // the slot; since ADR-0027 wave 3 a turn boundary does too,
+        // whichever comes first.
         let (db, _dir) = harness().await;
         let project_id = ProjectId::new();
         let run_id = RunId::new();
         let running = Arc::new(Mutex::new(HashMap::new()));
         running.lock().insert(run_id, build_placeholder_adapter());
 
-        let (sink, settled) = SettlementSink::wrap(Arc::new(StubSink));
+        let (sink, settled, slot_free) = SettlementSink::wrap(Arc::new(StubSink));
         sink.emit(AdapterEvent {
             run_id,
             task_id: TaskId::new(),
@@ -2131,13 +2234,13 @@ mod settlement_tests {
         watch_settlement(
             settled,
             Arc::clone(&running),
-            Arc::clone(&authorization),
             None,
             Arc::clone(&db),
             project_id,
             run_id,
         )
         .await;
+        watch_slot(slot_free, Arc::clone(&authorization)).await;
 
         assert!(
             running.lock().get(&run_id).is_none(),

@@ -79,6 +79,7 @@ export type * from "./generated/SubtaskSpec";
 export type * from "./generated/TaskId";
 export type * from "./generated/TimeoutKind";
 export type * from "./generated/Timestamp";
+export type * from "./generated/TurnOutcome";
 export type * from "./generated/VersionRange";
 export type * from "./generated/WorkerId";
 export type * from "./generated/WorkspaceEvent";

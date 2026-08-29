@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crew_protocol::{Classified, ContentClass};
+use crew_protocol::{Classified, ContentClass, TurnOutcome};
 
 use crate::adapter::r#trait::{StartSpec, VendorSessionRef};
 use crate::config::crew::{AdapterConfig, PermissionMode};
@@ -275,6 +275,22 @@ impl TranscriptFormat for CodexRolloutFormat {
     fn parse(&self, raw: &[u8], cursor: &Cursor) -> Vec<(TuiEvent, Cursor)> {
         parse_jsonl_chunk(raw, cursor, map_entry)
     }
+
+    /// The `user_message` event's own text -- codex echoes the prompt it
+    /// received back into its rollout.
+    fn recorded_prompt(&self, entry: &Value) -> Option<String> {
+        if entry.get("type").and_then(Value::as_str) != Some("event_msg") {
+            return None;
+        }
+        let payload = entry.get("payload")?;
+        if payload.get("type").and_then(Value::as_str) != Some("user_message") {
+            return None;
+        }
+        payload
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }
 }
 
 /// Maps one parsed rollout entry to its events plus its own entry id
@@ -397,7 +413,12 @@ fn map_assistant_content(payload: &Value, ts: Option<&str>) -> Vec<TuiEvent> {
 
 fn map_event_msg(payload: &Value) -> (Vec<TuiEvent>, Option<String>) {
     match payload.get("type").and_then(Value::as_str).unwrap_or("") {
-        "task_complete" => (vec![TuiEvent::TurnEnded], None),
+        "task_complete" => (
+            vec![TuiEvent::TurnEnded {
+                outcome: TurnOutcome::Normal,
+            }],
+            None,
+        ),
         // agent_message duplicates the response_item message this same
         // turn already journaled; user_message is the leader's own
         // prompt; exec_*/token_count/stream_error are telemetry. All
@@ -595,7 +616,9 @@ mod tests {
         );
 
         assert!(
-            events.iter().any(|e| matches!(e, TuiEvent::TurnEnded)),
+            events
+                .iter()
+                .any(|e| matches!(e, TuiEvent::TurnEnded { .. })),
             "task_complete must end the turn"
         );
     }

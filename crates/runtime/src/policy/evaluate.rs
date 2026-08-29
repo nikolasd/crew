@@ -334,6 +334,7 @@ mod tests {
             display_backend: crate::config::crew::DisplayBackend::Auto,
             retention: "30d".to_string(),
             concurrency_ceiling: 2,
+            max_live_sessions: 16,
             org_security_patterns: vec![],
             copy_max_bytes: crate::workspace::DEFAULT_COPY_MAX_BYTES,
             copy_max_files: crate::workspace::DEFAULT_COPY_MAX_FILES,

@@ -156,7 +156,8 @@ async fn read_run_flags(db: &DatabaseHandle, run_id: RunId) -> RunFlags {
         .run_domain_op(Box::new(move |conn| {
             conn.query_row(
                 "SELECT flags_degraded_control, flags_needs_reconciliation, flags_protocol_unhealthy,
-                        flags_policy_quarantined, flags_workspace_dirty, flags_children_active
+                        flags_policy_quarantined, flags_workspace_dirty, flags_children_active,
+                        flags_turn_settled
                  FROM runs WHERE run_id = ?1",
                 [run_id.to_string()],
                 |row| {
@@ -167,6 +168,7 @@ async fn read_run_flags(db: &DatabaseHandle, run_id: RunId) -> RunFlags {
                         "policyQuarantined": row.get::<_, i64>(3)? != 0,
                         "workspaceDirty": row.get::<_, i64>(4)? != 0,
                         "childrenActive": row.get::<_, i64>(5)? != 0,
+                        "turnSettled": row.get::<_, i64>(6)? != 0,
                     }))
                 },
             )
@@ -182,6 +184,7 @@ async fn read_run_flags(db: &DatabaseHandle, run_id: RunId) -> RunFlags {
         policy_quarantined: value["policyQuarantined"].as_bool().unwrap_or(false),
         workspace_dirty: value["workspaceDirty"].as_bool().unwrap_or(false),
         children_active: value["childrenActive"].as_bool().unwrap_or(false),
+        turn_settled: value["turnSettled"].as_bool().unwrap_or(false),
     }
 }
 

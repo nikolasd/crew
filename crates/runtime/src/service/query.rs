@@ -119,7 +119,8 @@ pub fn run_get_op(run_id: RunId) -> DomainClosure {
             "SELECT run_id, task_id, worker_id, state,
                     flags_degraded_control, flags_needs_reconciliation, flags_protocol_unhealthy,
                     flags_policy_quarantined, flags_workspace_dirty, flags_children_active,
-                    vendor_session_id, created_at, started_at, completed_at, policy_fingerprint
+                    vendor_session_id, created_at, started_at, completed_at, policy_fingerprint,
+                    flags_turn_settled
              FROM runs WHERE run_id = ?1",
             [run_id.to_string()],
             row_to_run_json,
@@ -140,7 +141,8 @@ pub fn run_list_op(task_id: Option<TaskId>, project_id: ProjectId) -> DomainClos
                 "SELECT run_id, task_id, worker_id, state,
                         flags_degraded_control, flags_needs_reconciliation, flags_protocol_unhealthy,
                         flags_policy_quarantined, flags_workspace_dirty, flags_children_active,
-                        vendor_session_id, created_at, started_at, completed_at, policy_fingerprint
+                        vendor_session_id, created_at, started_at, completed_at,
+                        policy_fingerprint, flags_turn_settled
                  FROM runs WHERE task_id = ?1 ORDER BY created_at",
             )?;
             stmt.query_map([task_id.to_string()], row_to_run_json)?
@@ -151,7 +153,7 @@ pub fn run_list_op(task_id: Option<TaskId>, project_id: ProjectId) -> DomainClos
                         r.flags_degraded_control, r.flags_needs_reconciliation, r.flags_protocol_unhealthy,
                         r.flags_policy_quarantined, r.flags_workspace_dirty, r.flags_children_active,
                         r.vendor_session_id, r.created_at, r.started_at, r.completed_at,
-                        r.policy_fingerprint
+                        r.policy_fingerprint, r.flags_turn_settled
                  FROM runs r JOIN tasks t ON r.task_id = t.task_id
                  WHERE t.project_id = ?1 ORDER BY r.created_at",
             )?;
@@ -221,6 +223,11 @@ fn row_to_run_json(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
             "policyQuarantined": row.get::<_, i64>(7)? != 0,
             "workspaceDirty": row.get::<_, i64>(8)? != 0,
             "childrenActive": row.get::<_, i64>(9)? != 0,
+            // Appended at index 15 rather than inserted beside the other
+            // flags: every index below is positional, and shifting them to
+            // keep the flags adjacent would be a silent, wide-blast-radius
+            // edit for cosmetic grouping.
+            "turnSettled": row.get::<_, i64>(15)? != 0,
         },
         "vendorSessionId": row.get::<_, Option<String>>(10)?,
         "createdAt": row.get::<_, String>(11)?,
@@ -536,7 +543,8 @@ pub fn run_result_events_op(run_id: RunId) -> DomainClosure {
                 "SELECT event_json FROM events
                   WHERE run_id = ?1
                     AND (event_json LIKE '%adapterMessageEvent%'
-                         OR event_json LIKE '%adapterUsageEvent%')
+                         OR event_json LIKE '%adapterUsageEvent%'
+                         OR event_json LIKE '%adapterTurnEvent%')
                   ORDER BY sequence",
             )
             .map_err(DomainError::Sqlite)?;
@@ -547,6 +555,13 @@ pub fn run_result_events_op(run_id: RunId) -> DomainClosure {
         let mut final_text: Option<String> = None;
         let mut chunk_text: Option<String> = None;
         let mut usage: Option<(u64, u64, Option<f64>)> = None;
+        // ADR-0027's fold boundary: the residue is read up to and
+        // including the FIRST turn boundary. The vendor process stays
+        // alive after its turn, so a later turn would otherwise keep
+        // appending to this same run and silently rewrite an answer the
+        // leader has already read. A leader wanting a later turn asks for
+        // it explicitly.
+        let mut turn_ended = false;
 
         for row in rows {
             let raw = row.map_err(DomainError::Sqlite)?;
@@ -591,11 +606,16 @@ pub fn run_result_events_op(run_id: RunId) -> DomainClosure {
                         _ => (input, output, cost),
                     });
                 }
+                Some("adapterTurnEvent") => {
+                    turn_ended = true;
+                    break;
+                }
                 _ => {}
             }
         }
 
         Ok(json!({
+            "turnEnded": turn_ended,
             "resultText": final_text.or(chunk_text),
             "usage": usage.map(|(input, output, cost)| json!({
                 "inputTokens": input,
