@@ -121,6 +121,16 @@ pub enum AdapterEventPayload {
     QuestionDetected {
         text: Classified<String>,
     },
+    /// A TUI adapter observed its vendor's end-of-turn boundary
+    /// (ADR-0027): the worker stopped working and is holding at its
+    /// prompt. Carries no free text -- the turn's content was already
+    /// journaled as its own message events -- only that the turn ended,
+    /// and how. Maps to [`RuntimeEvent::AdapterTurnEvent`] and drives the
+    /// run's `working -> waitingUser` edge in
+    /// [`crate::adapter::run_lifecycle::RunLifecycleSink`].
+    TurnEnded {
+        outcome: crew_protocol::TurnOutcome,
+    },
     /// A human typed directly into a TUI adapter's attached pane,
     /// bypassing the adapter's own input path. Carries no free text (the
     /// keystrokes themselves are never journaled) -- only that it
@@ -249,6 +259,12 @@ impl DomainAdapterEventSink {
                     vendor_session_id: self.label(vendor_session_id),
                 }
             }
+            AdapterEventPayload::TurnEnded { outcome } => RuntimeEvent::AdapterTurnEvent {
+                run_id,
+                task_id,
+                worker_id,
+                outcome,
+            },
             AdapterEventPayload::MessageChunk { role, text } => RuntimeEvent::AdapterMessageEvent {
                 kind: RuntimeEventKind::AdapterMessageChunk,
                 run_id,
@@ -546,6 +562,13 @@ impl AdapterEventSink for DomainAdapterEventSink {
 pub(crate) struct SettlementSink {
     inner: Arc<dyn AdapterEventSink>,
     settled: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    /// Fires on the FIRST of a turn boundary or a process exit -- the
+    /// moment this run stops consuming a concurrency slot (ADR-0027 wave
+    /// 3). Separate from `settled` because the two events are no longer
+    /// the same: a TUI vendor's turn ends long before its process does,
+    /// and the run should stop holding a slot it is not using while its
+    /// session stays alive and steerable.
+    slot_free: std::sync::Mutex<Option<oneshot::Sender<()>>>,
 }
 
 impl SettlementSink {
@@ -554,14 +577,21 @@ impl SettlementSink {
     #[must_use]
     pub(crate) fn wrap(
         inner: Arc<dyn AdapterEventSink>,
-    ) -> (Arc<dyn AdapterEventSink>, oneshot::Receiver<()>) {
-        let (tx, rx) = oneshot::channel();
+    ) -> (
+        Arc<dyn AdapterEventSink>,
+        oneshot::Receiver<()>,
+        oneshot::Receiver<()>,
+    ) {
+        let (settled_tx, settled_rx) = oneshot::channel();
+        let (slot_tx, slot_rx) = oneshot::channel();
         (
             Arc::new(Self {
                 inner,
-                settled: std::sync::Mutex::new(Some(tx)),
+                settled: std::sync::Mutex::new(Some(settled_tx)),
+                slot_free: std::sync::Mutex::new(Some(slot_tx)),
             }),
-            rx,
+            settled_rx,
+            slot_rx,
         )
     }
 }
@@ -572,6 +602,7 @@ impl AdapterEventSink for SettlementSink {
         // below, so a by-value match would consume the payload before
         // the inner sink needs it.
         let is_exit = matches!(&event.payload, AdapterEventPayload::ProcessExited { .. });
+        let frees_slot = is_exit || matches!(&event.payload, AdapterEventPayload::TurnEnded { .. });
         Box::pin(async move {
             let result = self.inner.emit(event).await;
             // Fired even when the journal write failed: the process has
@@ -581,6 +612,20 @@ impl AdapterEventSink for SettlementSink {
             if is_exit
                 && let Some(tx) = self
                     .settled
+                    .lock()
+                    .expect("settlement mutex is never poisoned")
+                    .take()
+            {
+                let _ = tx.send(());
+            }
+            // Fires once, on whichever comes first. The inner sink has
+            // already run, so in the production chain the run's
+            // `waitingUser` edge is durable before its slot is released --
+            // the same ordering ADR-0023 established for the terminal
+            // edge, for the same reason.
+            if frees_slot
+                && let Some(tx) = self
+                    .slot_free
                     .lock()
                     .expect("settlement mutex is never poisoned")
                     .take()
@@ -606,7 +651,7 @@ mod settlement_sink_tests {
 
     #[tokio::test]
     async fn a_non_exit_payload_leaves_the_receiver_pending() {
-        let (sink, mut rx) = SettlementSink::wrap(Arc::new(StubSink));
+        let (sink, mut rx, _slot) = SettlementSink::wrap(Arc::new(StubSink));
         sink.emit(AdapterEvent {
             run_id: RunId::new(),
             task_id: TaskId::new(),
@@ -627,7 +672,7 @@ mod settlement_sink_tests {
 
     #[tokio::test]
     async fn an_exit_payload_resolves_the_receiver() {
-        let (sink, mut rx) = SettlementSink::wrap(Arc::new(StubSink));
+        let (sink, mut rx, _slot) = SettlementSink::wrap(Arc::new(StubSink));
         sink.emit(AdapterEvent {
             run_id: RunId::new(),
             task_id: TaskId::new(),
@@ -648,7 +693,7 @@ mod settlement_sink_tests {
 
     #[tokio::test]
     async fn a_duplicate_exit_payload_fires_the_receiver_only_once() {
-        let (sink, mut rx) = SettlementSink::wrap(Arc::new(StubSink));
+        let (sink, mut rx, _slot) = SettlementSink::wrap(Arc::new(StubSink));
         // First emit fires the receiver
         sink.emit(AdapterEvent {
             run_id: RunId::new(),
@@ -1193,7 +1238,17 @@ mod crash_resume_tests {
                     ts: None,
                 };
                 let events = match value.get("type").and_then(|v| v.as_str()) {
-                    Some("turn_end") => vec![TuiEvent::TurnEnded],
+                    Some("turn_end") => vec![TuiEvent::TurnEnded {
+                        outcome: crew_protocol::TurnOutcome::Normal,
+                    }],
+                    // A genuinely non-emitting entry. `turn_end` used to
+                    // be one; now that a turn boundary is journaled
+                    // evidence (ADR-0027), `Raw` is the only shape left
+                    // that emits nothing, so the cursor regression below
+                    // is guarded with this instead.
+                    Some("noise") => vec![TuiEvent::Raw {
+                        entry_type: "noise".to_string(),
+                    }],
                     Some("session_and_text") => vec![
                         TuiEvent::SessionMeta {
                             vendor_session_id: value
@@ -1359,9 +1414,20 @@ mod crash_resume_tests {
                     .await
                     .expect("emit");
                 }
-                TuiEvent::TurnEnded => {}
+                TuiEvent::TurnEnded { outcome } => {
+                    sink.emit(AdapterEvent {
+                        run_id,
+                        task_id,
+                        worker_id,
+                        payload: AdapterEventPayload::TurnEnded { outcome },
+                        cursor,
+                    })
+                    .await
+                    .expect("emit");
+                }
+                TuiEvent::Raw { .. } => {}
                 other => panic!(
-                    "TestFormat only produces AssistantText/SessionMeta/TurnEnded: {other:?}"
+                    "TestFormat only produces AssistantText/SessionMeta/TurnEnded/Raw: {other:?}"
                 ),
             }
         }
@@ -1473,19 +1539,20 @@ mod crash_resume_tests {
         db.shutdown().await.expect("shutdown database");
     }
 
-    /// The exact regression this suite guards against: a batch whose
-    /// *last* `TuiEvent` emits nothing (`TurnEnded`, the shape a worker's
-    /// transcript takes right after finishing a turn and going idle --
-    /// the common case, not an edge case). Before the fix, the cursor was
-    /// attached unconditionally to the batch's last *index*, so it was
-    /// dropped here even though `"first"` was already journaled; a crash
-    /// then resumed from the pre-first-line cursor and re-journaled
-    /// `"first"`. With the fix, the cursor rides the batch's last
-    /// *emitting* event (`"first"`'s own commit) and covers the
-    /// `TurnEnded` entry's bytes too, so resuming re-delivers nothing
-    /// already seen.
+    /// A batch ending in a turn boundary -- the shape a worker's
+    /// transcript takes right after finishing a turn and going idle, the
+    /// common case rather than an edge case.
+    ///
+    /// Since ADR-0027 the boundary is journaled evidence, so it is itself
+    /// the batch's last emitting event and carries the cursor. That is
+    /// what makes a resume start *after* the boundary and never settle the
+    /// same turn twice. The original regression this test was written for
+    /// -- a trailing NON-emitting event pulling the cursor back and
+    /// re-journaling an already-committed message -- is now guarded by
+    /// `a_batch_ending_in_a_non_emitting_entry_still_persists_its_cursor`
+    /// below, using `Raw`, the only shape left that emits nothing.
     #[tokio::test]
-    async fn a_batch_ending_in_turn_ended_still_persists_its_cursor_on_the_last_emitting_event() {
+    async fn a_batch_ending_in_turn_ended_persists_its_cursor_past_the_boundary() {
         let (_dir, db) = open_db().await;
         let project_id = ProjectId::new();
         let (task_id, worker_id, run_id) = seed_working_run(&db, project_id).await;
@@ -1519,14 +1586,14 @@ mod crash_resume_tests {
         let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
         assert_eq!(events.len(), 2, "AssistantText then TurnEnded");
         assert!(
-            events.iter().rposition(TuiEvent::emits_a_payload) == Some(0),
-            "the AssistantText at index 0 is the batch's only emitting event"
+            events.iter().rposition(TuiEvent::emits_a_payload) == Some(1),
+            "the turn boundary is journaled evidence (ADR-0027), so it is the batch's last \
+             emitting event"
         );
         emit_batch(&sink, run_id, task_id, worker_id, tagged).await;
 
-        // The stored cursor covers the *whole* batch (past the
-        // TurnEnded entry too), even though TurnEnded itself never
-        // carried it -- it rode the AssistantText commit instead.
+        // The stored cursor covers the *whole* batch: the turn boundary is
+        // the batch's last emitting event, so it carries the cursor itself.
         let stored_cursor_json: String = db
             .run_domain_op(Box::new(move |conn| {
                 let json: String = conn.query_row(
@@ -1545,10 +1612,9 @@ mod crash_resume_tests {
             serde_json::from_str(&stored_cursor_json).expect("stored cursor deserializes");
         assert_eq!(
             stored_cursor, cursor_after_batch,
-            "the persisted cursor must advance to the last emitting event: the trailing \
-             TurnEnded emits no payload, so the durable cursor stops at the AssistantText's \
-             line; the tailer's seek cursor (advanced separately to the post-batch position) \
-             covers the rest"
+            "the persisted cursor must advance to the last emitting event, which is the \
+             turn boundary itself -- so a resume starts after it and never settles the same \
+             turn twice"
         );
 
         // Simulated crash + resume: the worker was still idle (no new
@@ -1573,7 +1639,118 @@ mod crash_resume_tests {
         assert_eq!(
             events.iter().filter(|e| e.emits_a_payload()).count(),
             1,
-            "resuming must not re-deliver \"first\"; the TurnEnded entry re-parses to a \
+            "resuming must not re-deliver \"first\" or the turn boundary: the stored cursor \
+             is past both, so only \"second\" emits"
+        );
+        emit_batch(&sink, run_id, task_id, worker_id, tagged).await;
+
+        let texts = journaled_message_final_texts(&db, run_id).await;
+        assert_eq!(
+            texts,
+            vec!["first".to_string(), "second".to_string()],
+            "\"first\" must be journaled exactly once, not re-journaled after the crash"
+        );
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// The original cursor regression, kept guarded with `Raw` -- the only
+    /// `TuiEvent` shape left that emits nothing now that a turn boundary
+    /// is journaled evidence. Before the fix, the cursor was attached
+    /// unconditionally to the batch's last *index*, so a trailing
+    /// non-emitting entry dropped it even though the message before it was
+    /// already journaled; a crash then resumed from the pre-message cursor
+    /// and re-journaled that message.
+    #[tokio::test]
+    async fn a_batch_ending_in_a_non_emitting_entry_still_persists_its_cursor() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_working_run(&db, project_id).await;
+        let (events_tx, _events_rx) = broadcast::channel(64);
+        let sink = sink(Arc::clone(&db), project_id, events_tx);
+
+        let transcript_dir = tempfile::Builder::new()
+            .prefix("bat-crash-resume-non-emitting-")
+            .tempdir_in("/tmp")
+            .expect("transcript dir");
+        let transcript_path = transcript_dir.path().join("session.jsonl");
+
+        // One assistant message, then an entry the format does not
+        // understand -- both on disk before the first poll, so they land
+        // in one batch.
+        append_line(
+            &transcript_path,
+            r#"{"type":"text","text":"first","id":"1"}"#,
+        );
+        append_line(&transcript_path, r#"{"type":"noise","id":"noise-1"}"#);
+
+        let mut tailer_one = TranscriptTailer::new(
+            transcript_path.clone(),
+            Arc::new(TestFormat),
+            Cursor::start(),
+            std::time::Duration::from_millis(10),
+        );
+        let (tagged, cursor_after_batch) = tailer_one
+            .poll_once()
+            .await
+            .expect("both lines are consumed in one batch");
+        let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+        assert_eq!(events.len(), 2, "AssistantText then Raw");
+        assert!(
+            events.iter().rposition(TuiEvent::emits_a_payload) == Some(0),
+            "the trailing Raw entry emits nothing: the AssistantText is the batch's last \
+             emitting event"
+        );
+        emit_batch(&sink, run_id, task_id, worker_id, tagged).await;
+
+        // The stored cursor covers the *whole* batch: the turn boundary is
+        // the batch's last emitting event, so it carries the cursor itself.
+        let stored_cursor_json: String = db
+            .run_domain_op(Box::new(move |conn| {
+                let json: String = conn.query_row(
+                    "SELECT transcript_cursor FROM runs WHERE run_id = ?1",
+                    [run_id.to_string()],
+                    |r| r.get(0),
+                )?;
+                Ok(serde_json::json!(json))
+            }))
+            .await
+            .expect("read stored cursor")
+            .as_str()
+            .expect("stored cursor is a string")
+            .to_string();
+        let stored_cursor: Cursor =
+            serde_json::from_str(&stored_cursor_json).expect("stored cursor deserializes");
+        assert_eq!(
+            stored_cursor, cursor_after_batch,
+            "the persisted cursor must cover the whole batch: it rides the AssistantText's \
+             own commit, and a trailing non-emitting entry must never pull it back and cause \
+             an already-committed message to be re-journaled"
+        );
+
+        // Simulated crash + resume: the worker was still idle (no new
+        // turn started) when the daemon came back, then said something
+        // new.
+        drop(tailer_one);
+        append_line(
+            &transcript_path,
+            r#"{"type":"text","text":"second","id":"2"}"#,
+        );
+        let mut tailer_two = TranscriptTailer::new(
+            transcript_path.clone(),
+            Arc::new(TestFormat),
+            stored_cursor,
+            std::time::Duration::from_millis(10),
+        );
+        let (tagged, _cursor_after_resume) = tailer_two
+            .poll_once()
+            .await
+            .expect("only the newly appended line is unconsumed");
+        let events: Vec<TuiEvent> = tagged.iter().map(|(e, _)| e.clone()).collect();
+        assert_eq!(
+            events.iter().filter(|e| e.emits_a_payload()).count(),
+            1,
+            "resuming must not re-deliver \"first\": the Raw entry re-parses to a \
              non-emitting event that journals nothing, so only \"second\" emits"
         );
         emit_batch(&sink, run_id, task_id, worker_id, tagged).await;

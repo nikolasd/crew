@@ -1,6 +1,6 @@
 # Run-state edges derive from adapter evidence; an unobservable exit is `lost`
 
-* Status: Accepted
+* Status: Accepted, amended by [0027](0027-turn-end-settles-a-run.md)
 * Date: 2026-08-16
 
 ## Context and Problem Statement

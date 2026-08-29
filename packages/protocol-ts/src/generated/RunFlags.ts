@@ -4,7 +4,20 @@
  * Independent boolean flags on a run.
  *
  * `degradedControl`, `needsReconciliation`, `protocolUnhealthy`,
- * `policyQuarantined`, `workspaceDirty`, and `childrenActive` are all
- * independent booleans.
+ * `policyQuarantined`, `workspaceDirty`, `childrenActive`, and
+ * `turnSettled` are all independent booleans.
  */
-export type RunFlags = { degradedControl: boolean, needsReconciliation: boolean, protocolUnhealthy: boolean, policyQuarantined: boolean, workspaceDirty: boolean, childrenActive: boolean, };
+export type RunFlags = { degradedControl: boolean, needsReconciliation: boolean, protocolUnhealthy: boolean, policyQuarantined: boolean, workspaceDirty: boolean, childrenActive: boolean, 
+/**
+ * The run is in `waitingUser` because its vendor finished a TURN
+ * (ADR-0027), not because the worker asked a question. Both reach the
+ * same state, and a snapshot reader (`run/get`, the monitor) cannot
+ * otherwise tell "the answer is ready" from "the worker needs you" --
+ * this is the distinction.
+ *
+ * Cleared when the run goes back to work, so it never outlives the
+ * pause it describes. `#[serde(default)]` because the journal is
+ * append-only: `RunFlags` payloads written before this field existed
+ * must still deserialize on replay.
+ */
+turnSettled: boolean, };
