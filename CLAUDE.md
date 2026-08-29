@@ -163,7 +163,7 @@ These are enforced in review, not just style preference:
 - **Config**: layered JSON (built-in defaults → paths → per-run params), strict unknown-key rejection.
   `crates/runtime/src/config/mod.rs` and `crew.rs` load layers via `resolve_policy()` and `CrewConfig`, producing an immutable, SHA-256-fingerprinted `RuntimePolicy`.
 - **Naming**: Rust `snake_case`/`PascalCase`/`SCREAMING_SNAKE_CASE` as usual; TS `camelCase`/`PascalCase`.
-  Tool names follow `crew_<verb>` (`crew_task`, `crew_worker`, `crew_run`, ...); commands are `/crew` (subcommands `health`, `run`, `runs`, `export`, `clean`, `reopen`, `doctor`, `config`) plus the standalone `/crew-install`; `/crew-status`, `/crew-doctor`, `/crew-config` are deprecated forwarders until the next release
+  Tool names follow `crew_<verb>` (`crew_task`, `crew_worker`, `crew_run`, ...); commands are `/crew` (subcommands `health`, `run`, `runs`, `export`, `clean`, `reopen`, `doctor`, `config`) plus the standalone `/crew-install`
 
 ## Source-of-truth docs (read before assuming a gap is unintentional)
 
