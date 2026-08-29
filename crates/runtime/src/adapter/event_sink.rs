@@ -562,6 +562,13 @@ impl AdapterEventSink for DomainAdapterEventSink {
 pub(crate) struct SettlementSink {
     inner: Arc<dyn AdapterEventSink>,
     settled: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    /// Fires on the FIRST of a turn boundary or a process exit -- the
+    /// moment this run stops consuming a concurrency slot (ADR-0027 wave
+    /// 3). Separate from `settled` because the two events are no longer
+    /// the same: a TUI vendor's turn ends long before its process does,
+    /// and the run should stop holding a slot it is not using while its
+    /// session stays alive and steerable.
+    slot_free: std::sync::Mutex<Option<oneshot::Sender<()>>>,
 }
 
 impl SettlementSink {
@@ -570,14 +577,21 @@ impl SettlementSink {
     #[must_use]
     pub(crate) fn wrap(
         inner: Arc<dyn AdapterEventSink>,
-    ) -> (Arc<dyn AdapterEventSink>, oneshot::Receiver<()>) {
-        let (tx, rx) = oneshot::channel();
+    ) -> (
+        Arc<dyn AdapterEventSink>,
+        oneshot::Receiver<()>,
+        oneshot::Receiver<()>,
+    ) {
+        let (settled_tx, settled_rx) = oneshot::channel();
+        let (slot_tx, slot_rx) = oneshot::channel();
         (
             Arc::new(Self {
                 inner,
-                settled: std::sync::Mutex::new(Some(tx)),
+                settled: std::sync::Mutex::new(Some(settled_tx)),
+                slot_free: std::sync::Mutex::new(Some(slot_tx)),
             }),
-            rx,
+            settled_rx,
+            slot_rx,
         )
     }
 }
@@ -588,6 +602,7 @@ impl AdapterEventSink for SettlementSink {
         // below, so a by-value match would consume the payload before
         // the inner sink needs it.
         let is_exit = matches!(&event.payload, AdapterEventPayload::ProcessExited { .. });
+        let frees_slot = is_exit || matches!(&event.payload, AdapterEventPayload::TurnEnded { .. });
         Box::pin(async move {
             let result = self.inner.emit(event).await;
             // Fired even when the journal write failed: the process has
@@ -597,6 +612,20 @@ impl AdapterEventSink for SettlementSink {
             if is_exit
                 && let Some(tx) = self
                     .settled
+                    .lock()
+                    .expect("settlement mutex is never poisoned")
+                    .take()
+            {
+                let _ = tx.send(());
+            }
+            // Fires once, on whichever comes first. The inner sink has
+            // already run, so in the production chain the run's
+            // `waitingUser` edge is durable before its slot is released --
+            // the same ordering ADR-0023 established for the terminal
+            // edge, for the same reason.
+            if frees_slot
+                && let Some(tx) = self
+                    .slot_free
                     .lock()
                     .expect("settlement mutex is never poisoned")
                     .take()
@@ -622,7 +651,7 @@ mod settlement_sink_tests {
 
     #[tokio::test]
     async fn a_non_exit_payload_leaves_the_receiver_pending() {
-        let (sink, mut rx) = SettlementSink::wrap(Arc::new(StubSink));
+        let (sink, mut rx, _slot) = SettlementSink::wrap(Arc::new(StubSink));
         sink.emit(AdapterEvent {
             run_id: RunId::new(),
             task_id: TaskId::new(),
@@ -643,7 +672,7 @@ mod settlement_sink_tests {
 
     #[tokio::test]
     async fn an_exit_payload_resolves_the_receiver() {
-        let (sink, mut rx) = SettlementSink::wrap(Arc::new(StubSink));
+        let (sink, mut rx, _slot) = SettlementSink::wrap(Arc::new(StubSink));
         sink.emit(AdapterEvent {
             run_id: RunId::new(),
             task_id: TaskId::new(),
@@ -664,7 +693,7 @@ mod settlement_sink_tests {
 
     #[tokio::test]
     async fn a_duplicate_exit_payload_fires_the_receiver_only_once() {
-        let (sink, mut rx) = SettlementSink::wrap(Arc::new(StubSink));
+        let (sink, mut rx, _slot) = SettlementSink::wrap(Arc::new(StubSink));
         // First emit fires the receiver
         sink.emit(AdapterEvent {
             run_id: RunId::new(),

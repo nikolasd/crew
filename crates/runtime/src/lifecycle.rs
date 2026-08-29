@@ -358,6 +358,14 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     // `set_broker` above.
     registry.set_activity_clock(Arc::clone(&activity_clock));
 
+    // ADR-0027 wave 3: the cap that bounds sessions ALIVE, including the
+    // ones parked between turns -- not the concurrency ceiling, which
+    // bounds runs actively taking a turn. Both are needed: a follow-up
+    // turn is never refused, so the honest bound on concurrent turns is
+    // `concurrency_ceiling + max_live_sessions`, and without this cap the
+    // second term is unbounded.
+    registry.set_max_live_sessions(policy.max_live_sessions);
+
     // Resume support (WP14): everything `AdapterRegistry::resume_run`
     // needs that only exists after bind -- the journal handle, project id,
     // the server-owned violation service, and the live event broadcast.

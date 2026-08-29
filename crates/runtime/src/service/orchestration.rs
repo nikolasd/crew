@@ -2396,6 +2396,21 @@ impl OrchestrationService {
         // A genuine success, symmetrically, must advance the message past
         // `recorded` -- leaving it there forever regardless of outcome is
         // exactly the deliveryState inversion this branch exists to avoid.
+        // Read before delivery: the adapter's own events will clear the
+        // flag the moment the follow-up turn starts producing output, so
+        // reading afterwards would miss the very admissions this records.
+        let run_was_turn_settled = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                DomainRepository::new(conn, project_id)
+                    .read_run_flags(run_id)
+                    .map(|flags| json!(flags.turn_settled))
+            }))
+            .await
+            .ok()
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+
         if let Some(driver) = self.run_driver.clone() {
             match driver
                 .send_follow_up(
@@ -2408,6 +2423,43 @@ impl OrchestrationService {
                 .await
             {
                 Ok(()) => {
+                    // ADR-0027 wave 3: a follow-up delivered to a run
+                    // parked by a finished turn is admitted on that run's
+                    // own burst allowance, outside the concurrency
+                    // ceiling -- it is never refused. Journal it, so burst
+                    // usage is visible evidence rather than something an
+                    // operator discovers by finding more turns running
+                    // than the ceiling allows.
+                    if run_was_turn_settled {
+                        let mut burst = self
+                            .db
+                            .run_domain_op(Box::new(move |conn| {
+                                DomainRepository::new(conn, project_id)
+                                    .record_diagnostic(
+                                        run_id,
+                                        crew_protocol::DiagnosticLevel::Info,
+                                        "turn_admitted_over_ceiling",
+                                        "follow-up turn admitted on this run's burst allowance, \
+                                         outside the concurrency ceiling"
+                                            .to_string(),
+                                    )
+                                    .map(|c| {
+                                        embed_envelope(
+                                            json!({ "sequence": c.sequence }),
+                                            &c.envelope,
+                                        )
+                                    })
+                            }))
+                            .await;
+                        match burst {
+                            Ok(ref mut value) => self.broadcast(value),
+                            Err(ref err) => tracing::warn!(
+                                error = %err,
+                                run_id = %run_id,
+                                "failed to journal a burst-allowance admission"
+                            ),
+                        }
+                    }
                     let mut sent = self
                         .db
                         .run_domain_op(Box::new(move |conn| {

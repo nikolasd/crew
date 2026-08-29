@@ -174,21 +174,6 @@ impl PaneCoordinator {
     /// the run: it is journaled as a diagnostic and this falls back to
     /// `Hidden` (an empty `pane_ref`) instead of propagating the error.
     pub async fn attach(&self, req: PaneAttachRequest) -> PaneAttachOutcome {
-        // ADR-0027 wave 3: a TUI vendor outlives its turn, so panes
-        // accumulate. Past the cap, degrade to hidden -- and journal why,
-        // rather than silently reporting a pane that was never opened.
-        if !self.reserve_pane(req.run_id) {
-            self.journal_diagnostic(
-                req.run_id,
-                format!(
-                    "live pane cap of {} reached, attaching hidden instead; close a finished \
-                     worker's pane to free one",
-                    self.max_live_panes
-                ),
-            )
-            .await;
-            return self.attach_hidden(req.run_id, req.placement).await;
-        }
         let candidates = ordered_candidates(req.forced_backend);
         let selection = self.registry.resolve(&crew_protocol::DisplayPreference {
             ordered: candidates,
@@ -205,6 +190,26 @@ impl PaneCoordinator {
         let Some(display) = self.registry.find(backend) else {
             return self.attach_hidden(req.run_id, req.placement).await;
         };
+
+        // ADR-0027 wave 3's pane cap, applied only once a REAL backend is
+        // resolved. Hidden is not a pane: it occupies no screen, so it
+        // neither consumes the cap nor is refused by it -- and this cap is
+        // purely about screen real estate. The bound on concurrent turns is
+        // the registry's live-SESSION cap, which exists whether or not the
+        // user wants windows; conflating the two would have left a
+        // hidden-display setup unbounded.
+        if backend != DisplayBackend::Hidden && !self.reserve_pane(req.run_id) {
+            self.journal_diagnostic(
+                req.run_id,
+                format!(
+                    "live pane cap of {} reached, attaching hidden instead; close a finished \
+                     worker's pane to free one",
+                    self.max_live_panes
+                ),
+            )
+            .await;
+            return self.attach_hidden(req.run_id, req.placement).await;
+        }
 
         let pane_request = self.pane_request(&req);
         match display.create_pane(pane_request).await {
@@ -897,6 +902,34 @@ mod tests {
             DisplayBackend::Tmux,
             "the same run re-attaching holds its own slot, not a new one"
         );
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// The pane cap is about SCREEN REAL ESTATE, not concurrency. A run
+    /// that resolves to hidden occupies no screen, so it must neither
+    /// consume the cap nor be refused by it -- otherwise a hidden-display
+    /// setup would be limited for no reason, and (worse) the cap would
+    /// look like a bound on live sessions when it is not. That bound is
+    /// the registry's live-session cap.
+    #[tokio::test]
+    async fn a_hidden_pane_neither_consumes_nor_is_refused_by_the_cap() {
+        let (db, _dir) = harness().await;
+        let (events_tx, _events_rx) = broadcast::channel(64);
+        let mut registry = DisplayRegistry::new();
+        registry.register(Box::new(super::super::HiddenDisplay::new(
+            DisplayConfig::default(),
+        )));
+        let coordinator = coordinator(registry, Arc::clone(&db), events_tx).with_max_live_panes(1);
+
+        // Three hidden attaches against a cap of one: all succeed, because
+        // none of them is a pane.
+        for _ in 0..3 {
+            let outcome = coordinator
+                .attach(attach_request(Some(DisplayBackend::Hidden)))
+                .await;
+            assert_eq!(outcome.backend, DisplayBackend::Hidden);
+        }
 
         db.shutdown().await.expect("shutdown database");
     }

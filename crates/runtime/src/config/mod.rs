@@ -84,6 +84,11 @@ pub struct RuntimePolicy {
     pub display_backend: crew::DisplayBackend,
     pub retention: String,
     pub concurrency_ceiling: u32,
+    /// How many worker sessions may be alive at once, including those
+    /// parked between turns. See [`crew::Limits::max_live_sessions`].
+    /// Clamped to at least `concurrency_ceiling`, since a smaller value
+    /// would refuse new runs before the ceiling ever applied.
+    pub max_live_sessions: u32,
     pub org_security_patterns: Vec<String>,
     pub copy_max_bytes: u64,
     pub copy_max_files: u64,
@@ -99,6 +104,10 @@ impl RuntimePolicy {
             display_backend: cfg.display.backend,
             retention: cfg.retention.period.clone(),
             concurrency_ceiling: cfg.limits.max_concurrent_workers,
+            max_live_sessions: cfg
+                .limits
+                .max_live_sessions
+                .max(cfg.limits.max_concurrent_workers),
             org_security_patterns: cfg.security.patterns.clone(),
             copy_max_bytes: cfg
                 .workspace
