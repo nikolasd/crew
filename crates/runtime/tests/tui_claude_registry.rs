@@ -62,10 +62,11 @@ impl DisplayBackendTrait for FakePaneBackend {
         crew_protocol::DisplayStatus::new(crew_protocol::DisplayBackend::Tmux, true, false)
     }
 
-    fn create_pane(&self, _req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
+    fn create_pane(&self, req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
         let handle = PaneHandle {
             backend: crew_protocol::DisplayBackend::Tmux,
             pane_ref: "fake-pane-1".to_string(),
+            placement: req.placement,
         };
         Box::pin(async move { Ok(handle) })
     }
@@ -640,6 +641,7 @@ async fn exactly_one_display_pane_detached_is_journaled_for_a_tui_run() {
             selected: Some(crew_protocol::DisplayBackend::Hidden),
             placement: crew_protocol::DisplayPlacement::SplitRight,
             attempts: vec![crew_protocol::DisplayBackend::Hidden],
+            launch_program: None,
         }),
     );
 
