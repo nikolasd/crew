@@ -62,6 +62,13 @@
           "format": "uint32",
           "minimum": 0
         },
+        "maxLiveSessions": {
+          "description": "How many worker SESSIONS may be alive at once, counting the ones\nparked between turns (ADR-0027 wave 3).\n\nDistinct from `max_concurrent_workers`, which bounds how many runs\nmay be *actively taking a turn*. A TUI vendor outlives its turn, so\nonce a run releases its concurrency slot at turn-end it stays alive\nand steerable -- and every such run can be sent a follow-up, which\nis never refused. This is therefore the cap that makes the honest\nbound on concurrent turns (`max_concurrent_workers +\nmax_live_sessions`) finite at all.\n\n`#[serde(default)]` because existing configs predate the field; a\nvalue below `max_concurrent_workers` would refuse new runs before\nthe concurrency ceiling ever applied, so it is clamped up at merge.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 16
+        },
         "inactivityTimeoutSec": {
           "type": "integer",
           "format": "uint64",

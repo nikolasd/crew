@@ -564,6 +564,9 @@ async fn omp_extension_receives_all_mutation_methods() {
             "run/result",
             "run/retry",
             "run/cancel",
+            // ADR-0027 wave 3: the leader closing a conversation, distinct
+            // from cancel's abort.
+            "run/finish",
             "message/send",
             "message/list",
             "approval/list",
