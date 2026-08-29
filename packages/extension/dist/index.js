@@ -12054,7 +12054,7 @@ function registerSpawnTool(pi, ctx) {
           isError: true
         };
       }
-      return callOrchestration(client, "run/submit", {
+      const result = await callOrchestration(client, "run/submit", {
         taskId: input.taskId,
         workerId,
         prompt: subtask.description,
@@ -12063,6 +12063,11 @@ function registerSpawnTool(pi, ctx) {
         ...input.workspaceMode !== undefined ? { workspaceMode: input.workspaceMode } : {},
         ...input.priority !== undefined ? { priority: input.priority } : {}
       });
+      if (result.isError && ctx.reportSubmitFailure !== undefined) {
+        const msg = result.details?.message ?? "run/submit failed";
+        ctx.reportSubmitFailure(`crew_spawn: run/submit failed: ${msg}`);
+      }
+      return result;
     }
   });
 }
@@ -12434,27 +12439,39 @@ function registerRunTool(pi, ctx) {
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
       const client = await ctx.getClient(extCtx);
       switch (input.op) {
-        case "submit":
-          return callOrchestration(client, "run/submit", {
+        case "submit": {
+          const result = await callOrchestration(client, "run/submit", {
             taskId: input.taskId,
             prompt: input.prompt,
             workerId: input.workerId,
             workspaceMode: input.workspaceMode,
             priority: input.priority
           });
+          if (result.isError && ctx.reportSubmitFailure !== undefined) {
+            const msg = result.details?.message ?? "run/submit failed";
+            ctx.reportSubmitFailure(`run/submit failed: ${msg}`);
+          }
+          return result;
+        }
         case "list":
           return callOrchestration(client, "run/list", { taskId: input.taskId });
         case "get":
           return callOrchestration(client, "run/get", { runId: input.runId });
         case "result":
           return callOrchestration(client, "run/result", { runId: input.runId });
-        case "retry":
-          return callOrchestration(client, "run/retry", {
+        case "retry": {
+          const result = await callOrchestration(client, "run/retry", {
             priorRunId: input.priorRunId,
             workerId: input.workerId,
             prompt: input.prompt,
             workspaceMode: input.workspaceMode
           });
+          if (result.isError && ctx.reportSubmitFailure !== undefined) {
+            const msg = result.details?.message ?? "run/retry failed";
+            ctx.reportSubmitFailure(`run/retry failed: ${msg}`);
+          }
+          return result;
+        }
         case "cancel":
           return callOrchestration(client, "run/cancel", { runId: input.runId });
       }
@@ -12825,18 +12842,21 @@ var EMPTY_FLAGS = {
   childrenActive: false
 };
 var EMPTY_MONITOR_STATE = { rows: {}, lastSequence: 0 };
-function hasVisibleRows(state) {
-  return Object.keys(state.rows).length > 0;
+function setSubmitError(state, message, at) {
+  return { ...state, lastSubmitError: { message, at } };
+}
+function clearSubmitError(state) {
+  return { ...state, lastSubmitError: undefined };
 }
 function reduceEvent(state, envelope) {
   const lastSequence = envelope.sequence > state.lastSequence ? envelope.sequence : state.lastSequence;
   const patch = eventPatch(envelope);
   if (patch === undefined) {
-    return { rows: state.rows, lastSequence };
+    return { rows: state.rows, lastSequence, lastSubmitError: state.lastSubmitError };
   }
   const existing = state.rows[patch.runId];
   if (existing !== undefined && envelope.sequence <= existing.lastAppliedSequence) {
-    return { rows: state.rows, lastSequence };
+    return { rows: state.rows, lastSequence, lastSubmitError: state.lastSubmitError };
   }
   const base = existing ?? {
     runId: patch.runId,
@@ -12863,10 +12883,10 @@ function reduceEvent(state, envelope) {
     lastEventAt: envelope.timestamp,
     lastAppliedSequence: envelope.sequence
   };
-  return {
+  return clearSubmitError({
     rows: { ...state.rows, [patch.runId]: updated },
     lastSequence
-  };
+  });
 }
 function enrichWorker(state, runId, adapter, model) {
   const row = state.rows[runId];
@@ -13111,8 +13131,13 @@ function renderWidgetBox(state, theme) {
   let lines;
   let colors;
   if (totalCount === 0) {
-    lines = ["No Crew runs yet."];
-    colors = ["text"];
+    if (state.lastSubmitError !== undefined) {
+      lines = [state.lastSubmitError.message];
+      colors = ["error"];
+    } else {
+      lines = ["Crew active, waiting for task submissions"];
+      colors = ["text"];
+    }
   } else {
     lines = rows.map(renderRowLine);
     colors = rows.map((row) => stateColor(row.state));
@@ -13244,6 +13269,10 @@ class MonitorController {
     this.#unsubscribe = undefined;
     this.#onUpdate = undefined;
   }
+  reportSubmitFailure(message) {
+    this.#state = setSubmitError(this.#state, message, new Date().toISOString());
+    this.#onUpdate?.();
+  }
   renderStatus(runId) {
     const row = this.#state.rows[runId];
     return row === undefined ? undefined : renderRowDetails(row);
@@ -13271,7 +13300,8 @@ function registerMonitor(pi, ctx) {
   const subcommandList = ["run <runId>", "runs", "export [runId]", "clean", "reopen <runId>", ...ctx.management?.keys() ?? []];
   function refresh(extCtx, force = false) {
     const state = controller.getState();
-    const content = force || hasVisibleRows(state) ? renderWidgetBox(state, extCtx.ui.theme) : undefined;
+    const isConnected = subscribedClient !== undefined && !subscribedClient.isClosed;
+    const content = force || isConnected ? renderWidgetBox(state, extCtx.ui.theme) : undefined;
     extCtx.ui.setWidget(WIDGET_KEY, content, { placement: "aboveEditor" });
     pi.appendEntry(MONITOR_ENTRY_TYPE, { sequence: Number(state.lastSequence) });
   }
@@ -13303,7 +13333,7 @@ function registerMonitor(pi, ctx) {
   }
   pi.on("session_start", async (_event, extCtx) => {
     await connect(extCtx);
-    if (subscribedClient !== undefined) {
+    if (subscribedClient !== undefined && !subscribedClient.isClosed) {
       refresh(extCtx);
     }
   });
@@ -13404,6 +13434,9 @@ function registerMonitor(pi, ctx) {
     controller.stop();
     subscribedClient = undefined;
   });
+  return {
+    reportSubmitFailure: (message) => controller.reportSubmitFailure(message)
+  };
 }
 
 // src/index.ts
@@ -13438,7 +13471,7 @@ function crewExtension(pi) {
     }
   });
   registerDeprecatedForwarder(COMMAND_NAME, "/crew health", (_args, ctx) => healthResult(ctx));
-  registerOrchestrationTools(pi, { getClient });
+  registerOrchestrationTools(pi, { getClient, reportSubmitFailure: (message) => monitorHandle.reportSubmitFailure(message) });
   function doctorContextFor(cwd) {
     return buildDoctorContext(cwd);
   }
@@ -13498,7 +13531,7 @@ ${result.text}`, isError: result.isError });
     const { crewdPath } = doctorContextFor(cwd);
     return blocksToResult(await runConfigCommand({ crewdPath, repository: cwd }, request));
   }
-  registerMonitor(pi, {
+  const monitorHandle = registerMonitor(pi, {
     getClient,
     management: new Map([
       ["health", { description: "Runtime health: connects to or spawns the daemon", run: async (_args, ctx) => healthResult(ctx) }],
