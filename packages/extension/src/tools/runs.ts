@@ -31,27 +31,39 @@ export function registerRunTool(pi: ExtensionAPI, ctx: OrchestrationToolContext)
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
       const client = await ctx.getClient(extCtx);
       switch (input.op) {
-        case "submit":
-          return callOrchestration(client, "run/submit", {
+        case "submit": {
+          const result = await callOrchestration(client, "run/submit", {
             taskId: input.taskId,
             prompt: input.prompt,
             workerId: input.workerId,
             workspaceMode: input.workspaceMode,
             priority: input.priority,
           });
+          if (result.isError && ctx.reportSubmitFailure !== undefined) {
+            const msg = (result.details as { message?: string })?.message ?? "run/submit failed";
+            ctx.reportSubmitFailure(`run/submit failed: ${msg}`);
+          }
+          return result;
+        }
         case "list":
           return callOrchestration(client, "run/list", { taskId: input.taskId });
         case "get":
           return callOrchestration(client, "run/get", { runId: input.runId });
         case "result":
           return callOrchestration(client, "run/result", { runId: input.runId });
-        case "retry":
-          return callOrchestration(client, "run/retry", {
+        case "retry": {
+          const result = await callOrchestration(client, "run/retry", {
             priorRunId: input.priorRunId,
             workerId: input.workerId,
             prompt: input.prompt,
             workspaceMode: input.workspaceMode,
           });
+          if (result.isError && ctx.reportSubmitFailure !== undefined) {
+            const msg = (result.details as { message?: string })?.message ?? "run/retry failed";
+            ctx.reportSubmitFailure(`run/retry failed: ${msg}`);
+          }
+          return result;
+        }
         case "cancel":
           return callOrchestration(client, "run/cancel", { runId: input.runId });
       }

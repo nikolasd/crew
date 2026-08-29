@@ -99,6 +99,7 @@ export class CrewClient {
   #closeReason: Error | undefined;
   readonly #pending = new Map<string, PendingRequest>();
   readonly #subscribers = new Set<(event: EventEnvelope) => void>();
+  readonly #closeListeners = new Set<() => void>();
   readonly #ready: Promise<void>;
 
   constructor(options: CrewClientOptions) {
@@ -196,6 +197,29 @@ export class CrewClient {
    */
   get isClosed(): boolean {
     return this.#closed;
+  }
+
+  /**
+   * Registers `listener` to be called once the socket closes -- for any
+   * reason: the runtime dropping the connection (e.g. a restart), a socket
+   * error, or a caller's own {@link CrewClient.close}. `#onClose` is the one
+   * path every one of those funnels through, so callers get a single
+   * reactive signal instead of having to poll {@link CrewClient.isClosed}.
+   * If the client is already closed, `listener` fires on the next tick
+   * rather than never, so a caller that raced the close cannot hang waiting
+   * for a notification that already happened.
+   *
+   * Returns a function that unregisters `listener`.
+   */
+  onClose(listener: () => void): () => void {
+    if (this.#closed) {
+      queueMicrotask(listener);
+      return () => {};
+    }
+    this.#closeListeners.add(listener);
+    return () => {
+      this.#closeListeners.delete(listener);
+    };
   }
 
   #send(method: string, params: unknown): Promise<unknown> {
@@ -339,6 +363,17 @@ export class CrewClient {
   #onClose(): void {
     this.#closed = true;
     this.#failPending(this.#closeReason ?? new Error("connection closed by runtime"));
+    for (const listener of this.#closeListeners) {
+      // One listener throwing must not abort the rest -- they are
+      // independent observers (e.g. the monitor's reconnect trigger),
+      // never a pipeline where the next depends on the previous.
+      try {
+        listener();
+      } catch {
+        // Best-effort notification; a listener's own failure is its problem.
+      }
+    }
+    this.#closeListeners.clear();
   }
 
   #failPending(reason: Error): void {
