@@ -440,6 +440,40 @@ pub async fn connect(path: &Path) -> Result<UnixStream, AttachError> {
     UnixStream::connect(path).await.map_err(AttachError::from)
 }
 
+/// CREW-18: the crew identity shown in a pane's title bar/tab, set exactly
+/// once when `crewd attach`'s pump starts. `worker_id` is truncated to its
+/// first 8 hex characters, matching the short-id convention already used
+/// for run ids in the `/crew` widget and this codebase's own manual-test
+/// walkthrough -- a full UUID would swamp a narrow tab.
+#[must_use]
+pub fn pane_title(worker_id: &str, adapter: &str) -> String {
+    let short = worker_id.get(..8).unwrap_or(worker_id);
+    format!("crew: {short} ({adapter})")
+}
+
+/// Wraps `title` in the OSC title-setting escape sequence (`OSC 0`, BEL
+/// terminator) that Terminal.app, iTerm2, Ghostty, and tmux all
+/// understand -- setting both the window and tab/icon title in one write.
+/// Deliberately a single, one-shot write: the vendor's own later title
+/// sequences (if it emits any) simply overwrite this one and win, exactly
+/// like any other program sharing a terminal would -- there is no
+/// re-assert loop fighting to keep this value pinned.
+///
+/// `title` is spliced into an escape sequence, which makes this a
+/// terminal-escape-injection sink: a stray control byte in it (BEL
+/// terminates the sequence early, ESC starts a new one) would let
+/// whatever supplied `title` inject arbitrary escapes into the pane. An
+/// OSC title string legitimately never contains a C0 control character
+/// (`< 0x20`) or DEL (`0x7f`), so every such byte is stripped here,
+/// structurally, rather than trusted from the caller -- `pane_title`'s
+/// `adapter` is bounded to the reserved wire-names today, but this sink
+/// must stay safe regardless of what future caller feeds it.
+#[must_use]
+pub fn osc_set_title(title: &str) -> String {
+    let sanitized: String = title.chars().filter(|c| !c.is_control()).collect();
+    format!("\x1b]0;{sanitized}\x07")
+}
+
 /// Pumps bytes bidirectionally between `input`/`output` (a terminal's
 /// stdin/stdout in production, or an in-memory pipe in tests) and an
 /// already-connected attach `socket`, until the socket closes, `input`
@@ -494,5 +528,56 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    #[test]
+    fn pane_title_truncates_the_worker_id_to_8_chars() {
+        assert_eq!(
+            pane_title("7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d", "claude"),
+            "crew: 7a8b9c0d (claude)"
+        );
+    }
+
+    #[test]
+    fn pane_title_uses_the_whole_worker_id_when_shorter_than_8_chars() {
+        assert_eq!(pane_title("abc", "codex"), "crew: abc (codex)");
+    }
+
+    /// Terminal-escape-injection sink: `title` ends up spliced verbatim
+    /// into an escape sequence, so a stray control byte in it (`\x07` BEL
+    /// would terminate the sequence early, `\x1b` ESC would start a new
+    /// one) lets whatever supplied `title` inject arbitrary escapes into
+    /// the pane. `adapter` is bounded to the reserved wire-names today, but
+    /// that is exactly the kind of upstream-bounded assumption this whole
+    /// wave found unsafe to rely on -- so this is enforced structurally at
+    /// the sink, not by trusting the caller.
+    #[test]
+    fn osc_set_title_strips_control_bytes_so_injection_cannot_reach_the_output() {
+        let malicious = "crew: \x07\x1b]0;pwned\x07 (claude)";
+        let escaped = osc_set_title(malicious);
+        assert_eq!(escaped, "\x1b]0;crew: ]0;pwned (claude)\x07");
+        assert_eq!(
+            escaped.matches('\x1b').count(),
+            1,
+            "the only ESC must be the sequence's own opener, not one smuggled in via the title: {escaped:?}"
+        );
+        assert_eq!(
+            escaped.matches('\x07').count(),
+            1,
+            "the only BEL must be the sequence's own terminator: {escaped:?}"
+        );
+    }
+
+    #[test]
+    fn osc_set_title_wraps_in_the_osc_0_escape_with_a_bel_terminator() {
+        assert_eq!(
+            osc_set_title("crew: 7a8b9c0d (claude)"),
+            "\x1b]0;crew: 7a8b9c0d (claude)\x07"
+        );
     }
 }
