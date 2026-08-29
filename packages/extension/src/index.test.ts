@@ -84,6 +84,24 @@ function fakeCommandContext(cwd: string, hasUI: boolean): { ctx: ExtensionComman
   };
 }
 
+/** Like {@link fakeCommandContext}, but also captures the `notify` level --
+ *  for tests asserting on error-vs-info routing, not just message text. */
+function fakeCommandContextWithLevels(cwd: string, hasUI: boolean): { ctx: ExtensionCommandContext; notifications: Array<{ message: string; level: string }> } {
+  const notifications: Array<{ message: string; level: string }> = [];
+  const sessionManager = {
+    getSessionId: () => "test-session-id-12345",
+  };
+  return {
+    notifications,
+    ctx: {
+      cwd,
+      hasUI,
+      ui: { notify: (message: string, level: string) => notifications.push({ message, level }) },
+      sessionManager: sessionManager as unknown as ExtensionCommandContext["sessionManager"],
+    } as unknown as ExtensionCommandContext,
+  };
+}
+
 test("registers crew_health plus every orchestration tool, and every slash command", () => {
   const { api, tools, commands } = createFakeApi();
   extension(api);
@@ -442,13 +460,7 @@ test("/crew config print bogus is a usage error with the error level, before any
   const { api, commands } = createFakeApi();
   extension(api);
 
-  const notifications: Array<{ message: string; level: string }> = [];
-  const ctx = {
-    cwd: repoDir,
-    hasUI: true,
-    ui: { notify: (message: string, level: string) => notifications.push({ message, level }) },
-    sessionManager: { getSessionId: () => "test-session-id-12345" },
-  } as unknown as ExtensionCommandContext;
+  const { ctx, notifications } = fakeCommandContextWithLevels(repoDir, true);
 
   await commands.get("crew")!.handler("config print bogus", ctx);
 
@@ -466,13 +478,7 @@ test("the crew-doctor forwarder surfaces a real BinarySelectionError through emi
   const previousOverride = process.env.OMP_CREW_BINARY;
   delete process.env.OMP_CREW_BINARY;
 
-  const notifications: Array<{ message: string; level: string }> = [];
-  const ctx = {
-    cwd: repoDir,
-    hasUI: true,
-    ui: { notify: (message: string, level: string) => notifications.push({ message, level }) },
-    sessionManager: { getSessionId: () => "test-session-id-12345" },
-  } as unknown as ExtensionCommandContext;
+  const { ctx, notifications } = fakeCommandContextWithLevels(repoDir, true);
 
   try {
     const { api, commands } = createFakeApi();

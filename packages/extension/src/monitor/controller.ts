@@ -284,17 +284,21 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
       const management = ctx.management?.get(sub);
       if (management !== undefined) {
         const rest = args.trim().slice(sub.length).trim();
+        let result: { text: string; isError: boolean };
         try {
-          const result = await management.run(rest, cmdCtx);
-          respond(cmdCtx, result.text, result.isError ? "error" : "info");
+          result = await management.run(rest, cmdCtx);
         } catch (err) {
           // A management handler (health/doctor/config, in index.ts) can throw
           // before producing any result -- e.g. resolving the crewd binary
           // fails on a fresh-install machine. That must surface through
           // `respond`, not escape as an unhandled rejection past the command
-          // dispatcher.
+          // dispatcher. The try wraps only the handler's own work, so a
+          // failure in `respond` itself is never re-caught and re-reported
+          // through the same channel that just failed.
           respond(cmdCtx, err instanceof Error ? err.message : String(err), "error");
+          return;
         }
+        respond(cmdCtx, result.text, result.isError ? "error" : "info");
         return;
       }
 

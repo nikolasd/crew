@@ -100,17 +100,22 @@ export default function crewExtension(pi: ExtensionAPI): void {
       description: `Deprecated: use ${replacement}.`,
       handler: async (args, ctx) => {
         const notice = `Note: /${oldName} is deprecated; use ${replacement}.`;
+        let result: CommandResult;
         try {
-          const result = await run(args, ctx);
-          emitResult(ctx, { text: `${notice}\n${result.text}`, isError: result.isError });
+          result = await run(args, ctx);
         } catch (err) {
           // `run` (health/doctor/config) can throw before producing a result --
           // e.g. resolving the crewd binary fails on a fresh-install machine,
           // exactly the machine most likely to hit this forwarder. That must
           // surface through emitResult, not escape as an unhandled rejection.
+          // The try wraps only `run`'s own work, so a failure in emitResult
+          // itself is never re-caught and re-reported through the same
+          // channel that just failed.
           const message = err instanceof Error ? err.message : String(err);
           emitResult(ctx, { text: `${notice}\n${message}`, isError: true });
+          return;
         }
+        emitResult(ctx, { text: `${notice}\n${result.text}`, isError: result.isError });
       },
     });
   }
