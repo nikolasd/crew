@@ -48,28 +48,62 @@ interface FakeClient {
   closed: boolean;
   onEvent: ((event: EventEnvelope) => void) | undefined;
   client: CrewClient;
+  /** Fires every listener registered via the client's `onClose` and marks it
+   *  closed -- simulates the daemon dropping the connection out from under
+   *  the monitor (CREW-5), as opposed to `client.close()`, which is the
+   *  monitor's own side initiating it. Both route through the same
+   *  close-notification path, exactly like the real `CrewClient`. */
+  simulateClose(): void;
+  /** Marks the client open again, as if a fresh reconnect succeeded --
+   *  mirrors `resolveClient`'s real contract (a *resolved* client is never
+   *  closed) for a test that drives more than one connect cycle. */
+  reopen(): void;
 }
 
 function createFakeClient(): FakeClient {
+  const closeListeners = new Set<() => void>();
   const fake: FakeClient = {
     subscribeCalls: 0,
     closed: false,
     onEvent: undefined,
     client: undefined as unknown as CrewClient,
+    simulateClose() {
+      if (fake.closed) {
+        return;
+      }
+      fake.closed = true;
+      fake.onEvent = undefined;
+      for (const listener of closeListeners) {
+        listener();
+      }
+      closeListeners.clear();
+    },
+    reopen() {
+      fake.closed = false;
+    },
   };
   fake.client = {
     get isClosed() {
       return fake.closed;
     },
     close() {
-      fake.closed = true;
-      fake.onEvent = undefined;
+      fake.simulateClose();
     },
     subscribe(_fromSequence: number, onEvent: (event: EventEnvelope) => void) {
       fake.subscribeCalls += 1;
       fake.onEvent = onEvent;
       return () => {
         fake.onEvent = undefined;
+      };
+    },
+    onClose(listener: () => void) {
+      if (fake.closed) {
+        queueMicrotask(listener);
+        return () => {};
+      }
+      closeListeners.add(listener);
+      return () => {
+        closeListeners.delete(listener);
       };
     },
   } as unknown as CrewClient;
@@ -294,6 +328,62 @@ test("a closed client is repaired on the next connect even without the shutdown 
 
   await handlers.get("session_start")?.(undefined, extCtx);
   expect(fake.subscribeCalls).toBe(2);
+});
+
+test("CREW-5: an unexpected client close reconnects on its own, with no new session_start or /crew", async () => {
+  // The gap this closes: before CREW-5, connect() only ever ran from
+  // session_start or the /crew command -- a daemon restart mid-session
+  // left the widget silently blind until the user happened to type /crew.
+  const { api, handlers } = createFakeApi();
+  const fake = createFakeClient();
+  // A resolved client is never closed (resolveClient's real contract) --
+  // simulate that here so a second connect cycle gets a usable client,
+  // exactly like a real reconnect would.
+  registerMonitor(api, {
+    getClient: async () => {
+      fake.reopen();
+      return fake.client;
+    },
+  });
+
+  const widgetCalls: unknown[][] = [];
+  const extCtx = fakeExtensionContext(widgetCalls);
+
+  await handlers.get("session_start")?.(undefined, extCtx);
+  expect(fake.subscribeCalls).toBe(1);
+
+  // The daemon restarts: the socket drops out from under the monitor,
+  // nothing the user did.
+  fake.simulateClose();
+  expect(fake.subscribeCalls).toBe(1); // not yet -- the backoff hasn't fired
+
+  // Past the initial backoff delay, with no session_start/`/crew` in between.
+  await new Promise<void>((resolve) => setTimeout(resolve, 400));
+  expect(fake.subscribeCalls).toBe(2);
+});
+
+test("CREW-5: session_shutdown cancels a pending automatic reconnect", async () => {
+  const { api, handlers } = createFakeApi();
+  const fake = createFakeClient();
+  registerMonitor(api, {
+    getClient: async () => {
+      fake.reopen();
+      return fake.client;
+    },
+  });
+
+  const widgetCalls: unknown[][] = [];
+  const extCtx = fakeExtensionContext(widgetCalls);
+
+  await handlers.get("session_start")?.(undefined, extCtx);
+  expect(fake.subscribeCalls).toBe(1);
+
+  fake.simulateClose();
+  await handlers.get("session_shutdown")?.(undefined, extCtx);
+
+  // Past when the (cancelled) backoff would have fired.
+  await new Promise<void>((resolve) => setTimeout(resolve, 400));
+  expect(fake.subscribeCalls).toBe(1);
 });
 
 test("/crew runs, export, clean, and reopen invoke their scoped RPC contracts", async () => {

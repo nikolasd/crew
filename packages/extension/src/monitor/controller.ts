@@ -23,6 +23,14 @@ const WIDGET_KEY = "crew-monitor";
 /** The slash command that opens or refreshes the monitor. */
 export const MONITOR_COMMAND_NAME = "crew";
 
+/** CREW-5: delay before the first automatic reconnect attempt after the live
+ *  subscription's client closes unexpectedly (e.g. a daemon restart or idle
+ *  exit) -- doubles on each further failed attempt, capped at
+ *  {@link RECONNECT_MAX_DELAY_MS}, so the monitor never needs the user to
+ *  type `/crew` just to notice the runtime came back. */
+const RECONNECT_INITIAL_DELAY_MS = 250;
+const RECONNECT_MAX_DELAY_MS = 30_000;
+
 /** One management operation surfaced as a /crew subcommand. The handler
  *  lives in index.ts (it needs the cached-client and doctor-context
  *  closures); the monitor owns only the dispatch. */
@@ -189,6 +197,12 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
   const controller = new MonitorController();
   attachMilestoneBridge(pi, controller);
   let subscribedClient: CrewClient | undefined;
+  /** Guards against two overlapping `connect()` calls -- the automatic
+   *  reconnect loop and a user-typed `/crew` can otherwise race and each
+   *  resolve their own client, leaking whichever one loses. */
+  let connecting = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
 
   /** The single source of truth for the `/crew` subcommand surface: both the
    *  registration `description` and the handler's `usage` line derive from it,
@@ -211,20 +225,24 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
   }
 
   async function connect(extCtx: ExtensionContext): Promise<void> {
+    if (connecting) {
+      return;
+    }
     if (subscribedClient !== undefined && !subscribedClient.isClosed) {
       return;
     }
-    if (subscribedClient !== undefined) {
-      // The prior subscription is dead with it; drop it before resubscribing.
-      controller.stop();
-      subscribedClient = undefined;
-    }
-    // Resume from whichever is further ahead: what was persisted to the
-    // session log, or what this controller has already reduced in memory.
-    // `reduceEvent` ignores an event at or below a row's applied sequence,
-    // so overlapping replay is a no-op rather than a double-count.
-    const fromSequence = Math.max(lastPersistedSequence(extCtx.sessionManager.getEntries() as SessionEntryLike[]), Number(controller.getState().lastSequence));
+    connecting = true;
     try {
+      if (subscribedClient !== undefined) {
+        // The prior subscription is dead with it; drop it before resubscribing.
+        controller.stop();
+        subscribedClient = undefined;
+      }
+      // Resume from whichever is further ahead: what was persisted to the
+      // session log, or what this controller has already reduced in memory.
+      // `reduceEvent` ignores an event at or below a row's applied sequence,
+      // so overlapping replay is a no-op rather than a double-count.
+      const fromSequence = Math.max(lastPersistedSequence(extCtx.sessionManager.getEntries() as SessionEntryLike[]), Number(controller.getState().lastSequence));
       try {
         assertCompatiblePiCodingAgentVersion();
       } catch (err) {
@@ -235,11 +253,48 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
       const client = await ctx.getClient(extCtx);
       controller.start(client, fromSequence, () => refresh(extCtx));
       subscribedClient = client;
+      // A live connection is proof the runtime is reachable again; reset the
+      // backoff so the *next* unexpected drop starts retrying quickly.
+      reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
+      client.onClose(() => scheduleReconnect(extCtx));
     } catch (err) {
       pi.logger.warn("crew monitor: runtime unavailable", {
         error: err instanceof Error ? err.message : String(err),
       });
+    } finally {
+      connecting = false;
     }
+  }
+
+  /**
+   * Schedules an automatic `connect()` retry after {@link reconnectDelayMs},
+   * doubling it (capped) for next time. This is what makes a daemon restart
+   * mid-session recoverable on its own (CREW-5): without it, the live
+   * subscription's client silently goes dark and the widget stays blind
+   * until the user happens to type `/crew` or invoke a tool. A no-op if a
+   * retry is already pending -- one client can only close once, but this
+   * keeps the function safe to call from more than one place regardless.
+   */
+  function scheduleReconnect(extCtx: ExtensionContext): void {
+    if (reconnectTimer !== undefined) {
+      return;
+    }
+    const delay = reconnectDelayMs;
+    reconnectDelayMs = Math.min(reconnectDelayMs * 2, RECONNECT_MAX_DELAY_MS);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
+      void connect(extCtx).then(() => {
+        if (subscribedClient !== undefined) {
+          // Resumed: replay already ran refresh() per event via
+          // controller.start()'s onUpdate, but a healthy, still-empty
+          // runtime needs an explicit render too (mirrors session_start).
+          refresh(extCtx);
+        } else {
+          // Still down -- keep retrying with the next, larger delay.
+          scheduleReconnect(extCtx);
+        }
+      });
+    }, delay);
   }
 
   pi.on("session_start", async (_event, extCtx) => {
@@ -366,5 +421,13 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
     // path in connect() does -- otherwise a later connect() early-returns
     // into a monitor whose subscription no longer exists (R39).
     subscribedClient = undefined;
+    // Cancel any pending automatic reconnect: its client.onClose listener
+    // was registered against a client this session no longer owns, and
+    // firing after shutdown would resubscribe into a dead session.
+    if (reconnectTimer !== undefined) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+    }
+    reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
   });
 }
