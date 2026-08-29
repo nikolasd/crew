@@ -7403,6 +7403,11 @@ Serialized as the literal method name string used on the wire.`,
           const: "runtime/shutdown"
         },
         {
+          description: "The leader closes a run it considers done (ADR-0027). A TUI vendor\nnever exits, so a run is a conversation the leader ends -- this is\nthat ending, distinct from `run/cancel`'s abort.",
+          type: "string",
+          const: "run/finish"
+        },
+        {
           description: `Lists a project's recorded policy violations with their decision
 state, so an operator can find which violation still holds a
 quarantine without diffing the raw event stream (R80).`,
