@@ -1,14 +1,29 @@
-# Rust in a week — a fast track grounded in this codebase
+# Learning Rust with this codebase as the textbook
 
-**Audience & purpose:** contributors with a TypeScript background who are new to Rust — a
+**Audience & purpose:** anyone learning Rust with this repository as the textbook — most often a
+contributor with a TypeScript background, but the material stands on its own for any newcomer. A
 companion to [getting-started.md](getting-started.md), the developer manual, and to
-[journal.md](journal.md) (each "Day" below is the concept behind one of that document's commits).
+[`docs/adr/`](adr/) and [engineering-lessons.md](engineering-lessons.md).
 
-You know TypeScript. You don't know Rust. This guide gets you productive in the Crew Rust crates
-in about a week by teaching each concept with the code that's already in this repository. Every
-section names real files — open them next to this document.
+You know TypeScript. You don't know Rust. This guide gets you productive in the Crew Rust crates in
+about a week by teaching each concept with code that is already in this repository. Every section
+names real files — open them next to this document.
 
-The plan:
+**How to use it.** Read a day, then open the files it names and read the surrounding code, not just
+the excerpt. Each day ends with **Exercises**: do them in the repo, with `cargo check` running. The
+excerpts here are real and current, but code moves — if an excerpt and the file disagree, the file
+is right, and finding that is itself the skill this repo cares about most. Which brings us to the
+one habit worth forming before any syntax:
+
+> **Verify the claim against the code.** Every assertion in a comment, a doc, or a review is a
+> testable statement. "This module handles config merging" is answered by `grep -rn "mod merge"` —
+> and in this repo, that grep once revealed a component the architecture document described as live
+> which was not even compiled. `cargo check` and `grep` are the two most useful tools in this
+> tutorial. Reach for them before you reach for belief.
+
+Seven days is the spine, not a limit — each day is a topic with real code, and the later ones carry
+**Exercises** you should actually run. Treat a day as done when its exercises compile and you can
+explain why they failed before they passed.
 
 | Day | Topic | Home base in this repo |
 |---|---|---|
@@ -132,6 +147,71 @@ One more owner shape you'll meet on Day 6: `Arc<T>` (atomic reference count) = s
 across threads, like every JS object reference, but explicit. `crates/runtime/src/ipc/server.rs`
 shares its state between connection tasks with `Arc<Shared>`.
 
+### Shared ownership, and why this codebase is full of `Arc`
+
+`Arc<T>` is shared ownership with a thread-safe reference count: every clone is a new owner, and the
+value drops when the last one does. In TypeScript every object reference behaves this way and you
+never say so; in Rust you say so, and the type records it.
+
+Read this signature from `crates/runtime/src/adapter/run_lifecycle.rs`:
+
+```rust
+pub fn wrap(
+    inner: Arc<dyn AdapterEventSink>,
+    db: Arc<DatabaseHandle>,
+    project_id: ProjectId,
+    events_tx: broadcast::Sender<EventEnvelope>,
+    run_id: RunId,
+    activity: Arc<ActivityClock>,
+) -> Arc<dyn AdapterEventSink>
+```
+
+Four things are being said at once, and each is a design decision rather than syntax noise:
+
+* **`Arc<dyn AdapterEventSink>` in *and* out.** This function wraps a sink in another sink and
+  returns something of the same shape, so wrappers compose: the production stack is a redacting sink
+  wrapped by a lifecycle sink wrapped by a settlement sink. `dyn` means "some type implementing this
+  trait, decided at runtime" — the TypeScript instinct here is an interface-typed variable.
+* **`Arc<DatabaseHandle>`, not `&DatabaseHandle`.** A borrow would need a lifetime that outlives the
+  wrapper, and the wrapper outlives this function call — it is stored and used later, from other
+  tasks. When a value must be *kept*, shared ownership is the honest answer; a borrow is for
+  *looking*.
+* **`ProjectId` and `RunId` by value.** They are small `Copy`-ish identifier newtypes. Borrowing
+  something smaller than a pointer buys nothing.
+* **`broadcast::Sender` by value.** Senders are cheap to clone and are *meant* to be handed out;
+  cloning one is how you get another producer.
+
+The rule of thumb this codebase follows: **borrow to look, `Arc` to keep, clone when the cost is
+smaller than the argument about it.** You will see `Arc::clone(&x)` written explicitly rather than
+`x.clone()` in most places here — same effect, but it tells a reader "this is a refcount bump, not a
+deep copy" at a glance.
+
+### `Mutex`, and why `&self` methods can still mutate
+
+Rust normally requires `&mut self` to change something. But `Arc<T>` hands out shared references, so
+how does anything shared ever change? Through *interior mutability*: a `Mutex<T>` inside the struct
+lets a `&self` method take the lock and mutate what is inside.
+
+`crates/runtime/src/display/coordinator.rs` holds `live_panes: Arc<Mutex<HashSet<RunId>>>` and
+mutates it from `&self` methods. This repo uses `parking_lot::Mutex`, whose `.lock()` returns the
+guard directly rather than a `Result` — there is no lock poisoning to handle, which is why you will
+not see `.unwrap()` after locks here.
+
+For a single flag, a whole mutex is overkill. `crates/runtime/src/adapter/run_lifecycle.rs` uses an
+`AtomicBool`:
+
+```rust
+working_observed: AtomicBool,
+```
+
+It is a latch: once a run has been observed working, stop paying for a state read on every
+subsequent event. Two lessons hide in it. First, `Ordering::Relaxed` is chosen deliberately — the
+flag guards an optimisation, not a correctness invariant, so no memory ordering is needed beyond
+atomicity. Second, a latch that is never *reset* is a bug waiting to happen: this one has to be
+reopened when a turn boundary parks the run, or the next turn's output is silently ignored. That
+exact bug shipped and was caught by a test. Interior mutability is easy; deciding when state must be
+cleared is the hard part.
+
 **Do now:** in `paths.rs`, find every `&` in the function signatures and say out loud who owns
 what. Then deliberately break something: change `state_root: &Path` to `state_root: PathBuf` and
 read the compiler errors at the call sites — Rust's errors are unusually good teachers. Revert.
@@ -235,6 +315,80 @@ let `?` auto-convert a lower layer's error into this layer's — that's how a `D
 
 ---
 
+### Exhaustive matching is a refactoring tool, not a chore
+
+This is the single biggest practical difference from TypeScript, and it is worth internalising early.
+
+When you add a variant to an enum, every `match` that lacks a `_ =>` arm stops compiling. That feels
+like friction until the first time it saves you. A real instance from this repo: adding a `TurnEnded`
+variant to `TuiEvent` — a vendor's end-of-turn boundary — broke compilation in about a dozen places
+across parsers, the adapter shell, the event sink and several test fixtures. Every one of those was a
+site that genuinely had to decide what the new variant meant. Nothing was forgotten, because nothing
+*could* be forgotten.
+
+The corollary is a style rule you will see enforced in review here: **avoid `_ =>` in matches over
+your own enums.** A wildcard converts that compiler-guided refactor into a silent default. Where a
+catch-all is genuinely right, this codebase names the variants anyway:
+
+```rust
+TuiEvent::AssistantText { .. }
+| TuiEvent::ToolActivity { .. }
+| TuiEvent::SessionMeta { .. }
+| TuiEvent::TurnEnded { .. } => true,
+TuiEvent::Raw { .. } => false,
+```
+
+That is from `emits_a_payload` in `crates/runtime/src/adapter/tui/mod.rs`. Adding a variant breaks
+it, which is the point — whether a new event carries a payload is exactly the kind of question a
+human should answer once, explicitly.
+
+### `match` on the *shape* of data, not just its tag
+
+Patterns destructure. You can match on nested structure, bind parts, and add conditions:
+
+```rust
+let exit = match &event.payload {
+    AdapterEventPayload::ProcessExited { exit_code, signal } => {
+        Some((*exit_code, signal.clone()))
+    }
+    _ => None,
+};
+```
+
+Two details from `run_lifecycle.rs` worth copying. It matches on `&event.payload` — a *reference* —
+because `event` is moved into the inner sink immediately afterwards; matching by value would consume
+the payload before the code that needs it runs. And the `_ => None` here is over a foreign-ish
+payload enum where only one variant is relevant, with the exhaustive decision made elsewhere.
+
+You will also meet guards and `if let` chains, which this codebase uses heavily:
+
+```rust
+if let Some(injection) = inject
+    && let Err(err) = write_paste(pty, kind, "start", injection.text, injection.write_timeout).await
+{
+    // both conditions held; `injection` and `err` are in scope
+}
+```
+
+Chained `let` conditions like this are a recent-edition feature and appear throughout the runtime.
+Read them as "if all of these bind, then".
+
+### Exercises — Day 3
+
+1. **Feel the compiler work for you.** Add a variant `Paused` to `TuiEvent` in
+   `crates/runtime/src/adapter/tui/mod.rs`, run `cargo check -p crew-runtime`, and read every error.
+   Count the sites. Now delete the variant and confirm the errors go away. You have just performed
+   the refactor Rust is best at.
+2. **Break a wildcard.** In `emits_a_payload`, replace the named `Raw` arm with `_ => false`, add
+   your `Paused` variant again, and observe that it now compiles *silently* with a default you never
+   chose. Revert both. This is the argument against `_` in one experiment.
+3. **Read an error type.** Open `crates/runtime/src/adapter/tui/mod.rs` and find a
+   `#[derive(thiserror::Error)]` enum. For each variant, decide whether a caller could sensibly
+   *recover* from it. That question is what separates `thiserror` (typed, caller might branch) from
+   `anyhow` (opaque, just report it).
+
+---
+
 ## Day 4 — Structs, traits, derives, generics, serde
 
 ### Traits ≈ interfaces, derives ≈ free implementations
@@ -296,6 +450,67 @@ about where something lives, start from `lib.rs`.
 `packages/protocol-ts/src/generated/RuntimeStatus.ts` and to its entry in
 `packages/protocol-ts/schema/crew.schema.json`. Change nothing; just see that the Rust struct is
 the one place that shape is defined, and that both other files are downstream of it.
+
+### Default methods: how a trait grows without breaking its implementors
+
+A trait method can have a body. Implementors that say nothing get that body; implementors that care
+override it. This is how you extend a trait that already has several implementations without touching
+any of them — and the *choice of default* is a safety decision.
+
+From `crates/runtime/src/adapter/tui/mod.rs`:
+
+```rust
+fn recorded_prompt(&self, entry: &serde_json::Value) -> Option<String> {
+    let _ = entry;
+    None
+}
+```
+
+`TranscriptFormat` gained this method so the adapter could verify that a vendor recorded the whole
+prompt it was sent. Four vendor formats implement the trait; three now answer this question, and the
+default means the fourth — and any future one — is not *forced* to. Returning `None` disables the
+verification rather than failing it, so a format whose shape is unknown cannot fail runs it has no
+opinion about. A default of "assume intact" would have been the dangerous choice: silently claiming
+success. **A check that cannot judge must abstain, not guess.**
+
+Note `let _ = entry;` — it silences the unused-parameter warning while keeping the parameter named
+for documentation. You will see this idiom wherever a default ignores its arguments.
+
+### `dyn Trait`, and the bounds that make it usable across threads
+
+`Arc<dyn AdapterEventSink>` is a *trait object*: the concrete type is erased and calls dispatch
+through a vtable, exactly like an interface-typed variable in TypeScript. The Rust-specific part is
+that sharing one across threads requires the trait to promise thread-safety:
+
+```rust
+pub trait AdapterEventSink: Send + Sync { /* ... */ }
+```
+
+`Send` means the value can move between threads; `Sync` means `&T` can be shared between them. Tokio
+tasks may run on any worker thread, so anything held across an `await` needs these. When you get a
+"future is not `Send`" error, the usual cause is holding a non-`Send` guard — like a `MutexGuard` —
+across an `await`. The fix is almost always to narrow the lock's scope so it is dropped before the
+await, not to reach for a different lock type.
+
+Traits also make testing cheap. Because the runtime depends on `Arc<dyn AdapterEventSink>` rather
+than a concrete sink, tests substitute a recording fake in one line. That is dependency injection
+with no framework — the trait *is* the seam.
+
+### Generics vs. trait objects: which one and why
+
+Both appear here, and the choice is not arbitrary:
+
+| | Generic (`fn f<T: Trait>(x: T)`) | Trait object (`Arc<dyn Trait>`) |
+|---|---|---|
+| Dispatch | static, monomorphised per type | dynamic, one vtable call |
+| Cost | zero at runtime, larger binary | one indirection |
+| Needs | type known at compile time | type chosen at runtime |
+| Used here for | `Classified<T>`, `parse_jsonl_chunk<F>` | sinks, adapters, display backends |
+
+The rule: if the set of types is fixed and known where you write the code, use a generic. If callers
+pick at runtime — which adapter, which display backend, which sink stack — use a trait object.
+
+---
 
 ## Day 5 — Visibility as a security boundary ("make illegal states unrepresentable")
 
@@ -420,6 +635,75 @@ architecture doc promises: stopping event committed → actor closed → socket 
 
 ---
 
+### The channel taxonomy: pick by how many, how often
+
+Tokio gives you several channel types and the choice encodes intent. All four appear in this
+codebase, each for a reason you can read off the problem:
+
+| Channel | Shape | Used here for |
+|---|---|---|
+| `oneshot` | one value, one time | "this run has settled" / "its slot is free" |
+| `mpsc` | many senders, one receiver | PTY write jobs queued to one writer thread |
+| `broadcast` | one sender, many receivers, each gets a copy | journal events fanned out to every subscriber |
+| `watch` | latest value only, many receivers | current-state style updates |
+
+The `oneshot` pair is the most instructive. From `crates/runtime/src/adapter/event_sink.rs`:
+
+```rust
+let (settled_tx, settled_rx) = oneshot::channel();
+let (slot_tx, slot_rx) = oneshot::channel();
+```
+
+Two separate one-shot signals from one sink, because two different things now happen at two different
+moments: a *turn* ending frees the concurrency slot, while the *process* exiting tears the session
+down. They used to be one signal, and splitting them was the whole point of a design change. When you
+find yourself wanting to fire one signal for two purposes, that is usually two signals.
+
+`broadcast` has a property worth knowing before it surprises you: a slow receiver can *lag* and miss
+messages, receiving `RecvError::Lagged(n)` instead. Code here handles that explicitly rather than
+treating it as fatal — a viewer that fell behind skips ahead rather than killing the worker. And a
+receiver only sees messages sent *after* it subscribed, which is why subscription order matters and
+why one call site in the TUI adapter carries a comment explaining that it subscribes before spawning
+anything, or it would miss the first output.
+
+### Blocking work in an async world
+
+`await` yields; blocking does not. A blocking call on an async worker thread stalls every other task
+on that thread. This codebase keeps the boundary explicit in two ways.
+
+Filesystem scanning goes to a blocking pool:
+
+```rust
+let scan_result = tokio::task::spawn_blocking(move || {
+    scan(&root_for_scan, started_at, &nonce_for_scan, MAX_DEPTH)
+}).await;
+```
+
+And PTY writes get a dedicated OS thread with an `mpsc` queue, because `write_all` on a pty master
+genuinely blocks until the kernel accepts every byte. The async side sends a job and awaits an
+acknowledgement; the thread does the blocking work. That shape — *own thread, queue in, ack out* — is
+the standard answer for "this API is blocking and I cannot change it".
+
+The database is the same idea taken further: one thread owns the single SQLite connection, and callers
+send closures to it. That is Day 6's actor pattern, and it is why "atomicity" in this codebase means
+"inside one closure" — see [engineering-lessons.md](engineering-lessons.md) for the bugs that taught
+everyone that boundary.
+
+### Exercises — Day 6
+
+1. **Watch a lag happen.** Write a test that subscribes to a `broadcast` channel with a tiny
+   capacity, sends more messages than it holds without receiving, then receives. Observe
+   `RecvError::Lagged`. Decide what the right behaviour would be for a pane viewer versus for the
+   journal.
+2. **Break the blocking boundary.** In a scratch test, call `std::thread::sleep` inside a
+   `#[tokio::test]` (single-threaded by default) alongside a spawned task and watch the task starve.
+   Then swap to `tokio::time::sleep` and see it interleave.
+3. **Find the subscribe-before-spawn comment.** Search `crates/runtime/src/adapter/tui/adapter.rs`
+   for the `subscribe_output` call and read why it happens where it does. Move it later in the
+   function, run the TUI adapter tests, and see what fails.
+
+---
+
 ## Day 7 — Testing, tooling, macros, and fluency drills
 
 ### Tests
@@ -461,6 +745,103 @@ You don't need to *write* macros for a long time, but you'll read three kinds he
 3. One local declarative macro: `uuid_id!` in `crates/protocol/src/ids.rs`, which stamps out the
    nine id newtypes from one template. Read it once to demystify `macro_rules!`; it's
    find-and-replace with hygiene.
+
+### A test you have not watched fail is decoration
+
+This is the house standard, and it is worth more than any syntax on this page.
+
+A test written after the code it tests passes on the first run — which proves nothing. It may assert
+the wrong thing, assert the implementation rather than the behaviour, or never execute the branch you
+care about. The discipline:
+
+1. Write the assertion first and run it. Confirm it fails **for the reason you expect** — feature
+   missing, not a typo or a compile error.
+2. Make it pass.
+3. If you wrote the code first, *mutate* the code: break the thing deliberately and confirm the test
+   notices. Then revert.
+
+Step 3 has caught real problems in this repo. A framing test looked green but passed on an empty
+result — vacuously true. A guard test only proved anything once its guard was deleted and the test
+was watched failing. If you cannot make a test fail on demand, you do not yet know what it tests.
+
+```rust
+// A vacuous assertion: passes even if `paste_chunks` returns nothing at all.
+for chunk in paste_chunks(&prompt, 512) {
+    assert!(chunk.len() <= 512);
+}
+
+// Non-vacuous: the loop cannot be trivially satisfied.
+let chunks = paste_chunks(&prompt, 512);
+assert!(chunks.len() > 1, "this input must actually be split");
+assert_eq!(delivered_payload(&chunks), prompt);
+for chunk in &chunks { assert!(chunk.len() <= 512); }
+```
+
+Any `for`/`any`/`all` assertion over a collection you did not first assert is non-empty has this
+failure mode. Check the collection's size before checking its contents.
+
+### `#[tokio::test]` has flavours, and the default will deadlock you
+
+```rust
+#[tokio::test]                                                  // current-thread
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]      // real threads
+```
+
+The default is a **single-threaded** runtime. If your test blocks that thread — a `std::sync::mpsc`
+receive, a lock held across a spawn, anything genuinely blocking — while waiting for a spawned task
+to make progress, nothing can progress. It looks exactly like a hang, and in CI it looks exactly like
+a slow build.
+
+That is not hypothetical: a registry test in this repo deadlocked precisely this way, because the
+fixture it borrowed blocks a whole thread inside an authorization call. Its neighbours carry
+`flavor = "multi_thread"` for the same reason. **When a test that spawns something hangs, check the
+flavour before you suspect your logic.**
+
+### Where the tests live, and why in two places
+
+| Location | For | Sees |
+|---|---|---|
+| `#[cfg(test)] mod tests` in the source file | unit tests | private items — `pub(crate)`, private fns |
+| `crates/*/tests/*.rs` | integration tests | only the public API, like a real consumer |
+
+The split is not stylistic. A private helper can only be tested from inside its module; a public
+contract is better tested from outside, because that is where a bug in the *shape* of the API shows
+up. This repo has hit bugs that only an integration test could see — a fixture that compiled fine but
+made a promise the public path did not keep.
+
+One consequence worth planning for: an integration test cannot see `pub(crate)` items. If you find
+yourself wanting to widen visibility purely for a test, that is usually a signal to test through the
+public seam instead — or to move the test into the module.
+
+### Run the whole suite, not the part you touched
+
+`cargo test -p crew-runtime --lib adapter::tui` is the fast loop. It is not the gate.
+
+Three classes of failure only appear in a full `cargo test --workspace` run:
+
+* **Compile-only fixtures.** A struct literal in another crate's test breaks when you add a field.
+  Nothing in your crate notices.
+* **Contract tests.** This repo asserts the exact list of methods each client role may call. Adding a
+  method fails that test *by design* — a role's surface must never widen unnoticed.
+* **Committed-artifact tests.** Generated files — a JSON schema, a default config snapshot — are
+  compared byte-for-byte against what the code would produce now.
+
+All three have caught real breakage here. The habit: iterate narrow, gate wide.
+
+### Exercises — Day 7
+
+1. **Earn one test.** Pick any test in `crates/runtime/src/adapter/tui/input.rs`, break the
+   production code it covers, and confirm it fails with a message that tells you what went wrong.
+   If the message is unhelpful, improve it — a failure message is documentation read at the worst
+   possible moment.
+2. **Cause the deadlock on purpose.** Take a `multi_thread` test in
+   `crates/runtime/tests/adapter_registry.rs`, drop it to plain `#[tokio::test]`, and watch it hang.
+   Restore it. You now recognise the symptom for life.
+3. **Find a vacuous assertion.** Search the test suites for a `for` loop or `.all(` over a collection
+   whose length is never asserted. Either prove it cannot be empty or add the assertion.
+4. **Trip a contract test.** Add a variant to `CrewMethod` in `crates/protocol/src/method.rs`, run
+   `cargo test --workspace`, and read which tests fail and why. Revert. You have just met the repo's
+   immune system.
 
 ### Fluency drills (in increasing order of ambition)
 

@@ -283,6 +283,17 @@ must be the caller's only source of truth about whether the write happened.
 `deciding_the_same_resolution_twice_sequentially_stays_idempotent`, and
 `releasing_a_violation_whose_run_settles_mid_decide_is_refused`.
 
+### An entire-struct write built on a stale read silently discards a concurrent field update
+**Location:** `crates/runtime/src/domain/repository.rs::set_run_flag`, `write_run_flags`
+
+`set_run_flags` read the whole `RunFlags` struct, handed it to a callback, then wrote the whole
+struct back. Any flag a *different* caller set while the callback ran was inside the snapshot's blind
+spot and was overwritten on write-back — no error, no conflict, just a lost update. Read-modify-write
+of an aggregate is only safe when the read and the write are the same transaction; otherwise the
+granularity of the write has to match the granularity of the intent. Fix: mutate one named flag at a
+time, reading current state inside the database actor's own closure. The lesson generalizes past
+flags — any "load object, mutate in memory, save object" against shared state has this shape.
+
 ### A root-cause lesson attaches to a pattern, not to the service the fix landed in
 
 **Location:** `crates/runtime/src/domain/repository.rs::decide_approval`;
@@ -330,13 +341,27 @@ four `policy_violation.rs` tests named in the previous entry.
 
 ---
 
+## Recovery and Startup Sweeps
+
+### A startup sweep and a periodic sweep have different risk models
+**Location:** `crates/runtime/src/recovery.rs`
+
+The crash-recovery sweep reused an age threshold (`stuck_threshold`) borrowed from the periodic
+sweep, so any run younger than that threshold went unrecovered after a daemon crash — a blind spot
+exactly where a crash is most likely to have just happened. The threshold was never an age heuristic;
+it was a guard against false positives in a *running* daemon, where a young run is probably alive.
+A daemon that has just booted provably has no live workers of its own, so the same guard becomes a
+bug. When reusing a predicate across two callers, check what the predicate was protecting against,
+not just what it computes.
+
 ## Determinism and Content Addressing
 
 ### A dependency feature enabled for one tool silently redefines every hash in the workspace
 
 **Location:** `Cargo.toml`; `crates/runtime/src/canonical_json.rs`;
 `crates/runtime/src/security/redaction.rs`; `crates/runtime/src/adapter/profile.rs`; and
-`crates/runtime/src/config/merge.rs`
+`crates/runtime/src/config/merge.rs` (since orphaned — the same sorting now lives in
+`config/crew.rs::fingerprint`)
 
 **The bug:** `serde_json`'s `preserve_order` feature was correctly enabled for the conformance
 fixture-capture scrubber, which must reproduce vendor frames in their original key order. It also
@@ -369,6 +394,28 @@ These tests vary the order each contract claims to ignore instead of repeating o
 calling the result deterministic.
 
 ---
+
+## Verification Discipline
+
+### A promise about behavior is only tested by running it
+**Location:** `crates/runtime/src/conformance/`, `crates/xtask` capture tooling
+
+Two instances, one shape. Conformance "fixture mode" promised zero model calls and still spawned
+vendor binaries on probe scenarios, because the suite asserted the promise by construction rather
+than observing it — the test and the bug shared an assumption, so the test could never fail on it.
+Separately, the fixture-capture tool reported "changed / unchanged" by reading back the file it had
+just written, grading its own homework; it always reported unchanged. In both cases reading the code
+would have confirmed the promise and running it would not. Assert on observed behavior — a spawn
+count, the previously-committed bytes — never on the code path you believe you took.
+
+### A type checker is a gate only if it is run to failure
+**Location:** `bun run typecheck`, CI `typecheck` job
+
+`tsc --noEmit` was assumed green because the code "looked fine" and other checks passed. It is only a
+gate once something has watched it fail and then pass. The same standard applies to any new test:
+edit the production code to break it and confirm the test notices, or the test is decoration. The
+cheapest version of this discipline is to write the assertion first and watch it fail for the right
+reason.
 
 ## Health Checks (`doctor`)
 
@@ -413,6 +460,35 @@ trap is treating "the prompt shows in the box" as "the prompt was submitted" —
 only proof. Fix: deliver text and Enter as two *phase-separated* writes (text at first output; Enter
 only after a measured idle window), so submission never depends on render timing.
 
+### An unframed prompt's own newlines are submit keystrokes
+**Location:** `crates/runtime/src/adapter/tui/input.rs`, `adapter.rs::run_pipeline`
+
+A multi-line prompt written raw to a PTY is not one message: every `\n` inside it reaches the vendor
+as Enter. The vendor submits the first line, starts a turn, drops or queues the rest, and whatever
+remains in the composer when the adapter's own submit byte arrives is submitted as "the prompt" — so
+a long prompt arrives as a mid-sentence *tail fragment*, with nothing anywhere reporting an error.
+Fix: frame the text as one bracketed paste so every byte is content rather than keystrokes, chunk it,
+and bound each write so a vendor that stops reading fails loudly instead of silently truncating.
+
+Note which explanations this rules out. The kernel tty layer was the intuitive suspect, but
+`supervisor/pty.rs` writes with `write_all`, which loops on partial writes and blocks rather than
+dropping; and a *tail* fragment means the head was lost, which is not what buffer overflow produces.
+The symptom's shape disqualified the theory before any code was read.
+
+### A nonce appended to a prompt cannot prove the prompt arrived
+**Location:** `crates/runtime/src/adapter/tui/verify.rs`, `adapter/tui/discovery.rs`
+
+Transcript discovery finds a vendor's session file by grepping for a nonce appended to the injected
+prompt. That proves the *tail* arrived — precisely the half that survives the truncation above — so it
+can never detect a lost head. The check that can is comparing the text the vendor actually recorded
+against the text that was sent, which is why `TranscriptFormat::recorded_prompt` exists.
+
+Two details worth copying. The comparison reports the *shape* of a mismatch (head lost, tail lost,
+middle fragment) and the two lengths, never the prompt text: prompts are user content and the message
+becomes an error string. And the accessor defaults to `None`, so a vendor whose user-entry shape is
+unknown disables verification rather than failing runs over it — a check that cannot judge must abstain,
+not guess.
+
 ### Two writers to one WAL file must both set a busy timeout
 **Location:** `packages/extension/src/ownership.test.ts::seedTestData`
 
@@ -420,6 +496,62 @@ The test opens a second connection to the daemon-owned `runtime.db` and writes d
 `busy_timeout`, a momentary lock held by the live daemon throws `SQLITE_BUSY`. The daemon itself sets
 `busy_timeout=5000` on that database; the test connection must match it. A second writer to a live
 WAL file without a busy timeout is a latent flake, not a logic bug.
+
+## Reported Outcomes
+
+### A success report must describe what happened, not what was requested
+**Locations:** `crates/runtime/src/service/orchestration.rs` (`pane/reopen`),
+`crates/runtime/src/display/pane_socket.rs`
+
+`pane/reopen` treated the socket *file existing* as proof of a live pane. A Unix socket file outlives
+its listener, and nothing removed sockets left by a daemon that died without cleaning up — so a
+leftover file made the call **succeed**, returning `{backend: "hidden", paneRef: ""}` for a pane that
+did not exist. The gate was answering "is there a file here" while its caller asked "is there a pane
+here".
+
+The fix is one definition of liveness — a connect probe, the only portable proof of a listener —
+shared by the reopen gate and by a startup sweep that unlinks the dead ones. Both consumers now ask
+the same question, so they cannot disagree. Note the sweep is keyed on liveness and never on
+ownership: the pane directory is per-*user* and shared across every repository, so another
+repository's live sockets sit beside this daemon's dead ones and must survive.
+
+The general form: a value describing an *intention* must never be returned as though it described an
+*outcome*. When reviewing any result field, ask whether it is measured after the fact or predicted
+before it — and if predicted, say so in its name or its docs.
+
+This class is not confined to code. A stacked pull request displays green checks for a workflow that
+never ran on it, because the real gate is filtered on `pull_request: branches: [main, master]` and a
+stack's child targets its parent instead. Green ticks for a gate that did not execute are the same
+failure wearing different clothes.
+
+## Structural Limits and Long-Lived Consumers
+
+### A path-length limit is a property of the layout, not an edge case
+**Location:** `crates/runtime/src/paths.rs`, `crates/runtime/src/ipc/server.rs`
+
+The pane attach socket lived at `<state_root>/repos/<32-hex>/panes/<36-uuid>.sock` — a fixed 97-byte
+suffix after `$HOME`. macOS caps `sun_path` at 104, so even `/Users/x` overflowed: the path could not
+fit for *any* real home directory, on every run, for every user. Both call sites guarded and rejected
+correctly, and tests passed because they bound sockets under `/tmp`, sidestepping the layout entirely.
+
+A limit that a layout can never satisfy is not an edge case to guard, it is a design error to fix —
+and a test fixture that avoids the production layout will never reveal it. Compute the worst case from
+the layout itself (longest realistic prefix, maximum-length components) and assert against the
+platform bound, rather than testing a path that happens to fit.
+
+### A subscription that heals only on user action is not self-healing
+**Location:** `packages/extension/src/monitor/controller.ts`
+
+The monitor subscribed once at session start. When the daemon restarted or idle-exited, the client
+went dead and nothing noticed: the widget stayed blind until the user happened to type `/crew`, whose
+handler reconnected as a side effect. Tool calls self-healed their own client, which made the
+subsystem *look* resilient while the one long-lived consumer was not.
+
+Fix: react to the close rather than waiting for a caller — a close listener plus backoff. Two
+constraints matter. Reconnect must not spawn a daemon that deliberately idle-exited (ADR-0008), so the
+automatic path connects only, and spawning stays on user-initiated paths. And the shutdown handler
+must set a flag rather than only cancelling a pending timer, because shutdown's own client close fires
+the listener and re-arms it.
 
 ## Build Determinism
 
@@ -431,6 +563,19 @@ linux-x64 rebuild even at the same Bun version. `bundle-check`'s byte-exact cont
 satisfiable from CI's platform. Produce the committed artifact in CI's environment (`refresh-bundle`
 workflow), or document that local rebuilds must happen on linux-x64. Don't weaken the check to
 "close enough" — the bytes matter.
+
+The non-obvious part is knowing *when* the bundle is stale. "Does this feel like a TypeScript change"
+is the wrong test — a change can read as pure Rust and still touch extension source. The mechanical
+test is:
+
+```
+git diff --name-only origin/main...HEAD -- packages/extension/src packages/protocol-ts
+```
+
+Non-empty means refresh the bundle. `packages/protocol-ts` counts because
+`packages/protocol-ts/src/validate.ts` imports `crew.schema.json` at runtime for the Ajv validators,
+so the schema is *embedded in the bundle* — generated TypeScript types are erased at build time and
+do not affect it, but a schema change does.
 
 ---
 
