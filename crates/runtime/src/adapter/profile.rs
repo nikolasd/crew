@@ -331,6 +331,19 @@ pub enum ProfileError {
          defaults to it), which is retired in crew v2 -- register with mode: \"tui\" instead"
     )]
     RetiredHeadlessMode { adapter: String },
+    /// `StartupOptions::TerminalDegraded` is a real, deserializable variant
+    /// -- the documented fallback identity for when a structured adapter's
+    /// protocol goes unhealthy -- but the milestone that would actually
+    /// transition a run into it is not wired yet. Registering one directly
+    /// would build a working adapter nothing else ever puts a run into, so
+    /// `profile/register` refuses it explicitly rather than validating by
+    /// omission (its `adapter_kind()`/`mode()` both return `None`, so
+    /// neither the adapter-mismatch nor the retired-headless check above
+    /// would otherwise ever see it). The variant stays deserializable --
+    /// this is a registration-time gate, not a wire-format rejection -- so
+    /// a historical row naming it still reads back exactly as journaled.
+    #[error("terminalDegraded is not implemented; registration refused")]
+    TerminalDegradedNotImplemented,
 }
 
 impl WorkerProfile {
@@ -361,6 +374,9 @@ impl WorkerProfile {
     pub fn validate(&self, policy: &EffectivePolicy) -> Result<(), ProfileError> {
         if self.model.trim().is_empty() {
             return Err(ProfileError::EmptyModel);
+        }
+        if matches!(self.startup_options, StartupOptions::TerminalDegraded(_)) {
+            return Err(ProfileError::TerminalDegradedNotImplemented);
         }
         if let Some(kind) = self.startup_options.adapter_kind()
             && self.adapter != kind.wire_name()
@@ -565,10 +581,29 @@ mod retired_headless_registration_tests {
 
     /// `TerminalDegraded` carries no `mode` field at all (it wraps an
     /// arbitrary underlying harness rather than one of the four reserved
-    /// [`AdapterKind`]s) -- the retired-headless check must not touch it.
+    /// [`AdapterKind`]s), so it slips past both the adapter-mismatch check
+    /// (guarded by `adapter_kind()`, which returns `None` for it) and the
+    /// retired-headless check (guarded by `mode()`, also `None`) -- that
+    /// gap is exactly how a `terminalDegraded` profile used to validate
+    /// successfully. The milestone that would actually drive a run into
+    /// this fallback (a structured adapter's protocol going unhealthy) is
+    /// not wired yet, so registering one today would build a working
+    /// adapter nothing else ever transitions a run into -- refused here,
+    /// explicitly, rather than left to validate by omission.
     #[test]
-    fn validate_ignores_terminal_degraded_which_has_no_mode() {
-        let profile = WorkerProfile {
+    fn validate_rejects_terminal_degraded_as_not_yet_implemented() {
+        let profile = terminal_degraded_profile();
+        let err = profile
+            .validate(&EffectivePolicy::baseline())
+            .expect_err("terminalDegraded must be refused at registration");
+        assert!(
+            matches!(err, ProfileError::TerminalDegradedNotImplemented),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    fn terminal_degraded_profile() -> WorkerProfile {
+        WorkerProfile {
             id: ProfileId::new(),
             adapter: "some-harness".to_string(),
             model: "claude-sonnet-4-5".to_string(),
@@ -579,10 +614,35 @@ mod retired_headless_registration_tests {
             }),
             environment_allowlist: vec![],
             source: "test".to_string(),
-        };
-        profile
-            .validate(&EffectivePolicy::baseline())
-            .expect("terminalDegraded has no mode to reject");
+        }
+    }
+
+    /// The register-time refusal above must never become a deserialization
+    /// refusal: an already-stored profile row (from before this check
+    /// existed, or a future one written directly by whatever milestone
+    /// eventually wires this up) must still parse -- `validate` is a gate
+    /// `profile/register` calls, not something `serde` enforces, so a
+    /// stored row is read back exactly as journaled regardless of whether
+    /// today's registration rules would have accepted it.
+    #[test]
+    fn terminal_degraded_startup_options_still_deserializes() {
+        let json = serde_json::json!({
+            "id": ProfileId::new(),
+            "adapter": "some-harness",
+            "model": "claude-sonnet-4-5",
+            "permissionEnvelope": {},
+            "startupOptions": {
+                "terminalDegraded": { "backend": "tmux", "underlyingAdapter": "claude" }
+            },
+            "environmentAllowlist": [],
+            "source": "historical-row",
+        });
+        let profile: WorkerProfile =
+            serde_json::from_value(json).expect("a stored terminalDegraded row must still parse");
+        assert!(matches!(
+            profile.startup_options,
+            StartupOptions::TerminalDegraded(_)
+        ));
     }
 }
 
