@@ -193,6 +193,13 @@ impl HerdrDisplay {
                     .to_string(),
             );
         }
+        if req.placement == DisplayPlacement::Window {
+            return Err(
+                "DisplayPlacement::Window is OsWindowDisplay's own actual-outcome placement, \
+                 never a valid request for Herdr"
+                    .to_string(),
+            );
+        }
 
         let direction = match req.placement {
             DisplayPlacement::SplitRight => "right",
@@ -203,7 +210,9 @@ impl HerdrDisplay {
             DisplayPlacement::SplitDown | DisplayPlacement::Tab | DisplayPlacement::Workspace => {
                 "down"
             }
-            DisplayPlacement::Embedded => unreachable!("handled above"),
+            DisplayPlacement::Embedded | DisplayPlacement::Window => {
+                unreachable!("handled above")
+            }
         };
         let pane_id = self.run_pane_command(
             &["pane", "split", "--current", "--direction", direction],
@@ -227,7 +236,9 @@ impl HerdrDisplay {
                     )?;
                 }
                 DisplayPlacement::SplitRight | DisplayPlacement::SplitDown => {}
-                DisplayPlacement::Embedded => unreachable!("handled above"),
+                DisplayPlacement::Embedded | DisplayPlacement::Window => {
+                    unreachable!("handled above")
+                }
             }
 
             let mut run_args: Vec<&str> = vec!["pane", "run", &pane_id];
@@ -383,6 +394,7 @@ impl DisplayBackendTrait for HerdrDisplay {
             Ok(PaneHandle {
                 backend: DisplayBackend::Herdr,
                 pane_ref,
+                placement: req.placement,
             })
         })
     }
@@ -466,6 +478,7 @@ mod tests {
             title: title.to_string(),
             command: command.iter().map(|s| s.to_string()).collect(),
             placement,
+            launch_program: None,
         }
     }
 

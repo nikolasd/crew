@@ -84,7 +84,7 @@ OMP Extension (TypeScript)  ──JSON-RPC 2.0 over NDJSON──>  crewd daemon 
                                                                       ├── SQLite Journal (WAL, append-only)
                                                                       ├── Coordination Broker (scope tokens, rate limiting)
                                                                       ├── Approval Service
-                                                                      ├── Display Backends (herdr, tmux, terminal)
+                                                                      ├── Display Backends (herdr, tmux, osWindow, hidden)
                                                                       └── Workspace Operations (lease, materialize, apply)
 ```
 
@@ -160,13 +160,13 @@ These are enforced in review, not just style preference:
 - **TypeScript**: strict mode, ESNext, Bundler resolution, runs on **Bun, not Node**. Biome formats
   (2-space indent, double quotes, semicolons, 320-char width); Biome linting is disabled — there is
   no TS linter in this repo. Tests are co-located `.test.ts` files.
-- **Config**: layered YAML (org → repo → user → per-run params), strict unknown-key rejection.
-  `crates/runtime/src/config/merge.rs` produces an immutable, SHA-256-fingerprinted `RuntimePolicy`.
+- **Config**: layered JSON (built-in defaults → paths → per-run params), strict unknown-key rejection.
+  `crates/runtime/src/config/mod.rs` and `crew.rs` load layers via `resolve_policy()` and `CrewConfig`, producing an immutable, SHA-256-fingerprinted `RuntimePolicy`.
 - **Naming**: Rust `snake_case`/`PascalCase`/`SCREAMING_SNAKE_CASE` as usual; TS `camelCase`/`PascalCase`.
   Tool names follow `crew_<verb>` (`crew_task`, `crew_worker`, `crew_run`, ...); commands are `/crew` (subcommands `health`, `run`, `runs`, `export`, `clean`, `reopen`, `doctor`, `config`) plus the standalone `/crew-install`; `/crew-status`, `/crew-doctor`, `/crew-config` are deprecated forwarders until the next release
 
 ## Source-of-truth docs (read before assuming a gap is unintentional)
 
-- `REVIEW.md` (gitignored — present on the maintainer's machine, not in fresh clones) — open implementation gaps and findings by severity, verified against the current code (not planning docs); check before re-reporting something already tracked. Resolution history: `docs/journal.md`.
+- `REVIEW.md` (gitignored — present on the maintainer's machine, not in fresh clones) — open implementation gaps and findings by severity, verified against the current code (not planning docs); check before re-reporting something already tracked. Engineering lessons from closed findings: `docs/engineering-lessons.md`.
 - `docs/future-features.md` — items deliberately deferred, each with a decision trigger.
 - `docs/engineering-lessons.md` — past bugs and the invariant/test that now guards against each.

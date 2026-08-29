@@ -93,6 +93,7 @@ fn pane_request(command: Vec<&str>, title: &str) -> PaneRequest {
         title: title.to_string(),
         command: command.into_iter().map(str::to_string).collect(),
         placement: DisplayPlacement::SplitRight,
+        launch_program: None,
     }
 }
 
@@ -164,6 +165,7 @@ async fn a_created_pane_updates_state_three_times_and_close_only_touches_crew_ta
     let unowned = PaneHandle {
         backend: DisplayBackend::Herdr,
         pane_ref: "some-other:p1".to_string(),
+        placement: DisplayPlacement::SplitRight,
     };
     let refused = herdr.close_pane(&unowned).await;
     assert!(refused.is_err());

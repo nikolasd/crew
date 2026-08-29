@@ -1,9 +1,9 @@
 # Using the Crew OMP Extension
 
-**This is the Crew user manual.** Audience: anyone using Crew through OMP — you drive it with
-plain language, and the model calls the tools on your behalf. You never need to touch the source,
-build anything, or write raw tool-call JSON yourself — that detail lives in Appendix A below, for
-advanced users and for the model's own reference.
+**Audience & purpose:** the Crew user manual, for anyone using Crew through OMP — you drive it
+with plain language, and the model calls the tools on your behalf. You never need to touch the
+source, build anything, or write raw tool-call JSON yourself — that detail lives in Appendix A
+below, for advanced users and for the model's own reference.
 
 For installing the extension, see the [README](../README.md#installation). For running/
 troubleshooting the daemon directly, see [`operations.md`](operations.md) and
@@ -27,11 +27,10 @@ tool) only exists once a fresh session has loaded the installed module. Then:
 /crew health
 ```
 
-**This repository is private** — the marketplace step git-clones it, so it needs your own GitHub
-read access to `nikolasd/crew` (an SSH key registered with GitHub, or a `gh auth login` session
-backed by a git credential helper). `/crew-install` additionally needs a `GITHUB_TOKEN` or
-`GH_TOKEN` environment variable, or that same `gh auth login` session, to download and verify the
-release asset.
+This repository is public — the marketplace step clones it over HTTPS, no authentication needed.
+`/crew-install` downloads the `crewd` binary via the GitHub REST API; a `GITHUB_TOKEN`/`GH_TOKEN`
+environment variable (or a `gh auth login` session) is optional but recommended — without one you
+may hit GitHub's unauthenticated rate limit (60 requests/hour); with one, it's 5,000/hour.
 
 **Skills and rules load automatically — no extra manifest entry needed.** `packages/extension/`
 ships `skills/` (three skills, §3) and `rules/` (`crew-delegation-guard.md`) as plain sibling
@@ -90,23 +89,36 @@ hint from you. Some examples of what to say, and what happens:
 ## 4. Watching runs
 
 `/crew` opens (or refreshes) a live widget above the editor showing every active run: state icon,
-adapter/model, workspace mode, pending approvals, and latest activity — up to 7 rows. It subscribes
-to the daemon's live event stream, so it updates itself with zero further input as runs progress,
-and it replays from the daemon's journal across OMP restarts, so nothing is lost or duplicated. When
-there's nothing running yet, it prints:
+adapter/model, workspace mode, pending approvals, and latest activity — up to 7 rows, with an
+overflow line (`… N more; use /crew run <runId> for full details.`) once there are more than that.
+It subscribes to the daemon's live event stream, so it updates itself with zero further input as
+runs progress, and it replays from the daemon's journal across OMP restarts, so nothing is lost or
+duplicated. Before the first run event of a session, it prints:
 
 ```
-No Crew runs yet.
+Crew active, waiting for task submissions
 ```
 
-`/crew run <runId>` prints the full detail block for one run: task, worker, state, harness/
-model, flags, pending approvals, workspace mode, latest activity, first-seen and last-event
-timestamps.
+or, if your most recent `run/submit`/`run/retry` failed outright (before a run even started), that
+failure's own message instead — the widget's most urgent thing to show you is a submission Crew
+never managed to start at all.
 
-On session start the monitor connects on its own: if the daemon is unreachable it degrades to
-inactive rather than blocking session startup — running `/crew` again retries the connection.
-The widget itself appears only when the journal has runs, so a session with nothing to show stays
-widget-free until the first run event arrives.
+`/crew` isn't only the live widget — it's a small command family:
+
+| Subcommand | Does |
+|---|---|
+| `/crew run <runId>` | Full detail block for one run: task, worker, state, harness/model, flags, pending approvals, workspace mode, latest activity, first-seen and last-event timestamps |
+| `/crew runs` | Lists retained run history |
+| `/crew export [runId]` | Writes replayed events as JSONL under `.omp/crew/` |
+| `/crew clean` | Applies configured event retention (period plus max-runs) to terminal/unassociated history |
+| `/crew reopen <runId>` | Reopens a pane for a still-live run, while its attach socket still exists |
+
+On session start the monitor connects on its own without blocking startup, and if the daemon is
+unreachable at that moment it keeps retrying on its own in the background (an increasing backoff,
+capped at 30s) — you don't need to run `/crew` again to make it reconnect, though doing so still
+works and reconnects immediately if a retry hasn't already landed. The widget itself appears only
+when the journal has runs, so a session with nothing to show stays widget-free until the first run
+event arrives.
 
 ## 5. When Crew needs you
 
@@ -121,6 +133,10 @@ Some actions require an explicit human decision, and Crew never fabricates one o
   These surface through the event stream and the `/crew` monitor, not a query you poll.
 - **Nested-child requests.** A worker that wants to spawn a child records only an intent — nothing
   happens until it's accepted or denied.
+- **Worker timeouts and budgets** (leader control plane, Appendix A). A timed-out worker is never
+  killed automatically — you (or the model acting as leader) decide to extend it or send an abort.
+  A subtask whose turn budget is exhausted refuses further progress on that same message; resending
+  it changes nothing — the fix is a new budget/plan decision, not a retry.
 
 ## 6. When something breaks
 
@@ -144,7 +160,7 @@ Every Crew tool failure has the same shape: text `"<method> failed: <message>"`,
 | `manifest-invalid` | Re-run `/crew-install`. The cached manifest is corrupt or for another platform. |
 | `unsupported-platform` | Crew only supports macOS and glibc Linux, arm64/x64. |
 | `connection-failed` | Run `/crew doctor` for a detailed check without needing a live daemon. |
-| `http-error` (from `/crew-install`) | **This repository is private.** Set `GITHUB_TOKEN`/`GH_TOKEN`, or run `gh auth login`, then retry the install. |
+| `http-error` (from `/crew-install`) | Usually a GitHub API rate limit. Set `GITHUB_TOKEN`/`GH_TOKEN`, or run `gh auth login`, then retry the install. |
 
 ## 7. Run three workers end to end
 
@@ -204,6 +220,11 @@ applies — there's no repository in it for either plain git or Crew's own (git-
 `apply` to work against. Reach for `copy` only when you want a worker fully outside git's reach;
 reach for `isolated` whenever you'll want the work back.
 
+As a rule of thumb across all three: use `shared` (the default) unless you specifically need
+otherwise — writes to it just serialize. Reach for `isolated` when you have genuine concurrent
+writers, like this three-worker example, not merely uncertainty about whether they'll collide.
+Reach for `copy` only for work you want fully outside git's reach.
+
 ### Merging back into `main`
 
 For a `gitWorktree` run, the direct-git route above is usually all you need. If you want Crew to
@@ -242,12 +263,14 @@ git merge would ask you to decide anyway.
 
 ## Appendix A — tool reference
 
-For advanced users, and for the model's own use: the extension registers **11 orchestration
-tools** (the deterministic `crew_*` tools below), plus three health/install helpers —
-`crew_health`, `crew_doctor`, and `crew_install` — each also available as a slash
-commands (`/crew health`, `/crew doctor`, `/crew-install`). Every tool shares one
-runtime connection per OMP session — the first call connects to (or spawns) the repository's
-`crewd` daemon; every later call in the same session reuses that connection.
+For advanced users, and for the model's own use: the extension registers **18 orchestration
+tools** — 11 base tools (the deterministic `crew_*` tools below) plus 7 leader-facing tools for a
+model acting as a team leader to decompose, spawn, steer, and wind down a plan's own subtask runs
+(their own subsection, below) — plus three health/install helpers — `crew_health`, `crew_doctor`,
+and `crew_install` — each also available as a slash commands (`/crew health`, `/crew doctor`,
+`/crew-install`). Every tool shares one runtime connection per OMP session — the first call
+connects to (or spawns) the repository's `crewd` daemon; every later call in the same session
+reuses that connection.
 
 **Shared contract** (`packages/extension/src/tools/shared.ts`, `callOrchestration`): a successful
 call's text content is `"<method>: <JSON.stringify(result)>"`, and `details` is the daemon's JSON
@@ -659,18 +682,81 @@ Path: /Users/you/.omp/crew/bin/0.3.0/crewd
 { "version": "0.3.0", "target": "darwin-arm64", "path": "/Users/you/.omp/crew/bin/0.3.0/crewd", "sizeBytes": 41211752 }
 ```
 
-Failure (private-repo case):
+Failure (unauthenticated rate-limit case):
 
 ```
-Runtime install failed: failed to fetch release https://api.github.com/repos/nikolasd/crew/releases/tags/v0.3.0: HTTP 404
+Runtime install failed: failed to fetch release https://api.github.com/repos/nikolasd/crew/releases/tags/v0.3.0: HTTP 403
 ```
 
 ```json
-{ "code": "http-error", "message": "failed to fetch release https://api.github.com/repos/nikolasd/crew/releases/tags/v0.3.0: HTTP 404" }
+{ "code": "http-error", "message": "failed to fetch release https://api.github.com/repos/nikolasd/crew/releases/tags/v0.3.0: HTTP 403" }
 ```
 
-That `404` on a private repo almost always means no `GITHUB_TOKEN`/`GH_TOKEN` was set and no
+That `403` almost always means no `GITHUB_TOKEN`/`GH_TOKEN` was set and no
 `gh auth login` session exists — see the [code table above](#6-when-something-breaks).
+
+### Leader control-plane tools
+
+A model acting as a **team leader** — decomposing a piece of work into subtasks, spawning each on
+its own worker, and steering or winding them down — uses seven tools built as thin compositions on
+top of the base tools above. None of them invent new routing or merge logic: `crew_spawn` still
+goes through `worker/create`/`run/submit`; `crew_stop`/`crew_finish` still go through
+`run/cancel`. `/crew` is the live projection for all of it — it receives milestone digests from the
+daemon, so watch it rather than polling a run until it becomes terminal.
+
+| Tool | Ops | Tier | Purpose |
+|---|---|---|---|
+| `crew_plan` | propose, get | `exec`/`read` | Persist a leader's decomposition of a run into subtasks and run its approval gate |
+| `crew_spawn` | spawn | `exec` | Execute one approved subtask: reuse (or create) a worker of its adapter, submit a run tagged with the plan and subtask ids |
+| `crew_send` | send | `write` | Steer a running subtask, or acknowledge a `WorkerTimeout`/`BUDGET_EXCEEDED` decision |
+| `crew_status` | snapshot | `read` | Read the current run list for a task (or all tasks) |
+| `crew_transcript` | replay | `read` | Replay one run's events as normalized digests, filtered and paged by sequence |
+| `crew_stop` | stop | `exec` | Stop one run: `done` sends a wrap-up message then cancels softly, `abort` cancels immediately |
+| `crew_finish` | finish | `exec` | Cancel the plan's remaining named subtask runs once the leader is done |
+
+**`plan/propose`** persists the decomposition (a `PlanProposed` event) and returns:
+
+```json
+{ "runId": "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e", "sequence": 51 }
+```
+
+Then runs the approval gate from the effective `~/.omp/crew.json`/`<repo>/.omp/crew.json` layers
+(repo wins): `approval: "always"` always requires a human decision, `"never"` never does, and the
+default `"auto"` requires one only if any subtask sets `writes: true`. When a decision is required
+and no interactive UI is present, the plan is left proposed rather than auto-decided either way —
+this is the same fail-closed rule as any other Crew approval.
+
+**`plan/get`** is a pure read — no event, nothing broadcast — of the most recently proposed plan and
+its decision:
+
+```json
+{
+  "runId": "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e",
+  "plan": { "subtasks": [ { "id": "auth-refactor", "description": "…", "adapter": "claude", "writes": true } ] },
+  "approved": true
+}
+```
+
+`plan: null` means no plan has been proposed for that run yet; `approved: null` means one has been
+proposed but not yet decided.
+
+**`crew_spawn`** resolves `subtaskId` out of `crew_plan`'s stored plan, reuses an idle worker for
+that subtask's adapter (or creates one), and submits a run tagged with `planId`/`subtaskId` for
+budget tracking — its response is a `run/submit` result, shown under §Appendix A `run/submit`
+above.
+
+**`crew_send`** is `message/send` under a leader-facing name — see §Appendix A `message/send`; use
+it to steer or nudge a subtask already in flight. It is a separate channel from a `WorkerTimeout`
+decision, which the daemon's own milestone digests instruct the leader to acknowledge with an
+`extend`/`abort` decision (the underlying `run/timeoutAck` RPC) rather than a steering message. A
+`BUDGET_EXCEEDED` result on a subtask means its snapshotted turn budget is exhausted — resending
+the same message changes nothing; escalate for a new plan/budget decision instead.
+
+**`crew_status`**/**`crew_transcript`** are `run/list`/`events/replay` respectively, pre-filtered to
+a task or run — see those entries above for the full result shape.
+
+**`crew_stop`**/**`crew_finish`** both resolve to `run/cancel` (§Appendix A above); `crew_stop`'s
+`"done"` outcome additionally sends one `message/send` wrap-up before the soft cancel.
 
 ## Appendix B — how the runtime binary is resolved
 
@@ -679,21 +765,3 @@ Moved to [`getting-started.md` § How the extension finds and starts `crewd`](ge
 socket answers; otherwise `OMP_CREW_BINARY` (developer override) or the checksum-verified
 `<state root>/bin/<version>/crewd` cache is spawned, and `crew_health` reports which one as
 "Binary source".
-
-## Crew v2 leader control plane
-
-Use `/crew` as the live projection. It receives milestone digests from the daemon; do not poll a run until it becomes terminal.
-
-1. Propose a decomposition with `crew_plan`; the configured approval gate decides whether it may execute.
-2. Start approved subtasks with `crew_spawn`. The selected worker's resolved `adapters.*.profile` is the adapter/model/permission routing context the worker sees.
-3. Triage from the monitor: use `crew_send` for one Crew message channel, `crew_stop` for one outcome, and `crew_finish` for explicitly named plan runs.
-
-`/crew runs` lists retained run history. `/crew export [runId]` writes replayed event JSONL under `.omp/crew/`. `/crew clean` applies configured event retention (period plus `maxRuns`) only to terminal/unassociated history. `/crew reopen <runId>` opens another pane only while the live attach socket exists.
-
-### Timeout and budget facts
-
-A `WorkerTimeout` is a leader decision, never an automatic daemon kill: acknowledge `extend`, send one nudge with `crew_send`, or acknowledge `abort`. A `BUDGET_EXCEEDED` result means the subtask's snapshotted turn budget is exhausted; do not resend the same message. Escalate for a plan/budget decision instead.
-
-### Workspace choice
-
-Use `shared` by default. Use an isolated Git worktree for parallel writers. Use `copy` only for work outside Git or a disposable filesystem copy. Shared writes serialize; worktrees solve actual concurrent file ownership, not planning uncertainty.

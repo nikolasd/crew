@@ -9,7 +9,7 @@
 import type { AgentToolResult, ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 import type { OrchestrationToolContext } from "./shared";
-import { callOrchestration } from "./shared";
+import { callOrchestration, displayPreferenceFragment } from "./shared";
 
 export const CREW_SPAWN_TOOL_NAME = "crew_spawn";
 export const CREW_SEND_TOOL_NAME = "crew_send";
@@ -87,6 +87,7 @@ export function registerSpawnTool(pi: ExtensionAPI, ctx: OrchestrationToolContex
         subtaskId: input.subtaskId,
         ...(input.workspaceMode !== undefined ? { workspaceMode: input.workspaceMode } : {}),
         ...(input.priority !== undefined ? { priority: input.priority } : {}),
+        ...displayPreferenceFragment(),
       });
       if (result.isError && ctx.reportSubmitFailure !== undefined) {
         const msg = (result.details as { message?: string })?.message ?? "run/submit failed";

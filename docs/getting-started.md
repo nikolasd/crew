@@ -1,13 +1,14 @@
 # Crew Getting Started Guide
 
-**This is the Crew developer manual.** Audience: contributors building, configuring, or testing
-Crew from source. This guide covers everything you need to **build Crew from source as a
-contributor** — from setup to troubleshooting, including configuration, security, recovery,
-doctor, and testing. Its companions are [`code-walkthrough.md`](code-walkthrough.md) (source map
-and debugging playbook), [`rust-primer.md`](rust-primer.md) (Rust via this codebase), and
-[`manual-testing.md`](manual-testing.md) (QA verification steps).
+**Audience & purpose:** the Crew developer manual, for contributors building Crew from source and
+working in this codebase day to day — setup, the patterns and invariants this repo actually
+enforces, and where to find more. For running/debugging an already-installed `crewd` (flags,
+troubleshooting workflows), see [`cli-reference.md`](cli-reference.md) instead — that content used
+to live here and has moved. Its other companions are [`code-walkthrough.md`](code-walkthrough.md)
+(source map and debugging playbook), [`rust-primer.md`](rust-primer.md) (Rust via this codebase),
+and [`manual-testing.md`](manual-testing.md) (QA verification steps).
 
-> **Just want to use Crew, not build it?** See [README.md's Installation section](../README.md#installation) — `/marketplace add nikolasd/crew` then `/marketplace install crew@crew` installs the extension, then a session restart, then `/crew-install` in the new session downloads the runtime binary; no build step. Note this is a private repository, so both need your own GitHub read access. Then see [`plugin-usage.md`](plugin-usage.md), the user manual. This guide is for developing Crew itself.
+> **Just want to use Crew, not build it?** See [README.md's Installation section](../README.md#installation) — `/marketplace add nikolasd/crew` then `/marketplace install crew@crew` installs the extension, then a session restart, then `/crew-install` in the new session downloads the runtime binary; no build step, no GitHub access needed (the repository is public). Then see [`plugin-usage.md`](plugin-usage.md), the user manual. This guide is for developing Crew itself.
 
 ## Prerequisites
 
@@ -94,24 +95,15 @@ CLI layer, only what the extension does for you.
 
 ### CrewConfig
 
-The merged configuration deserializes into an immutable `CrewConfig` (spec §10); a thin
+The merged configuration deserializes into an immutable `CrewConfig` (spec §10) — approval mode,
+concurrency/timeout/turn-budget limits, display backend preference, per-adapter config, workspace
+defaults, dashboard, retention, and (additive-across-layers) security patterns. A thin
 `RuntimePolicy` adapter (`crates/runtime/src/config/mod.rs`) exposes the fields the runtime's
 redaction, workspace, concurrency, retention, and doctor checks read, plus a SHA-256 fingerprint
 (`crew::fingerprint`) so two runtimes that resolved the same layers can prove they landed on the
-identical effective policy without comparing documents byte-for-byte:
-
-```rust
-pub struct CrewConfig {
-    pub approval: ApprovalMode,           // always | never | auto
-    pub limits: Limits,                   // maxConcurrentWorkers, timeouts, turn budget
-    pub display: DisplayConfig,           // backend, closeOnExit
-    pub adapters: BTreeMap<String, AdapterConfig>,
-    pub workspace: WorkspaceConfig,       // default_mode, copy_max_bytes, copy_max_files
-    pub dashboard: DashboardConfig,       // enabled, port
-    pub retention: RetentionConfig,       // max_runs, period
-    pub security: SecurityConfig,         // patterns (additive across layers)
-}
-```
+identical effective policy without comparing documents byte-for-byte. The full field list lives in
+`crates/runtime/src/config/crew.rs` — it's the single source of truth; a struct copied here would
+just be one more place for it to go stale.
 
 ## Usage
 
@@ -200,144 +192,27 @@ subcommand takes — `audit export` derives the per-repository runtime directory
 crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl
 ```
 
-## Security Features
+## Security and recovery, in brief
 
-### Redaction
+Two invariants worth knowing before you touch either area — full detail in
+[Developer practices](#developer-practices) below and, for the flags/workflows around them,
+[`cli-reference.md`](cli-reference.md):
 
-Crew enforces a strict redaction boundary: raw vendor content (which may contain `Thinking` or `Secret` fragments) is sanitized before persistence. The [`Redactor`] is the sole path from raw content to [`PersistableEvent`]:
-
-- Drops `Thinking` and `Secret` fragments entirely
-- Rewrites built-in regex-pattern matches (e.g., API keys) with `[REDACTED:<rule id>]` markers
-- [`PersistableEvent`] fields are private with no public constructor
-
-The built-in rules, applied to every `Visible` string before it can become durable:
-
-| Rule id | Shape it catches |
-|---|---|
-| `api_key` | `sk-`-prefixed vendor keys, including the hyphenated/underscored shapes Anthropic (`sk-ant-api03-…`) and OpenAI (`sk-proj-…`) actually issue |
-| `bearer_token` | `Bearer <token>` (20+ chars) in free text |
-| `github_pat` | `ghp_`-prefixed GitHub personal access tokens |
-| `aws_access_key` | `AKIA`-prefixed AWS access key IDs |
-| `jwt` | Three `.`-separated base64url segments |
-
-Org-configured patterns (below) are applied *in addition to* these; they can never remove built-in
-coverage.
-
-```rust
-let redactor = Redactor::new();
-let sanitized = redactor.sanitize(raw_event)?;
-```
-
-### Org-Configured Redaction Rules
-
-Organizations can define custom redaction patterns in their config:
-
-```yaml
-security:
-  patterns:
-    - "AKIA[0-9A-Za-z]{16}"  # AWS access key
-    - "sk-[a-zA-Z0-9]{32}"  # API key
-    - "ghp_[a-zA-Z0-9]{36}"  # GitHub personal access token
-```
-
-These are compiled once at startup and applied to every redaction call.
-
-### File Security
-
-Crew ensures all on-disk state is private (mode `0700`/`0600`, owned by current user) before writing:
-
-```rust
-// Ensures directory is mode 0700 and owned by current user
-ensure_private_dir(&state_root)?;
-
-// Ensures file is mode 0600 and owned by current user
-ensure_private_file(&lock_file)?;
-```
-
-### Event Retention
-
-Configure event retention period:
-
-```yaml
-retention: "30d"  # 30 days
-# or
-retention: "90d"  # 90 days
-```
-
-Events older than the retention period are automatically purged.
-
-### Export
-
-Audit events export to JSONL for offline analysis — command and the `--state-dir` caveat in
-[Audit Export](#audit-export) above.
-
-## Crash Recovery
-
-### RecoveryCoordinator
-
-`RecoveryCoordinator` is wired into `lifecycle::serve()` and runs automatically at daemon startup. It transitions every run the journal still calls non-terminal to a terminal state — `queued`/`starting`/`working` to `failed` — without consulting how recent its last event is, because `serve` holds the single-instance lock and starts with an empty adapter registry, so no non-terminal run can still have a live process. `paused`/`waitingUser`/`waitingPeer` runs are skipped unless `RecoveryConfig` opts in. 14 tests verify the recovery matrix plus the doctor's separate silence-threshold report.
-
-**References:** `crates/runtime/src/recovery.rs`, `crates/runtime/src/lifecycle.rs`
-
-### Manual Recovery
-
-There's no flag to trigger recovery on demand — it only ever runs automatically, once, inside
-`crewd serve` at startup, before the socket accepts any connection. To see a run that has gone
-silent while the daemon is up, check `doctor`'s `stale_runs` check, which reports runs silent for
-longer than five minutes, read-only:
-
-```bash
-crewd doctor --repo "$PWD" --state-dir "$HOME/.omp/crew" --json
-```
-
-### Recovery Configuration
-
-```rust
-pub struct RecoveryConfig {
-    pub recover_paused: bool,   // Default: false
-    pub recover_waiting: bool,  // Default: false
-}
-```
-
-Recovery has no stuck-run threshold: the startup sweep decides by ownership, not age. The five-minute
-silence threshold belongs to the doctor's passive `stale_runs` report and lives beside it as
-`recovery::DEFAULT_STALE_RUN_THRESHOLD`.
-
-## Doctor (Health Checks)
-
-The [`Doctor`] provides comprehensive health checking:
-
-```rust
-let doctor = Doctor::new(Some(db), Some(state_dir), Some(policy))
-    .with_runtime_context(socket_path, repo, project_id);
-let result = doctor.check().await?;
-
-if result.healthy {
-    println!("Runtime is healthy");
-} else {
-    println!("Failed checks: {:?}", result.failed_checks);
-}
-```
-
-### Health Checks
-
-The catalog runs 12 checks in total — database connectivity, configuration validity, state
-directory permissions, platform support, binary integrity, socket permissions, schema
-compatibility, per-adapter availability (Claude/Codex/Copilot/OMP-RPC), display backend
-availability, disk space, stale workspaces, and stale runs. See
-[`cli-reference.md`](cli-reference.md#crewd-doctor) for what each one actually verifies — it's
-the single source of truth for the catalog, kept alongside the CLI flags it's exposed through.
-
-### DoctorResult
-
-```rust
-pub struct DoctorResult {
-    pub healthy: bool,
-    pub passed_checks: Vec<String>,
-    pub failed_checks: Vec<FailedCheck>,
-    pub unresolved_gates: Vec<String>,
-}
-```
+- **Redaction is a boundary, not a step.** [`Redactor`] is the *only* path from raw vendor content
+  to a [`PersistableEvent`] — it drops `Thinking`/`Secret` fragments entirely and rewrites built-in
+  regex matches (API keys, bearer tokens, GitHub PATs, AWS keys, JWTs) with `[REDACTED:<rule id>]`
+  markers; org-configured `security.patterns` (`crew.json`, additive across layers, never replacing
+  built-in coverage) are applied on top. `PersistableEvent`'s fields are private with no public
+  constructor, so nothing can construct one by skipping `Redactor::sanitize`.
+- **Crash recovery runs once, automatically, at `serve` startup** — there's no flag to trigger it on
+  demand. `RecoveryCoordinator` transitions every run the journal still calls non-terminal
+  (`queued`/`starting`/`working`) to `failed`, unconditionally on recency, because `serve` holds the
+  single-instance lock and starts with an empty adapter registry — no such run can still have a live
+  process. `paused`/`waitingUser`/`waitingPeer` runs are left alone unless `RecoveryConfig` opts in.
+  `doctor`'s `stale_runs` check is the live-daemon counterpart — see
+  [`cli-reference.md`](cli-reference.md#crewd-doctor) for the full check catalog, and its
+  [Troubleshooting](cli-reference.md#troubleshooting) section for what to do when a run wasn't
+  recovered the way you expected.
 
 ## Testing
 
@@ -406,60 +281,66 @@ The test suite's Rust integration test files (`crates/runtime/tests/`) cover:
 - Vendor CLI availability probing
 - Workspace operations (apply, lease, materialize)
 
-## Troubleshooting
+## Developer practices
 
-### `serve` exits with code 73
+What this codebase actually enforces, beyond what any single file's tests show:
 
-There is no TCP port to conflict on — `crewd` communicates over a Unix domain socket, not a
-network port, and `serve` has no `--port` flag. Exit code 73 (`EX_TEMPFAIL`) means the repository's
-`runtime.lock` is already held by a live `crewd serve` process; it prints that process's identity
-(pid, project id, socket path) as JSON on stdout when it happens.
+### Protocol types flow one way: Rust → TypeScript
 
-**Solution**:
-1. This usually isn't an error to fix — connect to the existing runtime instead of starting another:
-   `crewd status --repo <path> --state-dir <same state-dir>`.
-2. If you're sure it should have exited (e.g. a previous test run leaked it), find and stop it:
-   `ps aux | grep crewd`, then `crewd stop --repo <path> --state-dir <state-dir>` or `kill <pid>`.
+`crates/protocol/` is the canonical wire contract — every request/result/event type derives
+`serde` (wire format), `schemars` (JSON Schema), and `ts-rs` (TS bindings). Never hand-edit
+`packages/protocol-ts/src/generated/` or the schema file directly; after any change under
+`crates/protocol/`, run:
 
-### Database Connection Errors
+```bash
+bun run generate
+```
 
-Crew has no configurable database URL — the SQLite file is always `<runtime-dir>/runtime.db`,
-where `<runtime-dir>` is `<state-dir>/repos/<repository-id>/`, derived automatically from
-`--state-dir` and `--repo`. A "failed to open database" error almost always means that directory
-doesn't exist or isn't writable.
+This regenerates the TS bindings and `packages/protocol-ts/schema/crew.schema.json` from the Rust
+source. CI's `generate-check` job re-runs the same generation and fails the build on any diff — the
+generated output and the Rust source can never quietly drift apart. On the TypeScript side, every
+message the extension receives from the daemon is validated before it reaches extension logic
+(`packages/protocol-ts/src/validate.ts`): envelopes and events via Ajv schemas, results via Ajv
+where a canonical protocol result type exists, structurally otherwise.
 
-**Solution**:
-1. Confirm the state dir resolves the way you expect (see
-   [`cli-reference.md`](cli-reference.md#before-you-start-state-directories)).
-2. Ensure it exists and is writable — `crewd doctor --json` reports this directly as the
-   `state_dir_writable` and `database_connectivity` checks.
+### A domain mutation is not done until it's both journaled and broadcast
 
-### Permission Errors
+Every domain mutation must commit its event **and** broadcast that same `EventEnvelope` to live
+`events/subscribe` listeners, in the same call. An append without a broadcast silently breaks the
+embedded `/crew` monitor and any other live subscriber — it's a real, previously-hit bug class, not
+a hypothetical one. Two regression tests guard it directly:
+`events_replay_round_trips_committed_mutation_events` and
+`events_subscribe_delivers_live_notifications_for_orchestration_mutations`. If you add a new
+mutation path and suspect you've regressed this, run the affected test with an explicit runner
+timeout — the failure mode is a hang (a subscriber waiting for a broadcast that never comes), not a
+clean assertion failure.
 
-**Solution**:
-1. Check file permissions: `ls -ld <state-dir>` — Crew expects its state directory at mode
-   `0700` and its socket at `0600`, both owned by the user running `crewd`.
-2. **Do not widen permissions** (e.g. `chmod 755`) to work around a permission error — that defeats
-   the same-user isolation the redaction/security boundary depends on, and `doctor`'s
-   `state_dir_writable`/`socket_permissions` checks will simply fail again with a different reason.
-   If ownership is wrong, fix ownership (`chown`) or remove and let `crewd` recreate the directory
-   at the correct mode.
+### The redaction boundary is an invariant, not a call site to remember
 
-### Recovery Issues
+Section above; the point worth restating here is that it's enforced structurally
+(`PersistableEvent` has no public constructor reachable except through `Redactor::sanitize`), not
+by convention — the same pattern this codebase reaches for repeatedly: make the unsafe path
+impossible to construct, rather than trusting every call site to remember a rule. `HostProgramHint`
+(a closed enum with a `#[serde(other)]` catch-all, so untrusted `$TERM_PROGRAM` content can never
+reach an `osascript` invocation unmapped) is the same pattern applied to a different boundary.
 
-Recovery isn't configurable from the CLI — `recover_paused` and `recover_waiting` are the only fields
-on `RecoveryConfig`, used by whatever code calls `RecoveryCoordinator` (currently just
-`lifecycle::serve()`'s own defaults). If a run looks like it should have been recovered and wasn't:
+### Test-first, and a failing test before any fix
 
-**Solution**:
-1. Confirm it's actually eligible: the startup sweep touches `queued`/`starting`/`working` runs only
-   — `paused`/`waitingUser`/`waitingPeer` runs are left alone unless recovery was built with
-   `recover_paused`/`recover_waiting` enabled.
-2. Recovery only runs at `serve` startup, not continuously — a run that goes silent while the daemon
-   is up stays where it is until the next restart, deliberately: a quiet run is not a dead run while
-   its supervisor is alive.
-3. Use `crewd doctor --json`'s `stale_runs` check to see runs silent for longer than five minutes,
-   without waiting for a restart.
+This repo expects tests written before the code that makes them pass — for new features and for bug
+fixes alike. A bug fix without a regression test is treated as incomplete, not merely stylistic.
+`crates/runtime/tests/` (grep it for the exact suite name to pass to `cargo test --test`) and
+co-located `.test.ts` files are both large and current; when changing behavior near existing tests,
+extend them rather than deleting coverage to make a change land more easily.
+
+### Review discipline: verify, don't relay
+
+A design or approach worth merging is expected to survive independent scrutiny before it lands —
+not just look plausible on a first read. Two artifacts capture that discipline once a review closes:
+[`docs/engineering-lessons.md`](engineering-lessons.md) records past bugs alongside the specific
+invariant or test that now closes each one (read it before assuming a gap in unfamiliar code is
+accidental), and `docs/adr/0001...`–`0027...` capture the design rationale for structural choices —
+check there before assuming something is arbitrary. A maintainer-local `REVIEW.md` (gitignored, not
+in a fresh clone) tracks open findings by severity against current code, not planning docs.
 
 ## Contributing
 
@@ -481,22 +362,9 @@ We welcome contributions! Please see the [CONTRIBUTING.md](../CONTRIBUTING.md) f
 
 ## Getting Help
 
-- **Documentation**: See the other files in [`docs/`](.) — start with [architecture.md](architecture.md) and [code-walkthrough.md](code-walkthrough.md). For running `crewd` day-to-day, see [`cli-reference.md`](cli-reference.md) (full flag reference) and [`operations.md`](operations.md) (lifecycle procedures).
+- **Documentation**: See the other files in [`docs/`](.) — start with [architecture.md](architecture.md) and [code-walkthrough.md](code-walkthrough.md). For running `crewd` day-to-day, see [`cli-reference.md`](cli-reference.md) (full flag reference and troubleshooting workflows) and [`operations.md`](operations.md) (lifecycle procedures).
 - **Issues**: Open a GitHub Issue on this repository
 
 ## License
 
 This project is licensed under the [MIT License](../LICENSE). See the LICENSE file for full terms.
-
-## Leading a Crew plan
-
-Crew v2 separates leader intent from daemon execution:
-
-```text
-crew_plan → configured approval gate → crew_spawn
-        → /crew milestone digest → crew_send / crew_stop / crew_finish
-```
-
-The routing profile in `adapters.*.profile` is the concrete adapter/model/permission context a worker receives. A plan subtask snapshots its turn budget when submitted. When the daemon reports a timeout, the leader chooses `extend`, one Crew-message nudge, or `abort`; it does not wait for a vendor process by polling.
-
-Start in `shared` workspace mode for ordinary work. Use a Git worktree for parallel writers; use `copy` for outside-Git or disposable directories. The monitor's `/crew runs`, `export`, `clean`, and `reopen` subcommands expose retained history, sanitized JSONL replay, retention maintenance, and a live pane reattachment respectively.

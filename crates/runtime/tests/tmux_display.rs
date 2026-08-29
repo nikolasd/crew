@@ -337,6 +337,7 @@ fn pane_request(command: Vec<&str>, placement: DisplayPlacement) -> PaneRequest 
         title: "crew: worker-1 (claude)".to_string(),
         command: command.into_iter().map(str::to_string).collect(),
         placement,
+        launch_program: None,
     }
 }
 
@@ -444,6 +445,7 @@ async fn closing_an_untracked_pane_is_refused_and_closing_an_owned_one_removes_i
     let unowned = PaneHandle {
         backend: DisplayBackend::Tmux,
         pane_ref: "%99".to_string(),
+        placement: DisplayPlacement::SplitRight,
     };
     assert!(
         tmux.close_pane(&unowned).await.is_err(),

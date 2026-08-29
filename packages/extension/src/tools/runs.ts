@@ -5,7 +5,7 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 import type { OrchestrationToolContext } from "./shared";
-import { callOrchestration } from "./shared";
+import { callOrchestration, displayPreferenceFragment } from "./shared";
 
 export const CREW_RUN_TOOL_NAME = "crew_run";
 
@@ -38,6 +38,7 @@ export function registerRunTool(pi: ExtensionAPI, ctx: OrchestrationToolContext)
             workerId: input.workerId,
             workspaceMode: input.workspaceMode,
             priority: input.priority,
+            ...displayPreferenceFragment(),
           });
           if (result.isError && ctx.reportSubmitFailure !== undefined) {
             const msg = (result.details as { message?: string })?.message ?? "run/submit failed";
@@ -57,6 +58,7 @@ export function registerRunTool(pi: ExtensionAPI, ctx: OrchestrationToolContext)
             workerId: input.workerId,
             prompt: input.prompt,
             workspaceMode: input.workspaceMode,
+            ...displayPreferenceFragment(),
           });
           if (result.isError && ctx.reportSubmitFailure !== undefined) {
             const msg = (result.details as { message?: string })?.message ?? "run/retry failed";

@@ -115,8 +115,8 @@ test("stateColor falls back to the theme's default text color for an unrecognize
   expect(stateColor("totally-unknown")).toBe("text");
 });
 
-test("renderWidgetHeader returns the bat icon and the Crew label", () => {
-  expect(renderWidgetHeader()).toBe("\u{F0B5F} Crew");
+test("renderWidgetHeader returns the ship-wheel icon and the Crew label", () => {
+  expect(renderWidgetHeader()).toBe("\u{F0833} Crew");
 });
 
 test("a row line includes the state icon alongside the state word", () => {
@@ -238,7 +238,7 @@ test("renderWidgetBox produces a top border, every content line, and the bottom 
 
   // Width equality must hold in *code points*, not UTF-16 code units. Every
   // content line here carries a `stateIcon(...)` via `renderRowLine`, and the
-  // header (`renderWidgetHeader`) carries `BAT_ICON` — both astral-plane
+  // header (`renderWidgetHeader`) carries `HELM_ICON` — both astral-plane
   // characters stored as UTF-16 surrogate pairs, so `.length` overcounts them
   // by 1 each. That overcount is exactly what let the original `.length`-based
   // implementation pass this same width check by coincidence: `.length`
@@ -269,8 +269,8 @@ test("renderWidgetBox produces a top border, every content line, and the bottom 
 });
 
 test("renderWidgetBox stays equal-width by code points for the empty state, where the header carries an icon but the content line does not", () => {
-  // The header (`BAT_ICON`) always carries a surrogate-pair icon; the
-  // empty-state line ("No Crew runs yet.") never does. Pre-fix, that
+  // The header (`HELM_ICON`) always carries a surrogate-pair icon; the
+  // empty-state line ("Crew active, waiting for task submissions") never does. Pre-fix, that
   // asymmetry meant the top border's fill-character count (derived from
   // `header.length`) came out 1 short relative to the body/bottom border
   // (derived from a line with no surrogate pair to overcount) — the exact
