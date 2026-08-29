@@ -154,13 +154,10 @@ export function reduceEvent(state: MonitorState, envelope: EventEnvelope): Monit
 
   // Clear any stale submit error once a run row is created/updated: the
   // row's existence proves the submission succeeded.
-  const nextState = {
+  return clearSubmitError({
     rows: { ...state.rows, [patch.runId]: updated },
     lastSequence,
-    lastSubmitError: undefined,
-  };
-
-  return nextState;
+  });
 }
 
 /** Applies every envelope in `envelopes`, in the order given. */
