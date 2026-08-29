@@ -43,11 +43,12 @@ loaded the installed module. Then:
 /crew health
 ```
 
-**This repository is private.** The marketplace step git-clones it, so you need your own GitHub
-read access to `nikolasd/crew` — an SSH key registered with GitHub, or a `gh auth login` session
-backed by a git credential helper. `/crew-install` additionally needs a `GITHUB_TOKEN` or
-`GH_TOKEN` environment variable set, or that same `gh auth login` session, to download and verify
-the release asset. The binary is cached under your Crew state root.
+This repository is public. The OMP marketplace clones it via HTTPS — no authentication required.
+`/crew-install` downloads the `crewd` binary via the GitHub REST API. While the repository is public,
+a `GITHUB_TOKEN` or `GH_TOKEN` environment variable is optional but recommended: without one, you may
+hit GitHub's unauthenticated API rate limit (60 requests/hour). With a token (from `export
+GITHUB_TOKEN=...`, `export GH_TOKEN=...`, or a local `gh auth login` session), the limit is 5,000
+requests/hour. The binary is cached under your Crew state root.
 
 Once installed, [`docs/plugin-usage.md`](docs/plugin-usage.md) is the user manual: every tool and
 command the extension registers, and the recommended flow for running a task through it.

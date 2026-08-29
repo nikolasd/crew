@@ -84,7 +84,7 @@ OMP Extension (TypeScript)  ──JSON-RPC 2.0 over NDJSON──>  crewd daemon 
                                                                       ├── SQLite Journal (WAL, append-only)
                                                                       ├── Coordination Broker (scope tokens, rate limiting)
                                                                       ├── Approval Service
-                                                                      ├── Display Backends (herdr, tmux, terminal)
+                                                                      ├── Display Backends (herdr, tmux, osWindow, hidden)
                                                                       └── Workspace Operations (lease, materialize, apply)
 ```
 

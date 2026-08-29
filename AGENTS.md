@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Crew (B**orderline** **A**wesome **T**ool for **M**ultiagent **A**utomation by **N**ikolas) is an [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi) extension backed by a durable, repository-scoped local daemon. It supervises worker processes (Claude, Codex, Copilot, OMP-RPC), persists a durable event journal, recovers after crashes, and feeds display backends.
+Crew is an [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi) extension backed by a durable, repository-scoped local daemon. It supervises worker processes (Claude, Codex, Copilot, OMP-RPC), persists a durable event journal, recovers after crashes, and feeds display backends.
 
 **Architecture split:** OMP decides what to do (task graph, scheduling, approvals, merge decisions). Crew ensures it happens and can be replayed.
 
@@ -19,7 +19,7 @@ OMP Extension (TypeScript)  ──JSON-RPC 2.0 over NDJSON──>  crewd daemon 
                                                                       ├── SQLite Journal (WAL, append-only)
                                                                       ├── Coordination Broker (scope tokens, rate limiting)
                                                                       ├── Approval Service
-                                                                      ├── Display Backends (herdr, tmux, terminal)
+                                                                      ├── Display Backends (herdr, tmux, osWindow, hidden)
                                                                       └── Workspace Operations (lease, materialize, apply)
 ```
 
