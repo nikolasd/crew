@@ -99,9 +99,6 @@ export default function crewExtension(pi: ExtensionAPI): void {
     }
   }
 
-  /** Registers a deprecated hyphenated command that forwards to `run`'s
-   *  result with a one-line deprecation notice prepended to the same
-   *  message -- never emitted as a second notification. */
   async function healthResult(extCtx: ExtensionContext): Promise<CommandResult> {
     return blocksToResult(await getRuntimeStatus(statusContextFor(extCtx)));
   }
