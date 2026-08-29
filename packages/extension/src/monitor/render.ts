@@ -16,9 +16,9 @@ export const MAX_WIDGET_ROWS = 7;
 
 /**
  * Counts Unicode code points rather than UTF-16 code units. Every Nerd Font
- * icon this module uses (`BAT_ICON`, every `STATE_ICONS` entry) is on the
+ * icon this module uses (`HELM_ICON`, every `STATE_ICONS` entry) is on the
  * astral plane (code point > U+FFFF), so it's stored as a UTF-16 surrogate
- * pair — `"\u{F0B5F}".length === 2`, not 1. `.length`-based width/pad math
+ * pair — `"\u{F1091}".length === 2`, not 1. `.length`-based width/pad math
  * would measure any icon-bearing string 1 unit too wide per icon relative to
  * how many character cells it actually occupies. `Array.from` iterates a
  * string by code point, correctly counting each surrogate pair as one unit.
@@ -33,7 +33,8 @@ function codePointLength(text: string): number {
   return Array.from(text).length;
 }
 
-const BAT_ICON = "\u{F0B5F}";
+/** Nerd Font Material Design ship-wheel icon for the Crew widget header. */
+const HELM_ICON = "\u{F1091}";
 const WIDGET_HEADER_TEXT = "Crew";
 
 const STATE_ICONS: Record<string, string> = {
@@ -84,7 +85,7 @@ export function stateColor(state: string): ThemeColor {
  *  (`renderWidgetBox`) applies theme color, so this stays a plain data
  *  producer with no `Theme` dependency of its own. */
 export function renderWidgetHeader(): string {
-  return `${BAT_ICON} ${WIDGET_HEADER_TEXT}`;
+  return `${HELM_ICON} ${WIDGET_HEADER_TEXT}`;
 }
 
 /** Sorts rows most-recently-active first and caps the visible slice at
