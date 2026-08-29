@@ -752,7 +752,7 @@ it. This is the chaining primitive every multi-worker synthesis flow builds on. 
 ## Reading the widget line
 
 The `/crew` widget is a rounded border (drawn by
-`packages/extension/src/monitor/render.ts::assembleBox`) with a bat-icon header
+`packages/extension/src/monitor/render.ts::assembleBox`) with an icon header
 (`renderWidgetHeader`) spliced directly into the top border line. Each row inside the box is
 prefixed with a per-state Nerd Font icon (`render.ts::stateIcon`) before the state word, and
 colored per-state (`render.ts::stateColor`). Underneath the icon, the joined structure of each row
@@ -773,6 +773,14 @@ real adapter, so you'll only ever see the run id, `state` (always `queued` here)
 | `ApprovalEvent` | `"approval requested: <action>"` or `"approval decided"` |
 | `ChildEvent` | `"child worker requested"`, `"child worker accepted"`, or `"child worker request denied"` |
 | `AdapterProtocolHealthEvent` | `"protocol healthy"` or `"protocol unhealthy: <detail>"` — the vendor's own error subtype/stop reason when one was journaled |
+| `PolicyViolationRecorded` | `"policy violation: <code>"` |
+| `PolicyViolationDecided` | `"violation decided: <resolution>"` |
+| `AdapterUsageEvent` | `"usage <inputTokens> in / <outputTokens> out"`, plus `" ($<costUsd>)"` when cost was reported |
+| `AdapterArtifactEvent` | `"artifact <artifactKind> <artifactId>"` |
+| `DisplayEvent` | `"pane attached: <backend> (<paneRef>)"` or `"pane detached: <backend>"` |
+| `WorkspaceEvent` | `"workspace <kind>"` |
+
+(`RunFlagsEvent` updates the row's flags but sets no `latestActivity` of its own.)
 
 The widget caps at `MAX_WIDGET_ROWS` rows (now 7) — not 10 — because the host's `ctx.ui.setWidget`
 truncates array-content widgets at 10 total *lines*, and the border chrome (2 lines, plus a
