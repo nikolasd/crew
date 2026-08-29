@@ -197,15 +197,15 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
 
   /**
    * Syncs the widget with the current state: renders the box when there are
-   * rows to show, removes the widget when there are none. `force` renders
-   * the box even when empty — the explicit `/crew` command uses it, so a
-   * healthy-but-empty runtime still answers with the "No Crew runs yet."
-   * box rather than silence; the session-start and live-event paths stay
-   * hidden when there is nothing to show.
+   * rows to show, or when crew is active even if empty. `force` renders
+   * the box unconditionally — the explicit `/crew` command uses it; the
+   * session-start and live-event paths show the widget when crew is active
+   * (connected), with an empty-state message when there are no runs yet.
    */
   function refresh(extCtx: ExtensionContext, force = false): void {
     const state = controller.getState();
-    const content = force || hasVisibleRows(state) ? renderWidgetBox(state, extCtx.ui.theme) : undefined;
+    const isConnected = subscribedClient !== undefined && !subscribedClient.isClosed;
+    const content = force || isConnected ? renderWidgetBox(state, extCtx.ui.theme) : undefined;
     extCtx.ui.setWidget(WIDGET_KEY, content, { placement: "aboveEditor" });
     pi.appendEntry(MONITOR_ENTRY_TYPE, { sequence: Number(state.lastSequence) });
   }
@@ -244,10 +244,10 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
 
   pi.on("session_start", async (_event, extCtx) => {
     await connect(extCtx);
-    // Render immediately: a healthy runtime with runs shows the widget; one
-    // with no runs keeps it hidden until the first run event (R56, revised:
-    // only show the box when there is something to show).
-    if (subscribedClient !== undefined) {
+    // Render immediately: if crew is active, show the widget (either with runs
+    // or with an empty-state message). If crew failed to start, the widget stays
+    // hidden until the first successful run event or explicit /crew command.
+    if (subscribedClient !== undefined && !subscribedClient.isClosed) {
       refresh(extCtx);
     }
   });

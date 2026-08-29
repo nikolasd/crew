@@ -161,7 +161,7 @@ export function renderWidgetBox(state: MonitorState, theme: Theme): string[] {
   let lines: string[];
   let colors: ThemeColor[];
   if (totalCount === 0) {
-    lines = ["No Crew runs yet."];
+    lines = ["Crew active, waiting for task submissions"];
     colors = ["text"];
   } else {
     lines = rows.map(renderRowLine);

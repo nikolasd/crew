@@ -126,7 +126,7 @@ function fakeCommandContext(widgetCalls: unknown[][], hasUI: boolean): { ctx: Ex
   return { ctx, notifications };
 }
 
-test("session_start keeps the widget hidden when the journal has no runs (R56, revised)", async () => {
+test("session_start shows the empty-state widget when crew is active (CREW-10)", async () => {
   const { api, handlers } = createFakeApi();
   const fake = createFakeClient();
   registerMonitor(api, { getClient: async () => fake.client });
@@ -136,16 +136,16 @@ test("session_start keeps the widget hidden when the journal has no runs (R56, r
 
   await handlers.get("session_start")?.(undefined, extCtx);
 
-  // A healthy runtime with no runs: the widget is explicitly removed, not
-  // shown with an empty box.
+  // A healthy runtime with no runs: show the empty-state widget, not hide it.
+  // This ensures the operator knows crew is running and waiting for submissions.
   expect(fake.subscribeCalls).toBe(1);
   expect(widgetCalls.length).toBe(1);
   expect(widgetCalls[0]?.[0]).toBe("crew-monitor");
-  expect(widgetCalls[0]?.[1]).toBeUndefined();
+  expect(Array.isArray(widgetCalls[0]?.[1])).toBe(true);
   expect(widgetCalls[0]?.[2]).toEqual({ placement: "aboveEditor" });
 });
 
-test("the widget appears the moment a run row is created, and stays hidden before it (R56, revised)", async () => {
+test("the widget updates from empty-state to run rows (CREW-10)", async () => {
   const { api, handlers } = createFakeApi();
   const fake = createFakeClient();
   registerMonitor(api, { getClient: async () => fake.client });
@@ -155,11 +155,13 @@ test("the widget appears the moment a run row is created, and stays hidden befor
 
   await handlers.get("session_start")?.(undefined, extCtx);
   expect(widgetCalls.length).toBe(1);
-  expect(Array.isArray(widgetCalls[0]?.[1])).toBe(false);
+  // Empty state: widget shows "waiting for task submissions"
+  expect(Array.isArray(widgetCalls[0]?.[1])).toBe(true);
 
   fake.onEvent?.(runEventEnvelope(1));
 
   expect(widgetCalls.length).toBe(2);
+  // After run arrives: widget shows the run row
   expect(Array.isArray(widgetCalls[1]?.[1])).toBe(true);
 });
 
