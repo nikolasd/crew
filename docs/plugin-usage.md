@@ -120,6 +120,43 @@ works and reconnects immediately if a retry hasn't already landed. The widget it
 when the journal has runs, so a session with nothing to show stays widget-free until the first run
 event arrives.
 
+### Watching from a browser
+
+The daemon can also serve a small read-only page, off by default. Turn it on in your crew config:
+
+```json
+{
+  "dashboard": { "enabled": true, "port": 4747 }
+}
+```
+
+Restart the daemon, and it logs the one URL that works:
+
+```
+dashboard_started addr=127.0.0.1:4747 url=http://127.0.0.1:4747/?token=8f3c…
+```
+
+Open that URL. It shows the same picture the widget does — workers, runs, their states and flags,
+budgets and pending escalations — plus a live event feed and, per run, its journaled transcript. It
+updates itself as events arrive.
+
+Three things worth knowing:
+
+- **The token is required and changes every time the daemon starts.** Every route needs it, so a bare
+  `http://127.0.0.1:4747/` returns 401. Opening the tokenized URL swaps the token for a cookie and
+  drops it from the address bar, so the secret does not linger in your browser history — but that
+  also means a bookmark of the bare address will not work, and a bookmark with an old token will not
+  either. Copy the URL from the log each time.
+- **It cannot change anything.** Every route is a GET; there is no cancel, finish or steer. It is a
+  window, not a control panel — use `/crew` and the tools for anything that acts.
+- **It shows nothing when the daemon is not running.** The daemon exits when it has been idle, and an
+  open page deliberately does not keep it alive. If the live indicator reads *daemon not running*,
+  that is what happened: start some work in the repository and reload.
+
+The port is fixed by your config rather than negotiated. If you run Crew in two repositories at once
+with the same port, the second daemon logs `dashboard_bind_failed` and simply has no dashboard —
+give them different ports if you want both.
+
 ## 5. When Crew needs you
 
 Some actions require an explicit human decision, and Crew never fabricates one on your behalf:

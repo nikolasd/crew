@@ -10,6 +10,40 @@
 //! method is rejected with 405, and all reads go through the same
 //! [`DatabaseHandle`] domain ops the RPC layer uses -- never a second
 //! connection to the journal.
+//!
+//! # Two things not to "simplify"
+//!
+//! **The page re-fetches the server-side projection; do not add a client
+//! reducer.** `page.rs` calls `/api/state` for the snapshot and uses
+//! `/events` purely as a signal to re-fetch. That looks naive next to
+//! applying events incrementally in the browser, and it is deliberate: a
+//! second reducer would have to mirror the server's projection semantics
+//! exactly, forever, and the two would drift. It also makes `broadcast`
+//! lag self-healing -- a viewer that misses an event still re-reads the
+//! authoritative snapshot on the next one, where an incremental reducer
+//! would be silently wrong from then on.
+//!
+//! **The per-run transcript is served from the JOURNAL, never from the
+//! vendor's transcript file.** Reading the file directly would look like a
+//! shortcut and would route around the redaction boundary: journaled
+//! content has crossed `Classified` and had secrets stripped (ADR-0006),
+//! while the vendor's own file on disk has not. `/api/run/<id>/events`
+//! therefore reads through the same domain ops as everything else here.
+//!
+//! # Access control
+//!
+//! A TCP listener cannot do what the IPC socket does. `ipc` enforces
+//! same-user access twice -- `check_owner_only` on the socket directory
+//! and `admit_same_uid` on every peer, using kernel-reported credentials
+//! that TCP has no equivalent for. Binding to loopback keeps other *hosts*
+//! out; it does nothing about other *local users or processes*.
+//!
+//! So every route requires a bearer token generated per daemon run and
+//! printed once at startup. The token arrives either as `?token=` (the
+//! URL an operator pastes) or as the `crew_dashboard` cookie; a valid
+//! query token on `GET /` is exchanged for that cookie via a redirect, so
+//! the secret leaves the address bar -- and browser history, and any
+//! `Referer` -- after first load.
 
 mod page;
 
@@ -43,6 +77,9 @@ pub struct DashboardServer {
     /// (a `notify_waiters` race left exactly that leak window).
     shutdown: watch::Sender<bool>,
     accept_task: tokio::task::JoinHandle<()>,
+    /// The per-run bearer token every route requires. Exposed so the
+    /// lifecycle can print the one URL that works.
+    token: StdArc<str>,
 }
 
 /// Ceiling on concurrently open dashboard connections. Each held
@@ -50,6 +87,65 @@ pub struct DashboardServer {
 /// unbounded viewers would let one curious browser tab-farm exhaust the
 /// daemon's task budget.
 const MAX_CONNECTIONS: usize = 64;
+
+/// Ceiling on events returned by one `/api/run/<id>/events` read. A
+/// long-lived worker's transcript grows without bound; an HTTP response
+/// should not. The page shows the oldest window and says so rather than
+/// silently truncating.
+const MAX_TRANSCRIPT_EVENTS: u32 = 2000;
+
+/// The cookie the dashboard exchanges a valid `?token=` for.
+const TOKEN_COOKIE: &str = "crew_dashboard";
+
+/// Generates the per-run dashboard token: 32 hex characters from 16 bytes
+/// of `/dev/urandom`.
+///
+/// Read from the OS CSPRNG directly rather than reaching for a new
+/// dependency, and deliberately **not** from `uuid`, whose only feature
+/// enabled in this workspace is `v7` -- a time-ordered identifier whose
+/// leading bits are the clock. Predictable is disqualifying for a bearer
+/// token. `/dev/urandom` is present on both supported platforms (macOS and
+/// glibc Linux, per the platform invariant); if it cannot be read the
+/// dashboard refuses to start rather than falling back to something
+/// weaker, because a guessable token reads exactly like a real one.
+fn generate_token() -> std::io::Result<String> {
+    use std::io::Read;
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Compares two tokens without leaking their common prefix length through
+/// timing. Overkill on loopback and cheap enough not to argue about.
+fn tokens_match(presented: &str, expected: &str) -> bool {
+    let (a, b) = (presented.as_bytes(), expected.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// The token presented by a request, if any: `?token=` first (the pasted
+/// URL), then the `crew_dashboard` cookie (every request after the
+/// redirect).
+fn presented_token(query: Option<&str>, cookie: Option<&str>) -> Option<String> {
+    if let Some(query) = query
+        && let Some(value) = query
+            .split('&')
+            .filter_map(|pair| pair.strip_prefix("token="))
+            .next()
+    {
+        return Some(value.to_string());
+    }
+    cookie.and_then(|header| {
+        header
+            .split(';')
+            .map(str::trim)
+            .filter_map(|pair| pair.strip_prefix(&format!("{TOKEN_COOKIE}=")))
+            .next()
+            .map(str::to_string)
+    })
+}
 
 impl DashboardServer {
     /// Binds `127.0.0.1:<port>` (never a routable interface; `0` picks an
@@ -62,6 +158,12 @@ impl DashboardServer {
     /// as non-fatal: a daemon without its dashboard still orchestrates.
     pub async fn bind(port: u16, deps: DashboardDeps) -> std::io::Result<Self> {
         Self::bind_with_header_timeout(port, deps, HEADER_READ_TIMEOUT).await
+    }
+
+    /// The per-run bearer token every route requires.
+    #[must_use]
+    pub fn token(&self) -> &str {
+        &self.token
     }
 
     /// Same as [`Self::bind`], but with an explicit header-read timeout --
@@ -78,6 +180,8 @@ impl DashboardServer {
     ) -> std::io::Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
         let local_addr = listener.local_addr()?;
+        let token: StdArc<str> = StdArc::from(generate_token()?.as_str());
+        let accept_token = StdArc::clone(&token);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut accept_shutdown = shutdown_rx.clone();
         let permits = StdArc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
@@ -88,6 +192,7 @@ impl DashboardServer {
                     accepted = listener.accept() => {
                         let Ok((stream, _peer)) = accepted else { continue };
                         let deps = deps.clone();
+                        let token = StdArc::clone(&accept_token);
                         let mut shutdown = shutdown_rx.clone();
                         let permit = match permits.clone().acquire_owned().await {
                             // A capped-out dashboard drops the new
@@ -105,6 +210,7 @@ impl DashboardServer {
                                 read_half,
                                 write_half,
                                 deps,
+                                &token,
                                 &mut shutdown,
                                 header_read_timeout,
                             )
@@ -115,6 +221,7 @@ impl DashboardServer {
             }
         });
         Ok(Self {
+            token,
             local_addr,
             shutdown: shutdown_tx,
             accept_task,
@@ -166,7 +273,11 @@ impl From<std::io::Error> for HeadReadError {
 
 struct RequestHead {
     method: String,
+    /// The raw request target, query string included.
     path: String,
+    /// The `Cookie` header's value, if the request sent one. The only
+    /// header this dashboard reads -- see the module's access-control note.
+    cookie: Option<String>,
 }
 
 /// Reads one line terminated by `\n`, refusing to buffer more than
@@ -203,9 +314,10 @@ where
     }
 }
 
-/// Reads the request line and drains (and ignores -- the dashboard needs
-/// none) the headers that follow, bounding each line's size. Callers wrap
-/// this in a [`tokio::time::timeout`]; it applies no timeout itself.
+/// Reads the request line and the headers that follow, bounding each
+/// line's size. Only `Cookie` is retained (the token may arrive there);
+/// every other header is drained and ignored. Callers wrap this in a
+/// [`tokio::time::timeout`]; it applies no timeout itself.
 async fn read_request_head<R>(reader: &mut R) -> Result<RequestHead, HeadReadError>
 where
     R: tokio::io::AsyncBufRead + Unpin,
@@ -214,20 +326,32 @@ where
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or_default().to_string();
     let path = parts.next().unwrap_or_default().to_string();
+    let mut cookie = None;
     for _ in 0..MAX_HEADER_COUNT {
         let header = read_bounded_line(reader).await?;
         if header == "\r\n" || header == "\n" {
             break;
         }
+        // Header names are case-insensitive; a browser sends `Cookie` but
+        // nothing obliges it to.
+        let lowered = header.to_ascii_lowercase();
+        if let Some(value) = lowered.strip_prefix("cookie:") {
+            cookie = Some(value.trim().to_string());
+        }
     }
 
-    Ok(RequestHead { method, path })
+    Ok(RequestHead {
+        method,
+        path,
+        cookie,
+    })
 }
 
 async fn handle_connection(
     read_half: tokio::net::tcp::OwnedReadHalf,
     write_half: tokio::net::tcp::OwnedWriteHalf,
     deps: DashboardDeps,
+    token: &str,
     shutdown: &mut watch::Receiver<bool>,
     header_read_timeout: std::time::Duration,
 ) -> std::io::Result<()> {
@@ -265,7 +389,41 @@ async fn handle_connection(
         .await;
     }
 
-    match head.path.as_str() {
+    // Split the request target once: the token may ride the query, and
+    // every route below matches on the path alone.
+    let (path, query) = match head.path.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (head.path.as_str(), None),
+    };
+
+    // Access control before routing, so an unauthenticated request cannot
+    // reach a handler at all -- not even a 404, which would otherwise
+    // confirm which paths exist.
+    let presented = presented_token(query, head.cookie.as_deref());
+    let authorized = presented
+        .as_deref()
+        .is_some_and(|candidate| tokens_match(candidate, token));
+    if !authorized {
+        return write_simple(
+            &mut stream,
+            "401 Unauthorized",
+            "text/plain; charset=utf-8",
+            "the dashboard requires the token printed in the daemon log at startup\n",
+        )
+        .await;
+    }
+
+    // A valid token in the query on the page route is exchanged for a
+    // cookie and redirected, so the secret stops travelling in the address
+    // bar (and out of browser history and any `Referer`). `HttpOnly` keeps
+    // page scripts from reading it; `SameSite=Strict` keeps another site
+    // from causing an authenticated request.
+    if path == "/" && query.is_some_and(|q| q.contains("token=")) {
+        let cookie = format!("{TOKEN_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict");
+        return write_redirect(&mut stream, "/", &cookie).await;
+    }
+
+    match path {
         "/" => {
             write_simple(
                 &mut stream,
@@ -288,6 +446,51 @@ async fn handle_connection(
             }
         },
         "/events" => serve_sse(&mut stream, &deps, shutdown).await,
+        // The per-run transcript. Read from the journal through the same
+        // domain ops as every other route here -- see the module doc on
+        // why the vendor's own transcript file is never served.
+        transcript if transcript.starts_with("/api/run/") && transcript.ends_with("/events") => {
+            let raw_id = transcript
+                .trim_start_matches("/api/run/")
+                .trim_end_matches("/events");
+            match crew_protocol::RunId::parse(raw_id) {
+                Ok(run_id) => match deps
+                    .db
+                    .run_domain_op(query::run_events_op(run_id, MAX_TRANSCRIPT_EVENTS))
+                    .await
+                {
+                    Ok(value) => {
+                        write_simple(
+                            &mut stream,
+                            "200 OK",
+                            "application/json",
+                            &value.to_string(),
+                        )
+                        .await
+                    }
+                    Err(err) => {
+                        write_simple(
+                            &mut stream,
+                            "500 Internal Server Error",
+                            "text/plain; charset=utf-8",
+                            &err.to_string(),
+                        )
+                        .await
+                    }
+                },
+                // A malformed id is the caller's error, not the server's --
+                // and saying so beats a 500 that looks like a daemon fault.
+                Err(_) => {
+                    write_simple(
+                        &mut stream,
+                        "400 Bad Request",
+                        "text/plain; charset=utf-8",
+                        "not a valid run id\n",
+                    )
+                    .await
+                }
+            }
+        }
         _ => {
             write_simple(
                 &mut stream,
@@ -372,6 +575,26 @@ async fn serve_sse(
             },
         }
     }
+}
+
+/// A 303 redirect that also sets a cookie -- the one non-GET-shaped
+/// response this dashboard produces, used to exchange a valid `?token=`
+/// for the `crew_dashboard` cookie. 303 rather than 302 so the follower is
+/// unambiguously a GET.
+async fn write_redirect<W>(stream: &mut W, location: &str, set_cookie: &str) -> std::io::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let head = format!(
+        "HTTP/1.1 303 See Other\r\n\
+         location: {location}\r\n\
+         set-cookie: {set_cookie}\r\n\
+         content-length: 0\r\n\
+         connection: close\r\n\r\n"
+    );
+    stream.write_all(head.as_bytes()).await?;
+    stream.flush().await?;
+    stream.shutdown().await
 }
 
 async fn write_simple<W>(

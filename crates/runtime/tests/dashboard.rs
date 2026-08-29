@@ -108,6 +108,14 @@ async fn start_dashboard() -> Harness {
     }
 }
 
+/// A `Cookie` header carrying the dashboard's per-run token -- the form
+/// every request takes after the page's first load exchanges `?token=`
+/// for it. Tests use the cookie rather than the query so they exercise the
+/// same path the page does for all but one request.
+fn authed(token: &str) -> String {
+    format!("cookie: crew_dashboard={token}\r\n")
+}
+
 /// One plain HTTP/1.1 request; returns the full raw response.
 async fn http_request(addr: std::net::SocketAddr, request: &str) -> String {
     let mut stream = TcpStream::connect(addr).await.unwrap();
@@ -158,7 +166,10 @@ async fn api_state_returns_seeded_runs_and_workers() {
 
     let response = http_request(
         harness.server.local_addr(),
-        "GET /api/state HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        &format!(
+            "GET /api/state HTTP/1.1\r\nHost: localhost\r\n{}Connection: close\r\n\r\n",
+            authed(harness.server.token())
+        ),
     )
     .await;
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
@@ -206,7 +217,10 @@ async fn index_serves_the_html_page() {
     let harness = start_dashboard().await;
     let response = http_request(
         harness.server.local_addr(),
-        "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        &format!(
+            "GET / HTTP/1.1\r\nHost: localhost\r\n{}Connection: close\r\n\r\n",
+            authed(harness.server.token())
+        ),
     )
     .await;
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
@@ -268,7 +282,10 @@ async fn an_oversized_line_with_no_newline_is_refused_and_the_server_stays_healt
     // The server must still serve a normal request on a fresh connection.
     let response = http_request(
         addr,
-        "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        &format!(
+            "GET / HTTP/1.1\r\nHost: localhost\r\n{}Connection: close\r\n\r\n",
+            authed(harness.server.token())
+        ),
     )
     .await;
     assert!(
@@ -328,7 +345,10 @@ async fn unknown_paths_are_404() {
     let harness = start_dashboard().await;
     let response = http_request(
         harness.server.local_addr(),
-        "GET /api/does-not-exist HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        &format!(
+            "GET /api/does-not-exist HTTP/1.1\r\nHost: localhost\r\n{}Connection: close\r\n\r\n",
+            authed(harness.server.token())
+        ),
     )
     .await;
     assert!(response.starts_with("HTTP/1.1 404"), "{response}");
@@ -343,7 +363,13 @@ async fn sse_stream_receives_a_broadcast_envelope() {
         .await
         .unwrap();
     stream
-        .write_all(b"GET /events HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .write_all(
+            format!(
+                "GET /events HTTP/1.1\r\nHost: localhost\r\n{}\r\n",
+                authed(harness.server.token())
+            )
+            .as_bytes(),
+        )
         .await
         .unwrap();
     let mut reader = BufReader::new(stream);
@@ -406,5 +432,160 @@ async fn sse_stream_receives_a_broadcast_envelope() {
     assert_eq!(payload["sequence"], 42);
     assert_eq!(payload["runId"].as_str(), Some(run_id.to_string().as_str()));
 
+    harness.server.stop();
+}
+
+// ----------------------------------------- access control (CREW-12)
+
+/// The property that matters: loopback is not access control. A TCP
+/// listener cannot check peer credentials the way the IPC socket does, so
+/// without a token any local process -- as any local user -- could read the
+/// whole projection.
+#[tokio::test]
+async fn every_route_refuses_a_request_with_no_token() {
+    let harness = start_dashboard().await;
+    let addr = harness.server.local_addr();
+
+    for path in ["/", "/api/state", "/events", "/api/run/whatever/events"] {
+        let response = http_request(
+            addr,
+            &format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"),
+        )
+        .await;
+        assert!(
+            response.starts_with("HTTP/1.1 401"),
+            "{path} must refuse an untokenized request: {response}"
+        );
+    }
+
+    harness.server.stop();
+}
+
+#[tokio::test]
+async fn a_wrong_token_is_refused_like_no_token() {
+    let harness = start_dashboard().await;
+    let response = http_request(
+        harness.server.local_addr(),
+        "GET /api/state HTTP/1.1\r\nHost: localhost\r\ncookie: crew_dashboard=not-the-token\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(
+        response.starts_with("HTTP/1.1 401"),
+        "a wrong token must not be accepted: {response}"
+    );
+    harness.server.stop();
+}
+
+/// An unauthenticated request must not even learn which paths exist -- the
+/// auth gate runs before routing, so an unknown path answers 401, not 404.
+#[tokio::test]
+async fn an_unauthenticated_unknown_path_does_not_reveal_itself_as_unknown() {
+    let harness = start_dashboard().await;
+    let response = http_request(
+        harness.server.local_addr(),
+        "GET /api/secret-thing HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(
+        response.starts_with("HTTP/1.1 401"),
+        "routing must happen after auth, so this is 401 rather than 404: {response}"
+    );
+    harness.server.stop();
+}
+
+/// The pasted URL carries `?token=`; the page must not keep serving it from
+/// the address bar. A valid query token is exchanged for a cookie and
+/// redirected, so the secret leaves the URL after first load.
+#[tokio::test]
+async fn a_query_token_on_the_page_route_is_exchanged_for_a_cookie() {
+    let harness = start_dashboard().await;
+    let response = http_request(
+        harness.server.local_addr(),
+        &format!(
+            "GET /?token={} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            harness.server.token()
+        ),
+    )
+    .await;
+
+    assert!(
+        response.starts_with("HTTP/1.1 303"),
+        "a valid query token must redirect rather than render: {response}"
+    );
+    let lowered = response.to_ascii_lowercase();
+    assert!(
+        lowered.contains("location: /"),
+        "must redirect to the bare page: {response}"
+    );
+    assert!(
+        lowered.contains("set-cookie: crew_dashboard="),
+        "must hand back the cookie: {response}"
+    );
+    assert!(
+        lowered.contains("httponly"),
+        "the cookie must be HttpOnly: {response}"
+    );
+    assert!(
+        lowered.contains("samesite=strict"),
+        "the cookie must be SameSite=Strict: {response}"
+    );
+
+    harness.server.stop();
+}
+
+/// The transcript reads the journal through domain ops -- never the vendor's
+/// own transcript file, which has not crossed the redaction boundary.
+#[tokio::test]
+async fn the_transcript_route_returns_that_runs_journaled_events() {
+    let harness = start_dashboard().await;
+    let run_id = seed_run(&harness.db, harness.project_id).await;
+
+    let response = http_request(
+        harness.server.local_addr(),
+        &format!(
+            "GET /api/run/{run_id}/events HTTP/1.1\r\nHost: localhost\r\n{}Connection: close\r\n\r\n",
+            authed(harness.server.token())
+        ),
+    )
+    .await;
+
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "a seeded run's transcript must be readable: {response}"
+    );
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or_default();
+    let parsed: serde_json::Value = serde_json::from_str(body).expect("transcript body is JSON");
+    assert_eq!(parsed["runId"], run_id.to_string());
+    let events = parsed["events"].as_array().expect("events array");
+    assert!(
+        !events.is_empty(),
+        "seeding a run journals events, so its transcript must not be empty"
+    );
+    assert!(
+        events[0]["sequence"].is_number() && events[0]["event"].is_object(),
+        "each entry carries its sequence and the parsed event: {:?}",
+        events[0]
+    );
+
+    harness.server.stop();
+}
+
+/// A malformed id is the caller's mistake; saying so beats a 500 that reads
+/// as a daemon fault.
+#[tokio::test]
+async fn a_malformed_run_id_on_the_transcript_route_is_a_400() {
+    let harness = start_dashboard().await;
+    let response = http_request(
+        harness.server.local_addr(),
+        &format!(
+            "GET /api/run/not-a-uuid/events HTTP/1.1\r\nHost: localhost\r\n{}Connection: close\r\n\r\n",
+            authed(harness.server.token())
+        ),
+    )
+    .await;
+    assert!(
+        response.starts_with("HTTP/1.1 400"),
+        "a malformed run id must be a client error: {response}"
+    );
     harness.server.stop();
 }

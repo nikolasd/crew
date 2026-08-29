@@ -105,6 +105,15 @@ identical effective policy without comparing documents byte-for-byte. The full f
 `crates/runtime/src/config/crew.rs` — it's the single source of truth; a struct copied here would
 just be one more place for it to go stale.
 
+`dashboard` (`enabled`, `port`) turns on a read-only HTTP projection served by the daemon itself —
+`crates/runtime/src/dashboard/`. Off by default. Two properties matter when working on it: every
+route requires a per-run bearer token, because a TCP listener cannot check peer credentials the way
+the IPC socket's `admit_same_uid` does and loopback alone keeps out other hosts but not other local
+users; and the page re-fetches the server-side projection rather than reducing events itself, so
+there is deliberately no second reducer to keep in sync. Both constraints are written into that
+module's own doc comment, along with why the per-run transcript is read from the journal and never
+from a vendor's transcript file.
+
 ## Usage
 
 Examples below invoke `crewd` bare — nothing puts it on your `PATH`; alias it or substitute the
