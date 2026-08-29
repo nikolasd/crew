@@ -244,6 +244,27 @@ pub struct RunFlags {
     pub children_active: bool,
 }
 
+/// How a vendor's turn ended (ADR-0027).
+///
+/// This is deliberately *not* a success/failure verdict on the task: only
+/// the leader can judge that. It distinguishes an ordinary turn boundary
+/// from one the vendor reached by reporting an API error, so wave 3's
+/// `run/finish` can settle such a run as failed from durable evidence
+/// rather than by re-parsing message text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
+#[ts(export)]
+pub enum TurnOutcome {
+    /// The vendor finished its turn and is holding at its prompt.
+    #[serde(rename = "normal")]
+    Normal,
+    /// The vendor ended the turn by reporting an API error (e.g. an
+    /// unavailable model). The turn is genuinely over -- the CLI returns
+    /// to its prompt -- so the boundary is still reported; this value is
+    /// what makes it distinguishable.
+    #[serde(rename = "apiError")]
+    ApiError,
+}
+
 /// The semantic kind of an orchestration event stored in the durable journal.
 ///
 /// Every record creation, lifecycle transition, flag change, message delivery
@@ -351,6 +372,14 @@ pub enum RuntimeEventKind {
     /// only by this `kind`.
     #[serde(rename = "adapterQuestionDetected")]
     AdapterQuestionDetected,
+    /// A TUI-mode worker adapter observed its vendor's own end-of-turn
+    /// boundary: the worker has stopped working and is holding at its
+    /// prompt. Evidence that the turn ended, never that the task
+    /// succeeded (ADR-0027) -- the vendor markers behind it say only
+    /// "this turn is over", and Codex's is literally `task_complete`
+    /// whatever the outcome.
+    #[serde(rename = "adapterTurnEnded")]
+    AdapterTurnEnded,
     /// A display backend attached a Crew-owned pane to a run.
     #[serde(rename = "displayPaneAttached")]
     DisplayPaneAttached,
@@ -505,6 +534,16 @@ pub enum RuntimeEvent {
         task_id: TaskId,
         worker_id: WorkerId,
         vendor_session_id: String,
+    },
+    /// A TUI-mode worker adapter observed its vendor's end-of-turn
+    /// boundary (ADR-0027). Carries no free text: the turn's content was
+    /// already journaled as its own message events, and this event exists
+    /// to say only *that* the turn ended, and how.
+    AdapterTurnEvent {
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        outcome: TurnOutcome,
     },
     /// A visible message chunk or final message from a worker adapter.
     /// `text` has already crossed the redaction boundary; `None` means

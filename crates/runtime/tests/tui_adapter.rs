@@ -106,6 +106,7 @@ fn kind_of(payload: &AdapterEventPayload) -> &'static str {
         AdapterEventPayload::NestedWorkerObserved { .. } => "NestedWorkerObserved",
         AdapterEventPayload::QuestionDetected { .. } => "QuestionDetected",
         AdapterEventPayload::OutOfBandInput { .. } => "OutOfBandInput",
+        AdapterEventPayload::TurnEnded { .. } => "TurnEnded",
     }
 }
 

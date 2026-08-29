@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use crew_protocol::{Classified, ContentClass};
+use crew_protocol::{Classified, ContentClass, TurnOutcome};
 
 use crate::adapter::r#trait::{StartSpec, VendorSessionRef};
 use crate::adapter::tui::copilot_compatibility as compatibility;
@@ -253,7 +253,12 @@ fn map_entry(value: &Value) -> (Vec<TuiEvent>, Option<String>) {
             )
         }
         // The assistant's own turn boundary.
-        "assistant.turn_end" => (vec![TuiEvent::TurnEnded], None),
+        "assistant.turn_end" => (
+            vec![TuiEvent::TurnEnded {
+                outcome: TurnOutcome::Normal,
+            }],
+            None,
+        ),
         // Deliberately unmapped telemetry: the user's own echoed prompt,
         // turn starts, redundant per-tool execution bookkeeping (the
         // call itself already surfaced from `toolRequests`),
@@ -522,7 +527,9 @@ mod tests {
             "an assistant message's toolRequests must surface as ToolActivity"
         );
         assert!(
-            events.iter().any(|e| matches!(e, TuiEvent::TurnEnded)),
+            events
+                .iter()
+                .any(|e| matches!(e, TuiEvent::TurnEnded { .. })),
             "assistant.turn_end must map to TurnEnded"
         );
     }
@@ -585,7 +592,7 @@ mod tests {
             .map(|(_, c)| c.clone())
             .unwrap_or_else(Cursor::start);
         assert!(matches!(&events[0], TuiEvent::Raw { .. }));
-        assert!(matches!(&events[1], TuiEvent::TurnEnded));
+        assert!(matches!(&events[1], TuiEvent::TurnEnded { .. }));
         assert_eq!(cursor.offset as usize, raw.len());
     }
 
@@ -599,7 +606,7 @@ mod tests {
             .last()
             .map(|(_, c)| c.clone())
             .unwrap_or_else(Cursor::start);
-        assert!(matches!(&events[0], TuiEvent::TurnEnded));
+        assert!(matches!(&events[0], TuiEvent::TurnEnded { .. }));
         assert_eq!(
             cursor.offset as usize,
             raw.len() - b"{\"type\":\"assistant.mess".len(),

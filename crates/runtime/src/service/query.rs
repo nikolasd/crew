@@ -536,7 +536,8 @@ pub fn run_result_events_op(run_id: RunId) -> DomainClosure {
                 "SELECT event_json FROM events
                   WHERE run_id = ?1
                     AND (event_json LIKE '%adapterMessageEvent%'
-                         OR event_json LIKE '%adapterUsageEvent%')
+                         OR event_json LIKE '%adapterUsageEvent%'
+                         OR event_json LIKE '%adapterTurnEvent%')
                   ORDER BY sequence",
             )
             .map_err(DomainError::Sqlite)?;
@@ -547,6 +548,13 @@ pub fn run_result_events_op(run_id: RunId) -> DomainClosure {
         let mut final_text: Option<String> = None;
         let mut chunk_text: Option<String> = None;
         let mut usage: Option<(u64, u64, Option<f64>)> = None;
+        // ADR-0027's fold boundary: the residue is read up to and
+        // including the FIRST turn boundary. The vendor process stays
+        // alive after its turn, so a later turn would otherwise keep
+        // appending to this same run and silently rewrite an answer the
+        // leader has already read. A leader wanting a later turn asks for
+        // it explicitly.
+        let mut turn_ended = false;
 
         for row in rows {
             let raw = row.map_err(DomainError::Sqlite)?;
@@ -591,11 +599,16 @@ pub fn run_result_events_op(run_id: RunId) -> DomainClosure {
                         _ => (input, output, cost),
                     });
                 }
+                Some("adapterTurnEvent") => {
+                    turn_ended = true;
+                    break;
+                }
                 _ => {}
             }
         }
 
         Ok(json!({
+            "turnEnded": turn_ended,
             "resultText": final_text.or(chunk_text),
             "usage": usage.map(|(input, output, cost)| json!({
                 "inputTokens": input,

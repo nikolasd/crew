@@ -1167,6 +1167,45 @@
           "additionalProperties": false
         },
         {
+          "description": "A TUI-mode worker adapter observed its vendor's end-of-turn\nboundary (ADR-0027). Carries no free text: the turn's content was\nalready journaled as its own message events, and this event exists\nto say only *that* the turn ended, and how.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "adapterTurnEvent"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "runId": {
+                  "$ref": "#/$defs/RunId"
+                },
+                "taskId": {
+                  "$ref": "#/$defs/TaskId"
+                },
+                "workerId": {
+                  "$ref": "#/$defs/WorkerId"
+                },
+                "outcome": {
+                  "$ref": "#/$defs/TurnOutcome"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "runId",
+                "taskId",
+                "workerId",
+                "outcome"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
           "description": "A visible message chunk or final message from a worker adapter.\n`text` has already crossed the redaction boundary; `None` means\nthe entire fragment was `Thinking`/`Secret`-classified and was\ndropped, not that the message was empty.",
           "type": "object",
           "properties": {
@@ -2070,6 +2109,11 @@
           "const": "adapterQuestionDetected"
         },
         {
+          "description": "A TUI-mode worker adapter observed its vendor's own end-of-turn\nboundary: the worker has stopped working and is holding at its\nprompt. Evidence that the turn ended, never that the task\nsucceeded (ADR-0027) -- the vendor markers behind it say only\n\"this turn is over\", and Codex's is literally `task_complete`\nwhatever the outcome.",
+          "type": "string",
+          "const": "adapterTurnEnded"
+        },
+        {
           "description": "A display backend attached a Crew-owned pane to a run.",
           "type": "string",
           "const": "displayPaneAttached"
@@ -2263,6 +2307,21 @@
           "description": "The calling model supplied the decision itself.",
           "type": "string",
           "const": "model"
+        }
+      ]
+    },
+    "TurnOutcome": {
+      "description": "How a vendor's turn ended (ADR-0027).\n\nThis is deliberately *not* a success/failure verdict on the task: only\nthe leader can judge that. It distinguishes an ordinary turn boundary\nfrom one the vendor reached by reporting an API error, so wave 3's\n`run/finish` can settle such a run as failed from durable evidence\nrather than by re-parsing message text.",
+      "oneOf": [
+        {
+          "description": "The vendor finished its turn and is holding at its prompt.",
+          "type": "string",
+          "const": "normal"
+        },
+        {
+          "description": "The vendor ended the turn by reporting an API error (e.g. an\nunavailable model). The turn is genuinely over -- the CLI returns\nto its prompt -- so the boundary is still reported; this value is\nwhat makes it distinguishable.",
+          "type": "string",
+          "const": "apiError"
         }
       ]
     },

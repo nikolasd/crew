@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crew_protocol::{Classified, ContentClass};
+use crew_protocol::{Classified, ContentClass, TurnOutcome};
 
 use crate::adapter::r#trait::{StartSpec, VendorSessionRef};
 use crate::config::crew::{AdapterConfig, PermissionMode};
@@ -286,8 +286,8 @@ fn map_entry(value: &Value) -> (Vec<TuiEvent>, Option<String>) {
             // The vendor's own turn boundary (CREW-3 / ADR-0027). Pushed
             // after the content so the answer is journaled before the
             // boundary that tells the leader it is readable.
-            if ends_turn(value) {
-                events.push(TuiEvent::TurnEnded);
+            if let Some(outcome) = turn_outcome(value) {
+                events.push(TuiEvent::TurnEnded { outcome });
             }
         }
         // A vendor-generated conversation summary (compaction); this
@@ -303,7 +303,8 @@ fn map_entry(value: &Value) -> (Vec<TuiEvent>, Option<String>) {
     (events, entry_id)
 }
 
-/// Whether this assistant entry ends the run's own turn.
+/// How this assistant entry ends the run's own turn, or `None` if it
+/// does not end it.
 ///
 /// Claude publishes the boundary the other two vendors send explicitly:
 /// `message.stop_reason` is `tool_use` while the turn continues and
@@ -327,20 +328,30 @@ fn map_entry(value: &Value) -> (Vec<TuiEvent>, Option<String>) {
 /// Recording the turn as *failed* rather than merely ended needs a terminal
 /// edge, which ADR-0027 wave 2 deliberately does not introduce -- it is
 /// wave 3's `run/finish`.
-fn ends_turn(value: &Value) -> bool {
+fn turn_outcome(value: &Value) -> Option<TurnOutcome> {
     if value
         .get("isSidechain")
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        return false;
+        return None;
     }
-    matches!(
+    if !matches!(
         value
             .pointer("/message/stop_reason")
             .and_then(Value::as_str),
         Some("end_turn" | "stop_sequence")
-    )
+    ) {
+        return None;
+    }
+    if value
+        .get("isApiErrorMessage")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Some(TurnOutcome::ApiError);
+    }
+    Some(TurnOutcome::Normal)
 }
 
 /// Maps one assistant entry's content blocks to events, in order.
@@ -702,7 +713,7 @@ mod tests {
     fn ended_turn(raw: &[u8]) -> bool {
         events_of(raw)
             .iter()
-            .any(|e| matches!(e, TuiEvent::TurnEnded))
+            .any(|e| matches!(e, TuiEvent::TurnEnded { .. }))
     }
 
     #[test]
@@ -732,7 +743,7 @@ mod tests {
             .expect("the entry's text must still be surfaced");
         let end_at = events
             .iter()
-            .position(|e| matches!(e, TuiEvent::TurnEnded))
+            .position(|e| matches!(e, TuiEvent::TurnEnded { .. }))
             .expect("the entry must end the turn");
         assert!(
             text_at < end_at,

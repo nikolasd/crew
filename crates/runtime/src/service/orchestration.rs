@@ -1138,17 +1138,25 @@ impl OrchestrationService {
         let is_terminal = RunState::try_from(state.as_str())
             .map(|s| s.is_terminal())
             .unwrap_or(false);
-        if !is_terminal {
-            return Err(ServiceError::invalid_params(format!(
-                "run {run_id} is not finished (state: {state})"
-            )));
-        }
 
         let residue = self
             .db
             .run_domain_op(query::run_result_events_op(run_id))
             .await
             .map_err(ServiceError::from)?;
+
+        // ADR-0027: a TUI vendor never exits, so a run's answer is
+        // readable as soon as the vendor's own turn boundary has been
+        // journaled -- the run is `waitingUser`, not terminal, and the
+        // leader has not settled it yet. Before this, reading a finished
+        // answer required cancelling the run first.
+        let settled_turn =
+            state == "waitingUser" && residue["turnEnded"].as_bool().unwrap_or(false);
+        if !is_terminal && !settled_turn {
+            return Err(ServiceError::invalid_params(format!(
+                "run {run_id} is not finished (state: {state})"
+            )));
+        }
 
         Ok(json!({
             "runId": run_id.to_string(),

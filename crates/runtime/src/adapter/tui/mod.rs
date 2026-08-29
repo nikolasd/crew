@@ -35,7 +35,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crew_protocol::Classified;
+use crew_protocol::{Classified, TurnOutcome};
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
@@ -133,7 +133,14 @@ pub enum TuiEvent {
     SessionMeta {
         vendor_session_id: String,
     },
-    TurnEnded,
+    /// The vendor's own end-of-turn boundary (ADR-0027): the worker has
+    /// stopped working and is holding at its prompt. Journaled and
+    /// broadcast like any other evidence, so it *does* emit a payload --
+    /// which also means a batch ending here carries its cursor past the
+    /// boundary, and a resume never re-delivers it.
+    TurnEnded {
+        outcome: TurnOutcome,
+    },
     /// An entry the format does not understand. Unknown entries degrade
     /// to `Raw` (carrying only the vendor's own type tag) rather than
     /// failing the tail -- vendor formats drift.
@@ -250,8 +257,9 @@ impl TuiEvent {
         match self {
             TuiEvent::AssistantText { .. }
             | TuiEvent::ToolActivity { .. }
-            | TuiEvent::SessionMeta { .. } => true,
-            TuiEvent::TurnEnded | TuiEvent::Raw { .. } => false,
+            | TuiEvent::SessionMeta { .. }
+            | TuiEvent::TurnEnded { .. } => true,
+            TuiEvent::Raw { .. } => false,
         }
     }
 }
@@ -638,10 +646,25 @@ mod tests {
         }
     }
 
+    fn raw_event() -> TuiEvent {
+        TuiEvent::Raw {
+            entry_type: "unknown".to_string(),
+        }
+    }
+
+    /// A turn boundary is journaled evidence (ADR-0027), so it emits --
+    /// and the batch's cursor therefore rides it rather than stopping at
+    /// the message before it. That is what keeps a resume from
+    /// re-delivering the boundary.
     #[test]
-    fn last_emitting_index_skips_a_trailing_turn_ended() {
-        let events = vec![text_event(), TuiEvent::TurnEnded];
-        assert_eq!(last_emitting_index(&events), Some(0));
+    fn last_emitting_index_lands_on_a_trailing_turn_ended() {
+        let events = vec![
+            text_event(),
+            TuiEvent::TurnEnded {
+                outcome: TurnOutcome::Normal,
+            },
+        ];
+        assert_eq!(last_emitting_index(&events), Some(1));
     }
 
     #[test]
@@ -657,18 +680,13 @@ mod tests {
 
     #[test]
     fn last_emitting_index_finds_the_last_of_several_emitting_events() {
-        let events = vec![text_event(), text_event(), TuiEvent::TurnEnded];
+        let events = vec![text_event(), text_event(), raw_event()];
         assert_eq!(last_emitting_index(&events), Some(1));
     }
 
     #[test]
     fn last_emitting_index_is_none_when_nothing_in_the_batch_emits() {
-        let events = vec![
-            TuiEvent::TurnEnded,
-            TuiEvent::Raw {
-                entry_type: "unknown".to_string(),
-            },
-        ];
+        let events = vec![raw_event(), raw_event()];
         assert_eq!(last_emitting_index(&events), None);
     }
 

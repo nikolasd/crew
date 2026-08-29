@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crew_protocol::{Classified, ContentClass};
+use crew_protocol::{Classified, ContentClass, TurnOutcome};
 
 use crate::adapter::r#trait::{StartSpec, VendorSessionRef};
 use crate::config::crew::{AdapterConfig, PermissionMode};
@@ -397,7 +397,12 @@ fn map_assistant_content(payload: &Value, ts: Option<&str>) -> Vec<TuiEvent> {
 
 fn map_event_msg(payload: &Value) -> (Vec<TuiEvent>, Option<String>) {
     match payload.get("type").and_then(Value::as_str).unwrap_or("") {
-        "task_complete" => (vec![TuiEvent::TurnEnded], None),
+        "task_complete" => (
+            vec![TuiEvent::TurnEnded {
+                outcome: TurnOutcome::Normal,
+            }],
+            None,
+        ),
         // agent_message duplicates the response_item message this same
         // turn already journaled; user_message is the leader's own
         // prompt; exec_*/token_count/stream_error are telemetry. All
@@ -595,7 +600,9 @@ mod tests {
         );
 
         assert!(
-            events.iter().any(|e| matches!(e, TuiEvent::TurnEnded)),
+            events
+                .iter()
+                .any(|e| matches!(e, TuiEvent::TurnEnded { .. })),
             "task_complete must end the turn"
         );
     }

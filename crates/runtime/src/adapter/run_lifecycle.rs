@@ -7,7 +7,8 @@
 //! | evidence | edge |
 //! |---|---|
 //! | `ProcessStarted` | `queued -> starting` |
-//! | any other payload except `ProcessExited` | up to `working` |
+//! | `TurnEnded` | up to `waitingUser` (non-terminal -- ADR-0027) |
+//! | any other payload except `ProcessExited`/`TurnEnded` | up to `working` |
 //! | `ProcessExited { exit_code: Some(0), signal: None }` | `-> succeeded` |
 //! | `ProcessExited` with a non-zero code or a signal | `-> failed` |
 //! | `ProcessExited` with no code and no signal | `-> lost` |
@@ -202,6 +203,33 @@ impl RunLifecycle {
         }
     }
 
+    /// `TurnEnded` evidence: the vendor finished its turn and is holding at
+    /// its prompt (ADR-0027).
+    ///
+    /// Deliberately **non-terminal**. A run is a conversation the leader
+    /// closes, and a vendor turn boundary says only that the turn is over
+    /// -- not that the task succeeded. `waitingUser` is the existing state
+    /// meaning "the runtime is not the blocker", so the boundary hands the
+    /// run back without claiming an outcome; settling it is `run/finish`'s
+    /// job (or the inactivity backstop's).
+    ///
+    /// Forward-only and terminal-safe on the same terms as every other
+    /// edge here: a run already waiting, paused, or terminal is left
+    /// alone, so a boundary arriving after a cancel cannot resurrect it.
+    pub(crate) async fn observe_turn_ended(&self) {
+        let Some(current) = self.current().await else {
+            return;
+        };
+        match current.to_string().as_str() {
+            // A run that never got its `working` edge (codex journals no
+            // `ProcessStarted`) still walks there hop-by-hop first.
+            "queued" | "starting" | "working" => self.walk_to(&state("waitingUser")).await,
+            // Already waiting on someone, paused, or terminal: a turn
+            // boundary must not clobber any of those.
+            _ => {}
+        }
+    }
+
     /// `ProcessExited` evidence: the vendor process is gone, so the run
     /// terminalizes. The walk keeps the hop-by-hop edges legal without
     /// touching the protocol's transition table (`queued -> lost` and
@@ -309,6 +337,7 @@ impl AdapterEventSink for RunLifecycleSink {
             _ => None,
         };
         let process_started = matches!(&event.payload, AdapterEventPayload::ProcessStarted { .. });
+        let turn_ended = matches!(&event.payload, AdapterEventPayload::TurnEnded { .. });
         let run_id = self.lifecycle.run_id;
         let activity = Arc::clone(&self.activity);
         Box::pin(async move {
@@ -328,6 +357,13 @@ impl AdapterEventSink for RunLifecycleSink {
                     activity.touch(&run_id, std::time::Instant::now());
                     if process_started {
                         self.lifecycle.observe_process_started().await;
+                    } else if turn_ended {
+                        // The boundary's own edge subsumes the `working`
+                        // observation: it walks through `working` on its
+                        // way to `waitingUser` when the run had not got
+                        // there yet.
+                        self.lifecycle.observe_turn_ended().await;
+                        self.working_observed.store(true, Ordering::Relaxed);
                     } else if !self.working_observed.load(Ordering::Relaxed)
                         && self.lifecycle.observe_vendor_activity().await
                     {
@@ -668,6 +704,93 @@ mod tests {
             }
             other => panic!("expected the working edge, got {other:?}"),
         }
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    #[tokio::test]
+    async fn a_turn_end_moves_a_working_run_to_waiting_user_and_broadcasts_it() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
+        drive_to_state(&db, project_id, run_id, "working").await;
+        let (tx, mut rx) = broadcast::channel(64);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::TurnEnded {
+                outcome: crew_protocol::TurnOutcome::Normal,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+
+        assert_eq!(
+            run_state(&db, run_id).await,
+            "waitingUser",
+            "a finished turn hands the run back to the leader (ADR-0027)"
+        );
+        assert!(
+            !run_timestamp_set(&db, run_id, "completed_at").await,
+            "a turn boundary is not a terminal state: nothing may stamp completed_at"
+        );
+
+        // Invariant 7: the edge is broadcast, not just committed.
+        let envelope = rx.recv().await.expect("the edge must be broadcast");
+        match &envelope.event {
+            RuntimeEvent::RunEvent { kind, state, .. } => {
+                assert_eq!(*kind, RuntimeEventKind::RunWaitingUser);
+                assert_eq!(state.as_str(), "waitingUser");
+            }
+            other => panic!("expected the waitingUser edge, got {other:?}"),
+        }
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    #[tokio::test]
+    async fn a_turn_end_never_pulls_a_terminal_run_backwards() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
+        drive_to_state(&db, project_id, run_id, "working").await;
+        drive_to_state(&db, project_id, run_id, "cancelled").await;
+        let (tx, _rx) = broadcast::channel(64);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::TurnEnded {
+                outcome: crew_protocol::TurnOutcome::Normal,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+
+        assert_eq!(
+            run_state(&db, run_id).await,
+            "cancelled",
+            "a turn boundary arriving after a cancel must not resurrect the run"
+        );
         db.shutdown().await.expect("shutdown database");
     }
 
