@@ -131,7 +131,7 @@ crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/aud
 - Rust: `snake_case` for modules/functions, `PascalCase` for types, `SCREAMING_SNAKE_CASE` for constants
 - TypeScript: `camelCase` for functions/variables, `PascalCase` for types/classes
 - Tool names: `crew_<verb>` (e.g., `crew_task`, `crew_worker`, `crew_run`)
-- Commands: `/crew` (subcommands `health`, `run`, `runs`, `export`, `clean`, `reopen`, `doctor`, `config`) plus the standalone `/crew-install`; `/crew-status`, `/crew-doctor`, `/crew-config` are deprecated forwarders until the next release
+- Commands: `/crew` (subcommands `health`, `run`, `runs`, `export`, `clean`, `reopen`, `doctor`, `config`) plus the standalone `/crew-install`
 
 ---
 

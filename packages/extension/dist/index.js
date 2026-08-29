@@ -13655,7 +13655,6 @@ function registerMonitor(pi, ctx) {
 
 // src/index.ts
 var TOOL_NAME = "crew_health";
-var COMMAND_NAME = "crew-status";
 var STATUS_DESCRIPTION = "Use to verify the Crew runtime is reachable and healthy before orchestration operations. Returns connection status, runtime identity, and binary source. Call this if you're unsure the daemon is running, or after a connection failure.";
 var INSTALL_TOOL_NAME = "crew_install";
 function crewExtension(pi) {
@@ -13687,7 +13686,6 @@ function crewExtension(pi) {
       return getRuntimeStatus(statusContextFor(extCtx));
     }
   });
-  registerDeprecatedForwarder(COMMAND_NAME, "/crew health", (_args, ctx) => healthResult(ctx));
   registerOrchestrationTools(pi, { getClient, reportSubmitFailure: (message) => monitorHandle.reportSubmitFailure(message) });
   function doctorContextFor(cwd) {
     return buildDoctorContext(cwd);
@@ -13702,25 +13700,6 @@ function crewExtension(pi) {
     } else {
       ctx.ui.notify(result.text, result.isError ? "error" : "info");
     }
-  }
-  function registerDeprecatedForwarder(oldName, replacement, run) {
-    pi.registerCommand(oldName, {
-      description: `Deprecated: use ${replacement}.`,
-      handler: async (args, ctx) => {
-        const notice = `Note: /${oldName} is deprecated; use ${replacement}.`;
-        let result;
-        try {
-          result = await run(args, ctx);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          emitResult(ctx, { text: `${notice}
-${message}`, isError: true });
-          return;
-        }
-        emitResult(ctx, { text: `${notice}
-${result.text}`, isError: result.isError });
-      }
-    });
   }
   async function healthResult(extCtx) {
     return blocksToResult(await getRuntimeStatus(statusContextFor(extCtx)));
@@ -13766,7 +13745,6 @@ ${result.text}`, isError: result.isError });
       return runDoctorCommand(doctorContextFor(ctx.cwd));
     }
   });
-  registerDeprecatedForwarder("crew-doctor", "/crew doctor", (_args, ctx) => doctorResult(ctx.cwd));
   const configParams = pi.zod.object({
     op: pi.zod.enum(["path", "print", "init"]).describe("Which config operation to perform."),
     document: pi.zod.enum(["effective", "defaults", "schema"]).optional().describe("For op 'print': which document to emit. Defaults to 'effective'."),
@@ -13791,7 +13769,6 @@ ${result.text}`, isError: result.isError });
       return runConfigCommand({ crewdPath, repository: extCtx.cwd }, request);
     }
   });
-  registerDeprecatedForwarder("crew-config", "/crew config", (args, ctx) => configResult(args, ctx.cwd));
   pi.registerTool({
     name: INSTALL_TOOL_NAME,
     label: "Crew Install",
