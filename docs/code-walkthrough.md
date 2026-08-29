@@ -102,7 +102,8 @@ Small, dependency-light, and the vocabulary for everything else.
 | `src/display/herdr.rs` | Herdr display backend |
 | `src/display/tmux.rs` | Tmux display backend |
 | `src/canonical_json.rs` | Canonical, recursively key-sorted JSON bytes for hashing and durable storage |
-| `src/config/merge.rs` | Configuration merging with strict unknown-key rejection |
+| `src/config/mod.rs` | `RuntimePolicy` adapter and `resolve_policy()` layer merging |
+| `src/config/crew.rs` | `CrewConfig` loader with strict unknown-key rejection |
 | `src/policy/evaluate.rs` | `RuntimePolicy` with SHA-256 fingerprint, `RolloutGates` |
 | `src/audit/export.rs` | JSONL export |
 | `src/audit/retention.rs` | Event retention and pruning |
