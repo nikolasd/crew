@@ -124,7 +124,17 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
       });
 
       if (result.isError !== true && input.model !== undefined && configuredModel === undefined) {
-        persistConfiguredModel(extCtx.cwd, input.adapter, input.model);
+        // Registration is already durable by this point -- a failure to
+        // persist the model for next time (e.g. a malformed crew.json a
+        // concurrent process left mid-edit) must never surface as a
+        // failed crew_profile call; it's a missed convenience, not a
+        // failed registration. Warn, don't throw or flip isError.
+        try {
+          persistConfiguredModel(extCtx.cwd, input.adapter, input.model);
+        } catch (err) {
+          const message = err instanceof CrewConfigError ? err.message : err instanceof Error ? err.message : String(err);
+          result.content.push({ type: "text", text: `Warning: model was registered but not persisted for future sessions: ${message}` });
+        }
       }
 
       return result;

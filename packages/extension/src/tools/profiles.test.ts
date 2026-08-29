@@ -175,6 +175,28 @@ test("crew_profile never persists when profile/register itself failed", async ()
   expect(() => readFileSync(join(repository, ".omp", "crew.json"), "utf8")).toThrow();
 });
 
+test("crew_profile warns rather than throwing when persistence fails after a successful registration", async () => {
+  const repository = tempRepo();
+  // Registration is already durable by the time persistConfiguredModel
+  // runs -- simulate a concurrent process corrupting the repo layer file
+  // in the window between the read (resolveConfiguredModel, at the top
+  // of execute) and the write, by mutating it as a side effect of the
+  // mocked profile/register call itself.
+  const racy = {
+    request: async () => {
+      mkdirSync(join(repository, ".omp"), { recursive: true });
+      writeFileSync(join(repository, ".omp", "crew.json"), "{ not valid json");
+      return { profileId: "profile-1", sequence: 1 };
+    },
+  } as unknown as CrewClient;
+  const { tool } = setupProfileTool(racy);
+
+  const result = await tool({ adapter: "claude", model: "sonnet", startupOptions: { claude: { mode: "tui" } } }, fakeExtCtx(repository));
+
+  expect(result.isError).not.toBe(true);
+  expect(result.content.some((c) => "text" in c && c.text.includes("Warning"))).toBe(true);
+});
+
 // -------------------------------------------------------------- injection
 
 test("crew_profile fills in mode: tui for a reserved adapter when the caller omits it", async () => {
