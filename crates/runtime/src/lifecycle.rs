@@ -116,6 +116,19 @@ pub enum ServeError {
     #[error("config error: {0}")]
     ConfigError(String),
 }
+/// The `--state-dir` value every crewd-spawned subprocess (pane attach,
+/// pane reopen, `coordination-mcp`) must be launched with: the daemon's own
+/// state root, exactly what was passed to [`RuntimePaths::resolve`] here --
+/// never `paths.root`, the per-repository directory that call derives from
+/// it. Every one of those subprocesses re-resolves its own `RuntimePaths`
+/// from `--state-dir` + `--repo` (see `cli.rs`'s `resolve_state_dir`,
+/// `run_attach`, `run_coordination_mcp`), so handing it `paths.root` here
+/// would make it re-append `repos/<repository_id>` onto an already-descended
+/// path -- `<root>/repos/<id>/repos/<id>/...`, which never exists (CREW-2).
+fn subprocess_state_dir(opts: &ServeOptions) -> PathBuf {
+    opts.state_dir.clone()
+}
+
 /// or idle. Acquires the single-instance lock first; performs a graceful,
 /// journal-before-socket-removal shutdown on exit.
 ///
@@ -196,7 +209,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
             scope_tokens: Arc::clone(&scope_tokens),
             project_id: paths.project_id,
             crewd_path: crewd_path.clone(),
-            state_dir: paths.root.clone(),
+            state_dir: subprocess_state_dir(opts),
             repository: repo_root.clone(),
         }),
         Err(err) => {
@@ -244,7 +257,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
             display_registry,
             panes_dir: paths.panes.clone(),
             crewd_path: crewd_path.clone(),
-            state_dir: paths.root.clone(),
+            state_dir: subprocess_state_dir(opts),
             close_on_exit: crew_config.display.close_on_exit,
             forced_backend: crate::config::protocol_display_backend(crew_config.display.backend),
             adapters: crew_config.adapters.clone(),
@@ -293,7 +306,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         pane_reopen: current_exe.as_ref().ok().map(|crewd_path| {
             crate::ipc::PaneReopenConfig {
                 panes_dir: paths.panes.clone(),
-                state_dir: paths.root.clone(),
+                state_dir: subprocess_state_dir(opts),
                 crewd_path: crewd_path.clone(),
                 // Match the TUI adapter's own default backend registry so
                 // a reopened pane resolves exactly like a submit-time pane.
@@ -1267,6 +1280,61 @@ fn init_logging(foreground: bool, log_path: &Path) -> Result<(), ServeError> {
 mod tests {
     use super::*;
     use crew_protocol::{EventSource, ProjectId, RunId, RuntimeEvent, TaskId, Timestamp, WorkerId};
+
+    /// CREW-2 regression: `subprocess_state_dir` must return the real state
+    /// root (`opts.state_dir`), not `RuntimePaths::root` -- the per-repo
+    /// directory `RuntimePaths::resolve` derives from it. Every subprocess
+    /// `--state-dir` is fed to (pane attach, pane reopen, coordination-mcp)
+    /// re-resolves its own `RuntimePaths` from `--state-dir` + `--repo`, so
+    /// the round trip must land back on the exact same durable database the
+    /// daemon itself opened -- not a bogus, double-nested
+    /// `repos/<id>/repos/<id>/runtime.db` that `RuntimePaths::resolve` would
+    /// happily create anyway (`ensure_private_dir` doesn't know it's wrong).
+    /// Asserted against `database` rather than `panes` because CREW-1 moved
+    /// `panes` off the per-repo tree entirely (it no longer varies with
+    /// `state_dir` at all, by design) -- `database` is the field this
+    /// regression's actual victim, `coordination-mcp`, still depends on.
+    #[test]
+    fn subprocess_state_dir_round_trips_through_runtime_paths_resolve() {
+        let repo = tempfile::Builder::new()
+            .prefix("bat-lifecycle-repo-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
+        let state_root = tempfile::Builder::new()
+            .prefix("bat-lifecycle-state-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let opts = ServeOptions {
+            state_dir: state_root.path().to_path_buf(),
+            repo: repo.path().to_path_buf(),
+            idle_seconds: None,
+            foreground: true,
+            binary_source: BinarySource::Unknown,
+            config_paths: vec![],
+        };
+        let paths = RuntimePaths::resolve(&opts.state_dir, &opts.repo).unwrap();
+
+        // This is exactly what `crewd attach --state-dir <value>` and
+        // `crewd coordination-mcp --state-dir <value>` do on the receiving
+        // end: re-resolve `RuntimePaths` from it plus `--repo`.
+        let resolved = RuntimePaths::resolve(&subprocess_state_dir(&opts), &opts.repo).unwrap();
+        assert_eq!(
+            resolved.database, paths.database,
+            "a spawned coordination-mcp subprocess must resolve the exact \
+             same database the daemon itself opened"
+        );
+
+        // Pin the bug this guards against: `paths.root` is NOT a valid
+        // `--state-dir` value. Feeding it back through `RuntimePaths::resolve`
+        // (what the CREW-2 bug did, transitively, via the CLI) double-nests
+        // `repos/<repository_id>` a second time instead of erroring.
+        let double_nested = RuntimePaths::resolve(&paths.root, &opts.repo).unwrap();
+        assert_ne!(
+            double_nested.database, paths.database,
+            "paths.root must never be passed as --state-dir -- this is the exact CREW-2 regression"
+        );
+    }
 
     fn health_envelope(healthy: bool, detail: Option<&str>) -> EventEnvelope {
         let run_id = RunId::new();

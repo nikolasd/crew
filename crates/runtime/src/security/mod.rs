@@ -53,6 +53,20 @@ pub enum SecurityError {
         mode: u32,
         expected: u32,
     },
+
+    /// `path` already exists as a symlink. `DirBuilder::create` (recursive)
+    /// treats an existing symlink-to-directory as "already there" and skips
+    /// creating it, and the ownership/chmod steps that follow both dereference
+    /// symlinks -- so without this check, a local attacker who pre-creates
+    /// `path` as a symlink to a directory the expected uid already owns (but
+    /// never intended to expose here) passes the ownership check and gets
+    /// that arbitrary directory silently chmod-ed to `0700` and reused. Safe
+    /// only as long as every caller's parent directory is itself
+    /// non-world-writable (`$HOME`, `$XDG_RUNTIME_DIR`); a caller that resolves
+    /// `path` under a world-writable directory (e.g. `/tmp`) must not skip
+    /// this rejection.
+    #[error("{path:?} is a symlink; refusing to create or reuse a directory through one")]
+    UntrustedSymlink { path: PathBuf },
 }
 
 /// The root directory Crew stores all per-repository state under.
@@ -210,7 +224,32 @@ pub fn ensure_private_dir(path: &Path) -> Result<(), SecurityError> {
 /// test can simulate a foreign-owned directory (a directory owned by someone
 /// other than `expected_uid`) and assert [`SecurityError::UntrustedOwner`]
 /// without needing root or a second real user.
+/// Rejects `path` if it exists as a symlink, via `lstat` (which does not
+/// dereference the final path component, unlike `fs::metadata`/`create`).
+/// Called twice by [`ensure_private_dir_as`]: once before anything touches
+/// `path`, and once again immediately after `DirBuilder::create` returns, to
+/// close the race where a symlink is planted in between (see that call
+/// site's comment).
+fn reject_symlink(path: &Path) -> Result<(), SecurityError> {
+    if let Ok(link_metadata) = fs::symlink_metadata(path)
+        && link_metadata.file_type().is_symlink()
+    {
+        return Err(SecurityError::UntrustedSymlink {
+            path: path.to_path_buf(),
+        });
+    }
+    Ok(())
+}
+
 fn ensure_private_dir_as(path: &Path, expected_uid: u32) -> Result<(), SecurityError> {
+    // Reject a pre-existing symlink at `path` before anything else touches
+    // it. `fs::symlink_metadata` (lstat) does not follow the final
+    // component, so this sees the symlink itself rather than whatever it
+    // points to; `DirBuilder::create` and the ownership/chmod checks below
+    // all dereference, so this must run first. See `SecurityError::
+    // UntrustedSymlink`'s doc comment for the attack this closes.
+    reject_symlink(path)?;
+
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
     builder.mode(0o700);
@@ -218,6 +257,14 @@ fn ensure_private_dir_as(path: &Path, expected_uid: u32) -> Result<(), SecurityE
         path: path.to_path_buf(),
         source,
     })?;
+
+    // Re-check immediately after `create()`: a symlink planted in the
+    // (sub-millisecond) window between the check above and `create()`
+    // returning is invisible to that first check, and `create()` itself
+    // treats an existing symlink-to-directory as "already there" and
+    // succeeds through it rather than erroring. This closes that race
+    // rather than relying on the first check alone.
+    reject_symlink(path)?;
 
     let metadata = fs::metadata(path).map_err(|source| SecurityError::Io {
         path: path.to_path_buf(),
@@ -593,6 +640,42 @@ mod tests {
             }
             other => panic!("expected UntrustedOwner, got {other:?}"),
         }
+    }
+
+    /// CREW-1 blocker: a local attacker who pre-creates `path` as a symlink
+    /// to a directory the current uid *already owns* (but never intended to
+    /// expose here) must be rejected outright -- not have that arbitrary
+    /// directory silently chmod-ed to `0700` and reused. This is what makes
+    /// relocating a private directory under a world-writable parent (e.g.
+    /// `/tmp`) safe: `ensure_private_dir`'s existing ownership check alone
+    /// passes here (the symlink's target really is owned by the expected
+    /// uid), so only an explicit symlink rejection closes it.
+    #[test]
+    fn ensure_private_dir_rejects_a_symlink_even_when_its_target_is_owned_by_the_expected_uid() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim");
+        fs::create_dir(&victim).unwrap();
+        fs::set_permissions(&victim, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let attacker_planted = dir.path().join("state");
+        std::os::unix::fs::symlink(&victim, &attacker_planted).unwrap();
+
+        let real_uid = Uid::current().as_raw();
+        let err = ensure_private_dir_as(&attacker_planted, real_uid)
+            .expect_err("a symlinked path must be rejected even when its target is owned by us");
+        match err {
+            SecurityError::UntrustedSymlink { path } => assert_eq!(path, attacker_planted),
+            other => panic!("expected UntrustedSymlink, got {other:?}"),
+        }
+
+        // The real point of the test: the victim directory's permissions
+        // must be completely untouched -- proof we never dereferenced the
+        // symlink to chmod its target.
+        let mode = fs::metadata(&victim).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o755,
+            "the symlink target must never be touched, chmod-ed, or otherwise reused"
+        );
     }
 
     #[test]

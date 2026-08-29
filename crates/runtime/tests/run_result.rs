@@ -581,7 +581,7 @@ async fn run_result_sums_claude_usage_and_takes_last_for_cumulative_adapters() {
                 "adapter": "claude",
                 "model": "claude-sonnet-4-5",
                 "permissionEnvelope": { "fullAuto": false },
-                "startupOptions": { "claude": {} },
+                "startupOptions": { "claude": { "mode": "tui" } },
                 "environmentAllowlist": [],
                 "source": "run-result-test"
             }),
