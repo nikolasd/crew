@@ -360,7 +360,8 @@ not just what it computes.
 
 **Location:** `Cargo.toml`; `crates/runtime/src/canonical_json.rs`;
 `crates/runtime/src/security/redaction.rs`; `crates/runtime/src/adapter/profile.rs`; and
-`crates/runtime/src/config/merge.rs`
+`crates/runtime/src/config/merge.rs` (since orphaned — the same sorting now lives in
+`config/crew.rs::fingerprint`)
 
 **The bug:** `serde_json`'s `preserve_order` feature was correctly enabled for the conformance
 fixture-capture scrubber, which must reproduce vendor frames in their original key order. It also

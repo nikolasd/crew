@@ -39,7 +39,11 @@ An operator builds a web dashboard that wants to be a *display backend* — not 
 
 **2. Liveness-aware display routing**
 
-You run both Herdr (terminal) and a web dashboard. Herdr crashes. Today the `DisplaySelector` still thinks Herdr is available (registered at startup, nothing tells the runtime it died). A new run gets routed to the dead backend, events go nowhere. `display/heartbeat` with expiry would detect the crash and remove it from the available set.
+You run both Herdr (terminal) and a web dashboard. Herdr crashes. The `DisplaySelector` still thinks Herdr is available — registered at startup, with nothing telling the runtime it died — so a new run gets routed to a dead backend.
+
+Partly narrowed since this was written: `display::pane_socket::is_live` established a connect-probe definition of pane liveness, used by `pane/reopen` and by the startup sweep that unlinks dead sockets ([ADR-0027](adr/0027-turn-end-settles-a-run.md)). That answers "is this *pane* alive" for a Crew-owned attach socket. It does not answer "is this *backend* still able to accept new panes", which is what routing needs, and it says nothing about a backend that never had a Crew socket in the first place. So the scenario stands, but its premise is no longer "nothing detects a dead backend" — it is that pane-level liveness does not generalize to backend-level routing.
+
+**Cross-note:** the crewd-served web monitor ([CREW-12](adr/)) must be scoped as a **read-only viewer** built on `events/subscribe` + `events/replay`. If it is instead allowed to receive routed runs, it becomes a display backend and this entry's trigger fires — a registration surface would then be required rather than deferred.
 
 **3. Multi-tenant / shared daemon**
 
@@ -213,6 +217,18 @@ operator was reported as depending on the headless path specifically. Retiring i
 than keeping it permanently inert, follows the same reasoning as the Org Governance Enforcement
 entry above: an unreachable-in-practice code path is a liability, not a free option.
 
+Subsequent work removed most of the *practical* pressure that would have argued for bringing it
+back. The three complaints that made a headless plane attractive were that driving a real TUI is
+fragile about input, opaque about completion, and unverifiable about delivery. Each now has an
+answer in the TUI path itself: prompts are delivered as one bracketed paste in paced chunks with a
+bounded write, so a vendor that stops reading fails loudly instead of truncating silently; a run
+reaches a settled state from the vendor's own end-of-turn boundary rather than only from process
+exit, with `run/finish` for the leader and an inactivity backstop for an abandoned turn
+([ADR-0027](adr/0027-turn-end-settles-a-run.md)); and post-submit verification compares what the
+vendor actually recorded against what was sent, so a truncating composer fails the run rather than
+producing a plausible-looking short answer. A headless plane would have to beat that, not merely
+match a PTY's old weaknesses.
+
 ### Decision trigger
 
 Implement a non-interactive control plane again only if a concrete deployment needs to drive a
@@ -220,42 +236,6 @@ vendor CLI without a PTY (e.g. a headless CI runner with no pane backend availab
 the TUI path is confirmed unworkable for it — not merely inconvenient. Any reintroduction should
 design fresh against the vendor CLIs' current protocols rather than resurrect the deleted code,
 since the vendor wire formats this was built against may themselves have moved on by then.
-
----
-
-## Org Config: URL or File Path Support
-
-**Specified by:** TODO.md Feature Requests section (retired 2026-08-06)
-**Status:** the local org config layer this describes was itself retired by the crew-v2
-design (spec §2.2/§12; removed by crew-v2 gap-closure WP5) — the entry below is preserved as
-a record of the pre-crew-v2 idea, relevant again only if the org config layer itself returns.
-**References:** `crates/runtime/src/config/merge.rs` (`load_layer`, no longer part of the
-crate -- orphaned, pending deletion)
-
-### What it is
-
-Org-level config currently loads only from a local file path
-(`--org-config /etc/crew/org.yaml`). This would let it also accept an
-`http://`/`https://` URL, fetching and parsing the YAML remotely — e.g.
-`--org-config https://config.example.com/org.yaml` — so a central org can
-publish one config that every install pulls from instead of distributing
-a file to each machine.
-
-### Why deferred
-
-No operator has asked for this; it's a speculative convenience, not a
-reported gap. It also isn't a small bolt-on: it adds a network dependency
-and a new failure mode (DNS, TLS, timeout, transient outage) to daemon
-startup, which today is entirely offline-safe. Doing it properly means
-deciding TLS certificate validation policy, timeout/retry behavior, and
-whether/how to cache the last-fetched config so a network blip doesn't
-prevent the daemon from starting at all.
-
-### Decision trigger
-
-Implement when an operator needs centrally-managed org config across
-multiple machines/repos and file distribution (config management, shared
-filesystem, etc.) is a real deployment problem for them.
 
 ---
 
@@ -355,7 +335,9 @@ Deprecation forwarders give users a grace period to migrate from the old command
 
 ### Decision trigger
 
-The first release cut after v0.6.0 (which ships the forwarders). Removing them shrinks the registered-command list — update the exact-list assertion in `packages/extension/src/index.test.ts` (the `["crew-status", "crew", ...]` line) and delete the forwarder test in the same commit.
+**Armed.** v0.6.0 has shipped, so this is scheduled for the next release cut rather than waiting on a condition — the only remaining question is when that cut happens, not whether the trigger has fired.
+
+Removing them shrinks the registered-command list, so the same commit must update the exact-list assertion in `packages/extension/src/index.test.ts` (the `["crew-status", "crew", ...]` line) and delete the forwarder test. `/crew-install` is permanent and stays.
 
 ---
 
