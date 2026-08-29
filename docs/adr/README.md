@@ -30,10 +30,11 @@ agreed. Read [../journal.md](../journal.md) for the story each of these was extr
 | [0020](0020-per-mutation-event-broadcast-is-not-optional.md) | Per-mutation event broadcast is not optional | Accepted |
 | [0021](0021-shared-client-authenticates-with-the-union-of-required-roles.md) | A shared client authenticates with the union of every caller's role | Accepted |
 | [0022](0022-github-release-download-cache-replaces-npm-leaf-packages.md) | GitHub Release download-cache replaces npm optional leaf packages | Accepted |
-| [0023](0023-run-state-edges-from-adapter-evidence.md) | Run-state edges derive from adapter evidence; an unobservable exit is `lost` | Accepted |
+| [0023](0023-run-state-edges-from-adapter-evidence.md) | Run-state edges derive from adapter evidence; an unobservable exit is `lost` | Accepted, amended by [0027](0027-turn-end-settles-a-run.md) |
 | [0024](0024-project-scoped-reads-are-open-ownership-gates-writes.md) | Project-scoped reads are open; ownership gates writes | Accepted |
 | [0025](0025-crew-v2-tui-control-plane.md) | Crew v2 TUI control plane | Accepted |
 | [0026](0026-headless-retirement.md) | Headless control plane retirement | Accepted |
+| [0027](0027-turn-end-settles-a-run.md) | A run is a conversation the leader closes; a vendor's turn-end is durable evidence, not a terminal state | Accepted |
 
 ## When to add one
 

@@ -388,6 +388,7 @@ fn full_field_round_trip_through_json_survives_validate_shape() {
         approval: ApprovalMode::Never,
         limits: Limits {
             max_concurrent_workers: 7,
+            max_live_sessions: 21,
             inactivity_timeout_sec: 111,
             total_timeout_sec: 222,
             turn_budget_per_subtask: 3,
