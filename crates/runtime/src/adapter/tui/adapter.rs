@@ -55,6 +55,7 @@ use crate::supervisor::{EscalationTimings, PtyProcess};
 use super::discovery::{DiscoveryError, find_transcript_by_nonce};
 use super::input::{PASTE_CHUNK_BYTES, paste_chunks};
 use super::tailer::{TailerHandle, TranscriptTailer};
+use super::verify::{PromptVerdict, verify_recorded_prompt};
 use super::{Cursor, TranscriptFormat, TuiEvent};
 
 /// Interactive-TUI launch instructions a [`TuiVendor`] builds: argv, cwd,
@@ -805,6 +806,51 @@ impl<V: TuiVendor> TuiAdapter<V> {
                 }
             }
         };
+
+        // CREW-13: confirm the vendor recorded the WHOLE prompt, not just
+        // the tail. Discovery only proves the nonce arrived, and the nonce
+        // is appended -- so a vendor that accepted every byte and then
+        // truncated in its own composer passes discovery and looks like a
+        // success. Only compared for a fresh injection: a resume has no
+        // prompt of its own to verify, and its transcript's prior turns
+        // belong to earlier runs.
+        if let Some(injected) = inject.as_deref()
+            && let Ok(raw) = tokio::fs::read(&transcript_path).await
+        {
+            match verify_recorded_prompt(
+                &raw,
+                self.vendor.format().as_ref(),
+                injected,
+                &discovery_key,
+            ) {
+                PromptVerdict::Intact | PromptVerdict::Unverifiable => {}
+                PromptVerdict::Corrupted {
+                    expected_len,
+                    recorded_len,
+                    detail,
+                } => {
+                    return self
+                        .fail_start(
+                            pty,
+                            attach,
+                            pane_outcome,
+                            sink,
+                            run_id,
+                            task_id,
+                            worker_id,
+                            AdapterError::process(
+                                self.kind(),
+                                "start",
+                                format!(
+                                    "the vendor recorded {recorded_len} characters of a \
+                                     {expected_len}-character prompt: {detail}"
+                                ),
+                            ),
+                        )
+                        .await;
+                }
+            }
+        }
 
         // A best-effort initial guess (never a full path -- see
         // `TuiVendor::session_id_from_transcript_path`'s doc comment);
