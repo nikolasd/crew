@@ -17,14 +17,14 @@ Two facts are invisible from the tool schemas but essential for correct use:
 
 Follow this sequence to diagnose Crew problems:
 
-1. **`/crew-status`** — connects to or spawns the daemon. If it fails, proceed to step 2.
+1. **`/crew health`** — connects to or spawns the daemon. If it fails, proceed to step 2.
 2. **`/crew-install`** — downloads and verifies the crewd binary if it's missing. This is the fix for `runtime-not-installed`.
-3. **`/crew-doctor`** — works even with no live daemon. Provides a detailed health check of the environment.
+3. **`/crew doctor`** — works even with no live daemon. Provides a detailed health check of the environment.
 
 
 ## Live-control failures
 
-- Start with `/crew`, not a poll loop: `runs`, `status <runId>`, and `crew_transcript` expose the durable replay.
+- Start with `/crew`, not a poll loop: `runs`, `run <runId>`, and `crew_transcript` expose the durable replay.
 - `BUDGET_EXCEEDED` means the subtask's snapshotted turn budget is exhausted. Do not resend; change the approved plan budget or stop/finish the run.
 - `WorkerTimeout` is not a daemon kill. Choose `run/timeoutAck` `extend`, `crew_send` a nudge, or `run/timeoutAck` `abort`.
 - `pane/reopen` only works for a live run with its attach socket still bound. A terminal run or absent socket is an honest refusal; use the transcript instead.
@@ -40,5 +40,5 @@ Every Crew tool error has this shape: text `"<method> failed: <message>"`, `deta
 | `version-mismatch` | Re-run `/crew-install`. The cached binary is for a different extension version. |
 | `manifest-invalid` | Re-run `/crew-install`. The cached manifest is corrupt or for another platform. |
 | `unsupported-platform` | Crew only supports macOS and glibc Linux, arm64/x64. Other platforms are not supported. |
-| `connection-failed` | Run `/crew-doctor` for a detailed check without needing a live daemon. |
+| `connection-failed` | Run `/crew doctor` for a detailed check without needing a live daemon. |
 | `http-error` (from `/crew-install`) | **This repository is private.** The download needs read access via a `GITHUB_TOKEN` or `GH_TOKEN` environment variable, or a local `gh auth login` session. Set one of those and retry the install. |

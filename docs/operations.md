@@ -71,7 +71,7 @@ crewd doctor --repo <path> --state-dir "$HOME/.omp/crew" [--json]
 
 Runs the full check catalog documented in [`cli-reference.md`](cli-reference.md#crewd-doctor)
 against the same paths `serve` would use. Exits 0 healthy, 1 unhealthy. Inside OMP, prefer
-`crew_doctor` / `/crew-doctor` — same check catalog, no need to resolve paths by hand.
+`crew_doctor` / `/crew doctor` — same check catalog, no need to resolve paths by hand.
 
 ## Crash Recovery
 
@@ -174,7 +174,7 @@ installing anything.
   failing check (permissions, disk space, schema mismatch, unsupported platform, etc.).
 
 **`crew_health` fails but you're not sure why:**
-- Run `crew_doctor` (or `/crew-doctor`) — it diagnoses without needing a live connection, which
+- Run `crew_doctor` (or `/crew doctor`) — it diagnoses without needing a live connection, which
   is exactly the case `crew_health` can't help with.
 
 **Doctor reports a `state_dir_writable` or `socket_permissions` failure:**

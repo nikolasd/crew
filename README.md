@@ -40,7 +40,7 @@ loaded the installed module. Then:
 
 ```
 /crew-install
-/crew-status
+/crew health
 ```
 
 **This repository is private.** The marketplace step git-clones it, so you need your own GitHub

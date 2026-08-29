@@ -191,8 +191,8 @@ graph LR
 
 **Key components:**
 - **Extension entry point** ([`packages/extension/src/index.ts`](packages/extension/src/index.ts)): Registers tools and commands with OMP
-- **Status tool** ([`packages/extension/src/status.ts`](packages/extension/src/status.ts)): `crew_health` tool, `/crew-status` command, and the shared `resolveClient()` resolver — liveness-checks the cached connection and reconnects on demand
-- **Doctor tool** ([`packages/extension/src/doctor.ts`](packages/extension/src/doctor.ts)): `crew_doctor` tool and `/crew-doctor` command — runs `crewd doctor` without needing a live connection
+- **Status tool** ([`packages/extension/src/status.ts`](packages/extension/src/status.ts)): `crew_health` tool, `/crew health` command, and the shared `resolveClient()` resolver — liveness-checks the cached connection and reconnects on demand
+- **Doctor tool** ([`packages/extension/src/doctor.ts`](packages/extension/src/doctor.ts)): `crew_doctor` tool and `/crew doctor` command — runs `crewd doctor` without needing a live connection
 - **Runtime client** ([`packages/extension/src/client.ts`](packages/extension/src/client.ts)): JSON-RPC client with correlation table and `isClosed` liveness flag
 - **Runtime launcher** ([`packages/extension/src/runtime.ts`](packages/extension/src/runtime.ts)): `ensureRuntime()` with binary selection and connection retry
 - **Platform resolver** ([`packages/extension/src/platform.ts`](packages/extension/src/platform.ts)): `resolveCrewd()` for platform-specific binaries

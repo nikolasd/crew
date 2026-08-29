@@ -206,7 +206,7 @@ Two informational **notes** (not pass/fail checks) also ride along: `config_pres
 effective config differs from the built-in defaults). Both report facts about the `crew.json`
 layer (`crewd config`, below), never fail the overall `doctor` exit code.
 
-`crew_doctor` (the OMP tool/`,/crew-doctor` command) runs this same check catalog without
+`crew_doctor` (the OMP tool/`/crew doctor` command) runs this same check catalog without
 requiring a live runtime connection — see [`plugin-usage.md`](plugin-usage.md).
 
 ### `crewd config`

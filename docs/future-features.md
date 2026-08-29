@@ -340,6 +340,25 @@ config from the entry above is built).
 
 ---
 
+## Remove the deprecated hyphenated command forwarders
+
+**Specified by:** crew slash-command normalization plan (2026-08-27)  
+**References:** `docs/superpowers/specs/2026-08-27-crew-command-normalization.md`, `packages/extension/src/index.ts` (forwarder registrations), `packages/extension/src/index.test.ts` (forwarder test)
+
+### What it is
+
+`/crew-status`, `/crew-doctor`, `/crew-config` forward to `/crew health` / `/crew doctor` / `/crew config` with a deprecation notice. `/crew-install` is permanent and is NOT part of this removal.
+
+### Why deferred
+
+Deprecation forwarders give users a grace period to migrate from the old command names to the new ones. The forwarders ship in v0.6.0; once that release is in the wild long enough for operators to see the deprecation notice and update their workflows, the forwarders can be removed without breaking existing documentation or muscle memory.
+
+### Decision trigger
+
+The first release cut after v0.6.0 (which ships the forwarders). Removing them shrinks the registered-command list — update the exact-list assertion in `packages/extension/src/index.test.ts` (the `["crew-status", "crew", ...]` line) and delete the forwarder test in the same commit.
+
+---
+
 ## How to use this document
 
 1. **Adding a future feature:** Append a new section with the feature name, what it is, concrete scenarios that justify it, why it's deferred, and a decision trigger.

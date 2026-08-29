@@ -10829,7 +10829,7 @@ function envFlag(env, newName, oldName) {
 // package.json
 var package_default = {
   name: "@nikolasd/crew",
-  version: "0.5.0",
+  version: "0.6.0",
   type: "module",
   exports: { ".": "./dist/index.js" },
   omp: { extensions: ["./dist/index.js"] },
@@ -13249,10 +13249,26 @@ class MonitorController {
     return row === undefined ? undefined : renderRowDetails(row);
   }
 }
+var MONITOR_RPC_SUBCOMMANDS = new Set(["runs", "export", "clean", "reopen"]);
+var MONITOR_COMPLETIONS = [
+  { value: "run", label: "run", description: "Details for one run", hint: "<runId>" },
+  { value: "runs", label: "runs", description: "List all Crew runs" },
+  { value: "export", label: "export", description: "Export events to .omp/crew/", hint: "[runId]" },
+  { value: "clean", label: "clean", description: "Retention clean of terminal event history" },
+  { value: "reopen", label: "reopen", description: "Reopen a live run's pane", hint: "<runId>" }
+];
+function respond(cmdCtx, text, level = "info") {
+  if (cmdCtx.hasUI !== true) {
+    console.log(text);
+  } else {
+    cmdCtx.ui.notify(text, level);
+  }
+}
 function registerMonitor(pi, ctx) {
   const controller = new MonitorController;
   attachMilestoneBridge(pi, controller);
   let subscribedClient;
+  const subcommandList = ["run <runId>", "runs", "export [runId]", "clean", "reopen <runId>", ...ctx.management?.keys() ?? []];
   function refresh(extCtx, force = false) {
     const state = controller.getState();
     const content = force || hasVisibleRows(state) ? renderWidgetBox(state, extCtx.ui.theme) : undefined;
@@ -13292,24 +13308,66 @@ function registerMonitor(pi, ctx) {
     }
   });
   pi.registerCommand(MONITOR_COMMAND_NAME, {
-    description: "Opens the Crew monitor. Subcommands: status <runId>, runs, export [runId], clean, reopen <runId>.",
+    description: `Opens the Crew monitor. Subcommands: ${subcommandList.join(", ")}.`,
+    getArgumentCompletions: (argumentPrefix) => {
+      const managementItems = [...ctx.management?.entries() ?? []].map(([name, sub]) => ({
+        value: name,
+        label: name,
+        description: sub.description,
+        ...sub.hint !== undefined ? { hint: sub.hint } : {}
+      }));
+      const prefix = argumentPrefix.trimStart();
+      const matches = [...managementItems, ...MONITOR_COMPLETIONS].filter((item) => item.value.startsWith(prefix));
+      return matches.length === 0 ? null : matches;
+    },
     handler: async (args, cmdCtx) => {
       const [sub, runId] = args.trim().split(/\s+/, 2);
-      if (sub === "status" && runId !== undefined && runId.length > 0) {
+      const usage = `Usage: /crew [${subcommandList.join(" | ")}]`;
+      if (sub === undefined || sub.length === 0) {
+        await connect(cmdCtx);
+        if (subscribedClient === undefined) {
+          respond(cmdCtx, "Crew runtime is unavailable.", "warning");
+          return;
+        }
+        refresh(cmdCtx, true);
+        return;
+      }
+      const management = ctx.management?.get(sub);
+      if (management !== undefined) {
+        const rest = args.trim().slice(sub.length).trim();
+        let result;
+        try {
+          result = await management.run(rest, cmdCtx);
+        } catch (err) {
+          respond(cmdCtx, err instanceof Error ? err.message : String(err), "error");
+          return;
+        }
+        respond(cmdCtx, result.text, result.isError ? "error" : "info");
+        return;
+      }
+      if (sub === "run") {
+        if (runId === undefined || runId.length === 0) {
+          respond(cmdCtx, "Usage: /crew run <runId>", "error");
+          return;
+        }
         const details = controller.renderStatus(runId);
-        cmdCtx.ui.notify(details ?? `No Crew run found for ${runId}.`, details === undefined ? "warning" : "info");
+        respond(cmdCtx, details ?? `No Crew run found for ${runId}.`, details === undefined ? "warning" : "info");
+        return;
+      }
+      if (!MONITOR_RPC_SUBCOMMANDS.has(sub)) {
+        respond(cmdCtx, `Unknown subcommand "${sub}". ${usage}`, "error");
         return;
       }
       await connect(cmdCtx);
       const client = subscribedClient;
       if (client === undefined) {
-        cmdCtx.ui.notify("Crew runtime is unavailable.", "warning");
+        respond(cmdCtx, "Crew runtime is unavailable.", "warning");
         return;
       }
       if (sub === "runs") {
         const result = await client.request("run/list", {});
         const runs = result.runs ?? [];
-        cmdCtx.ui.notify(runs.length === 0 ? "No Crew runs recorded." : runs.map((run) => `${run.runId ?? "(unknown)"}  ${run.state ?? "unknown"}  worker ${run.workerId ?? "unknown"}`).join(`
+        respond(cmdCtx, runs.length === 0 ? "No Crew runs recorded." : runs.map((run) => `${run.runId ?? "(unknown)"}  ${run.state ?? "unknown"}  worker ${run.workerId ?? "unknown"}`).join(`
 `), "info");
         return;
       }
@@ -13323,24 +13381,23 @@ function registerMonitor(pi, ctx) {
         await writeFile(output, events.map((event) => JSON.stringify(event)).join(`
 `) + (events.length > 0 ? `
 ` : ""));
-        cmdCtx.ui.notify(`Exported ${events.length} Crew events to ${output}.`, "info");
+        respond(cmdCtx, `Exported ${events.length} Crew events to ${output}.`, "info");
         return;
       }
       if (sub === "clean") {
         const result = await client.request("retention/clean", {});
-        cmdCtx.ui.notify(`Retention clean removed ${result.deletedEvents} events across ${result.runsPruned} maxRuns-pruned runs.`, "info");
+        respond(cmdCtx, `Retention clean removed ${result.deletedEvents} events across ${result.runsPruned} maxRuns-pruned runs.`, "info");
         return;
       }
       if (sub === "reopen") {
         if (runId === undefined || runId.length === 0) {
-          cmdCtx.ui.notify("Usage: /crew reopen <runId>", "warning");
+          respond(cmdCtx, "Usage: /crew reopen <runId>", "error");
           return;
         }
         const result = await client.request("pane/reopen", { runId });
-        cmdCtx.ui.notify(result.paneRef.length === 0 ? `No visible backend is available for ${runId}.` : `Reopened ${runId} in ${result.backend}: ${result.paneRef}`, "info");
+        respond(cmdCtx, result.paneRef.length === 0 ? `No visible backend is available for ${runId}.` : `Reopened ${runId} in ${result.backend}: ${result.paneRef}`, "info");
         return;
       }
-      refresh(cmdCtx, true);
     }
   });
   pi.on("session_shutdown", async () => {
@@ -13380,24 +13437,75 @@ function crewExtension(pi) {
       return getRuntimeStatus(statusContextFor(extCtx));
     }
   });
-  pi.registerCommand(COMMAND_NAME, {
-    description: STATUS_DESCRIPTION,
-    handler: async (_args, extCtx) => {
-      const result = await getRuntimeStatus(statusContextFor(extCtx));
-      const text = result.content.map((block) => block.text).join(`
-`);
-      if (!extCtx.hasUI) {
-        console.log(text);
-      } else {
-        extCtx.ui.notify(text, result.isError ? "error" : "info");
-      }
-    }
-  });
+  registerDeprecatedForwarder(COMMAND_NAME, "/crew health", (_args, ctx) => healthResult(ctx));
   registerOrchestrationTools(pi, { getClient });
-  registerMonitor(pi, { getClient });
   function doctorContextFor(cwd) {
     return buildDoctorContext(cwd);
   }
+  function blocksToResult(result) {
+    return { text: result.content.map((block) => block.text).join(`
+`), isError: result.isError === true };
+  }
+  function emitResult(ctx, result) {
+    if (!ctx.hasUI) {
+      console.log(result.text);
+    } else {
+      ctx.ui.notify(result.text, result.isError ? "error" : "info");
+    }
+  }
+  function registerDeprecatedForwarder(oldName, replacement, run) {
+    pi.registerCommand(oldName, {
+      description: `Deprecated: use ${replacement}.`,
+      handler: async (args, ctx) => {
+        const notice = `Note: /${oldName} is deprecated; use ${replacement}.`;
+        let result;
+        try {
+          result = await run(args, ctx);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          emitResult(ctx, { text: `${notice}
+${message}`, isError: true });
+          return;
+        }
+        emitResult(ctx, { text: `${notice}
+${result.text}`, isError: result.isError });
+      }
+    });
+  }
+  async function healthResult(extCtx) {
+    return blocksToResult(await getRuntimeStatus(statusContextFor(extCtx)));
+  }
+  async function doctorResult(cwd) {
+    return blocksToResult(await runDoctorCommand(doctorContextFor(cwd)));
+  }
+  async function configResult(args, cwd) {
+    const [op = "path", ...rest] = args.trim().split(/\s+/).filter(Boolean);
+    if (op !== "path" && op !== "print" && op !== "init") {
+      return { text: `Unknown operation ${op}. Usage: /crew config [path | print [effective|defaults|schema] | init [global] [force]]`, isError: true };
+    }
+    if (op === "print") {
+      const doc = rest[0] ?? "effective";
+      if (doc !== "effective" && doc !== "defaults" && doc !== "schema") {
+        return { text: `Unknown document ${doc}. Usage: /crew config print [effective|defaults|schema]`, isError: true };
+      }
+    }
+    const request = {
+      op,
+      repository: cwd,
+      ...op === "print" ? { document: rest[0] ?? "effective" } : {},
+      ...op === "init" ? { global: rest.includes("global"), force: rest.includes("force") } : {}
+    };
+    const { crewdPath } = doctorContextFor(cwd);
+    return blocksToResult(await runConfigCommand({ crewdPath, repository: cwd }, request));
+  }
+  registerMonitor(pi, {
+    getClient,
+    management: new Map([
+      ["health", { description: "Runtime health: connects to or spawns the daemon", run: async (_args, ctx) => healthResult(ctx) }],
+      ["doctor", { description: "Diagnostics that work with no live daemon", run: async (_args, ctx) => doctorResult(ctx.cwd) }],
+      ["config", { description: "Inspect or scaffold crew.json", hint: "[path | print [effective|defaults|schema] | init [global] [force]]", run: async (args, ctx) => configResult(args, ctx.cwd) }]
+    ])
+  });
   pi.registerTool({
     name: "crew_doctor",
     label: "Crew Doctor",
@@ -13407,19 +13515,7 @@ function crewExtension(pi) {
       return runDoctorCommand(doctorContextFor(ctx.cwd));
     }
   });
-  pi.registerCommand("crew-doctor", {
-    description: "Run diagnostic checks on the Crew runtime state and configuration.",
-    handler: async (_args, ctx) => {
-      const result = await runDoctorCommand(doctorContextFor(ctx.cwd));
-      const text = result.content.map((block) => block.text).join(`
-`);
-      if (!ctx.hasUI) {
-        console.log(text);
-      } else {
-        ctx.ui.notify(text, result.isError ? "error" : "info");
-      }
-    }
-  });
+  registerDeprecatedForwarder("crew-doctor", "/crew doctor", (_args, ctx) => doctorResult(ctx.cwd));
   const configParams = pi.zod.object({
     op: pi.zod.enum(["path", "print", "init"]).describe("Which config operation to perform."),
     document: pi.zod.enum(["effective", "defaults", "schema"]).optional().describe("For op 'print': which document to emit. Defaults to 'effective'."),
@@ -13444,35 +13540,7 @@ function crewExtension(pi) {
       return runConfigCommand({ crewdPath, repository: extCtx.cwd }, request);
     }
   });
-  pi.registerCommand("crew-config", {
-    description: "Inspect or scaffold crew.json. Usage: /crew-config [path | print [effective|defaults|schema] | init [global] [force]]",
-    handler: async (args, ctx) => {
-      const [op = "path", ...rest] = args.trim().split(/\s+/).filter(Boolean);
-      if (op !== "path" && op !== "print" && op !== "init") {
-        const text2 = `Unknown operation ${op}. Usage: /crew-config [path | print [effective|defaults|schema] | init [global] [force]]`;
-        if (!ctx.hasUI)
-          console.log(text2);
-        else
-          ctx.ui.notify(text2, "error");
-        return;
-      }
-      const request = {
-        op,
-        repository: ctx.cwd,
-        ...op === "print" ? { document: rest[0] ?? "effective" } : {},
-        ...op === "init" ? { global: rest.includes("global"), force: rest.includes("force") } : {}
-      };
-      const { crewdPath } = doctorContextFor(ctx.cwd);
-      const result = await runConfigCommand({ crewdPath, repository: ctx.cwd }, request);
-      const text = result.content.map((block) => block.text).join(`
-`);
-      if (!ctx.hasUI) {
-        console.log(text);
-      } else {
-        ctx.ui.notify(text, result.isError === true ? "error" : "info");
-      }
-    }
-  });
+  registerDeprecatedForwarder("crew-config", "/crew config", (args, ctx) => configResult(args, ctx.cwd));
   pi.registerTool({
     name: INSTALL_TOOL_NAME,
     label: "Crew Install",

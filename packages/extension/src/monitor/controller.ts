@@ -1,13 +1,13 @@
 // Wires the monitor's pure model/render layers into the live extension:
 // replay-first startup (resuming from the last persisted sequence),
 // continuous widget updates as events arrive, and the `/crew` /
-// `/crew status <runId>` commands.
+// `/crew run <runId>` commands.
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { EventEnvelope } from "@nikolasd/crew-protocol";
 
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { CrewClient } from "../client";
 import { attachMilestoneBridge } from "../milestones";
 import { assertCompatiblePiCodingAgentVersion } from "./compat";
@@ -23,8 +23,19 @@ const WIDGET_KEY = "crew-monitor";
 /** The slash command that opens or refreshes the monitor. */
 export const MONITOR_COMMAND_NAME = "crew";
 
+/** One management operation surfaced as a /crew subcommand. The handler
+ *  lives in index.ts (it needs the cached-client and doctor-context
+ *  closures); the monitor owns only the dispatch. */
+export interface ManagementSubcommand {
+  readonly description: string;
+  /** Ghost-text hint for the completion dropdown, e.g. "[path | print ...]". */
+  readonly hint?: string;
+  run(args: string, ctx: ExtensionContext): Promise<{ text: string; isError: boolean }>;
+}
+
 export interface MonitorControllerContext {
   getClient(extCtx: ExtensionContext): Promise<CrewClient>;
+  management?: ReadonlyMap<string, ManagementSubcommand>;
 }
 
 /** The subset of `pi.appendEntry`'s session-entry log the controller reads
@@ -134,11 +145,39 @@ export class MonitorController {
     this.#onUpdate = undefined;
   }
 
-  /** Full detail text for `/crew status <runId>`, or `undefined` if no
+  /** Full detail text for `/crew run <runId>`, or `undefined` if no
    *  row exists for that run. */
   renderStatus(runId: string): string | undefined {
     const row = this.#state.rows[runId];
     return row === undefined ? undefined : renderRowDetails(row);
+  }
+}
+
+/** Monitor subcommands that talk to the daemon (connect-first). */
+const MONITOR_RPC_SUBCOMMANDS: ReadonlySet<string> = new Set(["runs", "export", "clean", "reopen"]);
+
+/** Completion metadata for the monitor's own subcommands, for the `/crew`
+ *  argument dropdown. Management entries (from `ctx.management`) are
+ *  prepended ahead of these at completion time. */
+const MONITOR_COMPLETIONS = [
+  { value: "run", label: "run", description: "Details for one run", hint: "<runId>" },
+  { value: "runs", label: "runs", description: "List all Crew runs" },
+  { value: "export", label: "export", description: "Export events to .omp/crew/", hint: "[runId]" },
+  { value: "clean", label: "clean", description: "Retention clean of terminal event history" },
+  { value: "reopen", label: "reopen", description: "Reopen a live run's pane", hint: "<runId>" },
+] as const;
+
+/**
+ * Routes command output to the UI in interactive mode and to stdout
+ * otherwise -- `ui.notify` is a no-op outside interactive mode (print/RPC),
+ * and a raw console.log inside it would corrupt the TUI. Mirrors the
+ * pattern of every flat command in index.ts.
+ */
+function respond(cmdCtx: ExtensionCommandContext, text: string, level: "info" | "warning" | "error" = "info"): void {
+  if (cmdCtx.hasUI !== true) {
+    console.log(text);
+  } else {
+    cmdCtx.ui.notify(text, level);
   }
 }
 
@@ -150,6 +189,11 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
   const controller = new MonitorController();
   attachMilestoneBridge(pi, controller);
   let subscribedClient: CrewClient | undefined;
+
+  /** The single source of truth for the `/crew` subcommand surface: both the
+   *  registration `description` and the handler's `usage` line derive from it,
+   *  so a future management entry cannot silently drift between the two. */
+  const subcommandList = ["run <runId>", "runs", "export [runId]", "clean", "reopen <runId>", ...(ctx.management?.keys() ?? [])];
 
   /**
    * Syncs the widget with the current state: renders the box when there are
@@ -209,24 +253,80 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
   });
 
   pi.registerCommand(MONITOR_COMMAND_NAME, {
-    description: "Opens the Crew monitor. Subcommands: status <runId>, runs, export [runId], clean, reopen <runId>.",
+    description: `Opens the Crew monitor. Subcommands: ${subcommandList.join(", ")}.`,
+    getArgumentCompletions: (argumentPrefix: string): Array<{ value: string; label: string; description?: string; hint?: string }> | null => {
+      const managementItems = [...(ctx.management?.entries() ?? [])].map(([name, sub]) => ({
+        value: name,
+        label: name,
+        description: sub.description,
+        ...(sub.hint !== undefined ? { hint: sub.hint } : {}),
+      }));
+      const prefix = argumentPrefix.trimStart();
+      const matches = [...managementItems, ...MONITOR_COMPLETIONS].filter((item) => item.value.startsWith(prefix));
+      return matches.length === 0 ? null : matches;
+    },
     handler: async (args, cmdCtx) => {
       const [sub, runId] = args.trim().split(/\s+/, 2);
-      if (sub === "status" && runId !== undefined && runId.length > 0) {
-        const details = controller.renderStatus(runId);
-        cmdCtx.ui.notify(details ?? `No Crew run found for ${runId}.`, details === undefined ? "warning" : "info");
+      const usage = `Usage: /crew [${subcommandList.join(" | ")}]`;
+
+      if (sub === undefined || sub.length === 0) {
+        await connect(cmdCtx);
+        if (subscribedClient === undefined) {
+          respond(cmdCtx, "Crew runtime is unavailable.", "warning");
+          return;
+        }
+        // An explicit user command renders unconditionally, so /crew against an
+        // empty runtime still shows the (empty) monitor box rather than nothing.
+        refresh(cmdCtx, true);
         return;
       }
+
+      const management = ctx.management?.get(sub);
+      if (management !== undefined) {
+        const rest = args.trim().slice(sub.length).trim();
+        let result: { text: string; isError: boolean };
+        try {
+          result = await management.run(rest, cmdCtx);
+        } catch (err) {
+          // A management handler (health/doctor/config, in index.ts) can throw
+          // before producing any result -- e.g. resolving the crewd binary
+          // fails on a fresh-install machine. That must surface through
+          // `respond`, not escape as an unhandled rejection past the command
+          // dispatcher. The try wraps only the handler's own work, so a
+          // failure in `respond` itself is never re-caught and re-reported
+          // through the same channel that just failed.
+          respond(cmdCtx, err instanceof Error ? err.message : String(err), "error");
+          return;
+        }
+        respond(cmdCtx, result.text, result.isError ? "error" : "info");
+        return;
+      }
+
+      if (sub === "run") {
+        if (runId === undefined || runId.length === 0) {
+          respond(cmdCtx, "Usage: /crew run <runId>", "error");
+          return;
+        }
+        const details = controller.renderStatus(runId);
+        respond(cmdCtx, details ?? `No Crew run found for ${runId}.`, details === undefined ? "warning" : "info");
+        return;
+      }
+
+      if (!MONITOR_RPC_SUBCOMMANDS.has(sub)) {
+        respond(cmdCtx, `Unknown subcommand "${sub}". ${usage}`, "error");
+        return;
+      }
+
       await connect(cmdCtx);
       const client = subscribedClient;
       if (client === undefined) {
-        cmdCtx.ui.notify("Crew runtime is unavailable.", "warning");
+        respond(cmdCtx, "Crew runtime is unavailable.", "warning");
         return;
       }
       if (sub === "runs") {
         const result = (await client.request("run/list", {})) as { runs?: Array<{ runId?: string; state?: string; workerId?: string }> };
         const runs = result.runs ?? [];
-        cmdCtx.ui.notify(runs.length === 0 ? "No Crew runs recorded." : runs.map((run) => `${run.runId ?? "(unknown)"}  ${run.state ?? "unknown"}  worker ${run.workerId ?? "unknown"}`).join("\n"), "info");
+        respond(cmdCtx, runs.length === 0 ? "No Crew runs recorded." : runs.map((run) => `${run.runId ?? "(unknown)"}  ${run.state ?? "unknown"}  worker ${run.workerId ?? "unknown"}`).join("\n"), "info");
         return;
       }
       if (sub === "export") {
@@ -240,27 +340,23 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
         const output = join(directory, `export-${exportId}.jsonl`);
         await mkdir(directory, { recursive: true });
         await writeFile(output, events.map((event) => JSON.stringify(event)).join("\n") + (events.length > 0 ? "\n" : ""));
-        cmdCtx.ui.notify(`Exported ${events.length} Crew events to ${output}.`, "info");
+        respond(cmdCtx, `Exported ${events.length} Crew events to ${output}.`, "info");
         return;
       }
       if (sub === "clean") {
         const result = (await client.request("retention/clean", {})) as { deletedEvents: number; runsPruned: number };
-        cmdCtx.ui.notify(`Retention clean removed ${result.deletedEvents} events across ${result.runsPruned} maxRuns-pruned runs.`, "info");
+        respond(cmdCtx, `Retention clean removed ${result.deletedEvents} events across ${result.runsPruned} maxRuns-pruned runs.`, "info");
         return;
       }
       if (sub === "reopen") {
         if (runId === undefined || runId.length === 0) {
-          cmdCtx.ui.notify("Usage: /crew reopen <runId>", "warning");
+          respond(cmdCtx, "Usage: /crew reopen <runId>", "error");
           return;
         }
         const result = (await client.request("pane/reopen", { runId })) as { backend: string; paneRef: string };
-        cmdCtx.ui.notify(result.paneRef.length === 0 ? `No visible backend is available for ${runId}.` : `Reopened ${runId} in ${result.backend}: ${result.paneRef}`, "info");
+        respond(cmdCtx, result.paneRef.length === 0 ? `No visible backend is available for ${runId}.` : `Reopened ${runId} in ${result.backend}: ${result.paneRef}`, "info");
         return;
       }
-      // Deliberately asymmetric with session_start's auto-hide: an explicit
-      // user command renders unconditionally, so /crew against an empty or
-      // dead runtime still shows the (empty) monitor box rather than nothing.
-      refresh(cmdCtx, true);
     },
   });
 

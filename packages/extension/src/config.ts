@@ -1,5 +1,4 @@
-// The `crewd config` CLI wrapper behind `/crew-config` and the
-// `crew_config` tool: scaffold a crew.json layer, print a configuration
+// The `crewd config` CLI wrapper behind `/crew config` (slash) and the `crew_config` (LLM) tool: scaffold a crew.json layer, print a configuration
 // document, or report which layers apply.
 //
 // Modelled on `doctor.ts`'s split -- `buildConfigArgs` is the pure,

@@ -185,7 +185,7 @@ dependencies = [
 
 [[package]]
 name = "crew-protocol"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "schemars",
  "serde",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "crew-runtime"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",

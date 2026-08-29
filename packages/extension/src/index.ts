@@ -1,15 +1,17 @@
-// The `@nikolasd/crew` OMP extension entry point. Registers `crew_health`
-// (an LLM-callable tool), `/crew-status` (a slash command),
-// `crew_doctor`/`/crew-doctor`, `crew_install`/
-// `/crew-install`, the `/crew` monitor, and every deterministic
-// orchestration tool (`crew_task`, `crew_worker`, `crew_profile`,
+// The `@nikolasd/crew` OMP extension entry point. Registers the LLM tools
+// (`crew_health`, `crew_doctor`, `crew_config`, `crew_install`) and the slash
+// commands `/crew` (monitor with subcommands `health`, `run`, `runs`, `export`,
+// `clean`, `reopen`, `doctor`, `config`) and `/crew-install` (bootstrap,
+// permanent). The legacy `/crew-status`, `/crew-doctor`, `/crew-config` are
+// deprecation forwarders removed in the release after next, and every
+// deterministic orchestration tool (`crew_task`, `crew_worker`, `crew_profile`,
 // `crew_run`, `crew_workspace`, `crew_artifact`, `crew_child`,
 // `crew_violation`, `crew_message`, `crew_approval`,
 // `crew_reconcile`). All share the single cached-client path: OMP loading
 // this extension starts or reconnects to the per-repository `crewd` runtime
 // once per session, and every tool reuses that connection.
 
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { TASK_SUBAGENT_EVENT_CHANNEL, TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL, type SubagentEventPayload, type SubagentLifecyclePayload, type SubagentProgressPayload } from "@oh-my-pi/pi-coding-agent/task";
 
 import type { CrewClient } from "./client";
@@ -23,6 +25,7 @@ import { runConfigCommand, type ConfigDocument, type ConfigRequest } from "./con
 import { installRuntimeForEnv } from "./install";
 import { registerOrchestrationTools } from "./tools";
 import { registerMonitor } from "./monitor/controller";
+import type { ManagementSubcommand } from "./monitor/controller";
 
 const TOOL_NAME = "crew_health";
 const COMMAND_NAME = "crew-status";
@@ -66,26 +69,9 @@ export default function crewExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand(COMMAND_NAME, {
-    description: STATUS_DESCRIPTION,
-    handler: async (_args, extCtx) => {
-      const result = await getRuntimeStatus(statusContextFor(extCtx));
-      const text = result.content.map((block) => block.text).join("\n");
-      // `extCtx.ui.notify` is a no-op outside interactive mode (print/RPC), so
-      // write directly to stdout instead when there is no UI -- this is the
-      // only way `--print` surfaces output for a locally-handled slash
-      // command. In interactive mode, raw console.log would corrupt the TUI,
-      // so route exclusively through `extCtx.ui.notify`.
-      if (!extCtx.hasUI) {
-        console.log(text);
-      } else {
-        extCtx.ui.notify(text, result.isError ? "error" : "info");
-      }
-    },
-  });
+  registerDeprecatedForwarder(COMMAND_NAME, "/crew health", (_args, ctx) => healthResult(ctx));
 
   registerOrchestrationTools(pi, { getClient });
-  registerMonitor(pi, { getClient });
   /**
    * Context builder for the doctor command: resolves the crewd binary path
    * and repository state for direct CLI invocation.
@@ -93,6 +79,88 @@ export default function crewExtension(pi: ExtensionAPI): void {
   function doctorContextFor(cwd: ExtensionContext["cwd"]): DoctorContext {
     return buildDoctorContext(cwd);
   }
+
+  type CommandResult = { text: string; isError: boolean };
+
+  function blocksToResult(result: { content: Array<{ text: string }>; isError?: boolean }): CommandResult {
+    return { text: result.content.map((block) => block.text).join("\n"), isError: result.isError === true };
+  }
+
+  function emitResult(ctx: ExtensionCommandContext, result: CommandResult): void {
+    if (!ctx.hasUI) {
+      console.log(result.text);
+    } else {
+      ctx.ui.notify(result.text, result.isError ? "error" : "info");
+    }
+  }
+
+  /** Registers a deprecated hyphenated command that forwards to `run`'s
+   *  result with a one-line deprecation notice prepended to the same
+   *  message -- never emitted as a second notification. */
+  function registerDeprecatedForwarder(oldName: string, replacement: string, run: (args: string, ctx: ExtensionCommandContext) => Promise<CommandResult>): void {
+    pi.registerCommand(oldName, {
+      description: `Deprecated: use ${replacement}.`,
+      handler: async (args, ctx) => {
+        const notice = `Note: /${oldName} is deprecated; use ${replacement}.`;
+        let result: CommandResult;
+        try {
+          result = await run(args, ctx);
+        } catch (err) {
+          // `run` (health/doctor/config) can throw before producing a result --
+          // e.g. resolving the crewd binary fails on a fresh-install machine,
+          // exactly the machine most likely to hit this forwarder. That must
+          // surface through emitResult, not escape as an unhandled rejection.
+          // The try wraps only `run`'s own work, so a failure in emitResult
+          // itself is never re-caught and re-reported through the same
+          // channel that just failed.
+          const message = err instanceof Error ? err.message : String(err);
+          emitResult(ctx, { text: `${notice}\n${message}`, isError: true });
+          return;
+        }
+        emitResult(ctx, { text: `${notice}\n${result.text}`, isError: result.isError });
+      },
+    });
+  }
+
+  async function healthResult(extCtx: ExtensionContext): Promise<CommandResult> {
+    return blocksToResult(await getRuntimeStatus(statusContextFor(extCtx)));
+  }
+
+  async function doctorResult(cwd: string): Promise<CommandResult> {
+    return blocksToResult(await runDoctorCommand(doctorContextFor(cwd)));
+  }
+
+  async function configResult(args: string, cwd: string): Promise<CommandResult> {
+    const [op = "path", ...rest] = args.trim().split(/\s+/).filter(Boolean);
+    if (op !== "path" && op !== "print" && op !== "init") {
+      return { text: `Unknown operation ${op}. Usage: /crew config [path | print [effective|defaults|schema] | init [global] [force]]`, isError: true };
+    }
+    if (op === "print") {
+      const doc = rest[0] ?? "effective";
+      if (doc !== "effective" && doc !== "defaults" && doc !== "schema") {
+        return { text: `Unknown document ${doc}. Usage: /crew config print [effective|defaults|schema]`, isError: true };
+      }
+    }
+    const request = {
+      op,
+      repository: cwd,
+      ...(op === "print" ? { document: (rest[0] as ConfigDocument) ?? "effective" } : {}),
+      ...(op === "init" ? { global: rest.includes("global"), force: rest.includes("force") } : {}),
+    } as ConfigRequest;
+    const { crewdPath } = doctorContextFor(cwd);
+    return blocksToResult(await runConfigCommand({ crewdPath, repository: cwd }, request));
+  }
+
+  // Registration order is user-visible and pinned by index.test.ts's exact-list
+  // assertion: crew-status, crew, crew-doctor, crew-config, crew-install.
+  registerMonitor(pi, {
+    getClient,
+    management: new Map<string, ManagementSubcommand>([
+      ["health", { description: "Runtime health: connects to or spawns the daemon", run: async (_args, ctx) => healthResult(ctx) }],
+      ["doctor", { description: "Diagnostics that work with no live daemon", run: async (_args, ctx) => doctorResult(ctx.cwd) }],
+      ["config", { description: "Inspect or scaffold crew.json", hint: "[path | print [effective|defaults|schema] | init [global] [force]]", run: async (args, ctx) => configResult(args, ctx.cwd) }],
+    ]),
+  });
 
   pi.registerTool({
     name: "crew_doctor",
@@ -104,18 +172,7 @@ export default function crewExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("crew-doctor", {
-    description: "Run diagnostic checks on the Crew runtime state and configuration.",
-    handler: async (_args, ctx) => {
-      const result = await runDoctorCommand(doctorContextFor(ctx.cwd));
-      const text = result.content.map((block) => block.text).join("\n");
-      if (!ctx.hasUI) {
-        console.log(text);
-      } else {
-        ctx.ui.notify(text, result.isError ? "error" : "info");
-      }
-    },
-  });
+  registerDeprecatedForwarder("crew-doctor", "/crew doctor", (_args, ctx) => doctorResult(ctx.cwd));
 
   const configParams = pi.zod.object({
     op: pi.zod.enum(["path", "print", "init"]).describe("Which config operation to perform."),
@@ -145,33 +202,7 @@ export default function crewExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("crew-config", {
-    description: "Inspect or scaffold crew.json. Usage: /crew-config [path | print [effective|defaults|schema] | init [global] [force]]",
-    handler: async (args, ctx) => {
-      const [op = "path", ...rest] = args.trim().split(/\s+/).filter(Boolean);
-      if (op !== "path" && op !== "print" && op !== "init") {
-        const text = `Unknown operation ${op}. Usage: /crew-config [path | print [effective|defaults|schema] | init [global] [force]]`;
-        if (!ctx.hasUI) console.log(text);
-        else ctx.ui.notify(text, "error");
-        return;
-      }
-      const request = {
-        op,
-        repository: ctx.cwd,
-        ...(op === "print" ? { document: (rest[0] as ConfigDocument) ?? "effective" } : {}),
-        ...(op === "init" ? { global: rest.includes("global"), force: rest.includes("force") } : {}),
-      } as ConfigRequest;
-
-      const { crewdPath } = doctorContextFor(ctx.cwd);
-      const result = await runConfigCommand({ crewdPath, repository: ctx.cwd }, request);
-      const text = result.content.map((block) => block.text).join("\n");
-      if (!ctx.hasUI) {
-        console.log(text);
-      } else {
-        ctx.ui.notify(text, result.isError === true ? "error" : "info");
-      }
-    },
-  });
+  registerDeprecatedForwarder("crew-config", "/crew config", (args, ctx) => configResult(args, ctx.cwd));
 
   pi.registerTool({
     name: INSTALL_TOOL_NAME,
