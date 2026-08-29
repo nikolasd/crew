@@ -474,6 +474,20 @@ Note which explanations this rules out. The kernel tty layer was the intuitive s
 dropping; and a *tail* fragment means the head was lost, which is not what buffer overflow produces.
 The symptom's shape disqualified the theory before any code was read.
 
+### A nonce appended to a prompt cannot prove the prompt arrived
+**Location:** `crates/runtime/src/adapter/tui/verify.rs`, `adapter/tui/discovery.rs`
+
+Transcript discovery finds a vendor's session file by grepping for a nonce appended to the injected
+prompt. That proves the *tail* arrived — precisely the half that survives the truncation above — so it
+can never detect a lost head. The check that can is comparing the text the vendor actually recorded
+against the text that was sent, which is why `TranscriptFormat::recorded_prompt` exists.
+
+Two details worth copying. The comparison reports the *shape* of a mismatch (head lost, tail lost,
+middle fragment) and the two lengths, never the prompt text: prompts are user content and the message
+becomes an error string. And the accessor defaults to `None`, so a vendor whose user-entry shape is
+unknown disables verification rather than failing runs over it — a check that cannot judge must abstain,
+not guess.
+
 ### Two writers to one WAL file must both set a busy timeout
 **Location:** `packages/extension/src/ownership.test.ts::seedTestData`
 
@@ -481,6 +495,33 @@ The test opens a second connection to the daemon-owned `runtime.db` and writes d
 `busy_timeout`, a momentary lock held by the live daemon throws `SQLITE_BUSY`. The daemon itself sets
 `busy_timeout=5000` on that database; the test connection must match it. A second writer to a live
 WAL file without a busy timeout is a latent flake, not a logic bug.
+
+## Reported Outcomes
+
+### A success report must describe what happened, not what was requested
+**Locations:** `crates/runtime/src/service/orchestration.rs` (`pane/reopen`),
+`crates/runtime/src/display/pane_socket.rs`
+
+`pane/reopen` treated the socket *file existing* as proof of a live pane. A Unix socket file outlives
+its listener, and nothing removed sockets left by a daemon that died without cleaning up — so a
+leftover file made the call **succeed**, returning `{backend: "hidden", paneRef: ""}` for a pane that
+did not exist. The gate was answering "is there a file here" while its caller asked "is there a pane
+here".
+
+The fix is one definition of liveness — a connect probe, the only portable proof of a listener —
+shared by the reopen gate and by a startup sweep that unlinks the dead ones. Both consumers now ask
+the same question, so they cannot disagree. Note the sweep is keyed on liveness and never on
+ownership: the pane directory is per-*user* and shared across every repository, so another
+repository's live sockets sit beside this daemon's dead ones and must survive.
+
+The general form: a value describing an *intention* must never be returned as though it described an
+*outcome*. When reviewing any result field, ask whether it is measured after the fact or predicted
+before it — and if predicted, say so in its name or its docs.
+
+This class is not confined to code. A stacked pull request displays green checks for a workflow that
+never ran on it, because the real gate is filtered on `pull_request: branches: [main, master]` and a
+stack's child targets its parent instead. Green ticks for a gate that did not execute are the same
+failure wearing different clothes.
 
 ## Structural Limits and Long-Lived Consumers
 

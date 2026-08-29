@@ -757,13 +757,24 @@ sequenceDiagram
    | evidence | edge |
    |---|---|
    | `ProcessStarted` | `queued -> starting` |
-   | any other payload except `ProcessExited` | up to `working` |
+   | `TurnEnded` | up to `waitingUser` — non-terminal ([ADR-0027](adr/0027-turn-end-settles-a-run.md)) |
+   | any other payload except `ProcessExited`/`TurnEnded` | up to `working` |
    | `ProcessExited { exit_code: Some(0), signal: None }` | `-> succeeded` |
    | `ProcessExited` with a non-zero code or a signal | `-> failed` |
    | `ProcessExited` with no code and no signal | `-> lost` |
 
-   The terminal edge is committed durably before the settlement signal that releases the run's
-   concurrency slot.
+   A TUI vendor never exits, so `ProcessExited` alone would leave such a run non-terminal forever.
+   `TurnEnded` is the vendor's own end-of-turn boundary, journaled as durable evidence and driving a
+   **non-terminal** edge: the boundary says the *turn* ended, never that the *task* succeeded, so
+   only the leader closes a run (`run/finish`), with an inactivity backstop settling an abandoned one
+   to `lost`. A run parked this way carries the `turnSettled` flag, which is what lets a snapshot
+   reader tell "the answer is ready" from "the worker asked a question" — both are `waitingUser`.
+
+   Two ordering properties hold. The state edge is committed durably before the signal it triggers,
+   as it always was. And the concurrency slot is released on the **first of a turn boundary or a
+   process exit**, so the ceiling bounds runs *actively taking a turn* rather than sessions that
+   merely exist — which is why a second cap, `limits.maxLiveSessions`, bounds live sessions and makes
+   the honest bound on concurrent turns `maxConcurrentWorkers + maxLiveSessions`.
 
 ## Known Deferred Items
 
