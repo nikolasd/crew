@@ -15,7 +15,9 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
   const params = pi.zod.object({
     adapter: pi.zod.string().describe("The adapter name this profile launches, e.g. claude, codex, copilot, ompRpc, terminalDegraded."),
     model: pi.zod.string().describe("The model identifier this profile uses."),
-    startupOptions: pi.zod.record(pi.zod.string(), pi.zod.unknown()).describe("Adapter-specific startup options, tagged by adapter kind, e.g. { claude: { ... } } or { codex: { ... } }."),
+    startupOptions: pi.zod
+      .record(pi.zod.string(), pi.zod.unknown())
+      .describe("Adapter-specific startup options, tagged by adapter kind. REQUIRED: include mode:'tui' for reserved adapters. Example: { claude: { mode: 'tui' } }. Headless mode is retired. Other options depend on the adapter (see crew-orchestration skill)."),
     environmentAllowlist: pi.zod.array(pi.zod.string()).optional().describe("Environment variable names this profile's process is allowed to read."),
     permissionEnvelope: pi.zod.record(pi.zod.string(), pi.zod.unknown()).optional(),
   });
@@ -24,7 +26,7 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
     name: CREW_PROFILE_TOOL_NAME,
     label: "Crew Profile",
     description:
-      "Use to register a reusable worker profile (adapter, model, startup options, environment allowlist) before provisioning workers against it. Call this once per adapter/model combination, then pass the returned profileId to crew_worker { op: 'create', profileId } instead of repeating fingerprint/adapter/model/permissionEnvelope on every worker. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
+      "Register a reusable worker profile (adapter, model, startup options with mode:'tui', environment allowlist) before provisioning workers. Call this once per adapter/model combination, then pass the returned profileId to crew_worker { op: 'create', profileId }. The profile-first flow (crew_profile → crew_worker → crew_run) replaces the legacy fingerprint/adapter/model pattern. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
     parameters: params,
     approval: () => "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
