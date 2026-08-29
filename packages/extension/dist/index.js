@@ -8086,6 +8086,48 @@ session/thread identifier.`,
           additionalProperties: false
         },
         {
+          description: `A TUI-mode worker adapter observed its vendor's end-of-turn
+boundary (ADR-0027). Carries no free text: the turn's content was
+already journaled as its own message events, and this event exists
+to say only *that* the turn ended, and how.`,
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "adapterTurnEvent"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                outcome: {
+                  $ref: "#/$defs/TurnOutcome"
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId",
+                "outcome"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
           description: "A visible message chunk or final message from a worker adapter.\n`text` has already crossed the redaction boundary; `None` means\nthe entire fragment was `Thinking`/`Secret`-classified and was\ndropped, not that the message was empty.",
           type: "object",
           properties: {
@@ -9003,6 +9045,16 @@ session/thread identifier.`,
           const: "adapterQuestionDetected"
         },
         {
+          description: `A TUI-mode worker adapter observed its vendor's own end-of-turn
+boundary: the worker has stopped working and is holding at its
+prompt. Evidence that the turn ended, never that the task
+succeeded (ADR-0027) -- the vendor markers behind it say only
+"this turn is over", and Codex's is literally \`task_complete\`
+whatever the outcome.`,
+          type: "string",
+          const: "adapterTurnEnded"
+        },
+        {
           description: "A display backend attached a Crew-owned pane to a run.",
           type: "string",
           const: "displayPaneAttached"
@@ -9146,7 +9198,7 @@ operator can correlate the violation to its cause.`,
       type: "string"
     },
     RunFlags: {
-      description: "Independent boolean flags on a run.\n\n`degradedControl`, `needsReconciliation`, `protocolUnhealthy`,\n`policyQuarantined`, `workspaceDirty`, and `childrenActive` are all\nindependent booleans.",
+      description: "Independent boolean flags on a run.\n\n`degradedControl`, `needsReconciliation`, `protocolUnhealthy`,\n`policyQuarantined`, `workspaceDirty`, `childrenActive`, and\n`turnSettled` are all independent booleans.",
       type: "object",
       properties: {
         degradedControl: {
@@ -9166,6 +9218,20 @@ operator can correlate the violation to its cause.`,
         },
         childrenActive: {
           type: "boolean"
+        },
+        turnSettled: {
+          description: `The run is in \`waitingUser\` because its vendor finished a TURN
+(ADR-0027), not because the worker asked a question. Both reach the
+same state, and a snapshot reader (\`run/get\`, the monitor) cannot
+otherwise tell "the answer is ready" from "the worker needs you" --
+this is the distinction.
+
+Cleared when the run goes back to work, so it never outlives the
+pause it describes. \`#[serde(default)]\` because the journal is
+append-only: \`RunFlags\` payloads written before this field existed
+must still deserialize on replay.`,
+          type: "boolean",
+          default: false
         }
       },
       additionalProperties: false,
@@ -9198,6 +9264,30 @@ operator can correlate the violation to its cause.`,
           description: "The calling model supplied the decision itself.",
           type: "string",
           const: "model"
+        }
+      ]
+    },
+    TurnOutcome: {
+      description: `How a vendor's turn ended (ADR-0027).
+
+This is deliberately *not* a success/failure verdict on the task: only
+the leader can judge that. It distinguishes an ordinary turn boundary
+from one the vendor reached by reporting an API error, so wave 3's
+\`run/finish\` can settle such a run as failed from durable evidence
+rather than by re-parsing message text.`,
+      oneOf: [
+        {
+          description: "The vendor finished its turn and is holding at its prompt.",
+          type: "string",
+          const: "normal"
+        },
+        {
+          description: `The vendor ended the turn by reporting an API error (e.g. an
+unavailable model). The turn is genuinely over -- the CLI returns
+to its prompt -- so the boundary is still reported; this value is
+what makes it distinguishable.`,
+          type: "string",
+          const: "apiError"
         }
       ]
     },
@@ -12872,7 +12962,8 @@ var EMPTY_FLAGS = {
   protocolUnhealthy: false,
   policyQuarantined: false,
   workspaceDirty: false,
-  childrenActive: false
+  childrenActive: false,
+  turnSettled: false
 };
 var EMPTY_MONITOR_STATE = { rows: {}, lastSequence: 0 };
 function setSubmitError(state, message, at) {
@@ -12974,6 +13065,7 @@ function eventPatch(envelope) {
           protocolUnhealthy: event.payload.flags.protocolUnhealthy,
           policyQuarantined: event.payload.flags.policyQuarantined,
           workspaceDirty: event.payload.flags.workspaceDirty,
+          turnSettled: event.payload.flags.turnSettled,
           childrenActive: event.payload.flags.childrenActive
         }
       };
@@ -13092,6 +13184,7 @@ var STATE_ICONS = {
   starting: "\uDB85\uDCDF",
   working: "\uDB85\uDC61",
   waitingUser: "\uDB82\uDF5A",
+  turnReady: "\uDB81\uDDE1",
   waitingPeer: "\uDB80\uDC0F",
   paused: "\uDB80\uDFE6",
   succeeded: "\uDB81\uDDE1",
@@ -13108,6 +13201,7 @@ var STATE_COLORS = {
   starting: "accent",
   working: "accent",
   waitingUser: "warning",
+  turnReady: "success",
   waitingPeer: "warning",
   paused: "muted",
   succeeded: "success",
@@ -13126,8 +13220,12 @@ function selectRows(state) {
   const rows = Object.values(state.rows).sort((a, b) => a.lastEventAt < b.lastEventAt ? 1 : -1);
   return { rows: rows.slice(0, MAX_WIDGET_ROWS), totalCount: rows.length };
 }
+function displayState(row) {
+  return row.state === "waitingUser" && row.flags.turnSettled ? "turnReady" : row.state;
+}
 function renderRowLine(row) {
-  const parts = [shortId(row.runId), `${stateIcon(row.state)} ${row.state}`];
+  const display = displayState(row);
+  const parts = [shortId(row.runId), `${stateIcon(display)} ${display}`];
   const harness = harnessLabel(row);
   if (harness !== undefined) {
     parts.push(harness);
@@ -13173,7 +13271,7 @@ function renderWidgetBox(state, theme) {
     }
   } else {
     lines = rows.map(renderRowLine);
-    colors = rows.map((row) => stateColor(row.state));
+    colors = rows.map((row) => stateColor(displayState(row)));
     if (totalCount > MAX_WIDGET_ROWS) {
       lines.push(`\u2026 ${totalCount - MAX_WIDGET_ROWS} more; use /crew status <runId> for full details.`);
       colors.push("muted");
@@ -13182,7 +13280,8 @@ function renderWidgetBox(state, theme) {
   return assembleBox(renderWidgetHeader(), lines, colors, theme);
 }
 function renderRowDetails(row) {
-  const lines = [`Run: ${row.runId}`, `Task: ${row.taskId}`, `Worker: ${row.workerId}`, `State: ${row.state}`];
+  const stateLine = row.state === "waitingUser" && row.flags.turnSettled ? `State: ${row.state} (turn ready)` : `State: ${row.state}`;
+  const lines = [`Run: ${row.runId}`, `Task: ${row.taskId}`, `Worker: ${row.workerId}`, stateLine];
   const harness = harnessLabel(row);
   if (harness !== undefined) {
     lines.push(`Harness/model: ${harness}`);
