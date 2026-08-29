@@ -79,7 +79,7 @@ export function registerSpawnTool(pi: ExtensionAPI, ctx: OrchestrationToolContex
         };
       }
 
-      return callOrchestration(client, "run/submit", {
+      const result = await callOrchestration(client, "run/submit", {
         taskId: input.taskId,
         workerId,
         prompt: subtask.description,
@@ -88,6 +88,11 @@ export function registerSpawnTool(pi: ExtensionAPI, ctx: OrchestrationToolContex
         ...(input.workspaceMode !== undefined ? { workspaceMode: input.workspaceMode } : {}),
         ...(input.priority !== undefined ? { priority: input.priority } : {}),
       });
+      if (result.isError && ctx.reportSubmitFailure !== undefined) {
+        const msg = (result.details as { message?: string })?.message ?? "run/submit failed";
+        ctx.reportSubmitFailure(`crew_spawn: run/submit failed: ${msg}`);
+      }
+      return result;
     },
   });
 }

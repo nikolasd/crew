@@ -11,7 +11,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@o
 import type { CrewClient } from "../client";
 import { attachMilestoneBridge } from "../milestones";
 import { assertCompatiblePiCodingAgentVersion } from "./compat";
-import { EMPTY_MONITOR_STATE, enrichWorker, enrichWorkspaceMode, hasVisibleRows, type MonitorState, reduceEvent } from "./model";
+import { EMPTY_MONITOR_STATE, enrichWorker, enrichWorkspaceMode, hasVisibleRows, setSubmitError, type MonitorState, reduceEvent } from "./model";
 import { renderRowDetails, renderWidgetBox } from "./render";
 
 /** The custom session-entry type the last-rendered sequence is persisted under. */
@@ -165,6 +165,13 @@ export class MonitorController {
     this.#onUpdate = undefined;
   }
 
+  /** Records a submit failure (pre-journal RPC rejection) and triggers a refresh
+   *  to ensure the error is visible in the widget. */
+  reportSubmitFailure(message: string): void {
+    this.#state = setSubmitError(this.#state, message, new Date().toISOString());
+    this.#onUpdate?.();
+  }
+
   /** Full detail text for `/crew run <runId>`, or `undefined` if no
    *  row exists for that run. */
   renderStatus(runId: string): string | undefined {
@@ -201,11 +208,17 @@ function respond(cmdCtx: ExtensionCommandContext, text: string, level: "info" | 
   }
 }
 
+/** Handle to the monitor for submitting failure notifications. */
+export interface MonitorHandle {
+  reportSubmitFailure(message: string): void;
+}
+
 /** Registers the `/crew` command and the replay-first monitor lifecycle.
  *  Wires the milestone bridge (spec §7.2) onto the monitor's single
  *  subscription so the model is injected with digests on milestones
- *  instead of having to poll the monitor. */
-export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext): void {
+ *  instead of having to poll the monitor. Returns a handle for reporting
+ *  submit failures to the widget. */
+export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext): MonitorHandle {
   const controller = new MonitorController();
   attachMilestoneBridge(pi, controller);
   let subscribedClient: CrewClient | undefined;
@@ -229,15 +242,15 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
 
   /**
    * Syncs the widget with the current state: renders the box when there are
-   * rows to show, removes the widget when there are none. `force` renders
-   * the box even when empty — the explicit `/crew` command uses it, so a
-   * healthy-but-empty runtime still answers with the "No Crew runs yet."
-   * box rather than silence; the session-start and live-event paths stay
-   * hidden when there is nothing to show.
+   * rows to show, or when crew is active even if empty. `force` renders
+   * the box unconditionally — the explicit `/crew` command uses it; the
+   * session-start and live-event paths show the widget when crew is active
+   * (connected), with an empty-state message when there are no runs yet.
    */
   function refresh(extCtx: ExtensionContext, force = false): void {
     const state = controller.getState();
-    const content = force || hasVisibleRows(state) ? renderWidgetBox(state, extCtx.ui.theme) : undefined;
+    const isConnected = subscribedClient !== undefined && !subscribedClient.isClosed;
+    const content = force || isConnected ? renderWidgetBox(state, extCtx.ui.theme) : undefined;
     extCtx.ui.setWidget(WIDGET_KEY, content, { placement: "aboveEditor" });
     pi.appendEntry(MONITOR_ENTRY_TYPE, { sequence: Number(state.lastSequence) });
   }
@@ -330,10 +343,10 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
 
   pi.on("session_start", async (_event, extCtx) => {
     await connect(extCtx);
-    // Render immediately: a healthy runtime with runs shows the widget; one
-    // with no runs keeps it hidden until the first run event (R56, revised:
-    // only show the box when there is something to show).
-    if (subscribedClient !== undefined) {
+    // Render immediately: if crew is active, show the widget (either with runs
+    // or with an empty-state message). If crew failed to start, the widget stays
+    // hidden until the first successful run event or explicit /crew command.
+    if (subscribedClient !== undefined && !subscribedClient.isClosed) {
       refresh(extCtx);
     }
   });
@@ -467,4 +480,8 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
     }
     reconnectDelayMs = RECONNECT_INITIAL_DELAY_MS;
   });
+
+  return {
+    reportSubmitFailure: (message: string) => controller.reportSubmitFailure(message),
+  };
 }

@@ -79,7 +79,7 @@ export default function crewExtension(pi: ExtensionAPI): void {
 
   registerDeprecatedForwarder(COMMAND_NAME, "/crew health", (_args, ctx) => healthResult(ctx));
 
-  registerOrchestrationTools(pi, { getClient });
+  registerOrchestrationTools(pi, { getClient, reportSubmitFailure: (message) => monitorHandle.reportSubmitFailure(message) });
   /**
    * Context builder for the doctor command: resolves the crewd binary path
    * and repository state for direct CLI invocation.
@@ -161,7 +161,7 @@ export default function crewExtension(pi: ExtensionAPI): void {
 
   // Registration order is user-visible and pinned by index.test.ts's exact-list
   // assertion: crew-status, crew, crew-doctor, crew-config, crew-install.
-  registerMonitor(pi, {
+  const monitorHandle = registerMonitor(pi, {
     getClient,
     getClientWithoutSpawning,
     management: new Map<string, ManagementSubcommand>([
