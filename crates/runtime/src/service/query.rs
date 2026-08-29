@@ -119,7 +119,8 @@ pub fn run_get_op(run_id: RunId) -> DomainClosure {
             "SELECT run_id, task_id, worker_id, state,
                     flags_degraded_control, flags_needs_reconciliation, flags_protocol_unhealthy,
                     flags_policy_quarantined, flags_workspace_dirty, flags_children_active,
-                    vendor_session_id, created_at, started_at, completed_at, policy_fingerprint
+                    vendor_session_id, created_at, started_at, completed_at, policy_fingerprint,
+                    flags_turn_settled
              FROM runs WHERE run_id = ?1",
             [run_id.to_string()],
             row_to_run_json,
@@ -140,7 +141,8 @@ pub fn run_list_op(task_id: Option<TaskId>, project_id: ProjectId) -> DomainClos
                 "SELECT run_id, task_id, worker_id, state,
                         flags_degraded_control, flags_needs_reconciliation, flags_protocol_unhealthy,
                         flags_policy_quarantined, flags_workspace_dirty, flags_children_active,
-                        vendor_session_id, created_at, started_at, completed_at, policy_fingerprint
+                        vendor_session_id, created_at, started_at, completed_at,
+                        policy_fingerprint, flags_turn_settled
                  FROM runs WHERE task_id = ?1 ORDER BY created_at",
             )?;
             stmt.query_map([task_id.to_string()], row_to_run_json)?
@@ -151,7 +153,7 @@ pub fn run_list_op(task_id: Option<TaskId>, project_id: ProjectId) -> DomainClos
                         r.flags_degraded_control, r.flags_needs_reconciliation, r.flags_protocol_unhealthy,
                         r.flags_policy_quarantined, r.flags_workspace_dirty, r.flags_children_active,
                         r.vendor_session_id, r.created_at, r.started_at, r.completed_at,
-                        r.policy_fingerprint
+                        r.policy_fingerprint, r.flags_turn_settled
                  FROM runs r JOIN tasks t ON r.task_id = t.task_id
                  WHERE t.project_id = ?1 ORDER BY r.created_at",
             )?;
@@ -221,6 +223,11 @@ fn row_to_run_json(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
             "policyQuarantined": row.get::<_, i64>(7)? != 0,
             "workspaceDirty": row.get::<_, i64>(8)? != 0,
             "childrenActive": row.get::<_, i64>(9)? != 0,
+            // Appended at index 15 rather than inserted beside the other
+            // flags: every index below is positional, and shifting them to
+            // keep the flags adjacent would be a silent, wide-blast-radius
+            // edit for cosmetic grouping.
+            "turnSettled": row.get::<_, i64>(15)? != 0,
         },
         "vendorSessionId": row.get::<_, Option<String>>(10)?,
         "createdAt": row.get::<_, String>(11)?,

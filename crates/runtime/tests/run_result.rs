@@ -860,3 +860,28 @@ async fn run_result_still_refuses_a_run_with_no_turn_end() {
         "no turn boundary means not finished: {resp:?}"
     );
 }
+
+/// The `turnSettled` flag exists so a SNAPSHOT reader can tell a finished
+/// turn from a worker's question -- both are `waitingUser`. That only works
+/// if `run/get` actually returns it, which it did not when the flag was
+/// first added: the row builder's flags object was hand-written and the new
+/// column was simply absent, so every snapshot reader saw `undefined`.
+#[tokio::test]
+async fn run_get_exposes_the_turn_settled_flag() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(LifecycleSeedingRunDriver::new(vec![
+            final_text("the finished answer"),
+            turn_ended(),
+        ])));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let run_id = submit_run(&mut client).await;
+
+    let get = client.call(5, "run/get", json!({ "runId": run_id })).await;
+    assert_eq!(get["result"]["state"], "waitingUser", "{get:?}");
+    assert_eq!(
+        get["result"]["flags"]["turnSettled"], true,
+        "a settled turn must be visible to a snapshot reader: {get:?}"
+    );
+}
