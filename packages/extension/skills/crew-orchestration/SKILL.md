@@ -41,7 +41,7 @@ Shared writes serialize. Use a worktree when parallel writers need independent f
 
 ## Read surfaces
 
-- `/crew` — live monitor; `runs`, `status <runId>`, `export [runId]`, `clean`, and `reopen <runId>`.
+- `/crew` — live monitor; `runs`, `run <runId>`, `export [runId]`, `clean`, and `reopen <runId>`.
 - `crew_status` — leader snapshot for tools.
 - `crew_transcript` — bounded digest of replayed events.
 - `crew_run { op: "result" }` — terminal result only; a non-terminal result is refused.

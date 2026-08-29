@@ -1,8 +1,10 @@
-// The `@nikolasd/crew` OMP extension entry point. Registers `crew_health`
-// (an LLM-callable tool), `/crew-status` (a slash command),
-// `crew_doctor`/`/crew-doctor`, `crew_install`/
-// `/crew-install`, the `/crew` monitor, and every deterministic
-// orchestration tool (`crew_task`, `crew_worker`, `crew_profile`,
+// The `@nikolasd/crew` OMP extension entry point. Registers the LLM tools
+// (`crew_health`, `crew_doctor`, `crew_config`, `crew_install`) and the slash
+// commands `/crew` (monitor with subcommands `health`, `run`, `runs`, `export`,
+// `clean`, `reopen`, `doctor`, `config`) and `/crew-install` (bootstrap,
+// permanent). The legacy `/crew-status`, `/crew-doctor`, `/crew-config` are
+// deprecation forwarders removed in the release after next, and every
+// deterministic orchestration tool (`crew_task`, `crew_worker`, `crew_profile`,
 // `crew_run`, `crew_workspace`, `crew_artifact`, `crew_child`,
 // `crew_violation`, `crew_message`, `crew_approval`,
 // `crew_reconcile`). All share the single cached-client path: OMP loading

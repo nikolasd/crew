@@ -119,7 +119,7 @@ that's the extension reporting it resolved `crewd` via `OMP_CREW_BINARY`, not a 
 (`platform.ts`'s `resolveCrewd`). If you ever see `Binary source: package` when you meant to test a
 local build, `OMP_CREW_BINARY` isn't set, or isn't pointing where you think.
 
-**Cheapest first check, no daemon needed.** `crew_doctor` / `/crew-doctor` (or
+**Cheapest first check, no daemon needed.** `crew_doctor` / `/crew doctor` (or
 `cargo run -p crew-runtime -- doctor`) verifies config parsing, the state directory, and rollout
 gates without spawning anything — run it before any section below when you just want to know "did
 I break something obvious," without paying for a daemon spawn or a model call.
@@ -145,7 +145,7 @@ lowest layer you can actually exercise end-to-end.
 export OMP_CREW_BINARY="$PWD/target/debug/crewd"
 EXT="$PWD/packages/extension/dist/index.js"
 
-omp --extension "$EXT" --print "/crew-status"
+omp --extension "$EXT" --print "/crew health"
 ```
 
 Expect:
@@ -163,7 +163,7 @@ Binary source: override
 Run it again — same command, same repo:
 
 ```bash
-omp --extension "$EXT" --print "/crew-status"
+omp --extension "$EXT" --print "/crew health"
 ```
 
 Expect the **same** `Project` id, with a **higher** `Uptime`. That's the connect-or-spawn design
@@ -777,8 +777,8 @@ real adapter, so you'll only ever see the run id, `state` (always `queued` here)
 The widget caps at `MAX_WIDGET_ROWS` rows (now 7) — not 10 — because the host's `ctx.ui.setWidget`
 truncates array-content widgets at 10 total *lines*, and the border chrome (2 lines, plus a
 possible overflow line) has to fit inside that same 10-line budget alongside the rows. When
-truncated, the box appends `"… N more; use /crew status <runId> for full details."` as its last
-row, before the bottom border. The `/crew status <runId>` detail block is a labeled multi-line
+truncated, the box appends `"… N more; use /crew run <runId> for full details."` as its last
+row, before the bottom border. The `/crew run <runId>` detail block is a labeled multi-line
 dump: Run/Task/Worker/State/Harness-model/Flags/Pending approvals/Workspace mode/Latest
 activity/First seen/Last event.
 

@@ -1,5 +1,5 @@
-// The single status path shared by both the `crew_health` tool and the
-// `/crew-status` command, plus the shared cached-client resolver used by
+// The single status path shared by both the `crew_health` (LLM) tool and the
+// `/crew health` (slash) command, plus the shared cached-client resolver used by
 // every orchestration tool and the monitor: connect to (or spawn) the
 // repository's `crewd` runtime, call `runtime/status`, and shape the
 

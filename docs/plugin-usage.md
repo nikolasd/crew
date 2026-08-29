@@ -24,7 +24,7 @@ tool) only exists once a fresh session has loaded the installed module. Then:
 
 ```
 /crew-install
-/crew-status
+/crew health
 ```
 
 **This repository is private** — the marketplace step git-clones it, so it needs your own GitHub
@@ -50,7 +50,7 @@ No `package.json` change is required.
 
 ## 2. Confirm it works
 
-Run `/crew-status`. A healthy runtime answers with exactly this shape (`formatStatus` in
+Run `/crew health`. A healthy runtime answers with exactly this shape (`formatStatus` in
 `status.ts`):
 
 ```
@@ -99,7 +99,7 @@ there's nothing running yet, it prints:
 No Crew runs yet.
 ```
 
-`/crew status <runId>` prints the full detail block for one run: task, worker, state, harness/
+`/crew run <runId>` prints the full detail block for one run: task, worker, state, harness/
 model, flags, pending approvals, workspace mode, latest activity, first-seen and last-event
 timestamps.
 
@@ -126,9 +126,9 @@ Some actions require an explicit human decision, and Crew never fabricates one o
 
 Work through this ladder:
 
-1. **`/crew-status`** — connects to (or spawns) the daemon and reports whether it's healthy.
+1. **`/crew health`** — connects to (or spawns) the daemon and reports whether it's healthy.
 2. **`/crew-install`** — downloads and verifies the `crewd` binary, if it's missing.
-3. **`/crew-doctor`** — works even with no live daemon; runs the full check catalog (database,
+3. **`/crew doctor`** — works even with no live daemon; runs the full check catalog (database,
    state directory permissions, platform support, schema compatibility, adapter availability, disk
    space, stale runs/workspaces, and more — see
    [`cli-reference.md`](cli-reference.md#crewd-doctor) for the complete list).
@@ -143,7 +143,7 @@ Every Crew tool failure has the same shape: text `"<method> failed: <message>"`,
 | `version-mismatch` | Re-run `/crew-install`. The cached binary is for a different extension version. |
 | `manifest-invalid` | Re-run `/crew-install`. The cached manifest is corrupt or for another platform. |
 | `unsupported-platform` | Crew only supports macOS and glibc Linux, arm64/x64. |
-| `connection-failed` | Run `/crew-doctor` for a detailed check without needing a live daemon. |
+| `connection-failed` | Run `/crew doctor` for a detailed check without needing a live daemon. |
 | `http-error` (from `/crew-install`) | **This repository is private.** Set `GITHUB_TOKEN`/`GH_TOKEN`, or run `gh auth login`, then retry the install. |
 
 ## 7. Run three workers end to end
@@ -245,7 +245,7 @@ git merge would ask you to decide anyway.
 For advanced users, and for the model's own use: the extension registers **11 orchestration
 tools** (the deterministic `crew_*` tools below), plus three health/install helpers —
 `crew_health`, `crew_doctor`, and `crew_install` — each also available as a slash
-command (`/crew-status`, `/crew-doctor`, `/crew-install`). Every tool shares one
+commands (`/crew health`, `/crew doctor`, `/crew-install`). Every tool shares one
 runtime connection per OMP session — the first call connects to (or spawns) the repository's
 `crewd` daemon; every later call in the same session reuses that connection.
 

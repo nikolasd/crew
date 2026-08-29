@@ -138,9 +138,9 @@ binary into a leaf package with a deterministic manifest).
 
 | File | What lives there |
 |---|---|
-| `src/index.ts` | Default-export extension factory; registers `crew_health`, `crew_doctor`, `/crew-status`, `/crew-doctor`, the 11 orchestration tools (via `tools/index.ts`), OMP-native lifecycle listeners (`omp-native/`), and the embedded monitor (`monitor/controller.ts`) |
+| `src/index.ts` | Default-export extension factory; registers `crew_health`, `crew_doctor`, `crew_config`, `/crew` (monitor with subcommands `health`, `run`, `runs`, `export`, `clean`, `reopen`, `doctor`, `config`) and `/crew-install`, the 11 orchestration tools (via `tools/index.ts`), OMP-native lifecycle listeners (`omp-native/`), and the embedded monitor (`monitor/controller.ts`) |
 | `src/status.ts` | `getRuntimeStatus(ctx)` and `resolveClient(ctx)` — the shared status path and liveness-aware client resolver; reuses the cached connection while open, reconnects on demand
-| `src/doctor.ts` | `crew_doctor` tool / `/crew-doctor` command — shells out to `crewd doctor --json`, no live connection required
+| `src/doctor.ts` | `crew_doctor` tool / `/crew doctor` command — shells out to `crewd doctor --json`, no live connection required
 | `src/client.ts` | `CrewClient` — NDJSON framing, byte-exact caps, request correlation, Ajv validation, and `isClosed` liveness flag for cache invalidation
 | `src/runtime.ts` | `ensureRuntime` (connect-or-spawn, authenticates as `ompExtension`), `buildServeArgs`, `resolveOverride` (`OMP_CREW_BINARY` validation), `repositoryIdFromRoot` |
 | `src/state.ts` | `resolveStateRoot(env, home)` — must stay semantically identical to Rust's `StateRoot::resolve` |
@@ -154,7 +154,7 @@ binary into a leaf package with a deterministic manifest).
 | `src/omp-native/reconcile.ts` | `OmpNativeReconciler` (150 ms progress coalescing, terminal-immediate), `reconcileAcrossRestart` (undetected parent-scoped runs become `lost`), `createOmpProcessEpoch`, `reconcileWithRuntime` |
 | `src/monitor/model.ts` | `reduceEvent` — the pure event-reducer building `MonitorState` |
 | `src/monitor/render.ts` | Turns `MonitorState` into the widget's concise lines + per-run status detail |
-| `src/monitor/controller.ts` | `registerMonitor` — replay-first `session_start` wiring, `/crew [status <runId>]`, retry-on-reconnect |
+| `src/monitor/controller.ts` | `registerMonitor` — replay-first `session_start` wiring, `/crew [run <runId>]`, retry-on-reconnect |
 | `src/monitor/compat.ts` | Test-only `assertCompatiblePiCodingAgentVersion` (never called at runtime — see [`engineering-lessons.md`](engineering-lessons.md#never-use-with--type-json--imports-at-extension-load-time)) |
 
 Each module has a sibling `*.test.ts`. `client.test.ts` and `index.test.ts` spawn the real daemon.
@@ -173,7 +173,7 @@ If Rust and TypeScript must agree on something, a fixture pins it: protocol fram
 (`fixtures/repo-id/`), and the status result shape (`fixtures/omp/`). Both language test suites
 consume them, so unilateral drift fails tests.
 
-## 2. Trace: what happens when OMP runs `/crew-status`
+## 2. Trace: what happens when OMP runs `/crew health`
 
 Follow this once with the files open and you will have seen every layer.
 

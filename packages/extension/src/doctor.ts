@@ -1,6 +1,6 @@
 // The `crewd doctor` CLI command wrapper: spawn the binary with `--json`
-// and parse the structured output. Used by both the `crew_doctor` tool and
-// the `/crew-doctor` command.
+// and parse the structured output. Used by both the `crew_doctor` (LLM) tool and the
+// `/crew doctor` (slash) command.
 //
 // Unlike `status.ts`, this does not connect to a running runtime — it invokes
 // the CLI directly, so it works even when no runtime is serving the repo.
