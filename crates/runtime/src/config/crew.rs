@@ -107,15 +107,40 @@ pub enum ApprovalMode {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Limits {
     pub max_concurrent_workers: u32,
+    /// How many worker SESSIONS may be alive at once, counting the ones
+    /// parked between turns (ADR-0027 wave 3).
+    ///
+    /// Distinct from `max_concurrent_workers`, which bounds how many runs
+    /// may be *actively taking a turn*. A TUI vendor outlives its turn, so
+    /// once a run releases its concurrency slot at turn-end it stays alive
+    /// and steerable -- and every such run can be sent a follow-up, which
+    /// is never refused. This is therefore the cap that makes the honest
+    /// bound on concurrent turns (`max_concurrent_workers +
+    /// max_live_sessions`) finite at all.
+    ///
+    /// `#[serde(default)]` because existing configs predate the field; a
+    /// value below `max_concurrent_workers` would refuse new runs before
+    /// the concurrency ceiling ever applied, so it is clamped up at merge.
+    #[serde(default = "default_max_live_sessions")]
+    pub max_live_sessions: u32,
     pub inactivity_timeout_sec: u64,
     pub total_timeout_sec: u64,
     pub turn_budget_per_subtask: u32,
+}
+
+/// Four times the default concurrency ceiling: parked sessions are the
+/// normal resting state for TUI workers, so the cap has to leave room for
+/// several finished-but-steerable runs per actively-working one while still
+/// bounding a session that never closes anything.
+fn default_max_live_sessions() -> u32 {
+    16
 }
 
 impl Default for Limits {
     fn default() -> Self {
         Self {
             max_concurrent_workers: 4,
+            max_live_sessions: default_max_live_sessions(),
             inactivity_timeout_sec: 300,
             total_timeout_sec: 1800,
             turn_budget_per_subtask: 10,
@@ -391,6 +416,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 ];
 const LIMITS_KEYS: &[&str] = &[
     "maxConcurrentWorkers",
+    "maxLiveSessions",
     "inactivityTimeoutSec",
     "totalTimeoutSec",
     "turnBudgetPerSubtask",

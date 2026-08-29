@@ -381,6 +381,7 @@ fn ceiling_one_policy() -> RuntimePolicy {
         display_backend: DisplayBackend::Auto,
         retention: "30d".to_string(),
         concurrency_ceiling: 1,
+        max_live_sessions: 16,
         org_security_patterns: vec![],
         copy_max_bytes: crew_runtime::workspace::DEFAULT_COPY_MAX_BYTES,
         copy_max_files: crew_runtime::workspace::DEFAULT_COPY_MAX_FILES,
@@ -446,4 +447,55 @@ async fn releasing_a_policy_evaluator_slot_frees_the_registry_ceiling() {
             "the released slot must not still be booked: {err}"
         );
     }
+}
+
+/// ADR-0027 wave 3's live-session cap. Distinct from the concurrency
+/// ceiling: that bounds runs actively taking a turn, this bounds sessions
+/// that EXIST. Since a run releases its slot at turn-end but stays alive
+/// and steerable — and a follow-up turn is never refused — this is the cap
+/// that makes the bound on concurrent turns finite at all.
+// Multi-thread, like `duplicate_start_is_rejected`: `BlockingAuthorization`
+// blocks a whole thread inside `authorize()`, so a current-thread runtime
+// deadlocks before the spawned start can reach it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_live_session_cap_refuses_a_new_run_when_full() {
+    let (db, _dir, project_id) = harness().await;
+    let (run_id, task_id, worker_id) =
+        seed_worker_and_run(&db, project_id, Some(&omp_rpc_profile())).await;
+    let (second_run, second_task, second_worker) =
+        seed_worker_and_run(&db, project_id, Some(&omp_rpc_profile())).await;
+
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let registry = AdapterRegistry::new(
+        Arc::new(BlockingAuthorization {
+            entered_tx,
+            release_rx: std::sync::Mutex::new(release_rx),
+        }),
+        PathBuf::from("/tmp"),
+        None,
+        vec![],
+    );
+    registry.set_max_live_sessions(1);
+
+    let first =
+        tokio::spawn(registry.start(ctx(db.clone(), project_id, run_id, task_id, worker_id)));
+    entered_rx
+        .recv()
+        .expect("first start must reach authorize()");
+
+    // A DIFFERENT run, so this is the cap refusing it and not the
+    // duplicate-start check.
+    let err = registry
+        .start(ctx(db, project_id, second_run, second_task, second_worker))
+        .await
+        .expect_err("the second session must be refused by the cap");
+    assert!(
+        err.contains("live-session cap"),
+        "the refusal must name the cap, not something vaguer: {err}"
+    );
+    assert_eq!(registry.running_count(), 1);
+
+    let _ = release_tx.send(());
+    let _ = first.await;
 }

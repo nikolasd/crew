@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use crew_protocol::{Classified, ContentClass, ProjectId, RunId, TaskId, WorkerId};
 use crew_runtime::adapter::{
-    Adapter, AdapterEvent, AdapterEventPayload, AdapterEventSink, CancelScope,
+    ActivityClock, Adapter, AdapterEvent, AdapterEventPayload, AdapterEventSink, CancelScope,
+    RunLifecycleSink,
 };
 use crew_runtime::db::DatabaseHandle;
 use crew_runtime::ipc::{PeerCredentialReader, PeerCredentials, Server, ServerConfig};
@@ -274,6 +275,106 @@ impl RunDriver for SeedingRunDriver {
         _scope: CancelScope,
     ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
         Box::pin(async move { Ok(crew_runtime::service::CancelOutcome::NoRunningAdapter) })
+    }
+}
+
+/// Seeds events through the *real* `RunLifecycleSink`, so a seeded
+/// `TurnEnded` drives the same `working -> waitingUser` edge production
+/// takes (ADR-0027). `SeedingRunDriver` deliberately bypasses that wrap,
+/// which is why the turn-end tests below need their own driver rather
+/// than reusing it.
+struct LifecycleSeedingRunDriver {
+    events: std::sync::Mutex<Option<Vec<AdapterEventPayload>>>,
+}
+
+impl LifecycleSeedingRunDriver {
+    fn new(events: Vec<AdapterEventPayload>) -> Self {
+        Self {
+            events: std::sync::Mutex::new(Some(events)),
+        }
+    }
+}
+
+impl RunDriver for LifecycleSeedingRunDriver {
+    fn active_run_count(&self) -> usize {
+        0
+    }
+
+    fn start(&self, ctx: RunDriverContext) -> AdapterFuture<'static, Result<(), String>> {
+        let events = self.events.lock().unwrap().take().unwrap_or_default();
+        Box::pin(async move {
+            let inner: Arc<dyn AdapterEventSink> = Arc::new(
+                crew_runtime::adapter::DomainAdapterEventSink::new(
+                    ctx.db.clone(),
+                    ctx.project_id,
+                    ctx.events_tx.clone(),
+                    Vec::new(),
+                    false,
+                    Arc::clone(&ctx.violation_service),
+                    false,
+                )
+                .expect("seed patterns always compile"),
+            );
+            let sink = RunLifecycleSink::wrap(
+                inner,
+                ctx.db.clone(),
+                ctx.project_id,
+                ctx.events_tx.clone(),
+                ctx.run_id,
+                Arc::new(ActivityClock::new()),
+            );
+            for payload in events {
+                sink.emit(AdapterEvent {
+                    run_id: ctx.run_id,
+                    task_id: ctx.task_id,
+                    worker_id: ctx.worker_id,
+                    payload,
+                    cursor: None,
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })
+    }
+
+    fn send_follow_up(
+        &self,
+        _run_id: RunId,
+        _task_id: TaskId,
+        _worker_id: WorkerId,
+        _prompt: String,
+        _kind: crew_protocol::MessageKind,
+    ) -> AdapterFuture<'static, Result<(), String>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn running_adapter(&self, _run_id: RunId) -> Option<Arc<dyn Adapter>> {
+        None
+    }
+
+    fn cancel_run(
+        &self,
+        _run_id: RunId,
+        _scope: CancelScope,
+    ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
+        Box::pin(async move { Ok(crew_runtime::service::CancelOutcome::NoRunningAdapter) })
+    }
+}
+
+fn final_text(value: &str) -> AdapterEventPayload {
+    AdapterEventPayload::MessageFinal {
+        role: "result".to_string(),
+        text: Classified {
+            class: ContentClass::Visible,
+            value: value.to_string(),
+        },
+    }
+}
+
+fn turn_ended() -> AdapterEventPayload {
+    AdapterEventPayload::TurnEnded {
+        outcome: crew_protocol::TurnOutcome::Normal,
     }
 }
 
@@ -678,5 +779,109 @@ async fn run_result_sums_claude_usage_and_takes_last_for_cumulative_adapters() {
     assert_eq!(
         rb["usage"]["costUsd"], 2.0,
         "fake takes the last cumulative report: {rb:?}"
+    );
+}
+
+/// The CREW-3 regression: a TUI vendor never exits, so before ADR-0027 the
+/// only way to read a finished answer was to cancel the run first. A
+/// journaled turn boundary now makes it readable in place.
+#[tokio::test]
+async fn run_result_returns_the_answer_after_a_turn_end_without_cancelling() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(LifecycleSeedingRunDriver::new(vec![
+            final_text("the finished answer"),
+            turn_ended(),
+        ])));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let run_id = submit_run(&mut client).await;
+
+    let resp = client
+        .call(5, "run/result", json!({ "runId": run_id }))
+        .await;
+    assert!(
+        resp.get("error").is_none(),
+        "a settled turn must be readable without a cancel: {resp:?}"
+    );
+    assert_eq!(resp["result"]["resultText"], "the finished answer");
+    assert_eq!(
+        resp["result"]["state"], "waitingUser",
+        "the run is handed back to the leader, not terminal: {resp:?}"
+    );
+}
+
+/// ADR-0027's fold boundary. The process stays alive after its turn, so a
+/// follow-up turn keeps appending to the same run; the answer the leader
+/// already read must not be silently rewritten by a later one.
+#[tokio::test]
+async fn run_result_reads_up_to_the_first_turn_end_not_a_later_one() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(LifecycleSeedingRunDriver::new(vec![
+            final_text("first turn answer"),
+            turn_ended(),
+            final_text("second turn answer"),
+            turn_ended(),
+        ])));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let run_id = submit_run(&mut client).await;
+
+    let resp = client
+        .call(5, "run/result", json!({ "runId": run_id }))
+        .await;
+    assert!(resp.get("error").is_none(), "{resp:?}");
+    assert_eq!(
+        resp["result"]["resultText"], "first turn answer",
+        "the fold stops at the first turn boundary: {resp:?}"
+    );
+}
+
+/// The gate is the turn boundary, not the state: a run sitting in
+/// `waitingUser` because the worker asked a QUESTION has not finished a
+/// turn, and must still refuse.
+#[tokio::test]
+async fn run_result_still_refuses_a_run_with_no_turn_end() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(LifecycleSeedingRunDriver::new(vec![final_text(
+            "mid-turn narration",
+        )])));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let run_id = submit_run(&mut client).await;
+
+    let resp = client
+        .call(5, "run/result", json!({ "runId": run_id }))
+        .await;
+    assert_eq!(
+        resp["error"]["code"], -32602,
+        "no turn boundary means not finished: {resp:?}"
+    );
+}
+
+/// The `turnSettled` flag exists so a SNAPSHOT reader can tell a finished
+/// turn from a worker's question -- both are `waitingUser`. That only works
+/// if `run/get` actually returns it, which it did not when the flag was
+/// first added: the row builder's flags object was hand-written and the new
+/// column was simply absent, so every snapshot reader saw `undefined`.
+#[tokio::test]
+async fn run_get_exposes_the_turn_settled_flag() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(LifecycleSeedingRunDriver::new(vec![
+            final_text("the finished answer"),
+            turn_ended(),
+        ])));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let run_id = submit_run(&mut client).await;
+
+    let get = client.call(5, "run/get", json!({ "runId": run_id })).await;
+    assert_eq!(get["result"]["state"], "waitingUser", "{get:?}");
+    assert_eq!(
+        get["result"]["flags"]["turnSettled"], true,
+        "a settled turn must be visible to a snapshot reader: {get:?}"
     );
 }

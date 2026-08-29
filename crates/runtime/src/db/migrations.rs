@@ -317,6 +317,18 @@ CREATE INDEX idx_events_run_seq ON events(run_id, sequence);
 CREATE INDEX idx_events_timestamp ON events(timestamp);
 ";
 
+/// Migration 15 (CREW-3 / ADR-0027): the `turnSettled` run flag.
+///
+/// A run reaches `waitingUser` two ways -- its vendor finished a turn, or
+/// the worker asked a question -- and a snapshot reader cannot tell them
+/// apart from the state alone. `DEFAULT 0` is what makes this safe to add
+/// to an existing table: every run already in flight reads as
+/// "not turn-settled", which is exactly right for a run that predates the
+/// concept.
+const MIGRATION_15: &str = "
+ALTER TABLE runs ADD COLUMN flags_turn_settled INTEGER NOT NULL DEFAULT 0;
+";
+
 /// Opens `path` as a private (mode `0600`) SQLite database, configures its
 /// PRAGMAs (`journal_mode=WAL`, `foreign_keys=ON`, `busy_timeout=5000`,
 /// `synchronous=FULL`), and migrates it to the latest schema. Migrations
@@ -358,6 +370,7 @@ fn migration_list() -> Migrations<'static> {
         M::up(MIGRATION_12),
         M::up(MIGRATION_13),
         M::up(MIGRATION_14),
+        M::up(MIGRATION_15),
     ])
 }
 

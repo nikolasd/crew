@@ -106,6 +106,7 @@ fn kind_of(payload: &AdapterEventPayload) -> &'static str {
         AdapterEventPayload::NestedWorkerObserved { .. } => "NestedWorkerObserved",
         AdapterEventPayload::QuestionDetected { .. } => "QuestionDetected",
         AdapterEventPayload::OutOfBandInput { .. } => "OutOfBandInput",
+        AdapterEventPayload::TurnEnded { .. } => "TurnEnded",
     }
 }
 
@@ -326,6 +327,18 @@ impl TranscriptFormat for MockFormat {
             (events, None)
         })
     }
+    /// Decodes the `<NL>` sentinel the mock vendor joins pasted lines
+    /// with (see `REACTIVE_SCRIPT`): a `/bin/sh` double cannot emit JSON
+    /// string escapes, so it encodes newlines rather than escaping them.
+    fn recorded_prompt(&self, entry: &serde_json::Value) -> Option<String> {
+        if entry.get("type").and_then(|v| v.as_str()) != Some("user") {
+            return None;
+        }
+        entry
+            .get("text")
+            .and_then(|v| v.as_str())
+            .map(|text| text.replace("<NL>", "\n"))
+    }
 }
 
 /// Which mock CLI script variant [`MockTuiVendor::launch`] runs.
@@ -341,6 +354,11 @@ enum MockScript {
     /// Prints several bursts of output before going quiet, to exercise
     /// the readiness gate's quiet-window timing.
     Bursty,
+    /// Accepts every byte, then records only the LAST line of the paste
+    /// in its transcript -- a vendor that truncated inside its own
+    /// composer. Indistinguishable from success at the PTY boundary,
+    /// which is the whole reason CREW-13 compares the recorded prompt.
+    Truncating,
     /// Prints a ready line and then never reads its stdin at all, so the
     /// tty input buffer fills and a large prompt cannot be delivered --
     /// the CREW-4 "fail loudly rather than truncate" case.
@@ -387,6 +405,7 @@ impl MockTuiVendor {
             MockScript::Reactive => REACTIVE_SCRIPT,
             MockScript::Silent => SILENT_SCRIPT,
             MockScript::Bursty => BURSTY_SCRIPT,
+            MockScript::Truncating => TRUNCATING_SCRIPT,
             MockScript::Deaf => DEAF_SCRIPT,
             MockScript::Stubborn => STUBBORN_SCRIPT,
         };
@@ -403,6 +422,7 @@ fn script_file_name(script: MockScript) -> &'static str {
         MockScript::Reactive => "reactive.sh",
         MockScript::Silent => "silent.sh",
         MockScript::Bursty => "bursty.sh",
+        MockScript::Truncating => "truncating.sh",
         MockScript::Deaf => "deaf.sh",
         MockScript::Stubborn => "stubborn.sh",
     }
@@ -410,12 +430,38 @@ fn script_file_name(script: MockScript) -> &'static str {
 
 const REACTIVE_SCRIPT: &str = r#"#!/bin/sh
 echo "MOCK VENDOR READY"
+ESC=$(printf '\033')
+buf=""
+started=0
 while IFS= read -r line; do
   printf '%s %s\n' "$(date +%s%N)" "$line" >> "$CONTROL_LOG"
-  case "$line" in
+  # Consume bracketed-paste framing the way a real vendor TUI does, and
+  # accumulate the pasted content across reads, so the transcript records
+  # the WHOLE prompt rather than only its last line (CREW-19).
+  #
+  # Only `tr` and POSIX parameter expansion: the introducer opens the
+  # first line and the terminator closes the last, so prefix/suffix
+  # removal is enough and no `sed` is involved. An earlier attempt at
+  # this used sed inside a Rust raw string and the escaping defeated it.
+  clean=$(printf '%s' "$line" | tr -d "$ESC")
+  clean=${clean#"[200~"}
+  clean=${clean%"[201~"}
+  if [ "$started" = "0" ]; then
+    buf="$clean"
+    started=1
+  else
+    # Newlines are joined with a sentinel, not a real newline: this
+    # double writes single-line JSON and cannot emit string escapes.
+    # `MockFormat::recorded_prompt` decodes it.
+    buf="$buf<NL>$clean"
+  fi
+  case "$buf" in
     *"[crew:"*)
+      payload="$buf"
+      buf=""
+      started=0
       (
-        printf '%s\n' "{\"type\":\"user\",\"text\":\"$line\"}" >> "$TRANSCRIPT"
+        printf '%s\n' "{\"type\":\"user\",\"text\":\"$payload\"}" >> "$TRANSCRIPT"
         sleep 0.05
         printf '%s\n' '{"type":"session","id":"sess-mock"}' >> "$TRANSCRIPT"
         sleep 0.05
@@ -446,6 +492,30 @@ while [ "$i" -lt 4 ]; do
 done
 while IFS= read -r line; do
   printf '%s %s\n' "$(date +%s%N)" "$line" >> "$CONTROL_LOG"
+done
+"#;
+
+const TRUNCATING_SCRIPT: &str = r#"#!/bin/sh
+echo "MOCK VENDOR READY (truncating)"
+ESC=$(printf '\033')
+while IFS= read -r line; do
+  printf '%s %s\n' "$(date +%s%N)" "$line" >> "$CONTROL_LOG"
+  clean=$(printf '%s' "$line" | tr -d "$ESC")
+  clean=${clean#"[200~"}
+  clean=${clean%"[201~"}
+  # Deliberately NOT accumulating: whatever line carries the nonce is
+  # recorded alone, so a multi-line prompt loses its head. The nonce is
+  # appended, so it survives -- which is exactly why discovery passes and
+  # only comparing the recorded text catches this.
+  case "$clean" in
+    *"[crew:"*)
+      (
+        printf '%s\n' "{\"type\":\"user\",\"text\":\"$clean\"}" >> "$TRANSCRIPT"
+        sleep 0.05
+        printf '%s\n' '{"type":"session","id":"sess-mock"}' >> "$TRANSCRIPT"
+      ) &
+      ;;
+  esac
 done
 "#;
 
@@ -1869,6 +1939,48 @@ async fn a_prompt_a_deaf_vendor_never_consumes_fails_the_start_loudly() {
     assert!(
         message.contains("stopped consuming input"),
         "the failure must name undeliverable input, not something vaguer; got: {message}"
+    );
+
+    harness.shutdown().await;
+}
+
+/// CREW-13's end-to-end negative path: a vendor that accepts every byte
+/// and then truncates in its own composer must fail the start, not look
+/// like a success. The nonce is appended to the prompt, so it survives the
+/// truncation and discovery still succeeds -- comparing the recorded
+/// prompt is the only thing that catches this.
+#[tokio::test]
+async fn a_vendor_that_records_only_part_of_the_prompt_fails_the_start() {
+    let _guard = SERIAL_PTY.lock().await;
+    let harness = harness().await;
+    let work_dir = tempfile::Builder::new()
+        .prefix("bat-tui-mock-trunc-")
+        .tempdir_in("/tmp")
+        .expect("mock work dir");
+    let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Truncating);
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let worker_id = WorkerId::new();
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        fast_timings(),
+        ResumeContext::default(),
+    );
+
+    let prompt = multi_line_prompt(40);
+    let sink = RecordingSink::new();
+    let err = adapter
+        .start(spec(run_id, task_id, worker_id, &prompt), sink.clone())
+        .await
+        .expect_err("a truncated prompt must fail the start");
+    let message = err.to_string();
+    assert!(
+        message.contains("beginning was lost"),
+        "the failure must name what went missing; got: {message}"
     );
 
     harness.shutdown().await;

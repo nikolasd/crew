@@ -3,6 +3,7 @@
   "approval": "always",
   "limits": {
     "maxConcurrentWorkers": 4,
+    "maxLiveSessions": 16,
     "inactivityTimeoutSec": 300,
     "totalTimeoutSec": 1800,
     "turnBudgetPerSubtask": 10
