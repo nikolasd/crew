@@ -224,13 +224,13 @@ pub fn ensure_private_dir(path: &Path) -> Result<(), SecurityError> {
 /// test can simulate a foreign-owned directory (a directory owned by someone
 /// other than `expected_uid`) and assert [`SecurityError::UntrustedOwner`]
 /// without needing root or a second real user.
-fn ensure_private_dir_as(path: &Path, expected_uid: u32) -> Result<(), SecurityError> {
-    // Reject a pre-existing symlink at `path` before anything else touches
-    // it. `fs::symlink_metadata` (lstat) does not follow the final
-    // component, so this sees the symlink itself rather than whatever it
-    // points to; `DirBuilder::create` and the ownership/chmod checks below
-    // all dereference, so this must run first. See `SecurityError::
-    // UntrustedSymlink`'s doc comment for the attack this closes.
+/// Rejects `path` if it exists as a symlink, via `lstat` (which does not
+/// dereference the final path component, unlike `fs::metadata`/`create`).
+/// Called twice by [`ensure_private_dir_as`]: once before anything touches
+/// `path`, and once again immediately after `DirBuilder::create` returns, to
+/// close the race where a symlink is planted in between (see that call
+/// site's comment).
+fn reject_symlink(path: &Path) -> Result<(), SecurityError> {
     if let Ok(link_metadata) = fs::symlink_metadata(path)
         && link_metadata.file_type().is_symlink()
     {
@@ -238,6 +238,17 @@ fn ensure_private_dir_as(path: &Path, expected_uid: u32) -> Result<(), SecurityE
             path: path.to_path_buf(),
         });
     }
+    Ok(())
+}
+
+fn ensure_private_dir_as(path: &Path, expected_uid: u32) -> Result<(), SecurityError> {
+    // Reject a pre-existing symlink at `path` before anything else touches
+    // it. `fs::symlink_metadata` (lstat) does not follow the final
+    // component, so this sees the symlink itself rather than whatever it
+    // points to; `DirBuilder::create` and the ownership/chmod checks below
+    // all dereference, so this must run first. See `SecurityError::
+    // UntrustedSymlink`'s doc comment for the attack this closes.
+    reject_symlink(path)?;
 
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
@@ -246,6 +257,14 @@ fn ensure_private_dir_as(path: &Path, expected_uid: u32) -> Result<(), SecurityE
         path: path.to_path_buf(),
         source,
     })?;
+
+    // Re-check immediately after `create()`: a symlink planted in the
+    // (sub-millisecond) window between the check above and `create()`
+    // returning is invisible to that first check, and `create()` itself
+    // treats an existing symlink-to-directory as "already there" and
+    // succeeds through it rather than erroring. This closes that race
+    // rather than relying on the first check alone.
+    reject_symlink(path)?;
 
     let metadata = fs::metadata(path).map_err(|source| SecurityError::Io {
         path: path.to_path_buf(),

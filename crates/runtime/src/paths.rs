@@ -133,11 +133,10 @@ impl RuntimePaths {
 
         let root = state_root.join("repos").join(&repository_id);
         let artifacts = root.join("artifacts");
-        let panes = pane_socket_root();
 
         ensure_private_dir(&root)?;
         ensure_private_dir(&artifacts)?;
-        ensure_private_dir(&panes)?;
+        let panes = pane_socket_root()?;
 
         Ok(Self {
             project_id,
@@ -197,12 +196,44 @@ fn discover_vcs_root(canonical: &Path) -> Option<PathBuf> {
     }
 }
 
-/// The short, per-user directory ephemeral pane-attach sockets bind under
-/// (CREW-1). Reads the real environment and the real effective uid; see
-/// [`pane_socket_root_with`] for the pure, testable resolution logic.
-fn pane_socket_root() -> PathBuf {
+/// Resolves and creates the pane-socket directory (CREW-1) using the real
+/// environment and the real effective uid; see [`ensure_pane_socket_root`]
+/// for the fallback-on-any-failure logic this delegates to.
+fn pane_socket_root() -> Result<PathBuf, SecurityError> {
     let env: HashMap<String, String> = std::env::vars().collect();
-    pane_socket_root_with(&env, Uid::current().as_raw())
+    ensure_pane_socket_root(&env, Uid::current().as_raw())
+}
+
+/// Resolves the preferred pane-socket directory via [`pane_socket_root_with`]
+/// and tries to create/secure it; on ANY failure to do so -- not just the
+/// length failure `pane_socket_root_with` itself already guards against --
+/// falls back to the always-creatable `/tmp/crew-<uid>` form instead of
+/// propagating the error.
+///
+/// This matters because `$XDG_RUNTIME_DIR` can be short enough to pass the
+/// length check and still be unusable: a stale value left over from a
+/// torn-down session, a container remount where `/run/user/<uid>` no
+/// longer exists, a directory owned by someone else, or (thanks to
+/// [`ensure_private_dir`]'s own rejection) a planted symlink. Before
+/// CREW-1, `panes` lived under the always-creatable state root, so nothing
+/// about a bogus `XDG_RUNTIME_DIR` could stop the daemon from starting;
+/// this fallback preserves that property. Only a failure to create the
+/// `/tmp` form itself is propagated.
+///
+/// # Errors
+/// Returns [`SecurityError`] if `/tmp/crew-<uid>` itself cannot be created
+/// or secured privately.
+fn ensure_pane_socket_root(
+    env: &HashMap<String, String>,
+    uid: u32,
+) -> Result<PathBuf, SecurityError> {
+    let fallback = PathBuf::from(format!("/tmp/crew-{uid}"));
+    let candidate = pane_socket_root_with(env, uid);
+    if candidate != fallback && ensure_private_dir(&candidate).is_ok() {
+        return Ok(candidate);
+    }
+    ensure_private_dir(&fallback)?;
+    Ok(fallback)
 }
 
 /// Resolves the pane-socket directory for a given environment and uid,
@@ -396,5 +427,87 @@ mod tests {
             PathBuf::from("/tmp/crew-501"),
             "an overflowing XDG_RUNTIME_DIR must fall back to the tmp form"
         );
+    }
+
+    /// CREW-1 review should-fix: a *short enough* `XDG_RUNTIME_DIR` that is
+    /// nonetheless unusable (stale value, no longer exists, sits under a
+    /// non-writable parent) must fall back to `/tmp/crew-<uid>` instead of
+    /// failing the whole daemon startup on a directory the user never
+    /// configured -- `panes` used to live under the always-creatable state
+    /// root, so nothing about a bogus `XDG_RUNTIME_DIR` could stop `crewd`
+    /// before this change.
+    #[test]
+    fn ensure_pane_socket_root_falls_back_to_tmp_when_xdg_runtime_dir_is_unusable() {
+        let mut env = HashMap::new();
+        // Short enough to pass the length check, but rooted somewhere no
+        // unprivileged test process can create: a realistic stand-in for a
+        // stale systemd-assigned /run/user/<uid> that no longer exists.
+        env.insert(
+            "XDG_RUNTIME_DIR".to_string(),
+            "/definitely-not-writable-in-a-test-sandbox/run/user/501".to_string(),
+        );
+        let uid = Uid::current().as_raw();
+
+        let panes =
+            ensure_pane_socket_root(&env, uid).expect("must fall back, not fail, on a bad XDG dir");
+
+        assert_eq!(panes, PathBuf::from(format!("/tmp/crew-{uid}")));
+        assert!(panes.is_dir());
+        let mode = fs::metadata(&panes).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+
+        // Clean up: this test targets the *shared* per-user /tmp directory
+        // real runs also use, so leave it exactly as ensure_private_dir
+        // would have (present, 0700) rather than removing it out from under
+        // a concurrently running daemon on the same machine.
+    }
+
+    /// The mirror case: a genuinely usable `XDG_RUNTIME_DIR` (the systemd-
+    /// managed common case) must actually be used, not bypassed in favor of
+    /// the fallback.
+    #[test]
+    fn ensure_pane_socket_root_uses_a_working_xdg_runtime_dir() {
+        let xdg = tempfile::Builder::new()
+            .prefix("bat-xdg-runtime-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let mut env = HashMap::new();
+        env.insert(
+            "XDG_RUNTIME_DIR".to_string(),
+            xdg.path().to_str().unwrap().to_string(),
+        );
+        let uid = Uid::current().as_raw();
+
+        let panes = ensure_pane_socket_root(&env, uid).unwrap();
+
+        assert_eq!(panes, xdg.path().join("crew"));
+        assert!(panes.is_dir());
+    }
+
+    /// A symlinked `XDG_RUNTIME_DIR/crew` (the exact attack
+    /// `ensure_private_dir`'s `UntrustedSymlink` rejects) must also fall
+    /// back to `/tmp/crew-<uid>` rather than propagate the error and stop
+    /// the daemon from starting.
+    #[test]
+    fn ensure_pane_socket_root_falls_back_when_xdg_candidate_is_a_symlink() {
+        let xdg = tempfile::Builder::new()
+            .prefix("bat-xdg-runtime-symlink-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let elsewhere = xdg.path().join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, xdg.path().join("crew")).unwrap();
+
+        let mut env = HashMap::new();
+        env.insert(
+            "XDG_RUNTIME_DIR".to_string(),
+            xdg.path().to_str().unwrap().to_string(),
+        );
+        let uid = Uid::current().as_raw();
+
+        let panes = ensure_pane_socket_root(&env, uid)
+            .expect("a symlinked XDG candidate must fall back, not fail outright");
+
+        assert_eq!(panes, PathBuf::from(format!("/tmp/crew-{uid}")));
     }
 }
