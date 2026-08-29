@@ -5,7 +5,7 @@ consciously deferred features — nice-to-have, not blocking any planned milesto
 includes the concrete scenarios that would justify implementation. For genuinely open
 implementation gaps (as opposed to deferred nice-to-haves): the open-items backlog is the
 maintainer's local, gitignored `REVIEW.md` (not present in a fresh clone; its resolution
-history lives in [`journal.md`](journal.md)) — that record, not this one, is the single
+history lives in [`docs/adr/`](adr/)) — that record, not this one, is the single
 source of truth for unfinished work.
 
 **Status:** All deferred. Revisit when a scenario becomes real.
@@ -363,6 +363,6 @@ The first release cut after v0.6.0 (which ships the forwarders). Removing them s
 
 1. **Adding a future feature:** Append a new section with the feature name, what it is, concrete scenarios that justify it, why it's deferred, and a decision trigger.
 2. **Revisiting:** When a scenario becomes real, implement the feature and remove it from this document.
-3. **Closing without implementing:** If a feature is no longer relevant, move it to `docs/journal.md` with a "retired" note and remove it from here.
+3. **Closing without implementing:** If a feature is no longer relevant, remove it from here and record the retirement in an ADR (or in [engineering-lessons.md](engineering-lessons.md) if the reason is a lesson rather than a decision).
 
 This document is **not** a TODO list — it's a design parking lot. Items here are consciously deferred, not forgotten.

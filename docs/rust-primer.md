@@ -2,7 +2,7 @@
 
 **Audience & purpose:** contributors with a TypeScript background who are new to Rust — a
 companion to [getting-started.md](getting-started.md), the developer manual, and to
-[journal.md](journal.md) (each "Day" below is the concept behind one of that document's commits).
+[`docs/adr/`](adr/) and [engineering-lessons.md](engineering-lessons.md).
 
 You know TypeScript. You don't know Rust. This guide gets you productive in the Crew Rust crates
 in about a week by teaching each concept with the code that's already in this repository. Every

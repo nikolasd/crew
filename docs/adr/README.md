@@ -3,8 +3,12 @@
 Every entry here uses the [MADR](https://adr.github.io/madr/) format. An ADR is written once a
 decision is made and left alone afterward — if a later decision reverses one, the later ADR says
 so explicitly (`Status: superseded by ADR-00NN`) and this one is never edited to pretend it always
-agreed. Read [../journal.md](../journal.md) for the story each of these was extracted from, and
-[../architecture.md](../architecture.md) for the resulting design with no history attached.
+agreed. Read [../architecture.md](../architecture.md) for the resulting design with no history attached, and
+[../engineering-lessons.md](../engineering-lessons.md) for the bugs and invariants that came out of
+building it. Several ADRs below cite `docs/journal.md`, a per-commit development narrative that has
+since been removed; the lessons worth keeping from it were absorbed into `engineering-lessons.md`.
+Those citations are left as written — an ADR records what was decided when it was decided, and is
+never edited to read as though it always agreed with what came later.
 
 | ID | Title | Status |
 |---|---|---|

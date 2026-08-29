@@ -7,7 +7,8 @@ the [README](../README.md) and want the engineering detail behind it.
 behind the current shape of the system. This is not a build guide (see
 [getting-started.md](getting-started.md), the developer manual) and not a tool-usage guide (see
 [plugin-usage.md](plugin-usage.md), the user manual). It describes the system as it stands today,
-with no history in it — for how it got this way, see [journal.md](journal.md) and [`docs/adr/`](adr/).
+with no history in it — for how it got this way, see [`docs/adr/`](adr/) and
+[engineering-lessons.md](engineering-lessons.md).
 
 **Related ADRs:** [0001](adr/0001-omp-extension-with-separate-rust-daemon.md),
 [0002](adr/0002-rust-canonical-protocol-with-generated-bindings.md),
@@ -369,7 +370,7 @@ graph TB
 
 #### Configuration and Policy
 - **Config Merge** ([`crates/runtime/src/config/merge.rs`](crates/runtime/src/config/merge.rs)): Layers org/repo/user/per-run YAML with strict unknown-key rejection into an immutable, SHA-256-fingerprinted `RuntimePolicy`; hashed JSON bytes are recursively key-sorted because this workspace enables `preserve_order`, and fingerprinting must not depend on input key order
-- **Policy Evaluator** ([`crates/runtime/src/policy/evaluate.rs`](crates/runtime/src/policy/evaluate.rs)): `PolicyEvaluator` implements `AdapterAuthorization` against a `RuntimePolicy` (model allowlist, concurrency ceiling) — wired into production via `lifecycle::serve()`, same as the real `ScopeTokenVerifier` `workerMcp` credential store (see the maintainer's local, gitignored `REVIEW.md` for remaining gaps; resolution history in [`journal.md`](journal.md))
+- **Policy Evaluator** ([`crates/runtime/src/policy/evaluate.rs`](crates/runtime/src/policy/evaluate.rs)): `PolicyEvaluator` implements `AdapterAuthorization` against a `RuntimePolicy` (model allowlist, concurrency ceiling) — wired into production via `lifecycle::serve()`, same as the real `ScopeTokenVerifier` `workerMcp` credential store (see the maintainer's local, gitignored `REVIEW.md` for remaining gaps)
 
 ## Level 4: Code (C4-4)
 
@@ -769,7 +770,7 @@ sequenceDiagram
 Consciously deferred features, each with a decision trigger, live in
 [`future-features.md`](future-features.md). Open defects and watch items live in the
 maintainer's local, gitignored `REVIEW.md` (not present in a fresh clone); their resolution
-history lives in [`journal.md`](journal.md).
+history lives in [`docs/adr/`](adr/) and [engineering-lessons.md](engineering-lessons.md).
 
 ## Appendix A: Quick Reference
 
