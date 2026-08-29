@@ -152,7 +152,10 @@ impl TmuxDisplay {
         match req.placement {
             DisplayPlacement::SplitRight => argv.push("-h".to_string()),
             DisplayPlacement::SplitDown => argv.push("-v".to_string()),
-            DisplayPlacement::Tab | DisplayPlacement::Embedded | DisplayPlacement::Workspace | DisplayPlacement::Window => {}
+            DisplayPlacement::Tab
+            | DisplayPlacement::Embedded
+            | DisplayPlacement::Workspace
+            | DisplayPlacement::Window => {}
         }
         argv.push("-P".to_string());
         argv.push("-F".to_string());

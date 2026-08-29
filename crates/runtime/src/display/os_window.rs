@@ -173,7 +173,10 @@ impl OsWindowDisplay {
     /// (both inside one `tell` block, so `do script` -- the tab/window
     /// reference this needs to capture -- stays the script's final
     /// evaluated value).
-    fn create_pane_terminal_app(&self, req: &PaneRequest) -> Result<(String, DisplayPlacement), String> {
+    fn create_pane_terminal_app(
+        &self,
+        req: &PaneRequest,
+    ) -> Result<(String, DisplayPlacement), String> {
         let script = format!(
             "tell application \"Terminal\"\nactivate\ndo script \"{}\"\nend tell",
             applescript_escape(&shell_join(&req.command))
@@ -297,7 +300,10 @@ impl OsWindowDisplay {
     /// uniquely-numbered ref is used only to satisfy the
     /// non-empty-means-a-real-pane-opened convention ([`PaneHandle`]'s
     /// own doc comment), never to identify anything `open` could act on.
-    fn create_pane_ghostty_fallback(&self, req: &PaneRequest) -> Result<(String, DisplayPlacement), String> {
+    fn create_pane_ghostty_fallback(
+        &self,
+        req: &PaneRequest,
+    ) -> Result<(String, DisplayPlacement), String> {
         let mut argv: Vec<String> = vec![
             "-na".to_string(),
             "Ghostty".to_string(),
@@ -724,7 +730,8 @@ mod tests {
 
     #[tokio::test]
     async fn macos_create_pane_runs_do_script_and_captures_the_returned_tab_reference() {
-        let script = "tell application \"Terminal\"\nactivate\ndo script \"crewd attach run-1\"\nend tell";
+        let script =
+            "tell application \"Terminal\"\nactivate\ndo script \"crewd attach run-1\"\nend tell";
         let executor = Arc::new(RecordingExecutor::new().with(
             &format!("osascript -e {script}"),
             Response::Execute(ok("tab 1 of window id 12345")),
@@ -747,8 +754,7 @@ mod tests {
 
     #[tokio::test]
     async fn macos_create_pane_shell_escapes_arguments_containing_spaces_and_quotes() {
-        let inner =
-            "tell application \"Terminal\"\nactivate\ndo script \"crewd attach 'run \\\"1\\\"'\"\nend tell";
+        let inner = "tell application \"Terminal\"\nactivate\ndo script \"crewd attach 'run \\\"1\\\"'\"\nend tell";
         let executor = Arc::new(RecordingExecutor::new().with(
             &format!("osascript -e {inner}"),
             Response::Execute(ok("tab 1")),
@@ -857,10 +863,7 @@ mod tests {
 
         assert_eq!(handle.pane_ref, "tab-9578b4000");
         assert_eq!(handle.placement, DisplayPlacement::Tab);
-        assert_eq!(
-            display.owned_pane_ids(),
-            vec!["tab-9578b4000".to_string()]
-        );
+        assert_eq!(display.owned_pane_ids(), vec!["tab-9578b4000".to_string()]);
     }
 
     #[tokio::test]
@@ -881,7 +884,10 @@ mod tests {
         let display = make_display(Platform::MacOs, Arc::clone(&executor));
 
         let handle = display
-            .create_pane(pane_request_with_hint(vec!["crewd"], HostProgramHint::Ghostty))
+            .create_pane(pane_request_with_hint(
+                vec!["crewd"],
+                HostProgramHint::Ghostty,
+            ))
             .await
             .expect("create must succeed");
 
@@ -902,7 +908,9 @@ mod tests {
             RecordingExecutor::new()
                 .with(
                     &format!("osascript -e {create_script}"),
-                    Response::Execute(err_result("Ghostty got an error: doesn't understand the new tab message")),
+                    Response::Execute(err_result(
+                        "Ghostty got an error: doesn't understand the new tab message",
+                    )),
                 )
                 .with(
                     "open -na Ghostty --args -e crewd",
@@ -912,7 +920,10 @@ mod tests {
         let display = make_display(Platform::MacOs, Arc::clone(&executor));
 
         let handle = display
-            .create_pane(pane_request_with_hint(vec!["crewd"], HostProgramHint::Ghostty))
+            .create_pane(pane_request_with_hint(
+                vec!["crewd"],
+                HostProgramHint::Ghostty,
+            ))
             .await
             .expect("fallback to open -na must succeed");
 
