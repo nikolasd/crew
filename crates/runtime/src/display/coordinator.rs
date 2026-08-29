@@ -66,6 +66,10 @@ pub struct PaneAttachRequest {
     /// `Auto`; see `crate::config::protocol_display_backend`). `None`
     /// for `Auto`, meaning "try the default chain".
     pub forced_backend: Option<DisplayBackend>,
+    /// The submitting caller's own `$TERM_PROGRAM` hint (CREW-9), from the
+    /// run's `displayPreference.launchProgram`. Only `OsWindowDisplay`
+    /// reads it; every other backend ignores it entirely.
+    pub launch_program: Option<crew_protocol::HostProgramHint>,
 }
 
 /// What a run's pane resolved to. `backend` is `Hidden` whenever every
@@ -178,6 +182,7 @@ impl PaneCoordinator {
         let selection = self.registry.resolve(&crew_protocol::DisplayPreference {
             ordered: candidates,
             placement: req.placement,
+            launch_program: req.launch_program,
         });
 
         let Some(backend) = selection.selected else {
@@ -215,12 +220,15 @@ impl PaneCoordinator {
         match display.create_pane(pane_request).await {
             Ok(handle) => {
                 let pane_ref = handle.pane_ref.clone();
-                self.journal_attach(req.run_id, backend, req.placement, pane_ref.clone())
+                // The actual placement, not the requested one (CREW-9):
+                // OsWindowDisplay may report `Window` for a `Tab` request.
+                let placement = handle.placement;
+                self.journal_attach(req.run_id, backend, placement, pane_ref.clone())
                     .await;
                 PaneAttachOutcome {
                     run_id: req.run_id,
                     backend,
-                    placement: req.placement,
+                    placement,
                     pane_ref,
                     handle: Some(handle),
                 }
@@ -250,6 +258,7 @@ impl PaneCoordinator {
         let selection = self.registry.resolve(&crew_protocol::DisplayPreference {
             ordered: ordered_candidates(req.forced_backend),
             placement: req.placement,
+            launch_program: req.launch_program,
         });
         let Some(backend) = selection.selected else {
             self.journal_attach_guarded(
@@ -288,10 +297,13 @@ impl PaneCoordinator {
         match display.create_pane(self.pane_request(&req)).await {
             Ok(handle) => {
                 let pane_ref = handle.pane_ref.clone();
+                // The actual placement, not the requested one (CREW-9):
+                // OsWindowDisplay may report `Window` for a `Tab` request.
+                let placement = handle.placement;
                 self.journal_attach_guarded(
                     req.run_id,
                     backend,
-                    req.placement,
+                    placement,
                     pane_ref.clone(),
                     owner_instance_id,
                 )
@@ -299,7 +311,7 @@ impl PaneCoordinator {
                 Ok(PaneAttachOutcome {
                     run_id: req.run_id,
                     backend,
-                    placement: req.placement,
+                    placement,
                     pane_ref,
                     handle: Some(handle),
                 })
@@ -370,6 +382,7 @@ impl PaneCoordinator {
                 self.state_dir.to_string_lossy().into_owned(),
             ],
             placement: req.placement,
+            launch_program: req.launch_program,
         }
     }
 
@@ -549,9 +562,17 @@ mod tests {
         }
 
         fn succeeding(self, pane_ref: &str) -> Self {
+            self.succeeding_with_placement(pane_ref, DisplayPlacement::SplitRight)
+        }
+
+        /// Like [`Self::succeeding`], but lets a test control the *actual*
+        /// placement the fake reports -- CREW-9's honest-reporting tests
+        /// need this to differ from whatever was requested.
+        fn succeeding_with_placement(self, pane_ref: &str, placement: DisplayPlacement) -> Self {
             *self.create_result.lock() = Some(Ok(PaneHandle {
                 backend: self.wire_backend,
                 pane_ref: pane_ref.to_string(),
+                placement,
             }));
             self
         }
@@ -631,6 +652,7 @@ mod tests {
             adapter: "claude".to_string(),
             placement: DisplayPlacement::SplitRight,
             forced_backend,
+            launch_program: None,
         }
     }
 
@@ -667,6 +689,44 @@ mod tests {
             &envelope.event,
             crew_protocol::RuntimeEventKind::DisplayPaneAttached
         ));
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// CREW-9: the outcome (and the journaled event) must reflect what the
+    /// backend actually did, not what was requested -- `OsWindowDisplay`
+    /// can report `Window` for a `Tab` request, and this must be visible
+    /// all the way out through `PaneAttachOutcome`, not silently
+    /// overwritten by `req.placement`.
+    #[tokio::test]
+    async fn attach_reports_the_backends_actual_placement_not_the_requested_one() {
+        let (db, _dir) = harness().await;
+        let (events_tx, mut events_rx) = broadcast::channel(16);
+        let mut registry = DisplayRegistry::new();
+        registry.register(Box::new(
+            FakeBackend::new("osWindow", DisplayBackend::OsWindow, true)
+                .succeeding_with_placement("tab 1 of window id 1", DisplayPlacement::Window),
+        ));
+        registry.register(Box::new(super::super::HiddenDisplay::new(
+            DisplayConfig::default(),
+        )));
+        let coordinator = coordinator(registry, Arc::clone(&db), events_tx);
+
+        let mut req = attach_request(None);
+        req.placement = DisplayPlacement::Tab; // requested a tab...
+        let outcome = coordinator.attach(req).await;
+
+        // ...but the backend actually opened a window, and the outcome
+        // must say so.
+        assert_eq!(outcome.placement, DisplayPlacement::Window);
+
+        let envelope = events_rx.try_recv().expect("attach must broadcast");
+        match &envelope.event {
+            crew_protocol::RuntimeEvent::DisplayEvent { placement, .. } => {
+                assert_eq!(*placement, DisplayPlacement::Window);
+            }
+            other => panic!("expected a DisplayEvent, got {other:?}"),
+        }
 
         db.shutdown().await.expect("shutdown database");
     }

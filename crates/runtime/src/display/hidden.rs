@@ -59,11 +59,12 @@ impl DisplayBackendTrait for HiddenDisplay {
         }
     }
 
-    fn create_pane(&self, _req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
-        Box::pin(async {
+    fn create_pane(&self, req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
+        Box::pin(async move {
             Ok(PaneHandle {
                 backend: DisplayBackend::Hidden,
                 pane_ref: String::new(),
+                placement: req.placement,
             })
         })
     }
@@ -106,6 +107,7 @@ mod tests {
                     "run-1".to_string(),
                 ],
                 placement: DisplayPlacement::SplitRight,
+                launch_program: None,
             })
             .await
             .expect("hidden pane creation never fails");
@@ -119,6 +121,7 @@ mod tests {
         let handle = PaneHandle {
             backend: DisplayBackend::Hidden,
             pane_ref: String::new(),
+            placement: DisplayPlacement::SplitRight,
         };
         assert!(hidden.close_pane(&handle).await.is_ok());
     }

@@ -79,6 +79,14 @@ pub enum DisplayPlacement {
     Tab,
     /// A new workspace (Herdr only; unsupported by tmux).
     Workspace,
+    /// A new, separate OS-level window (CREW-9) -- not a tab or split of
+    /// the caller's own terminal at all. `OsWindowDisplay`'s honest report
+    /// of what it actually opened when the target terminal has no
+    /// tab-creation mechanism it can drive (e.g. Terminal.app, or Ghostty
+    /// versions predating its AppleScript support): callers must never
+    /// see `Tab` echoed back for a placement that was, in fact, a whole
+    /// new window.
+    Window,
 }
 
 /// Display configuration.
@@ -140,6 +148,54 @@ pub struct DisplayPreference {
     pub ordered: Vec<DisplayBackend>,
     /// Where to put the pane once a backend is chosen.
     pub placement: DisplayPlacement,
+    /// The program that launched the OMP session issuing this request, from
+    /// its own `$TERM_PROGRAM` (CREW-9) -- used only by `OsWindowDisplay` to
+    /// target the right terminal application instead of always assuming
+    /// Terminal.app. Every other backend ignores this entirely: tmux/herdr
+    /// are self-detecting (they query whatever server already exists,
+    /// independent of who spawned the daemon), so this field only matters
+    /// once resolution has already fallen through to a bare terminal
+    /// window.
+    ///
+    /// Deliberately NOT the raw `$TERM_PROGRAM` string: that variable names
+    /// whatever process launched *this one*, which may be a multiplexer
+    /// (`tmux`) or something else entirely, not necessarily the terminal
+    /// emulator the user is sitting in -- calling this "hostTerminal" would
+    /// overclaim what it actually is. A closed, caller-untrusted enum
+    /// rather than a bare string for a structural reason, not just a
+    /// stylistic one: this value ends up selecting and parameterizing an
+    /// `osascript` invocation, and an environment variable must never be
+    /// interpolated into script text. `None` (absent) and
+    /// `Some(HostProgramHint::Other)` (present but unrecognized) are
+    /// deliberately equivalent -- both mean "no specific hint", falling
+    /// back to today's default.
+    #[serde(default)]
+    pub launch_program: Option<HostProgramHint>,
+}
+
+/// A closed set of terminal/launcher programs `OsWindowDisplay` knows how
+/// to target directly, resolved from the caller's own `$TERM_PROGRAM`. See
+/// [`DisplayPreference::launch_program`] for why this is an enum and not a
+/// bare string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum HostProgramHint {
+    /// `$TERM_PROGRAM=Apple_Terminal` -- macOS's built-in Terminal.app.
+    AppleTerminal,
+    /// `$TERM_PROGRAM=iTerm.app` -- iTerm2.
+    #[serde(rename = "iTerm2")]
+    ITerm2,
+    /// `$TERM_PROGRAM=ghostty` -- Ghostty.
+    Ghostty,
+    /// Anything else: a multiplexer (`tmux`, `screen`), an unrecognized or
+    /// future terminal, or a value this build's extension doesn't (yet)
+    /// know how to map. Never constructed by the extension directly --
+    /// this is serde's catch-all for whatever a caller's `$TERM_PROGRAM`
+    /// happens to be, so a value this enum doesn't recognize can still
+    /// deserialize instead of rejecting the whole request.
+    #[serde(other)]
+    Other,
 }
 
 /// The outcome of resolving a [`DisplayPreference`] against the live registry.
@@ -154,6 +210,13 @@ pub struct DisplaySelection {
     /// Every backend tried, in order, so an operator can see why the
     /// preferred one lost.
     pub attempts: Vec<DisplayBackend>,
+    /// Echoes [`DisplayPreference::launch_program`] through resolution
+    /// (CREW-9) -- carried here, rather than as a separate parameter
+    /// threaded alongside `Option<DisplaySelection>` through
+    /// `build_adapter`'s already-long argument list, because this struct
+    /// is already the one bundle that survives that exact call chain down
+    /// to `PaneAttachRequest`.
+    pub launch_program: Option<HostProgramHint>,
 }
 
 // ---------------------------------------------------------------------------
