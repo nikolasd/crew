@@ -13221,7 +13221,7 @@ var MAX_WIDGET_ROWS = 7;
 function codePointLength(text) {
   return Array.from(text).length;
 }
-var BAT_ICON = "\uDB82\uDF5F";
+var HELM_ICON = "\uDB82\uDC33";
 var WIDGET_HEADER_TEXT = "Crew";
 var STATE_ICONS = {
   queued: "\uDB80\uDD50",
@@ -13258,7 +13258,7 @@ function stateColor(state) {
   return STATE_COLORS[state] ?? FALLBACK_STATE_COLOR;
 }
 function renderWidgetHeader() {
-  return `${BAT_ICON} ${WIDGET_HEADER_TEXT}`;
+  return `${HELM_ICON} ${WIDGET_HEADER_TEXT}`;
 }
 function selectRows(state) {
   const rows = Object.values(state.rows).sort((a, b) => a.lastEventAt < b.lastEventAt ? 1 : -1);
