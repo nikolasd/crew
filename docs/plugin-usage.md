@@ -138,7 +138,16 @@ dashboard_started addr=127.0.0.1:4747 url=http://127.0.0.1:4747/?token=8f3c…
 
 Open that URL. It shows the same picture the widget does — workers, runs, their states and flags,
 budgets and pending escalations — plus a live event feed and, per run, its journaled transcript. It
-updates itself as events arrive.
+updates itself as events arrive. Each run and worker is labelled `adapter · model` in that runtime's
+own colour, so you can tell at a glance which tool is doing what.
+
+It is also where you can see spend. Every run row carries what its vendor reported, and every worker
+card the total across its runs — and it shows exactly that, never an estimate. Claude reports tokens
+and a dollar cost; Codex reports tokens but never a price; Copilot reports neither under ACP v1. So
+you will see `$2.41` where a cost exists, `12.3k tok` where only tokens do, and `—` where the vendor
+reported nothing at all — which is not the same as zero, and is why it is not shown as `$0.00`. A
+worker whose runs did not all report says so alongside its total (`$4.82 (3 of 5 runs reported)`),
+because a sum over some of the runs would otherwise read as the whole bill.
 
 Three things worth knowing:
 

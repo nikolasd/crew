@@ -67,6 +67,39 @@ Implement when any of the above scenarios becomes real (a third-party client is 
 
 ---
 
+## Nameable Workers (Optional Display Name)
+
+**References:** `crew_worker` / `worker/create`
+(`crates/runtime/src/service/orchestration.rs`), the monitor widget
+(`packages/extension/src/monitor/`), the dashboard's run table and worker cards
+(`crates/runtime/src/dashboard/`)
+
+### What it is
+
+An optional display name on `worker/create`, carried on the worker row and shown
+wherever a worker is currently identified by a truncated id — the monitor widget,
+the dashboard's run table, and its worker cards.
+
+### Why deferred
+
+Every surface now labels a worker `adapter · model` in that runtime's brand
+colour, which is what a reader actually wants to know and needs no new field to
+produce. A name only starts earning its keep once that label stops
+disambiguating, and it is not free: a name is a second identity for a thing that
+already has one, so it needs a uniqueness decision (or an explicit decision not
+to have one), it has to survive a harness replacement that creates a new worker,
+and every surface has to decide what to show when it is absent. None of that is
+worth settling before the label is observably insufficient.
+
+### Decision trigger
+
+The maintainer asks again once several workers on the *same* adapter and model
+run concurrently — at that point every row reads identically and only the
+truncated id separates them, which is precisely the readability problem the
+brand labels were introduced to fix.
+
+---
+
 ## Central organization configuration
 
 **Context:** Crew retired the organization lock/policy system in favor of explicit repository-scoped configuration layers.

@@ -516,6 +516,127 @@ pub fn run_owner_not_quarantined_op(run_id: RunId, expected_instance_id: String)
     })
 }
 
+/// One run's folded usage: input tokens, output tokens, and the cost the
+/// vendor reported, which stays `None` when it reported none.
+pub(crate) type FoldedUsage = (u64, u64, Option<f64>);
+
+/// Folds one journaled `adapterUsageEvent` into a running total, per
+/// vendor: Claude journals per-invocation *deltas* (sum them); every other
+/// reporting adapter journals *cumulative* totals (last wins).
+///
+/// Shared by [`run_result_events_op`] and [`usage_by_run_op`] on purpose.
+/// Two copies of this rule would be two projections of the same journal
+/// that could disagree about what a run cost, and the disagreement would
+/// surface as a dashboard and a `run/result` quoting different numbers for
+/// one run.
+///
+/// A cost is only ever combined from costs that were *reported*: summing
+/// deltas adds two `Some`s and otherwise keeps whichever side has a value,
+/// so a vendor that reports tokens without a price never acquires one.
+pub(crate) fn fold_usage_event(
+    sum_deltas: bool,
+    accumulated: Option<FoldedUsage>,
+    input: u64,
+    output: u64,
+    cost: Option<f64>,
+) -> FoldedUsage {
+    match (sum_deltas, accumulated) {
+        (true, Some((i, o, c))) => (
+            i + input,
+            o + output,
+            match (c, cost) {
+                (Some(a), Some(b)) => Some(a + b),
+                (a, b) => a.or(b),
+            },
+        ),
+        _ => (input, output, cost),
+    }
+}
+
+/// Every run's folded usage, keyed by run id -- the per-run spend the
+/// dashboard shows, over the same journal rows and through the same
+/// [`fold_usage_event`] as `run/result`.
+///
+/// Unlike `run/result` this does **not** stop at the first turn boundary.
+/// That boundary exists so a later turn cannot silently rewrite an answer
+/// the leader already read (ADR-0027), which is a property of result
+/// *text*. Spend is cumulative by nature, and the same fold gives the
+/// right total for both vendor shapes across every turn: summed deltas
+/// accumulate, and a cumulative reporter's last value already *is* its
+/// running total.
+///
+/// A run with no usage event is absent from the map. The caller renders
+/// that as "nothing reported", which is not the same fact as zero.
+pub fn usage_by_run_op(project_id: ProjectId) -> DomainClosure {
+    Box::new(move |conn| {
+        let mut stmt = conn.prepare(
+            "SELECT e.run_id, p.adapter, e.event_json
+               FROM events e
+               JOIN runs r ON e.run_id = r.run_id
+               JOIN workers w ON r.worker_id = w.worker_id
+               JOIN worker_profiles p ON w.profile_id = p.id
+              WHERE w.project_id = ?1
+                AND e.event_json LIKE '%adapterUsageEvent%'
+              ORDER BY e.run_id, e.sequence",
+        )?;
+        let rows = stmt.query_map([project_id.to_string()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+
+        let mut folded: std::collections::HashMap<String, FoldedUsage> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let (run_id, adapter, raw) = row?;
+            let Ok(event) = serde_json::from_str::<Value>(&raw) else {
+                continue;
+            };
+            // Re-verify the type tag: the LIKE prefilter alone would
+            // false-positive on message text mentioning the string, the
+            // same two-step `run_result_events_op` uses.
+            if event.get("type").and_then(Value::as_str) != Some("adapterUsageEvent") {
+                continue;
+            }
+            let payload = &event["payload"];
+            let input = payload
+                .get("inputTokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let output = payload
+                .get("outputTokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let cost = payload.get("costUsd").and_then(Value::as_f64);
+            let next = fold_usage_event(
+                adapter == "claude",
+                folded.get(&run_id).copied(),
+                input,
+                output,
+                cost,
+            );
+            folded.insert(run_id, next);
+        }
+
+        let usage: serde_json::Map<String, Value> = folded
+            .into_iter()
+            .map(|(run_id, (input, output, cost))| {
+                (
+                    run_id,
+                    json!({
+                        "inputTokens": input,
+                        "outputTokens": output,
+                        "costUsd": cost,
+                    }),
+                )
+            })
+            .collect();
+        Ok(json!({ "usageByRun": usage }))
+    })
+}
+
 /// Every journaled event for one run, oldest first -- the per-run
 /// transcript the dashboard serves at `/api/run/<id>/events`.
 ///
@@ -634,17 +755,7 @@ pub fn run_result_events_op(run_id: RunId) -> DomainClosure {
                         .and_then(Value::as_u64)
                         .unwrap_or(0);
                     let cost = payload.get("costUsd").and_then(Value::as_f64);
-                    usage = Some(match (sum_deltas, usage) {
-                        (true, Some((i, o, c))) => (
-                            i + input,
-                            o + output,
-                            match (c, cost) {
-                                (Some(a), Some(b)) => Some(a + b),
-                                (a, b) => a.or(b),
-                            },
-                        ),
-                        _ => (input, output, cost),
-                    });
+                    usage = Some(fold_usage_event(sum_deltas, usage, input, output, cost));
                 }
                 Some("adapterTurnEvent") => {
                     turn_ended = true;

@@ -21,32 +21,106 @@ use tokio::sync::broadcast;
 /// Seeds one task + one worker + one run through the real
 /// `DomainRepository`, mirroring `tests/recovery.rs`'s helper.
 async fn seed_run(db: &DatabaseHandle, project_id: ProjectId) -> crew_protocol::RunId {
-    let task_id = TaskId::new();
-    let worker_id = WorkerId::new();
+    seed_run_with_profile(db, project_id, "fake", "test").await
+}
+
+/// The three ids a seeded run is addressed by. `record_adapter_event`
+/// needs all of them, so a test that journals usage cannot make do with
+/// the run id alone.
+#[derive(Clone, Copy)]
+struct Seeded {
+    run_id: crew_protocol::RunId,
+    task_id: TaskId,
+    worker_id: WorkerId,
+}
+
+async fn seed_run_with_profile(
+    db: &DatabaseHandle,
+    project_id: ProjectId,
+    adapter: &str,
+    model: &str,
+) -> crew_protocol::RunId {
+    seed_run_returning_ids(db, project_id, adapter, model, None)
+        .await
+        .run_id
+}
+
+/// Journals one `adapterUsageEvent` against a seeded run, exactly as an
+/// adapter would -- the dashboard's spend figures must be read from the
+/// same journal rows `run/result` folds, never from a test-only shortcut.
+async fn journal_usage(
+    db: &DatabaseHandle,
+    project_id: ProjectId,
+    seeded: Seeded,
+    input_tokens: u64,
+    output_tokens: u64,
+    cost_usd: Option<f64>,
+) {
+    db.run_domain_op(Box::new(move |conn| {
+        let mut repo = DomainRepository::new(conn, project_id);
+        repo.record_adapter_event(
+            &RuntimeEvent::AdapterUsageEvent {
+                run_id: seeded.run_id,
+                task_id: seeded.task_id,
+                worker_id: seeded.worker_id,
+                input_tokens,
+                output_tokens,
+                cost_usd,
+            },
+            seeded.task_id,
+            seeded.worker_id,
+            seeded.run_id,
+            None,
+        )?;
+        Ok(serde_json::json!({}))
+    }))
+    .await
+    .expect("journal usage");
+}
+
+/// As [`seed_run`], with the worker's adapter and model named by the
+/// caller -- the two fields the dashboard reads to pick a run's brand
+/// colour, so a test needs to control them. Passing `reuse` puts the new
+/// run on an existing worker and task, which is how a test builds one
+/// worker with several runs to check a spend total's coverage.
+async fn seed_run_returning_ids(
+    db: &DatabaseHandle,
+    project_id: ProjectId,
+    adapter: &str,
+    model: &str,
+    reuse: Option<Seeded>,
+) -> Seeded {
+    let adapter = adapter.to_string();
+    let model = model.to_string();
+    let task_id = reuse.map_or_else(TaskId::new, |s| s.task_id);
+    let worker_id = reuse.map_or_else(WorkerId::new, |s| s.worker_id);
     let run_id = crew_protocol::RunId::new();
+    let fresh = reuse.is_none();
 
     db.run_domain_op(Box::new(move |conn| {
         let mut repo = DomainRepository::new(conn, project_id);
-        repo.upsert_task(
-            task_id,
-            &TaskRef {
-                owner_client_instance_id: "omp-1".into(),
-                revision: 1,
-            },
-        )?;
-        let worker = crew_protocol::Worker {
-            worker_id,
-            profile_ref: WorkerProfileRef {
-                id: worker_id,
-                fingerprint: "sha256:fake".into(),
-                adapter: "fake".into(),
-                model: "test".into(),
-                permission_envelope: serde_json::json!({}),
-            },
-            parent_worker_id: None,
-            created_at: Timestamp::now(),
-        };
-        repo.create_worker(&worker)?;
+        if fresh {
+            repo.upsert_task(
+                task_id,
+                &TaskRef {
+                    owner_client_instance_id: "omp-1".into(),
+                    revision: 1,
+                },
+            )?;
+            let worker = crew_protocol::Worker {
+                worker_id,
+                profile_ref: WorkerProfileRef {
+                    id: worker_id,
+                    fingerprint: "sha256:fake".into(),
+                    adapter: adapter.clone(),
+                    model: model.clone(),
+                    permission_envelope: serde_json::json!({}),
+                },
+                parent_worker_id: None,
+                created_at: Timestamp::now(),
+            };
+            repo.create_worker(&worker)?;
+        }
         let run = Run {
             run_id,
             task_id,
@@ -69,7 +143,11 @@ async fn seed_run(db: &DatabaseHandle, project_id: ProjectId) -> crew_protocol::
     }))
     .await
     .expect("seed run");
-    run_id
+    Seeded {
+        run_id,
+        task_id,
+        worker_id,
+    }
 }
 
 struct Harness {
@@ -210,6 +288,288 @@ async fn api_state_returns_seeded_runs_and_workers() {
     );
 
     harness.server.stop();
+}
+
+/// A run row must carry its worker's adapter and model, because that is
+/// what picks the row's brand colour (BRAND.md §02) and fills the
+/// `adapter · model` cell. Joined server-side from the worker rows the
+/// snapshot already reads -- the page must never derive it from a second
+/// pass over `workers`.
+#[tokio::test]
+async fn run_rows_carry_their_workers_adapter_and_model() {
+    let harness = start_dashboard().await;
+    let run_id = seed_run_with_profile(&harness.db, harness.project_id, "claude", "opus-5").await;
+
+    let response = http_request(
+        harness.server.local_addr(),
+        &format!(
+            "GET /api/state HTTP/1.1\r\nHost: localhost\r\n{}Connection: close\r\n\r\n",
+            authed(harness.server.token())
+        ),
+    )
+    .await;
+    let state: serde_json::Value = serde_json::from_str(body_of(&response)).unwrap();
+    let run = state["runs"]
+        .as_array()
+        .expect("runs array")
+        .iter()
+        .find(|r| r["runId"].as_str() == Some(&run_id.to_string()))
+        .expect("the seeded run must be visible");
+
+    assert_eq!(
+        run["adapter"].as_str(),
+        Some("claude"),
+        "the run row must carry its worker's adapter: {state}"
+    );
+    assert_eq!(
+        run["model"].as_str(),
+        Some("opus-5"),
+        "the run row must carry its worker's model: {state}"
+    );
+    harness.server.stop();
+}
+
+/// A run whose worker row is missing must not invent an adapter. The
+/// page renders an unknown runtime in the neutral colour, and it can only
+/// do that if the field is absent rather than guessed.
+#[tokio::test]
+async fn a_run_with_no_matching_worker_row_reports_no_adapter() {
+    let harness = start_dashboard().await;
+    let run_id = seed_run_with_profile(&harness.db, harness.project_id, "hermes", "sonnet").await;
+
+    let response = http_request(
+        harness.server.local_addr(),
+        &format!(
+            "GET /api/state HTTP/1.1\r\nHost: localhost\r\n{}Connection: close\r\n\r\n",
+            authed(harness.server.token())
+        ),
+    )
+    .await;
+    let state: serde_json::Value = serde_json::from_str(body_of(&response)).unwrap();
+    let run = state["runs"]
+        .as_array()
+        .expect("runs array")
+        .iter()
+        .find(|r| r["runId"].as_str() == Some(&run_id.to_string()))
+        .expect("the seeded run must be visible");
+
+    // An adapter with no BRAND.md §02 entry is still reported verbatim --
+    // the *page* maps an unrecognised name to the neutral colour. The
+    // runtime must not decide a name is unknown, or adding a colour later
+    // would mean changing Rust.
+    assert_eq!(
+        run["adapter"].as_str(),
+        Some("hermes"),
+        "an unbranded adapter is still reported as itself: {state}"
+    );
+    harness.server.stop();
+}
+
+/// Claude journals per-invocation deltas, so a run's spend is their sum --
+/// the same fold `run/result` applies, reached through the same shared
+/// combine so the two cannot drift.
+#[tokio::test]
+async fn a_runs_spend_sums_the_deltas_a_delta_reporting_vendor_journaled() {
+    let harness = start_dashboard().await;
+    let seeded =
+        seed_run_returning_ids(&harness.db, harness.project_id, "claude", "opus-5", None).await;
+    journal_usage(&harness.db, harness.project_id, seeded, 100, 200, Some(1.0)).await;
+    journal_usage(&harness.db, harness.project_id, seeded, 300, 400, Some(2.0)).await;
+
+    let run = one_run(&harness, seeded.run_id).await;
+    assert_eq!(
+        run["usage"]["costUsd"].as_f64(),
+        Some(3.0),
+        "claude's deltas sum: {run}"
+    );
+    assert_eq!(run["usage"]["inputTokens"].as_u64(), Some(400), "{run}");
+    assert_eq!(run["usage"]["outputTokens"].as_u64(), Some(600), "{run}");
+    harness.server.stop();
+}
+
+/// Codex reports tokens and never a cost. The row must carry the tokens
+/// and *no* dollar figure -- a cost derived from tokens at an assumed
+/// price would be a number nobody reported.
+#[tokio::test]
+async fn a_vendor_that_reports_tokens_but_no_cost_gets_no_dollar_figure() {
+    let harness = start_dashboard().await;
+    let seeded =
+        seed_run_returning_ids(&harness.db, harness.project_id, "codex", "gpt-5", None).await;
+    journal_usage(&harness.db, harness.project_id, seeded, 1200, 3400, None).await;
+
+    let run = one_run(&harness, seeded.run_id).await;
+    assert_eq!(run["usage"]["inputTokens"].as_u64(), Some(1200), "{run}");
+    assert!(
+        run["usage"]["costUsd"].is_null(),
+        "no cost was reported, so none may be shown: {run}"
+    );
+    harness.server.stop();
+}
+
+/// Copilot reports no usage at all under ACP v1. Absence must stay
+/// absence: a zero is a reported number and this is not one.
+#[tokio::test]
+async fn a_run_with_no_usage_events_reports_absence_not_zero() {
+    let harness = start_dashboard().await;
+    let seeded =
+        seed_run_returning_ids(&harness.db, harness.project_id, "copilot", "gpt-5", None).await;
+
+    let run = one_run(&harness, seeded.run_id).await;
+    // Asserting `run["usage"].is_null()` alone would pass vacuously while
+    // the field does not exist at all -- serde_json indexes a missing key
+    // to Null. The row must carry the key *and* have it null, so absence
+    // is stated rather than merely unimplemented.
+    assert!(
+        run.as_object().is_some_and(|row| row.contains_key("usage")),
+        "the row must state its usage, even when there is none: {run}"
+    );
+    assert!(
+        run["usage"].is_null(),
+        "a run nothing reported usage for has null usage, never a zero: {run}"
+    );
+    harness.server.stop();
+}
+
+/// A worker's total must say what it covers. Summing a dollar figure over
+/// runs where only some vendors reported cost is a lie by omission, so the
+/// total carries the counts that let the page qualify it.
+#[tokio::test]
+async fn a_worker_spend_total_names_how_many_of_its_runs_reported() {
+    let harness = start_dashboard().await;
+    let first =
+        seed_run_returning_ids(&harness.db, harness.project_id, "claude", "opus-5", None).await;
+    journal_usage(&harness.db, harness.project_id, first, 100, 100, Some(2.5)).await;
+    // A second run on the SAME worker that reported nothing at all.
+    let second = seed_run_returning_ids(
+        &harness.db,
+        harness.project_id,
+        "claude",
+        "opus-5",
+        Some(first),
+    )
+    .await;
+    assert_ne!(first.run_id, second.run_id, "two distinct runs");
+
+    let state = state_of(&harness).await;
+    let worker = state["workers"]
+        .as_array()
+        .expect("workers")
+        .iter()
+        .find(|w| w["workerId"].as_str() == Some(&first.worker_id.to_string()))
+        .expect("the seeded worker");
+
+    assert_eq!(
+        worker["spend"]["costUsd"].as_f64(),
+        Some(2.5),
+        "the total is what was actually reported: {worker}"
+    );
+    assert_eq!(
+        worker["spend"]["runsTotal"].as_u64(),
+        Some(2),
+        "two runs exist: {worker}"
+    );
+    assert_eq!(
+        worker["spend"]["runsReportingCost"].as_u64(),
+        Some(1),
+        "only one reported a cost, and the total must say so: {worker}"
+    );
+    harness.server.stop();
+}
+
+/// The `/api/state` body, parsed.
+async fn state_of(harness: &Harness) -> serde_json::Value {
+    let response = http_request(
+        harness.server.local_addr(),
+        &format!(
+            "GET /api/state HTTP/1.1\r\nHost: localhost\r\n{}Connection: close\r\n\r\n",
+            authed(harness.server.token())
+        ),
+    )
+    .await;
+    serde_json::from_str(body_of(&response)).expect("state body is JSON")
+}
+
+/// One named run out of `/api/state`.
+async fn one_run(harness: &Harness, run_id: crew_protocol::RunId) -> serde_json::Value {
+    state_of(harness).await["runs"]
+        .as_array()
+        .expect("runs array")
+        .iter()
+        .find(|r| r["runId"].as_str() == Some(&run_id.to_string()))
+        .expect("the seeded run must be visible")
+        .clone()
+}
+
+/// BRAND.md §01: "Never redraw it. Use the supplied files." This pins the
+/// inlined mark to the master SVG on disk, so redrawing it by eye -- or
+/// quietly changing a cell colour, the cell count, or the unequal leg
+/// lengths -- fails a test rather than shipping. §02's colours ride along,
+/// since they are the rects' `fill` values.
+#[test]
+fn the_inlined_mark_matches_the_master_svg_rect_for_rect() {
+    let master = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/logo/crew-logo.svg")
+            .canonicalize()
+            .expect("the master SVG must exist at assets/logo/crew-logo.svg"),
+    )
+    .expect("read the master SVG");
+
+    let rects: Vec<&str> = master
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("<rect"))
+        .collect();
+    assert_eq!(
+        rects.len(),
+        8,
+        "the master mark is one bar plus seven cells; if this changed, \
+         BRAND.md §01/§02 changed and this test is the wrong thing to edit first"
+    );
+    for rect in rects {
+        assert!(
+            crew_runtime::dashboard::PAGE_HTML.contains(rect),
+            "the page's inlined mark must be the master's rect verbatim, missing: {rect}"
+        );
+    }
+}
+
+/// BRAND.md §08's prohibitions, as far as a string can check them: no
+/// gradient, shadow, glow, outline or rounded corner may be applied to the
+/// cells, and the mark may not sit in a pill or badge. The bar's own
+/// gradient is the single permitted one and lives in the master's `defs`.
+#[test]
+fn the_mark_carries_none_of_the_forbidden_treatments() {
+    let page = crew_runtime::dashboard::PAGE_HTML;
+    let mark_start = page.find("<svg").expect("the mark must be inlined");
+    let mark_end = page[mark_start..].find("</svg>").expect("closed svg") + mark_start;
+    let mark = &page[mark_start..mark_end];
+
+    for forbidden in [
+        "box-shadow",
+        "filter:",
+        "drop-shadow",
+        "stroke=",
+        "rx=",
+        "ry=",
+    ] {
+        assert!(
+            !mark.contains(forbidden),
+            "BRAND.md §08 forbids `{forbidden}` on the mark: {mark}"
+        );
+    }
+    // The one permitted gradient is the bar's, from the master file.
+    assert_eq!(
+        mark.matches("linearGradient").count(),
+        2,
+        "exactly the master's one gradient definition (open + close tag): {mark}"
+    );
+    // §04: 32px is the floor when the mark sits beside the wordmark, which
+    // is the header lockup this page uses.
+    assert!(
+        mark.contains("width=\"32\"") && mark.contains("height=\"32\""),
+        "§04 sets a 32px floor for a mark beside the wordmark: {mark}"
+    );
 }
 
 #[tokio::test]
