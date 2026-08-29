@@ -39,6 +39,7 @@ never edited to read as though it always agreed with what came later.
 | [0025](0025-crew-v2-tui-control-plane.md) | Crew v2 TUI control plane | Accepted |
 | [0026](0026-headless-retirement.md) | Headless control plane retirement | Accepted |
 | [0027](0027-turn-end-settles-a-run.md) | A run is a conversation the leader closes; a vendor's turn-end is durable evidence, not a terminal state | Accepted |
+| [0028](0028-submit-prompt-is-journaled-redacted-run-intent.md) | The submit prompt is journaled, redacted, as durable run intent | Accepted |
 
 ## When to add one
 

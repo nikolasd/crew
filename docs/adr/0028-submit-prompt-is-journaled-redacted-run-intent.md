@@ -1,0 +1,171 @@
+# The submit prompt is journaled, redacted, as durable run intent
+
+* Status: Accepted
+* Date: 2026-08-30
+
+## Context and Problem Statement
+
+A run's prompt — what the leader actually asked the worker to do — was never made durable. It was
+read from `run/submit`'s params, passed to the adapter as `StartSpec::prompt`, and existed only in
+memory for the life of the process:
+
+* `runs` has no prompt column, and none of the four `ALTER TABLE runs` migrations adds one
+  (`policy_fingerprint`, `transcript_cursor`, `plan_ref`, `flags_turn_settled`).
+* `submit_run` journals a `Run` record that has no prompt field, so `RunQueued` never carried it.
+* The only `INSERT INTO messages` is reached from the coordination broker and `message/send` —
+  never from submit.
+* `tasks` stores no text at all by design: task id, project, owner, revision, timestamps.
+
+So nothing in the system could answer "what was this run asked to do?" after the fact. Not
+`run/result`, not `events/replay`, not the audit export, not the monitor, not a human reading the
+journal during an incident. A run's transcript was a set of answers to a question nobody recorded.
+
+The concrete trigger was a dashboard column: showing what each run is executing had no honest
+source, and the alternatives were to derive it from the first journaled *assistant* message — which
+is the answer, not the task — or to ship a permanently empty column. Both were rejected, and the
+absence became a decision to make rather than a gap to paper over.
+
+The question is not whether the intent is worth recording. It is what recording it costs, because a
+prompt is user-authored content that can contain secrets, and anything durable here crosses
+[ADR-0006](0006-type-enforced-redaction-boundary.md)'s boundary and lands in every surface that
+reads the journal.
+
+## Decision Drivers
+
+* Invariant 4 — *intent persisted before side effects, content redacted before durability* — reads
+  as a requirement for exactly this. The prompt **is** the intent, and it was the one piece of
+  intent the runtime acted on without persisting.
+* A run's journal is only interpretable against its question. Every consumer that reads run content
+  is degraded without it, and the degradation is invisible: the transcript looks complete.
+* Prompts are content, not metadata. Whatever is stored has to pass the classification boundary,
+  not merely be trusted because the caller is the leader.
+* Durability and *distribution* are separable concerns here, and conflating them would understate
+  the cost. The journal is read by the audit export, `events/replay`, and (since the dashboard's
+  transcript route) a browser page.
+
+## Considered Options
+
+* Journal the full prompt at submit, classified `Visible` and passed through `Redactor::sanitize`.
+* Journal only a truncated summary — the first line, or a fixed prefix.
+* Keep it ephemeral, and derive any display text from the vendor's own transcript file or from the
+  first journaled assistant message.
+
+## Decision Outcome
+
+Chosen option: **the full prompt, classified `Visible`, through `Redactor::sanitize`, journaled at
+`run/submit` before the adapter is spawned.**
+
+Its own event kind rather than a field on `RunQueued`: a run submitted with no prompt then has no
+prompt event, instead of a `RunQueued` carrying a null that every reader has to interpret. Like
+every other domain mutation it commits and broadcasts in the same call
+([ADR-0020](0020-per-mutation-event-broadcast-is-not-optional.md)).
+
+Ordering is the part that matters and is not incidental: the prompt is journaled *before* the
+adapter starts, so invariant 4's first clause holds structurally rather than by convention — the
+intent is durable before the side effect it authorizes exists.
+
+`Visible` is the correct classification and not a convenience. `Thinking` and `Secret` describe
+vendor-produced content; a submit prompt is authored by the leader and is meant to be readable. So
+the secret-shaped denylist applies to it and the text itself survives, which is precisely the
+intent.
+
+### Positive Consequences
+
+* `run/result`, `events/replay`, the audit export, and the dashboard's per-run transcript all gain
+  the run's question. The dashboard's task column becomes possible with a real source rather than
+  an inference.
+* Invariant 4's first clause is satisfied by construction at the one call site that was violating
+  its spirit.
+* No truncation, so no lossy projection. A reader who wants one line takes the first line of a
+  complete record; a reader given only the first line cannot recover the rest. Choosing the summary
+  at write time would decide, permanently and on everyone's behalf, which half of a two-paragraph
+  prompt mattered.
+
+### Negative Consequences
+
+* **The distribution surface genuinely widens.** The prompt now appears in the audit export
+  (`audit/export.rs` selects `FROM events`), in `events/replay`, and in the dashboard's transcript
+  route — which is a web page, even a token-gated localhost one. Before this decision, submit
+  prompts appeared in none of them.
+* **Content is only as protected as the denylist**, which ADR-0006 deliberately keeps small because
+  *classification* is the primary boundary. A prompt is `Visible` by definition, so a secret in a
+  shape the denylist does not match becomes durable. This decision therefore leans on a mechanism
+  ADR-0006 explicitly described as the weaker of its two, and it does so knowingly.
+* Journal size now scales with prompt length, and by choosing not to truncate we accept that a
+  pathologically large prompt is stored whole.
+
+### The asymmetry this decision does not resolve
+
+Recorded because it was found while making this decision, and a reader comparing the two paths will
+otherwise assume it was overlooked.
+
+`message/send` payloads — steers and answers, also user-authored text — are **already durable and
+are not redacted at all.** The payload is read from the request params and reaches `INSERT INTO
+messages` verbatim; `service/orchestration.rs` contains no `Redactor`, `sanitize`, or `Classified`
+reference of any kind. `crates/protocol/src/message.rs` nonetheless documents the field as "the
+message payload (redacted before persistence)", which is false, and false in the most misleading
+possible place: a security property asserted next to the field, where whoever adds the next
+message-producing path will reasonably trust it.
+
+The two exposure classes are therefore *different rather than nested*, and it is worth being exact:
+
+| | durable | redacted | in `audit export` |
+|---|---|---|---|
+| steer / answer payload (today) | yes | **no** | no |
+| submit prompt (this decision) | yes | yes | **yes** |
+
+So this decision produces a system where the redacted content is the widely distributed one and the
+unredacted content is the narrowly held one — defensible, but only while stated. Closing the
+message-path gap is its own decision with its own security reasoning, and is tracked separately; it
+is not folded in here, because a decision about run intent should not quietly also change how
+message content is persisted. The false doc comment is corrected as part of this change, since
+leaving a comment claiming a security property the code does not have is not defensible once known.
+
+### A rationale this decision invalidates
+
+`TranscriptFormat::recorded_prompt` is deliberately an accessor and not a `TuiEvent`, and the design
+note for that work justified it partly on the grounds that emitting one would duplicate "the
+already-journaled prompt". No prompt was journaled at the time, so that leg was never sound.
+
+The conclusion stands on its remaining leg, which is the sound one and now the only one: a
+user-entry event must not be emitted because a fresh start would duplicate the prompt this decision
+makes genuinely durable, and a resume would replay it as new conversation that already happened.
+Cited here so the disproved half is not resurrected once journaling makes it superficially
+plausible.
+
+## Pros and Cons of the Options
+
+### Full prompt, redacted, at submit (chosen)
+
+* Good, because the intent behind every run becomes durable and interpretable, and invariant 4 holds
+  by construction rather than by reviewer vigilance.
+* Good, because no reader is forced to accept somebody else's guess about which part of the prompt
+  mattered.
+* Bad, because it widens the distribution surface for user content, and it depends on the denylist
+  for the residual secret risk rather than on classification.
+
+### Truncated summary only
+
+* Good, because it bounds both the stored size and the exposure, and it satisfies the display case
+  that prompted the question.
+* Bad, because the truncation point is a guess made once, at write time, for every future reader —
+  and the discarded remainder is unrecoverable. It also buys less protection than it appears to: a
+  secret pasted at the start of a prompt is inside the first line.
+
+### Keep it ephemeral
+
+* Good, because it changes nothing and adds no durable content.
+* Bad, because it leaves every journal consumer reading answers to an unrecorded question, and the
+  only available substitutes are dishonest: the vendor's own transcript file is unredacted and must
+  never be served ([ADR-0006](0006-type-enforced-redaction-boundary.md)), and the first assistant
+  message is the response, not the request.
+
+## Links
+
+* Builds on [ADR-0006](0006-type-enforced-redaction-boundary.md) — the classification boundary this
+  content passes through, and the source of the "classification is primary, the denylist is
+  secondary" framing above.
+* Constrained by [ADR-0020](0020-per-mutation-event-broadcast-is-not-optional.md) — the prompt event
+  commits and broadcasts in one call like every other mutation.
+* Proven the way ADR-0006's boundary is proven: by byte-scanning the database, WAL, and log in
+  `crates/runtime/tests/redaction_boundary.rs`, not by asserting on a redactor's return value.
