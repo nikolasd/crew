@@ -3,7 +3,7 @@
 // possible overflow line. `ctx.ui.setWidget` truncates array-content
 // widgets at 10 total LINES, not 10 rows — `MAX_WIDGET_ROWS` is capped at
 // 7 so the worst case (2 border lines + 7 rows + 1 overflow line = 10)
-// fits exactly. A fuller view is a `/crew status <runId>` command
+// fits exactly. A fuller view is a `/crew run <runId>` command
 // lookup, never silent truncation of state (the model itself is
 // unbounded, only the *rendered* widget is capped).
 
@@ -192,7 +192,7 @@ export function renderWidgetBox(state: MonitorState, theme: Theme): string[] {
     lines = rows.map(renderRowLine);
     colors = rows.map((row) => stateColor(displayState(row)));
     if (totalCount > MAX_WIDGET_ROWS) {
-      lines.push(`… ${totalCount - MAX_WIDGET_ROWS} more; use /crew status <runId> for full details.`);
+      lines.push(`… ${totalCount - MAX_WIDGET_ROWS} more; use /crew run <runId> for full details.`);
       colors.push("muted");
     }
   }
@@ -200,7 +200,7 @@ export function renderWidgetBox(state: MonitorState, theme: Theme): string[] {
   return assembleBox(renderWidgetHeader(), lines, colors, theme);
 }
 
-/** Renders the full detail block for `/crew status <runId>`. */
+/** Renders the full detail block for `/crew run <runId>`. */
 export function renderRowDetails(row: MonitorRow): string {
   // The detail view names the real run state and annotates it, rather than
   // substituting the display key: someone reading the details wants the
