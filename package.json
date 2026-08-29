@@ -11,7 +11,7 @@
     "format:write": "biome format --write .",
     "typecheck": "tsc --noEmit",
     "test": "CREW_DISABLE_VENDOR_CLI=1 bun test && CREW_DISABLE_VENDOR_CLI=1 cargo test --workspace",
-    "check": "bun run generate --check && bun run format:check && bun run typecheck && bun run build && CREW_DISABLE_VENDOR_CLI=1 bun test && CREW_DISABLE_VENDOR_CLI=1 cargo test --workspace"
+    "check": "bun run generate --check && bun run format:check && bun run typecheck && (TMPDIR=$(mktemp -d) && bun run --cwd packages/extension build --outdir \"$TMPDIR/dist\" && rm -rf \"$TMPDIR\") && CREW_DISABLE_VENDOR_CLI=1 bun test && CREW_DISABLE_VENDOR_CLI=1 cargo test --workspace"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7",
