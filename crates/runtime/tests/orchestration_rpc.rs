@@ -5932,3 +5932,113 @@ async fn a_secret_shaped_string_in_a_message_payload_is_masked_before_it_is_jour
          dropped wholesale: {payload}"
     );
 }
+
+// ------------------- CREW-32: decision reasons are caller-supplied content
+
+/// A vendor-key-shaped string a leader might paste into a decision reason.
+const REASON_SECRET: &str = "sk-ant-api03-IIIIJJJJKKKKLLLL9012";
+
+/// The payload of the first journaled event of `event_type` in a replay.
+fn first_event_payload<'a>(replay: &'a Value, event_type: &str) -> &'a Value {
+    replay["result"]
+        .as_array()
+        .expect("events/replay returns an array")
+        .iter()
+        .map(|e| &e["event"])
+        .find(|e| e["type"] == event_type)
+        .map(|e| &e["payload"])
+        .unwrap_or_else(|| panic!("no {event_type} event journaled: {replay:?}"))
+}
+
+/// Asserts a journaled reason kept its prose and lost its secret. Read
+/// through `events/replay` deliberately: that is the same `events` table
+/// `audit/export.rs` reads, so it is the surface that makes an unredacted
+/// reason exportable rather than merely durable.
+fn assert_reason_masked(payload: &Value) {
+    let reason = payload["reason"].as_str().expect("a reason");
+    assert!(
+        !reason.contains(REASON_SECRET),
+        "a decision reason must not carry a secret into the journal: {reason}"
+    );
+    assert!(
+        reason.contains("denying because") && reason.contains("leaked"),
+        "the surrounding prose must survive -- a reason is Visible, not \
+         dropped wholesale: {reason}"
+    );
+}
+
+#[tokio::test]
+async fn a_plan_decision_reason_is_redacted_before_it_is_journaled() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let (_t, _w, run_id) = submit_run_with_driver(&mut client, "omp-1").await;
+    let plan = json!({ "subtasks": [ { "id": "s1", "description": "d", "adapter": "claude", "writes": true } ] });
+    client
+        .call(
+            2,
+            "plan/propose",
+            json!({ "runId": run_id, "ownerClientInstanceId": "omp-1", "taskText": "t", "plan": plan }),
+        )
+        .await;
+    let decide = client
+        .call(
+            3,
+            "plan/decide",
+            json!({
+                "runId": run_id,
+                "approved": false,
+                "reason": format!("denying because {REASON_SECRET} leaked"),
+            }),
+        )
+        .await;
+    assert!(decide.get("error").is_none(), "decide failed: {decide:?}");
+
+    let replay = client
+        .call(4, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    assert_reason_masked(first_event_payload(&replay, "planDecided"));
+}
+
+#[tokio::test]
+async fn a_child_denial_reason_is_redacted_before_it_is_journaled() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let (_t, _w, run_id) = submit_run_with_driver(&mut client, "omp-1").await;
+    // A deny needs a pending request to deny; without one the handler
+    // refuses before it ever reaches the reason.
+    seed_pending_child_request(&harness, RunId::parse(&run_id).unwrap(), "need help").await;
+
+    let decide = client
+        .call(
+            2,
+            "coordination/child/decide",
+            json!({
+                "parentRunId": run_id,
+                "decision": "deny",
+                "reason": format!("denying because {REASON_SECRET} leaked"),
+            }),
+        )
+        .await;
+    assert!(decide.get("error").is_none(), "decide failed: {decide:?}");
+
+    let replay = client
+        .call(3, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    // The replay also holds the *request* childEvent seeded above; select
+    // the denial by its kind rather than taking the first match.
+    let denied = replay["result"]
+        .as_array()
+        .expect("array")
+        .iter()
+        .map(|e| &e["event"])
+        .find(|e| e["type"] == "childEvent" && e["payload"]["kind"] == "childWorkerRequestDenied")
+        .map(|e| &e["payload"])
+        .expect("a childWorkerRequestDenied event");
+    assert_reason_masked(denied);
+}
