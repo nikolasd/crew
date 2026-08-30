@@ -176,8 +176,11 @@ async fn request_child_re_checks_the_transition_inside_its_guarded_write() {
     let err = db
         .run_domain_op(Box::new(move |conn| {
             let mut repo = DomainRepository::new(conn, project_id);
-            repo.request_child(run_id, "spawn a helper")
-                .map(|_| json!({}))
+            repo.request_child(
+                run_id,
+                &crew_protocol::Redacted::assert_runtime_authored("spawn a helper"),
+            )
+            .map(|_| json!({}))
         }))
         .await
         .expect_err("a settled parent must refuse a child request");

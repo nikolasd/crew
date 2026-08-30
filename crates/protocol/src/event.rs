@@ -161,6 +161,38 @@ pub struct Classified<T> {
 /// instead means **a new caller-carrying field is a compile error until
 /// its author decides how it gets sanitized.**
 ///
+/// # The property, as an executable pair
+///
+/// These two doctests differ in exactly one token — the constructor — so
+/// together they prove the boundary rather than merely exercising it. The
+/// negative one alone would be weak evidence: a `compile_fail` block passes
+/// on *any* compilation error, including a typo, which is why the positive
+/// twin sits beside it.
+///
+/// A bare `String` cannot populate a caller-carrying field:
+///
+/// ```compile_fail
+/// use crew_protocol::{RunId, RuntimeEvent, TaskId, WorkerId};
+/// let _ = RuntimeEvent::RunPromptEvent {
+///     run_id: RunId::new(),
+///     task_id: TaskId::new(),
+///     worker_id: WorkerId::new(),
+///     prompt: "unredacted".to_string(),
+/// };
+/// ```
+///
+/// The same construction, with the claim stated, compiles:
+///
+/// ```
+/// use crew_protocol::{Redacted, RunId, RuntimeEvent, TaskId, WorkerId};
+/// let _ = RuntimeEvent::RunPromptEvent {
+///     run_id: RunId::new(),
+///     task_id: TaskId::new(),
+///     worker_id: WorkerId::new(),
+///     prompt: Redacted::assert_runtime_authored("a fixture, not caller text"),
+/// };
+/// ```
+///
 /// # What it does not prevent
 ///
 /// `Deserialize` accepts a bare string, because stored events must be read
@@ -1014,7 +1046,7 @@ mod tests {
             task_id,
             worker_id,
             approved: false,
-            reason: Some("scope too broad".into()),
+            reason: Some(Redacted::assert_runtime_authored("scope too broad")),
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["type"], "planDecided");
@@ -1044,7 +1076,9 @@ mod tests {
             task_id,
             worker_id,
             reason: "ambiguous_requirement".into(),
-            question: Some("should this endpoint be idempotent?".into()),
+            question: Some(Redacted::assert_runtime_authored(
+                "should this endpoint be idempotent?",
+            )),
         };
         let value = serde_json::to_value(&raised).unwrap();
         assert_eq!(value["type"], "escalationRaised");
@@ -1056,7 +1090,7 @@ mod tests {
             task_id,
             worker_id,
             answered_by: AnsweredBy::User,
-            answer: Some("yes, make it idempotent".into()),
+            answer: Some(Redacted::assert_runtime_authored("yes, make it idempotent")),
         };
         let value = serde_json::to_value(&answered).unwrap();
         assert_eq!(value["type"], "escalationAnswered");
@@ -1110,19 +1144,21 @@ mod tests {
     fn classified_is_not_reachable_from_new_crew_v2_events() {
         // Compile-time proof mirroring `classified_is_not_reachable_from_runtime_event`:
         // every new free-text field on these variants is a plain
-        // `Option<String>`/`String`, never `Classified<String>`, so raw
+        // `Option<Redacted>`/`Redacted`, never `Classified<String>`, so raw
         // thinking/secret content can only reach these variants already
-        // sanitized.
+        // sanitized. CREW-29 strengthened this from `String`: the field type
+        // now also names *which* boundary the text crossed, so the pin below
+        // asserts something stricter than it used to rather than less.
         let (run_id, task_id, worker_id) = fixture_ids();
         let event = RuntimeEvent::WorkerQuestion {
             run_id,
             task_id,
             worker_id,
-            question: Some("sanitized".into()),
+            question: Some(Redacted::assert_runtime_authored("sanitized")),
         };
         match event {
             RuntimeEvent::WorkerQuestion { question, .. } => {
-                let _: Option<String> = question;
+                let _: Option<Redacted> = question;
             }
             _ => panic!("expected WorkerQuestion"),
         }

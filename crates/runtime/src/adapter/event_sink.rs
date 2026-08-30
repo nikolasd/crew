@@ -1118,9 +1118,9 @@ mod question_detected_tests {
                 assert_eq!(*got_task_id, task_id);
                 assert_eq!(*got_worker_id, worker_id);
                 assert_eq!(
-                question.as_ref().map(crew_protocol::Redacted::as_str),
-                Some("which branch should I target?")
-            );
+                    question.as_ref().map(crew_protocol::Redacted::as_str),
+                    Some("which branch should I target?")
+                );
             }
             other => panic!("expected WorkerQuestion, got {other:?}"),
         }

@@ -256,7 +256,13 @@ async fn a_flag_set_during_the_callback_window_survives_a_callback_failure() {
     );
 
     let outcome = svc
-        .decide(approval_id, "omp-1", "approve", "ok", DecidedBy::Human)
+        .decide(
+            approval_id,
+            "omp-1",
+            "approve",
+            &crew_protocol::Redacted::assert_runtime_authored("ok"),
+            DecidedBy::Human,
+        )
         .await;
 
     assert!(
@@ -318,7 +324,13 @@ async fn the_unhealthy_flag_is_applied_when_no_concurrent_mutation_happens() {
     );
 
     let outcome = svc
-        .decide(approval_id, "omp-1", "approve", "ok", DecidedBy::Human)
+        .decide(
+            approval_id,
+            "omp-1",
+            "approve",
+            &crew_protocol::Redacted::assert_runtime_authored("ok"),
+            DecidedBy::Human,
+        )
         .await;
 
     assert!(

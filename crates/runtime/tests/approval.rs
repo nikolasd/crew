@@ -521,7 +521,13 @@ async fn identical_repeat_decision_never_re_invokes_the_adapter_callback() {
     let (events_tx, _events_rx) = broadcast::channel(64);
     let service = ApprovalService::new(db, harness.project_id, counting, events_tx);
     let first = service
-        .decide(approval_id, "omp-owner", "approve", "ok", DecidedBy::Human)
+        .decide(
+            approval_id,
+            "omp-owner",
+            "approve",
+            &crew_protocol::Redacted::assert_runtime_authored("ok"),
+            DecidedBy::Human,
+        )
         .await
         .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -531,7 +537,13 @@ async fn identical_repeat_decision_never_re_invokes_the_adapter_callback() {
     ));
 
     let second = service
-        .decide(approval_id, "omp-owner", "approve", "ok", DecidedBy::Human)
+        .decide(
+            approval_id,
+            "omp-owner",
+            "approve",
+            &crew_protocol::Redacted::assert_runtime_authored("ok"),
+            DecidedBy::Human,
+        )
         .await
         .unwrap();
     assert_eq!(

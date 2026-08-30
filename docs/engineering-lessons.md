@@ -417,6 +417,57 @@ edit the production code to break it and confirm the test notices, or the test i
 cheapest version of this discipline is to write the assertion first and watch it fail for the right
 reason.
 
+### A payload crosses several boundaries, and clearing the one you are thinking about tells you nothing about the others
+
+**Location:** `.github/workflows/auto-commit-dist.yml` (CREW-26)
+
+The auto-commit workflow passed the ~484 KB bundle to `jq` as `--arg distContent "$DIST_B64"`. Two
+people reviewed the size question and both checked it against the *API's* limit — the base64
+inflation to ~645 KB, compared against the GraphQL mutation's documented ceiling, orders of magnitude
+clear. It died on the first live run with `Argument list too long`: Linux caps a single `exec`
+argument at 128 KB (`MAX_ARG_STRLEN`), and no amount of headroom against the API mattered because
+the bytes never reached the API.
+
+**The lesson:** a payload crosses several boundaries on its way somewhere — argv, environment, pipe
+buffer, request body, column width — and each has its own limit. Clearing the boundary you are
+thinking about is not evidence about the others, and the one that bites is usually the boring one
+nobody was thinking about. When a size looks safe, ask *what carries it there* and check every hop,
+not the destination. The fix was `--rawfile`, which bypasses argv entirely.
+
+### A citation establishes that a mechanism exists, not that your use of it is safe
+
+**Location:** CREW-26's design iterations
+
+That same workflow's design cited GitHub documentation for every claim it made, and the two blocking
+defects that survived to late review — `GITHUB_TOKEN` not retriggering workflow runs, and a
+`contents:write` credential sitting in a job that executes PR-authored build scripts — are both
+things the docs state plainly. Citing a mechanism is not the same as checking that your particular
+use of it holds. Reading the twenty lines of the existing `bundle-check` job would have surfaced the
+credential exposure immediately, because `bun install` and `bun run build` are right there in it.
+
+**The lesson:** a citation answers "does this mechanism work the way I said?" and never "is what I am
+doing with it correct?" Prefer reading the neighbouring code that already does the same thing.
+Sibling of the entry above: same failure, one layer down.
+
+### Finding an instance's call site is not the same as enumerating the write's call sites
+
+**Location:** `crates/runtime/src/service/orchestration.rs::message_send`,
+`crates/runtime/src/coordination/broker.rs` (CREW-28, then CREW-33)
+
+CREW-28 closed an unredacted message payload by adding redaction at `message/send`, and described
+`INSERT INTO messages` as having a single entry point. It has two: `send_internal`, reached from the
+coordination broker, is the other, and the broker held no redactor at all — so `coordination/askPolicy`
+and `coordination/reportBlocked` kept writing worker-supplied text unredacted after the "fix".
+
+The measurement that produced that false confidence was `grep -c "Redactor\|sanitize\|Classified"`
+over *one file*, which had been correct twice before. It answers "does this file redact?" and reads
+as though it answered "is this write redacted?"
+
+**The lesson:** when closing a leak, enumerate the callers of the **write**, not of the symptom you
+found. `grep -rn "INSERT INTO <table>"` and then the callers of whatever wraps it; the same for the
+event-append path. A fix scoped to the call site you happened to find leaves every sibling door open,
+and the next person will reasonably read the fix as having closed the class.
+
 ## Health Checks (`doctor`)
 
 ### A check scoped to the Crew source tree must not run against `--repo`

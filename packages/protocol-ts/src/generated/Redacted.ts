@@ -37,6 +37,38 @@
  * instead means **a new caller-carrying field is a compile error until
  * its author decides how it gets sanitized.**
  *
+ * # The property, as an executable pair
+ *
+ * These two doctests differ in exactly one token — the constructor — so
+ * together they prove the boundary rather than merely exercising it. The
+ * negative one alone would be weak evidence: a `compile_fail` block passes
+ * on *any* compilation error, including a typo, which is why the positive
+ * twin sits beside it.
+ *
+ * A bare `String` cannot populate a caller-carrying field:
+ *
+ * ```compile_fail
+ * use crew_protocol::{RunId, RuntimeEvent, TaskId, WorkerId};
+ * let _ = RuntimeEvent::RunPromptEvent {
+ *     run_id: RunId::new(),
+ *     task_id: TaskId::new(),
+ *     worker_id: WorkerId::new(),
+ *     prompt: "unredacted".to_string(),
+ * };
+ * ```
+ *
+ * The same construction, with the claim stated, compiles:
+ *
+ * ```
+ * use crew_protocol::{Redacted, RunId, RuntimeEvent, TaskId, WorkerId};
+ * let _ = RuntimeEvent::RunPromptEvent {
+ *     run_id: RunId::new(),
+ *     task_id: TaskId::new(),
+ *     worker_id: WorkerId::new(),
+ *     prompt: Redacted::assert_runtime_authored("a fixture, not caller text"),
+ * };
+ * ```
+ *
  * # What it does not prevent
  *
  * `Deserialize` accepts a bare string, because stored events must be read
