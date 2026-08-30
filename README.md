@@ -62,7 +62,7 @@ command the extension registers, and the recommended flow for running a task thr
 
 For contributors building or modifying Crew itself (not for end users — see [Installation](#installation) above). [`docs/development.md`](docs/development.md) (Crew Development Guide) is the developer manual — start there for the full setup/build/test/config walkthrough.
 
-**Prerequisites:** Bun 1.3.14+, macOS or glibc Linux on arm64/x64, and Rust — via [rustup](https://rustup.rs) (recommended: automatically respects the pinned `1.97.1` in `rust-toolchain.toml`) or your system package manager. For the full OMP integration you also need OMP ≥ 17.0.7.
+**Prerequisites:** Bun 1.3.14+, macOS or glibc Linux on arm64/x64, and Rust — via [rustup](https://rustup.rs) (recommended: automatically tracks the `stable` channel `rust-toolchain.toml` pins to, always the latest stable release) or your system package manager. For the full OMP integration you also need OMP ≥ 17.0.7.
 
 ```bash
 git clone https://github.com/nikolasd/crew.git

@@ -17,7 +17,7 @@ way `architecture.md` says it does.
 
 ## Prerequisites
 
-Same as [development.md](development.md#prerequisites): Rust 1.97.1+, Bun 1.3.14+,
+Same as [development.md](development.md#prerequisites): Rust stable, Bun 1.3.14+,
 `omp` ≥ 17.0.7 on your `PATH`. Build both sides first:
 
 ```bash
@@ -798,3 +798,7 @@ there with the exact cause. If a step in this document produces something not de
 there, that's either a real regression or a gap in this document — both are worth fixing; open an
 issue or extend this file, the same way the `run/submit` error-shape gap above was found by
 running the walkthrough for real and getting confused by it.
+
+## Pane Liveness Checks
+
+When testing `/crew attach` or pane persistence workflows, verify the CREWATTACH1 liveness marker is being sent correctly: the attach socket must send `CREWATTACH1\n` as its first bytes. A probe that doesn't see the marker within 250ms will mark the pane as stale and return -32602 (Invalid params). This guards against fork-inherited stale sockets being mistaken for live panes. See [cli-reference.md § Attach Socket Liveness](cli-reference.md#attach-socket-liveness-crewattach1-marker).
