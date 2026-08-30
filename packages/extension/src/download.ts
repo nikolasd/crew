@@ -5,14 +5,14 @@
 // Modelled on `doctor.ts`'s split: this module is the pure worker; `install.ts`
 // builds its context and shapes the tool/command result.
 //
-// nikolasd/crew is a PRIVATE repository, so a plain `releases/download/
-// <tag>/<asset>` URL always 404s -- that browser-facing URL is never
-// token-authenticated. Assets are instead fetched through the GitHub REST
-// API: a release-by-tag lookup returns each asset's download `url`, then
+// nikolasd/crew is a public repository. Assets are fetched through the
+// GitHub REST API rather than a plain `releases/download/<tag>/<asset>`
+// URL: a release-by-tag lookup returns each asset's download `url`, then
 // each asset is fetched from that url with an `Accept:
-// application/octet-stream` header. A `token` is forwarded as `Authorization:
-// Bearer <token>` on every request; omitting it only works if the repository
-// is ever made public.
+// application/octet-stream` header. A `token`, when given, is forwarded as
+// `Authorization: Bearer <token>` on every request -- optional but
+// recommended, since an unauthenticated request only gets GitHub's stricter
+// rate limit (60/hour vs. 5,000/hour authenticated), not a permission gate.
 
 import { chmodSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -50,7 +50,7 @@ export interface DownloadRuntimeOptions {
   readonly target: string;
   /** Absolute Crew state root the binary is cached under. */
   readonly stateRoot: string;
-  /** Forwarded as `Authorization: Bearer <token>` on every request; required while the repository stays private. */
+  /** Forwarded as `Authorization: Bearer <token>` on every request when given; optional (the repository is public), only raises the rate limit. */
   readonly token?: string;
   /** Injected in tests; defaults to global `fetch`. */
   readonly fetchImpl?: typeof fetch;

@@ -85,6 +85,10 @@
     "paneReopenResult": {
       "description": "`pane/reopen` result payload.",
       "$ref": "#/$defs/PaneReopenResult"
+    },
+    "messageListResult": {
+      "description": "`message/list` result payload.",
+      "$ref": "#/$defs/MessageListResult"
     }
   },
   "required": [
@@ -112,7 +116,8 @@
     "planGetResult",
     "runTimeoutAckResult",
     "retentionCleanResult",
-    "paneReopenResult"
+    "paneReopenResult",
+    "messageListResult"
   ],
   "$defs": {
     "InitializeParams": {
@@ -3744,6 +3749,141 @@
         "runId",
         "backend",
         "paneRef"
+      ]
+    },
+    "MessageListResult": {
+      "description": "Result of `message/list`: every message journaled for a run, oldest\nfirst.",
+      "type": "object",
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RunMessage"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "messages"
+      ]
+    },
+    "RunMessage": {
+      "description": "A message within a run's transcript.\n\nEvery message is correlated, journaled, bounded, and redacted before\npersistence.",
+      "type": "object",
+      "properties": {
+        "messageId": {
+          "description": "The message identifier (UUIDv7).",
+          "$ref": "#/$defs/MessageId"
+        },
+        "runId": {
+          "description": "The run this message belongs to.",
+          "$ref": "#/$defs/RunId"
+        },
+        "senderWorkerId": {
+          "description": "The sender worker ID.",
+          "$ref": "#/$defs/WorkerId"
+        },
+        "recipientWorkerId": {
+          "description": "The recipient worker ID, if targeted.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkerId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "taskId": {
+          "description": "The task ID this message relates to.",
+          "$ref": "#/$defs/TaskId"
+        },
+        "kind": {
+          "description": "Semantic message kind.",
+          "$ref": "#/$defs/MessageKind"
+        },
+        "payload": {
+          "description": "The message payload.\n\nTyped [`Redacted`] (CREW-34) rather than `String`, so \"redacted\nbefore persistence\" is enforced by the field rather than asserted\nby this comment. It said exactly that for a long time while nothing\nredacted it -- the claim became true at CREW-28, and true by\nconstruction here.",
+          "$ref": "#/$defs/Redacted"
+        },
+        "deliveryState": {
+          "description": "Delivery state.",
+          "$ref": "#/$defs/DeliveryState"
+        },
+        "createdAt": {
+          "description": "When the message was created (UTC RFC 3339).",
+          "$ref": "#/$defs/Timestamp"
+        },
+        "sentAt": {
+          "description": "When the message was sent to the adapter (UTC RFC 3339).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "acknowledgedAt": {
+          "description": "When the message was acknowledged by the recipient (UTC RFC 3339).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "replyTo": {
+          "description": "ID of a prior message this is a reply to.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "messageId",
+        "runId",
+        "senderWorkerId",
+        "taskId",
+        "kind",
+        "payload",
+        "deliveryState",
+        "createdAt"
+      ]
+    },
+    "MessageKind": {
+      "description": "Semantic message kinds for worker coordination.",
+      "type": "string",
+      "enum": [
+        "assign",
+        "steer",
+        "followUp",
+        "question",
+        "answer",
+        "peerMessage",
+        "approvalDecision",
+        "cancel",
+        "shutdown"
+      ]
+    },
+    "DeliveryState": {
+      "description": "The delivery state of a message.\n\nA runtime crash between intent and adapter acknowledgement leaves\n`unknown` after recovery; it does not resend automatically.",
+      "type": "string",
+      "enum": [
+        "recorded",
+        "sent",
+        "acknowledged",
+        "failed",
+        "unknown"
       ]
     }
   }

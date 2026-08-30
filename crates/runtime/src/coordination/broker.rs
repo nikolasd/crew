@@ -244,7 +244,16 @@ impl CoordinationBroker {
         reply_to: Option<MessageId>,
     ) -> Result<Value, CoordinationError> {
         self.require_live_run(run_id).await?;
+        // Bound-check the caller's own bytes, then redact -- never the
+        // reverse. Redaction can *shrink* text (a long secret becomes a
+        // short marker), so checking afterwards would let an oversized
+        // payload slip under the bound by being masked. Same ordering as
+        // `request_child` (CREW-33), for the same reason.
         Self::reject_oversized("payload", &payload)?;
+        // The single redaction point for everything that reaches
+        // `messages.payload`: `send`, `send_internal`, and every
+        // `coordination/*` route above that funnels through them.
+        let payload = self.redact_worker_text(payload)?;
 
         self.charge_rate_limit(sender_worker_id)?;
 
@@ -643,7 +652,13 @@ impl CoordinationBroker {
         self.charge_rate_limit(worker_id)?;
         let project_id = self.project_id;
         let kind = MessageKind::PeerMessage;
-        let payload = description.unwrap_or_else(|| artifact_ref.clone());
+        // CREW-34: this route builds its `RunMessage` directly rather than
+        // going through `send`, so `send`'s redaction does not cover it --
+        // which is exactly why CREW-33's fix at the three named routes
+        // missed this one. The bound checks above already ran on the
+        // caller's own bytes, so redacting here keeps that ordering.
+        let payload =
+            self.redact_worker_text(description.unwrap_or_else(|| artifact_ref.clone()))?;
         let mut result = self
             .db
             .run_domain_op(Box::new(move |conn| {
@@ -695,12 +710,7 @@ impl CoordinationBroker {
             worker_id,
             task_id,
             MessageKind::PeerMessage,
-            // `RunMessage::payload` is still a bare `String`, so the type
-            // guarantee has to be unwrapped here -- the one place in this
-            // file where redacted text leaves `Redacted`. Converting that
-            // field is the natural next step; until then this call is the
-            // visible seam rather than an invisible one.
-            self.redact_worker_text(reason)?.as_str().to_string(),
+            reason,
             None,
             None,
         )
@@ -721,12 +731,7 @@ impl CoordinationBroker {
             worker_id,
             task_id,
             MessageKind::Question,
-            // `RunMessage::payload` is still a bare `String`, so the type
-            // guarantee has to be unwrapped here -- the one place in this
-            // file where redacted text leaves `Redacted`. Converting that
-            // field is the natural next step; until then this call is the
-            // visible seam rather than an invisible one.
-            self.redact_worker_text(question)?.as_str().to_string(),
+            question,
             None,
             None,
         )

@@ -91,12 +91,23 @@ impl ActivityClock {
 
     /// Grants a fresh window for `run_id` (WP21 `run/timeoutAck decision:
     /// "extend"`): BOTH deadlines restart from `now` and any journaled
-    /// expiries are forgotten. A no-op when the run's clock is already
-    /// gone (it settled).
-    pub fn extend(&self, run_id: &RunId, now: Instant) {
+    /// expiries are forgotten.
+    ///
+    /// Returns `true` if a tracked clock existed and was re-armed, `false`
+    /// if the run's clock is already gone (never started, or settled).
+    /// CREW-40: this used to be a silent no-op with no way for the caller
+    /// to tell the difference -- `run_timeout_ack` reported `rearmed: true`
+    /// unconditionally, which a leader cannot distinguish from a real
+    /// re-arm. The caller must not report success when this returns
+    /// `false`.
+    #[must_use]
+    pub fn extend(&self, run_id: &RunId, now: Instant) -> bool {
         let mut runs = self.runs.lock().expect("activity clock mutex");
         if let Some(entry) = runs.get_mut(run_id) {
             *entry = RunActivity::starting(now);
+            true
+        } else {
+            false
         }
     }
 
@@ -286,5 +297,52 @@ mod tests {
         assert!(clock.snapshot().is_empty());
         // mark after forget is a no-op, not a panic.
         clock.mark_journaled(&run_id, TimeoutKind::Total);
+    }
+
+    /// CREW-40: `extend` must report whether it actually did anything.
+    /// A tracked run genuinely gets a fresh window (both `started_at` and
+    /// `last_activity` reset), and the caller is told so honestly.
+    #[test]
+    fn extend_rearms_a_tracked_run_and_reports_it_did() {
+        let clock = ActivityClock::new();
+        let run_id = RunId::new();
+        let old = Instant::now() - Duration::from_secs(1_000);
+        clock.touch(&run_id, old);
+        clock.mark_journaled(&run_id, TimeoutKind::Inactivity);
+
+        let now = Instant::now();
+        assert!(
+            clock.extend(&run_id, now),
+            "a tracked run's extend must report true"
+        );
+
+        let snap = clock.snapshot();
+        let (_, entry) = snap.iter().find(|(id, _)| id == &run_id).expect("entry");
+        assert!(
+            entry.started_at >= old + Duration::from_secs(999),
+            "extend must restart the total clock too, not just touch"
+        );
+        assert!(
+            !entry.inactivity_journaled,
+            "extend must forget a journaled expiry, same as a fresh start"
+        );
+    }
+
+    /// CREW-40: a run with no tracked clock -- never started, or already
+    /// forgotten (settled) -- has nothing for `extend` to re-arm. Reporting
+    /// `false` here (not a fabricated `true`) is what `run_timeout_ack`
+    /// relies on to refuse honestly instead of lying about success.
+    #[test]
+    fn extend_reports_false_for_a_run_with_no_tracked_clock() {
+        let clock = ActivityClock::new();
+        let run_id = RunId::new();
+        assert!(
+            !clock.extend(&run_id, Instant::now()),
+            "an untracked run's extend must report false, never a silent true"
+        );
+        assert!(
+            clock.snapshot().is_empty(),
+            "extend must not create an entry for an untracked run"
+        );
     }
 }

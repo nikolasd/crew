@@ -87,6 +87,8 @@ export const validatePlanDecideResult = def("PlanDecideResult");
 export const validatePlanGetResult = def("PlanGetResult");
 /** Validates a `run/timeoutAck` result payload. */
 export const validateRunTimeoutAckResult = def("RunTimeoutAckResult");
+/** Validates a `message/list` result payload. */
+export const validateMessageListResult = def("MessageListResult");
 
 /** Validates the array of event envelopes returned by `events/replay`. */
 export const validateEventEnvelopeArray = ajv.compile({

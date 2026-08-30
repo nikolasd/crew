@@ -1300,7 +1300,7 @@ impl<'c> DomainRepository<'c> {
                         message.recipient_worker_id.map(|w| w.to_string()),
                         message.task_id.to_string(),
                         message_kind_str(&message.kind),
-                        message.payload,
+                        message.payload.as_str(),
                         delivery_state_str(&message.delivery_state),
                         message.created_at.as_str(),
                         message.sent_at.as_ref().map(|t| t.as_str().to_string()),
@@ -1317,7 +1317,7 @@ impl<'c> DomainRepository<'c> {
                            answer = ?1, decided_at = ?2 \
                          WHERE run_id = ?3 AND kind = 'question' AND decided_at IS NULL",
                         rusqlite::params![
-                            message.payload,
+                            message.payload.as_str(),
                             now.as_str(),
                             message.run_id.to_string(),
                         ],
@@ -3498,7 +3498,7 @@ mod tests {
             recipient_worker_id: None,
             task_id,
             kind,
-            payload: "next step".into(),
+            payload: crew_protocol::Redacted::assert_runtime_authored("next step"),
             delivery_state: crew_protocol::DeliveryState::Recorded,
             created_at: Timestamp::now(),
             sent_at: None,

@@ -97,7 +97,7 @@ fn message(run_id: RunId, task_id: TaskId, worker_id: WorkerId) -> RunMessage {
         recipient_worker_id: None,
         task_id,
         kind: MessageKind::PeerMessage,
-        payload: "hello".to_string(),
+        payload: crew_protocol::Redacted::assert_runtime_authored("hello"),
         delivery_state: DeliveryState::Recorded,
         created_at: Timestamp::now(),
         sent_at: None,
