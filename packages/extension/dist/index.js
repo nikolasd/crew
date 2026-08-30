@@ -6850,7 +6850,8 @@ import { TASK_SUBAGENT_EVENT_CHANNEL, TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBA
 import { homedir } from "os";
 
 // src/crew-config.ts
-import { existsSync, readFileSync } from "fs";
+import { randomBytes } from "crypto";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "fs";
 import { join } from "path";
 
 class CrewConfigError extends Error {
@@ -6878,6 +6879,53 @@ function resolveCrewConfigPaths(home, repository) {
     resolved.push(path);
   }
   return resolved;
+}
+var CONFIG_KEY_FOR_ADAPTER = { ompRpc: "omp" };
+function configKeyFor(adapter) {
+  return CONFIG_KEY_FOR_ADAPTER[adapter] ?? adapter;
+}
+function resolveConfiguredModel(home, repository, adapter) {
+  const configKey = configKeyFor(adapter);
+  let model;
+  for (const path of resolveCrewConfigPaths(home, repository)) {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    const candidate = parsed.adapters?.[configKey]?.model;
+    if (typeof candidate === "string" && candidate.length > 0) {
+      model = candidate;
+    }
+  }
+  return model;
+}
+function persistConfiguredModel(repository, adapter, model) {
+  const dir = join(repository, ".omp");
+  const path = join(dir, "crew.json");
+  let parsed = {};
+  if (existsSync(path)) {
+    try {
+      parsed = JSON.parse(readFileSync(path, "utf8"));
+    } catch (err) {
+      throw new CrewConfigError("invalid-json", path, `crew config file ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const configKey = configKeyFor(adapter);
+  const adapters = { ...parsed.adapters };
+  const existingEntry = adapters[configKey] ?? {};
+  if (typeof existingEntry.model === "string" && existingEntry.model.length > 0) {
+    return;
+  }
+  adapters[configKey] = { ...existingEntry, model };
+  parsed.adapters = adapters;
+  mkdirSync(dir, { recursive: true });
+  const tmpPath = join(dir, `crew.json.tmp-${randomBytes(6).toString("hex")}`);
+  const fd = openSync(tmpPath, "w");
+  try {
+    writeSync(fd, `${JSON.stringify(parsed, null, 2)}
+`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(tmpPath, path);
 }
 
 // src/platform.ts
@@ -11750,7 +11798,7 @@ async function runConfigCommand(ctx, request) {
 import { homedir as homedir3 } from "os";
 
 // src/download.ts
-import { chmodSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "fs";
+import { chmodSync, mkdirSync as mkdirSync2, renameSync as renameSync2, unlinkSync, writeFileSync } from "fs";
 import { join as join5 } from "path";
 var API_BASE_URL = "https://api.github.com/repos/nikolasd/crew";
 
@@ -11786,7 +11834,7 @@ async function downloadRuntime(options) {
   const manifestPath = join5(dir, "manifest.json");
   const tmpPath = join5(dir, `.crewd.${process.pid}.tmp`);
   try {
-    mkdirSync(dir, { recursive: true, mode: 448 });
+    mkdirSync2(dir, { recursive: true, mode: 448 });
     writeFileSync(tmpPath, binaryBytes);
     chmodSync(tmpPath, 493);
   } catch (err) {
@@ -11800,7 +11848,7 @@ async function downloadRuntime(options) {
     throw new BinaryIntegrityError("checksum-mismatch", `checksum mismatch for ${binaryAsset.url}: manifest ${manifestAsset.url} declares ${manifest.sha256}, computed ${actualSha256}`);
   }
   try {
-    renameSync(tmpPath, finalPath);
+    renameSync2(tmpPath, finalPath);
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}
 `);
   } catch (err) {
@@ -12521,31 +12569,92 @@ function registerPlanTool(pi, ctx) {
 }
 
 // src/tools/profiles.ts
+import { homedir as homedir5 } from "os";
 var CREW_PROFILE_TOOL_NAME = "crew_profile";
+var RESERVED_ADAPTER_NAMES = ["claude", "codex", "copilot", "ompRpc"];
+function injectTuiMode(adapter, startupOptions) {
+  if (!RESERVED_ADAPTER_NAMES.includes(adapter)) {
+    return startupOptions;
+  }
+  const existing = startupOptions[adapter] ?? {};
+  if ("mode" in existing) {
+    return startupOptions;
+  }
+  return { ...startupOptions, [adapter]: { ...existing, mode: "tui" } };
+}
 function registerProfileTool(pi, ctx) {
   const params = pi.zod.object({
     adapter: pi.zod.string().describe("The adapter name this profile launches, e.g. claude, codex, copilot, ompRpc, terminalDegraded."),
-    model: pi.zod.string().describe("The model identifier this profile uses."),
-    startupOptions: pi.zod.record(pi.zod.string(), pi.zod.unknown()).describe("Adapter-specific startup options, tagged by adapter kind. REQUIRED: include mode:'tui' for reserved adapters. Example: { claude: { mode: 'tui' } }. Headless mode is retired. Other options depend on the adapter (see crew-orchestration skill)."),
+    model: pi.zod.string().optional().describe("The model identifier this profile uses. Optional: if omitted and no model is already configured for this adapter (in .omp/crew.json), registration is refused with a typed 'model-not-configured' error -- ask the user which model to use, then call crew_profile again with it. The first time a model is given explicitly for an adapter with none configured, it is persisted into the repository's .omp/crew.json for future sessions to reuse silently. crew_profile never overwrites an already-recorded model, and never silently ignores an explicit value that conflicts with one: passing a *different* model than the one already configured is refused with a typed 'model-conflict' error naming the stored value -- correct it via /crew config or by editing crew.json directly, never by passing a new value here. Passing the same value as already configured is a no-op success."),
+    startupOptions: pi.zod.record(pi.zod.string(), pi.zod.unknown()).optional().describe("Adapter-specific startup options, tagged by adapter kind, e.g. { claude: { mode: 'tui' } }. For a reserved adapter (claude, codex, copilot, ompRpc), an omitted mode is filled in as 'tui' automatically -- headless is retired. Other options depend on the adapter (see crew-orchestration skill)."),
     environmentAllowlist: pi.zod.array(pi.zod.string()).optional().describe("Environment variable names this profile's process is allowed to read."),
     permissionEnvelope: pi.zod.record(pi.zod.string(), pi.zod.unknown()).optional()
   });
   pi.registerTool({
     name: CREW_PROFILE_TOOL_NAME,
     label: "Crew Profile",
-    description: "Register a reusable worker profile (adapter, model, startup options with mode:'tui', environment allowlist) before provisioning workers. Call this once per adapter/model combination, then pass the returned profileId to crew_worker { op: 'create', profileId }. The profile-first flow (crew_profile \u2192 crew_worker \u2192 crew_run) replaces the legacy fingerprint/adapter/model pattern. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
+    description: "Register a reusable worker profile (adapter, model, startup options, environment allowlist) before provisioning workers. Call this once per adapter/model combination, then pass the returned profileId to crew_worker { op: 'create', profileId }. model is optional -- if none is configured yet for this adapter, you'll get a typed error telling you to ask the user which model to use and call this again; that answer is remembered for future sessions. mode:'tui' is filled in automatically for reserved adapters when omitted. The profile-first flow (crew_profile \u2192 crew_worker \u2192 crew_run) replaces the legacy fingerprint/adapter/model pattern. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
     parameters: params,
     approval: () => "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
+      const home = homedir5();
+      let configuredModel;
+      try {
+        configuredModel = resolveConfiguredModel(home, extCtx.cwd, input.adapter);
+      } catch (err) {
+        if (err instanceof CrewConfigError) {
+          return {
+            content: [{ type: "text", text: `crew_profile: ${err.message}` }],
+            details: { code: "config-invalid", path: err.path, message: err.message },
+            isError: true
+          };
+        }
+        throw err;
+      }
+      if (input.model !== undefined && configuredModel !== undefined && input.model !== configuredModel) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `model already configured as ${configuredModel} for adapter ${input.adapter} -- crew_profile never overwrites a stored model; change it via /crew config or by editing the repository's .omp/crew.json directly.`
+            }
+          ],
+          details: { code: "model-conflict", adapter: input.adapter, configuredModel },
+          isError: true
+        };
+      }
+      const model = input.model ?? configuredModel;
+      if (model === undefined) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `no model configured for adapter ${input.adapter} -- ask the user which model to use, then call crew_profile again with it; the answer will be persisted for future sessions.`
+            }
+          ],
+          details: { code: "model-not-configured", adapter: input.adapter },
+          isError: true
+        };
+      }
       const client = await ctx.getClient(extCtx);
-      return callOrchestration(client, "profile/register", {
+      const startupOptions = injectTuiMode(input.adapter, input.startupOptions ?? {});
+      const result = await callOrchestration(client, "profile/register", {
         adapter: input.adapter,
-        model: input.model,
-        startupOptions: input.startupOptions,
+        model,
+        startupOptions,
         environmentAllowlist: input.environmentAllowlist ?? [],
         permissionEnvelope: input.permissionEnvelope ?? {},
         source: "omp"
       });
+      if (result.isError !== true && input.model !== undefined && configuredModel === undefined) {
+        try {
+          persistConfiguredModel(extCtx.cwd, input.adapter, input.model);
+        } catch (err) {
+          const message = err instanceof CrewConfigError ? err.message : err instanceof Error ? err.message : String(err);
+          result.content.push({ type: "text", text: `Warning: model was registered but not persisted for future sessions: ${message}` });
+        }
+      }
+      return result;
     }
   });
 }
@@ -13655,7 +13764,6 @@ function registerMonitor(pi, ctx) {
 
 // src/index.ts
 var TOOL_NAME = "crew_health";
-var COMMAND_NAME = "crew-status";
 var STATUS_DESCRIPTION = "Use to verify the Crew runtime is reachable and healthy before orchestration operations. Returns connection status, runtime identity, and binary source. Call this if you're unsure the daemon is running, or after a connection failure.";
 var INSTALL_TOOL_NAME = "crew_install";
 function crewExtension(pi) {
@@ -13687,7 +13795,6 @@ function crewExtension(pi) {
       return getRuntimeStatus(statusContextFor(extCtx));
     }
   });
-  registerDeprecatedForwarder(COMMAND_NAME, "/crew health", (_args, ctx) => healthResult(ctx));
   registerOrchestrationTools(pi, { getClient, reportSubmitFailure: (message) => monitorHandle.reportSubmitFailure(message) });
   function doctorContextFor(cwd) {
     return buildDoctorContext(cwd);
@@ -13702,25 +13809,6 @@ function crewExtension(pi) {
     } else {
       ctx.ui.notify(result.text, result.isError ? "error" : "info");
     }
-  }
-  function registerDeprecatedForwarder(oldName, replacement, run) {
-    pi.registerCommand(oldName, {
-      description: `Deprecated: use ${replacement}.`,
-      handler: async (args, ctx) => {
-        const notice = `Note: /${oldName} is deprecated; use ${replacement}.`;
-        let result;
-        try {
-          result = await run(args, ctx);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          emitResult(ctx, { text: `${notice}
-${message}`, isError: true });
-          return;
-        }
-        emitResult(ctx, { text: `${notice}
-${result.text}`, isError: result.isError });
-      }
-    });
   }
   async function healthResult(extCtx) {
     return blocksToResult(await getRuntimeStatus(statusContextFor(extCtx)));
@@ -13766,7 +13854,6 @@ ${result.text}`, isError: result.isError });
       return runDoctorCommand(doctorContextFor(ctx.cwd));
     }
   });
-  registerDeprecatedForwarder("crew-doctor", "/crew doctor", (_args, ctx) => doctorResult(ctx.cwd));
   const configParams = pi.zod.object({
     op: pi.zod.enum(["path", "print", "init"]).describe("Which config operation to perform."),
     document: pi.zod.enum(["effective", "defaults", "schema"]).optional().describe("For op 'print': which document to emit. Defaults to 'effective'."),
@@ -13791,7 +13878,6 @@ ${result.text}`, isError: result.isError });
       return runConfigCommand({ crewdPath, repository: extCtx.cwd }, request);
     }
   });
-  registerDeprecatedForwarder("crew-config", "/crew config", (args, ctx) => configResult(args, ctx.cwd));
   pi.registerTool({
     name: INSTALL_TOOL_NAME,
     label: "Crew Install",

@@ -196,6 +196,18 @@ pub enum RegistryError {
          mode: \"tui\""
     )]
     HeadlessControlPlaneRetired(String),
+    /// The register-time backstop (`WorkerProfile::validate`'s
+    /// `TerminalDegradedNotImplemented`) refuses a *new* `terminalDegraded`
+    /// profile, but a historical row stored before that check existed can
+    /// still reach dispatch -- this is that defense-in-depth boundary,
+    /// mirroring `HeadlessControlPlaneRetired`'s own two-layer shape
+    /// exactly: reject here too, rather than silently building a working
+    /// adapter nothing else ever transitions a run into.
+    #[error(
+        "profile uses startupOptions.terminalDegraded, which is not implemented -- the \
+         protocol-degradation fallback it names is not wired to any trigger yet"
+    )]
+    TerminalDegradedNotImplemented,
 }
 
 impl From<RegistryError> for String {
@@ -420,23 +432,10 @@ impl AdapterRegistry {
                 let running_for_watcher = Arc::clone(&self.running);
                 tokio::spawn(watch_slot(slot_free, Arc::clone(&self.authorization)));
                 // A resumed TUI run owns its own pane lifecycle through
-                // its adapter, same as a fresh one. `resume_run` carries
-                // no `DisplaySelection` -- recovery callers do not resolve
-                // displays -- so there is nothing to journal a placeholder
-                // detach from either way; `watch_settlement`'s `None`
-                // display skips that path entirely.
-                let display: Option<crew_protocol::DisplaySelection> = None;
-                let Some(support) = self.resume_support.lock().clone() else {
-                    unreachable!("resume_one cannot succeed without resume support");
-                };
-                tokio::spawn(watch_settlement(
-                    settled,
-                    running_for_watcher,
-                    display,
-                    Arc::clone(&support.db),
-                    support.project_id,
-                    run_id,
-                ));
+                // its adapter, same as a fresh one -- `watch_settlement`
+                // journals no display event of its own for any run,
+                // resumed or fresh (CREW-11).
+                tokio::spawn(watch_settlement(settled, running_for_watcher, run_id));
                 Ok(())
             }
             Err(err) => {
@@ -638,34 +637,27 @@ impl RunDriver for AdapterRegistry {
             )
             .await
             {
-                Ok((adapter, settled, slot_free, pane_lifecycle_owned_by_adapter)) => {
+                // CREW-11: `watch_settlement` no longer journals a
+                // placeholder `DisplayPaneDetached` for anyone -- the
+                // submit-time placeholder `DisplayPaneAttached` it would
+                // have paired with is gone too (`start_queued_run`), for
+                // the same reason: an append-only journal must never carry
+                // an event for something that didn't happen. `run_one`
+                // used to also return whether this run's pane lifecycle
+                // was owned by its adapter, purely to gate that now-deleted
+                // placeholder pair -- with nothing left to gate, the
+                // predicate had no other reader, so it and its plumbing
+                // (the `run_one` tuple slot, `pane_lifecycle_owned_by_adapter`)
+                // are deleted too, not merely ignored: a live-looking
+                // function with no consumer is exactly the kind of
+                // artifact that outlives what it was for.
+                Ok((adapter, settled, slot_free)) => {
                     running.lock().insert(run_id, adapter);
                     let running_for_watcher = Arc::clone(&running);
                     // The slot is released at the first turn boundary,
                     // independently of the session teardown below.
                     tokio::spawn(watch_slot(slot_free, Arc::clone(&authorization)));
-                    // A TUI-mode run's own `TuiAdapter` already attaches
-                    // and detaches its pane for real, through the
-                    // `PaneCoordinator` built in `build_adapter` --
-                    // `watch_settlement` must not *also* journal the
-                    // placeholder-pane `DisplayPaneDetached` below for
-                    // it, or the run would get two (rider: collapse the
-                    // double detach now that a TUI run is reachable).
-                    let display = if pane_lifecycle_owned_by_adapter {
-                        None
-                    } else {
-                        ctx.display.clone()
-                    };
-                    let db = Arc::clone(&ctx.db);
-                    let project_id = ctx.project_id;
-                    tokio::spawn(watch_settlement(
-                        settled,
-                        running_for_watcher,
-                        display,
-                        db,
-                        project_id,
-                        run_id,
-                    ));
+                    tokio::spawn(watch_settlement(settled, running_for_watcher, run_id));
                     Ok(())
                 }
                 Err(err) => {
@@ -751,52 +743,30 @@ impl RunDriver for AdapterRegistry {
     }
 }
 
-/// Journals `DisplayPaneDetached` for a run that has settled.
-///
-/// Failures are swallowed: this runs on a detached watcher task after the
-/// run is already over, so there is no caller to report to and a lost
-/// pane record must never keep a finished adapter alive.
-async fn emit_pane_detached(
-    db: &Arc<crate::db::DatabaseHandle>,
-    project_id: crew_protocol::ProjectId,
-    run_id: RunId,
-    backend: crew_protocol::DisplayBackend,
-    placement: crew_protocol::DisplayPlacement,
-) {
-    let _ = db
-        .run_domain_op(Box::new(move |conn| {
-            let mut repo = crate::domain::DomainRepository::new(conn, project_id);
-            repo.record_display_event(
-                crew_protocol::RuntimeEventKind::DisplayPaneDetached,
-                run_id,
-                backend,
-                placement,
-                String::new(),
-            )
-            .map(|_| serde_json::Value::Null)
-        }))
-        .await;
-}
-
 /// Settles one run: waits for its `ProcessExited`, then evicts and
-/// disposes its adapter, returns the concurrency slot, and journals the
-/// display detach. The run's terminal `RunState` edge is already durable by
-/// the time this watcher runs: `RunLifecycleSink` commits it as part of
-/// journaling the very `ProcessExited` this signal is fired from, so the
-/// slot is never released -- and no other run authorized -- while this run
-/// still reads non-terminal. `Err` from `settled` means the run's sink was
-/// dropped without any process exit ever being observed -- an adapter
-/// task that died before emitting one (the terminal adapter itself now
-/// settles via `cancel`'s synthetic `ProcessExited`, R95); that
-/// path therefore leaves the run non-terminal until the boot recovery sweep.
-/// Never release or journal a detach on that path: there is no settlement to
-/// record, and a release without one would hand this run's slot to another.
+/// disposes its adapter, and returns the concurrency slot. The run's
+/// terminal `RunState` edge is already durable by the time this watcher
+/// runs: `RunLifecycleSink` commits it as part of journaling the very
+/// `ProcessExited` this signal is fired from, so the slot is never
+/// released -- and no other run authorized -- while this run still reads
+/// non-terminal. `Err` from `settled` means the run's sink was dropped
+/// without any process exit ever being observed -- an adapter task that
+/// died before emitting one (the terminal adapter itself now settles via
+/// `cancel`'s synthetic `ProcessExited`, R95); that path therefore leaves
+/// the run non-terminal until the boot recovery sweep. Never release on
+/// that path: there is no settlement to record, and a release without one
+/// would hand this run's slot to another.
+///
+/// CREW-11: this used to also journal a placeholder `DisplayPaneDetached`
+/// for a run not owned by its adapter, paired with `start_queued_run`'s
+/// now-removed placeholder `DisplayPaneAttached` -- an append-only journal
+/// must never carry either half of an attach/detach pair for a pane that
+/// was never really there. A pane-owning adapter's own exit watcher
+/// journals its real detach through `PaneCoordinator` already; nothing
+/// else needs to.
 async fn watch_settlement(
     settled: oneshot::Receiver<()>,
     running: Arc<Mutex<HashMap<RunId, Arc<dyn Adapter>>>>,
-    display: Option<crew_protocol::DisplaySelection>,
-    db: Arc<crate::db::DatabaseHandle>,
-    project_id: crew_protocol::ProjectId,
     run_id: RunId,
 ) {
     if settled.await.is_err() {
@@ -805,11 +775,6 @@ async fn watch_settlement(
     let evicted = running.lock().remove(&run_id);
     if let Some(adapter) = evicted {
         let _ = adapter.dispose().await;
-    }
-    if let Some(selection) = display
-        && let Some(backend) = selection.selected
-    {
-        emit_pane_detached(&db, project_id, run_id, backend, selection.placement).await;
     }
 }
 
@@ -870,7 +835,6 @@ async fn run_one(
         Arc<dyn Adapter>,
         oneshot::Receiver<()>,
         oneshot::Receiver<()>,
-        bool,
     ),
     String,
 > {
@@ -882,7 +846,6 @@ async fn run_one(
     // Use the workspace path from the context (isolated worktree or copy)
     // when available; fall back to the repository root.
     let cwd = ctx.workspace_path.as_deref().unwrap_or(repo_root);
-    let pane_lifecycle_owned_by_adapter = pane_lifecycle_owned_by_adapter(&profile.startup_options);
     // The same DB lookups that decide fresh-start vs continuation also
     // carry the stored tailer position: a resumed TUI adapter must
     // re-tail from exactly where the pre-crash incarnation stopped, or
@@ -966,7 +929,7 @@ async fn run_one(
         authorization.release();
         return Err(err.to_string());
     }
-    Ok((adapter, settled, slot_free, pane_lifecycle_owned_by_adapter))
+    Ok((adapter, settled, slot_free))
 }
 
 /// The resolved profile snapshot for one worker, read through the domain
@@ -1206,22 +1169,6 @@ pub(crate) fn requested_mode(
     }
 }
 
-/// Whether the startup options select a mode whose owning adapter
-/// journals its own real pane attach/detach pair -- every reserved
-/// vendor's `mode: "tui"` (WP13/WP27/WP28), whose
-/// [`super::tui::TuiAdapter`] attaches through its `PaneCoordinator`. Such a run must never also receive the submit-time
-/// placeholder pane events `start_queued_run` journals for every other
-/// backend-resolving run: pairing attach/detach consumers would see two
-/// attaches against one detach. Kept beside [`requested_mode`] so
-/// `run_one`'s watcher decision and `start_queued_run`'s placeholder skip
-/// cannot drift apart.
-pub(crate) fn pane_lifecycle_owned_by_adapter(startup_options: &StartupOptions) -> bool {
-    requested_mode(startup_options) == Some(super::profile::AdapterMode::Tui)
-        // Every reserved kind has a real `TuiVendor` now (WP13/WP27/WP28),
-        // so any `mode: "tui"` run is adapter-owned.
-        && startup_options.adapter_kind().is_some()
-}
-
 impl AdapterRegistry {
     /// The deterministic transcript path a resumed TUI session would tail
     /// (`TuiVendor::transcript_path_for_session`), or `None` when this
@@ -1415,7 +1362,13 @@ fn build_adapter(
     // calls this function, so reaching here with one is a defense-in-depth
     // boundary (a bug bypassing that earlier gate), not a normal path.
     // `TerminalDegraded` carries no adapter kind and is unaffected by any
-    // of this -- it never took the `if` branch above either.
+    // of this -- it never took the `if` branch above either. CREW-11:
+    // `WorkerProfile::validate` refuses a *new* `terminalDegraded` profile
+    // at `profile/register` (`TerminalDegradedNotImplemented`), but a
+    // historical row stored before that check existed can still reach
+    // here -- refuse it too, the same defense-in-depth shape as the
+    // headless case right above, rather than silently building a working
+    // `TerminalAdapter` nothing else ever transitions a run into.
     let _ = (mcp, broker); // only ever consumed by the deleted headless arms
     match &profile.startup_options {
         StartupOptions::Claude(_)
@@ -1430,9 +1383,7 @@ fn build_adapter(
                 kind.wire_name().to_string(),
             ))
         }
-        StartupOptions::TerminalDegraded(opts) => Ok(Arc::new(
-            super::terminal::TerminalAdapter::new(opts.backend.clone()),
-        ) as Arc<dyn Adapter>),
+        StartupOptions::TerminalDegraded(_) => Err(RegistryError::TerminalDegradedNotImplemented),
     }
 }
 
@@ -2009,7 +1960,6 @@ mod build_adapter_tests {
 mod settlement_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crew_protocol::ProjectId;
     use tokio::sync::oneshot;
 
     use super::*;
@@ -2059,7 +2009,6 @@ mod settlement_tests {
     #[tokio::test]
     async fn an_observed_exit_evicts_the_adapter() {
         let (db, _dir) = harness().await;
-        let project_id = ProjectId::new();
         let run_id = RunId::new();
         let authorization = CountingAuthorization::new();
         let running = Arc::new(Mutex::new(HashMap::new()));
@@ -2068,15 +2017,7 @@ mod settlement_tests {
         let (tx, rx) = oneshot::channel();
         tx.send(()).expect("send settlement");
 
-        watch_settlement(
-            rx,
-            Arc::clone(&running),
-            None,
-            Arc::clone(&db),
-            project_id,
-            run_id,
-        )
-        .await;
+        watch_settlement(rx, Arc::clone(&running), run_id).await;
 
         assert!(
             running.lock().get(&run_id).is_none(),
@@ -2096,7 +2037,6 @@ mod settlement_tests {
     #[tokio::test]
     async fn a_dropped_sink_without_an_exit_never_releases_a_slot() {
         let (db, _dir) = harness().await;
-        let project_id = ProjectId::new();
         let run_id = RunId::new();
         let authorization = CountingAuthorization::new();
         let running = Arc::new(Mutex::new(HashMap::new()));
@@ -2105,15 +2045,7 @@ mod settlement_tests {
         let (tx, rx) = oneshot::channel();
         drop(tx); // Simulate sink dropped without ProcessExited
 
-        watch_settlement(
-            rx,
-            Arc::clone(&running),
-            None,
-            Arc::clone(&db),
-            project_id,
-            run_id,
-        )
-        .await;
+        watch_settlement(rx, Arc::clone(&running), run_id).await;
 
         let (slot_tx, slot_rx) = oneshot::channel();
         drop(slot_tx);
@@ -2211,7 +2143,6 @@ mod settlement_tests {
         // the slot; since ADR-0027 wave 3 a turn boundary does too,
         // whichever comes first.
         let (db, _dir) = harness().await;
-        let project_id = ProjectId::new();
         let run_id = RunId::new();
         let running = Arc::new(Mutex::new(HashMap::new()));
         running.lock().insert(run_id, build_placeholder_adapter());
@@ -2235,15 +2166,7 @@ mod settlement_tests {
         // drops, so the positive path is untouched.
         drop(sink);
 
-        watch_settlement(
-            settled,
-            Arc::clone(&running),
-            None,
-            Arc::clone(&db),
-            project_id,
-            run_id,
-        )
-        .await;
+        watch_settlement(settled, Arc::clone(&running), run_id).await;
         watch_slot(slot_free, Arc::clone(&authorization)).await;
 
         assert!(
@@ -2550,8 +2473,8 @@ mod conformance_cache_tests {
                 .await
                 .expect("start database"),
         );
-        let project_id = ProjectId::new();
         let (events_tx, _rx) = tokio::sync::broadcast::channel(16);
+        let project_id = ProjectId::new();
         let (_task_id, _worker_id, run_id) =
             seed_claude_profile_run(&db, project_id, AdapterMode::Tui).await;
 
@@ -2630,8 +2553,8 @@ mod conformance_cache_tests {
                 .await
                 .expect("start database"),
         );
-        let project_id = ProjectId::new();
         let (events_tx, _rx) = tokio::sync::broadcast::channel(16);
+        let project_id = ProjectId::new();
         let (task_id, worker_id, run_id) =
             seed_claude_profile_run(&db, project_id, AdapterMode::Tui).await;
 

@@ -353,27 +353,6 @@ config from the entry above is built).
 
 ---
 
-## Remove the deprecated hyphenated command forwarders
-
-**Specified by:** crew slash-command normalization plan (2026-08-27)  
-**References:** `docs/superpowers/specs/2026-08-27-crew-command-normalization.md`, `packages/extension/src/index.ts` (forwarder registrations), `packages/extension/src/index.test.ts` (forwarder test)
-
-### What it is
-
-`/crew-status`, `/crew-doctor`, `/crew-config` forward to `/crew health` / `/crew doctor` / `/crew config` with a deprecation notice. `/crew-install` is permanent and is NOT part of this removal.
-
-### Why deferred
-
-Deprecation forwarders give users a grace period to migrate from the old command names to the new ones. The forwarders ship in v0.6.0; once that release is in the wild long enough for operators to see the deprecation notice and update their workflows, the forwarders can be removed without breaking existing documentation or muscle memory.
-
-### Decision trigger
-
-**Armed.** v0.6.0 has shipped, so this is scheduled for the next release cut rather than waiting on a condition — the only remaining question is when that cut happens, not whether the trigger has fired.
-
-Removing them shrinks the registered-command list, so the same commit must update the exact-list assertion in `packages/extension/src/index.test.ts` (the `["crew-status", "crew", ...]` line) and delete the forwarder test. `/crew-install` is permanent and stays.
-
----
-
 ## True tabs for Terminal.app (and pre-1.3.0 Ghostty)
 
 **Specified by:** deferred from CREW-9's first cut (2026-08-29)

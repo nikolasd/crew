@@ -82,3 +82,34 @@ fn committed_default_snapshot_points_at_the_committed_schema() {
         Some("./crew-config.schema.json")
     );
 }
+
+/// CREW-8: `packages/extension/src/crew-config.ts`'s TS-side model
+/// resolution reads `crew.json`'s `adapters.*` section keys directly, and
+/// hardcodes the one place they diverge from `AdapterKind::wire_name`
+/// (`"ompRpc"` -> `"omp"`, per `RESERVED_ADAPTER_CONFIG_KEYS`'s own doc
+/// comment). That mapping silently goes stale if this set ever changes
+/// shape -- pinned here against the actual generated document, not just
+/// hand-copied, so a future rename fails this test with a clear diff
+/// instead of silently breaking the TS side's lookup.
+#[test]
+fn committed_default_snapshot_declares_exactly_the_reserved_adapter_config_keys() {
+    let raw = read_artifact("crew.default.json");
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+
+    let mut keys: Vec<&str> = value["adapters"]
+        .as_object()
+        .expect("crew.default.json must have an adapters object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+
+    let mut expected = ["claude", "codex", "copilot", "omp"];
+    expected.sort_unstable();
+
+    assert_eq!(
+        keys, expected,
+        "crew.default.json's adapters keys drifted from the reserved set -- update \
+         packages/extension/src/crew-config.ts's CONFIG_KEY_FOR_ADAPTER mapping to match"
+    );
+}

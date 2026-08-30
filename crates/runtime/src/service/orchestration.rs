@@ -671,71 +671,18 @@ impl OrchestrationService {
         workspace_mode: Option<&str>,
         policy: Option<Arc<crate::config::RuntimePolicy>>,
         display: Option<crew_protocol::DisplaySelection>,
-        display_placement: crew_protocol::DisplayPlacement,
     ) -> Result<Option<(std::path::PathBuf, IsolationKind)>, ServiceError> {
-        // A pane is journaled only once the run row exists, so a replayer
-        // never sees a pane attach to a run it has not seen created. No
-        // available backend means no event at all -- headless is a normal
-        // outcome, not a failure.
-        //
-        // A run whose owning adapter journals its own real pane events
-        // (every reserved vendor's `mode: "tui"` since WP28, through their `TuiAdapter`'s
-        // `PaneCoordinator`) is skipped here: journaling the placeholder
-        // would leave its stream with two attaches against one detach.
-        // The decision reads the same resolved-profile snapshot
-        // `resolve_profile` reads inside the driver, so both sides answer
-        // from one source of truth; an unreadable snapshot falls back to
-        // journaling the placeholder, exactly as before -- the driver's
-        // own start fails on that same snapshot moments later anyway.
-        let pane_owned_by_adapter = self
-            .db
-            .run_domain_op(Box::new({
-                let project_id = self.project_id;
-                move |conn| {
-                    let repo = DomainRepository::new(conn, project_id);
-                    let snapshot = repo
-                        .resolved_profile_snapshot(worker_id)?
-                        .unwrap_or_default();
-                    let profile: crate::adapter::WorkerProfile = serde_json::from_str(&snapshot)
-                        .map_err(|err| DomainError::NotFound {
-                            kind: "resolved worker profile",
-                            id: err.to_string(),
-                        })?;
-                    Ok(json!(
-                        crate::adapter::registry::pane_lifecycle_owned_by_adapter(
-                            &profile.startup_options
-                        )
-                    ))
-                }
-            }))
-            .await
-            .ok()
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false);
-        if !pane_owned_by_adapter && let Some(backend) = display.as_ref().and_then(|s| s.selected) {
-            let placement = display_placement;
-            let project_id = self.project_id;
-            let mut attached = self
-                .db
-                .run_domain_op(Box::new(move |conn| {
-                    let mut repo = DomainRepository::new(conn, project_id);
-                    repo.record_display_event(
-                        crew_protocol::RuntimeEventKind::DisplayPaneAttached,
-                        run_id,
-                        backend,
-                        placement,
-                        // The registry resolves availability without
-                        // activating a backend, so no vendor pane id
-                        // exists yet. Never a filesystem path.
-                        String::new(),
-                    )
-                    .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
-                }))
-                .await
-                .map_err(ServiceError::from)?;
-            self.broadcast(&mut attached);
-        }
-
+        // CREW-11: no submit-time placeholder `DisplayPaneAttached` is ever
+        // journaled here. It used to be, for any run whose owning adapter
+        // doesn't attach through its own `PaneCoordinator` -- keyed on
+        // backend *availability* alone, with an admittedly-empty pane ref
+        // ("no vendor pane id exists yet"). An append-only journal must
+        // never carry an attach event for an attach that didn't happen:
+        // the only honest attach event is the real one, journaled by
+        // whatever component actually performs it (the `TuiAdapter`'s
+        // `PaneCoordinator`, today, for every reserved vendor's
+        // `mode: "tui"` run). A run that attaches through no such
+        // component simply gets no attach event until one actually does.
         let Some(driver) = self.run_driver.clone() else {
             // The queued run is preserved; the caller learns the adapter
             // registry is unavailable without a fabricated "started" state.
@@ -1070,8 +1017,7 @@ impl OrchestrationService {
                 prompt,
                 workspace_mode.as_deref(),
                 policy,
-                display.clone(),
-                display_preference.placement,
+                display,
             )
             .await?;
 
@@ -1084,10 +1030,12 @@ impl OrchestrationService {
             result["workspacePath"] = json!(path.to_string_lossy().to_string());
             result["workspaceMode"] = json!(Self::workspace_mode_echo(*kind));
         }
-        if let Some(selection) = &display {
-            result["display"] = serde_json::to_value(selection)
-                .expect("DisplaySelection always serializes to JSON");
-        }
+        // CREW-11: no `display` field here. The registry's resolve-time
+        // `DisplaySelection` (`selected` from an availability probe,
+        // `placement` a verbatim echo of the request) is not an outcome --
+        // the real attach, if any, happens later and is only ever
+        // reported through the journaled `DisplayPaneAttached` event a
+        // subscriber already receives (`events/replay`, the live monitor).
         Ok(result)
     }
 
@@ -1268,8 +1216,7 @@ impl OrchestrationService {
                 prompt,
                 workspace_mode.as_deref(),
                 self.policy.clone(),
-                display.clone(),
-                display_preference.placement,
+                display,
             )
             .await?;
 
@@ -1283,10 +1230,8 @@ impl OrchestrationService {
             result["workspacePath"] = json!(path.to_string_lossy().to_string());
             result["workspaceMode"] = json!(Self::workspace_mode_echo(*kind));
         }
-        if let Some(selection) = &display {
-            result["display"] = serde_json::to_value(selection)
-                .expect("DisplaySelection always serializes to JSON");
-        }
+        // CREW-11: no `display` field here either -- same reasoning as
+        // `run/submit`.
         Ok(result)
     }
 
