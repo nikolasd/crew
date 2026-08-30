@@ -1358,3 +1358,45 @@ async fn a_blocked_report_from_a_worker_is_redacted_before_journaling() {
         "a reportBlocked reason",
     );
 }
+
+/// CREW-34: `coordination/publishArtifact` builds its `RunMessage`
+/// directly instead of going through `send`, so `send`'s redaction never
+/// covered it — which is why CREW-33's fix at the three named routes
+/// missed this fourth one. Found by the compiler when `RunMessage::payload`
+/// became `Redacted`, not by review.
+#[tokio::test]
+async fn a_published_artifact_description_from_a_worker_is_redacted() {
+    let harness = Harness::start().await;
+    let mut omp = omp_client(&harness, "omp-1").await;
+    let (token, run_id, _task_id, _worker_id) = seed_scoped_run(&harness, &mut omp).await;
+    let mut worker = worker_client(&harness, &token).await;
+
+    let published = worker
+        .call(
+            2,
+            "coordination/publishArtifact",
+            json!({
+                "runId": run_id.to_string(),
+                "artifactRef": "build/out.tar.gz",
+                "description": format!("blocked on {BROKER_SECRET} rotation"),
+            }),
+        )
+        .await;
+    assert!(
+        published.get("error").is_none(),
+        "publishArtifact: {published:?}"
+    );
+
+    let list = omp
+        .call(9, "message/list", json!({ "runId": run_id.to_string() }))
+        .await;
+    let messages = list["result"]["messages"].as_array().expect("messages");
+    let peer = messages
+        .iter()
+        .find(|m| m["kind"] == "peerMessage")
+        .expect("a peerMessage carrying the description");
+    assert_masked(
+        peer["payload"].as_str().expect("payload"),
+        "a published artifact description",
+    );
+}

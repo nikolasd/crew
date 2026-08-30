@@ -86,8 +86,14 @@ pub struct RunMessage {
     pub task_id: TaskId,
     /// Semantic message kind.
     pub kind: MessageKind,
-    /// The message payload (redacted before persistence).
-    pub payload: String,
+    /// The message payload.
+    ///
+    /// Typed [`Redacted`] (CREW-34) rather than `String`, so "redacted
+    /// before persistence" is enforced by the field rather than asserted
+    /// by this comment. It said exactly that for a long time while nothing
+    /// redacted it -- the claim became true at CREW-28, and true by
+    /// construction here.
+    pub payload: crate::Redacted,
     /// Delivery state.
     #[serde(rename = "deliveryState")]
     pub delivery_state: DeliveryState,
