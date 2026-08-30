@@ -253,6 +253,7 @@ async fn decided_event_count(db: &DatabaseHandle) -> i64 {
 
 #[tokio::test]
 async fn a_stale_owner_is_refused_by_the_guarded_write_after_a_rebind() {
+    let ok_reason = crew_protocol::Redacted::assert_runtime_authored("ok");
     let (_state_dir, db) = open_db().await;
     let db = Arc::new(db);
     let project_id = ProjectId::new();
@@ -276,7 +277,7 @@ async fn a_stale_owner_is_refused_by_the_guarded_write_after_a_rebind() {
     // correctness, only for reproducibility.
     let (decide_result, _rebind) = tokio::join!(
         biased;
-        svc.decide(approval_id, "omp-1", "approve", "ok", DecidedBy::Human),
+        svc.decide(approval_id, "omp-1", "approve", &ok_reason, DecidedBy::Human),
         rebind_owner(&db, project_id, task_id, "omp-2", 1),
     );
 
@@ -308,6 +309,7 @@ async fn a_stale_owner_is_refused_by_the_guarded_write_after_a_rebind() {
 
 #[tokio::test]
 async fn the_new_owner_can_decide_after_a_rebind() {
+    let ok_reason = crew_protocol::Redacted::assert_runtime_authored("ok");
     let (_state_dir, db) = open_db().await;
     let db = Arc::new(db);
     let project_id = ProjectId::new();
@@ -328,7 +330,13 @@ async fn the_new_owner_can_decide_after_a_rebind() {
     rebind_owner(&db, project_id, task_id, "omp-2", 1).await;
 
     let outcome = svc
-        .decide(approval_id, "omp-2", "approve", "ok", DecidedBy::Human)
+        .decide(
+            approval_id,
+            "omp-2",
+            "approve",
+            &ok_reason,
+            DecidedBy::Human,
+        )
         .await;
 
     assert!(
@@ -354,6 +362,7 @@ async fn the_new_owner_can_decide_after_a_rebind() {
 
 #[tokio::test]
 async fn a_former_owner_replaying_its_identical_decision_is_refused() {
+    let ok_reason = crew_protocol::Redacted::assert_runtime_authored("ok");
     let (_state_dir, db) = open_db().await;
     let db = Arc::new(db);
     let project_id = ProjectId::new();
@@ -368,7 +377,13 @@ async fn a_former_owner_replaying_its_identical_decision_is_refused() {
     );
 
     let outcome = svc
-        .decide(approval_id, "omp-1", "approve", "ok", DecidedBy::Human)
+        .decide(
+            approval_id,
+            "omp-1",
+            "approve",
+            &ok_reason,
+            DecidedBy::Human,
+        )
         .await;
     assert!(
         matches!(outcome, Ok(DecideOutcome::Decided)),
@@ -384,7 +399,13 @@ async fn a_former_owner_replaying_its_identical_decision_is_refused() {
     // outranks idempotent replay, it is not treated as a no-op repeat of
     // an identical decision.
     let replay = svc
-        .decide(approval_id, "omp-1", "approve", "ok", DecidedBy::Human)
+        .decide(
+            approval_id,
+            "omp-1",
+            "approve",
+            &ok_reason,
+            DecidedBy::Human,
+        )
         .await;
 
     assert!(

@@ -115,7 +115,9 @@ async fn a_worker_question_opens_exactly_one_escalation_row() {
             run_id,
             task_id,
             worker_id,
-            question: Some("which module?".into()),
+            question: Some(crew_protocol::Redacted::assert_runtime_authored(
+                "which module?",
+            )),
         };
         db.run_domain_op(Box::new(move |conn| {
             let mut repo = DomainRepository::new(conn, project_id);
@@ -157,7 +159,9 @@ async fn an_answer_resolves_the_open_escalation_once() {
         run_id,
         task_id,
         worker_id,
-        question: Some("which module?".into()),
+        question: Some(crew_protocol::Redacted::assert_runtime_authored(
+            "which module?",
+        )),
     };
     db.run_domain_op(Box::new(move |conn| {
         let mut repo = DomainRepository::new(conn, project_id);
@@ -245,7 +249,7 @@ async fn concurrent_answers_admit_exactly_one_resolution() {
         run_id,
         task_id,
         worker_id,
-        question: Some("pick one".into()),
+        question: Some(crew_protocol::Redacted::assert_runtime_authored("pick one")),
     };
     db.run_domain_op(Box::new(move |conn| {
         let mut repo = DomainRepository::new(conn, project_id);

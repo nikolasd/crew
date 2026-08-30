@@ -137,7 +137,9 @@ async fn seed_run_returning_ids(
         repo.record_escalation_raised(
             run_id,
             "question",
-            Some("why did the run stall?".to_string()),
+            Some(crew_protocol::Redacted::assert_runtime_authored(
+                "why did the run stall?",
+            )),
         )?;
         Ok(serde_json::json!({}))
     }))
@@ -959,7 +961,14 @@ async fn journal_prompt(db: &DatabaseHandle, project_id: ProjectId, seeded: Seed
     let prompt = prompt.to_string();
     db.run_domain_op(Box::new(move |conn| {
         let mut repo = DomainRepository::new(conn, project_id);
-        repo.record_run_prompt(seeded.run_id, seeded.task_id, seeded.worker_id, prompt)?;
+        repo.record_run_prompt(
+            seeded.run_id,
+            seeded.task_id,
+            seeded.worker_id,
+            // This helper stands in for `run/submit`, which passes the
+            // redactor's own output -- so that is the claim it makes.
+            crew_protocol::Redacted::from_sanitized(prompt),
+        )?;
         Ok(serde_json::json!({}))
     }))
     .await

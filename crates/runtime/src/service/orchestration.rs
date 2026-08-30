@@ -383,12 +383,13 @@ impl OrchestrationService {
     /// surfaced rather than defaulted because a silently emptied rationale
     /// would record that a reason exists when none does -- the exact thing
     /// this field's own empty-check (R59) refuses at the boundary.
-    fn redact_caller_text(&self, text: String) -> Result<String, ServiceError> {
+    fn redact_caller_text(&self, text: String) -> Result<crew_protocol::Redacted, ServiceError> {
         self.redactor
             .sanitize_fragment(&crew_protocol::Classified {
                 class: crew_protocol::ContentClass::Visible,
                 value: text,
             })
+            .map(crew_protocol::Redacted::from_sanitized)
             .ok_or_else(|| ServiceError::internal("a Visible fragment always sanitizes to Some"))
     }
 
@@ -1073,8 +1074,11 @@ impl OrchestrationService {
                 class: crew_protocol::ContentClass::Visible,
                 value: prompt.to_string(),
             };
-            if let Some(redacted) = self.redactor.sanitize_fragment(&classified)
-                && !redacted.trim().is_empty()
+            if let Some(redacted) = self
+                .redactor
+                .sanitize_fragment(&classified)
+                .map(crew_protocol::Redacted::from_sanitized)
+                && !redacted.as_str().trim().is_empty()
             {
                 let mut prompt_result = self
                     .db
@@ -2599,7 +2603,7 @@ impl OrchestrationService {
         // The rationale is an audit fact (R59): an empty one is refused at
         // the boundary rather than silently persisted as a record that a
         // rationale exists when none does.
-        if reason.trim().is_empty() {
+        if reason.as_str().trim().is_empty() {
             return Err(ServiceError::invalid_params("reason must not be empty"));
         }
 
@@ -2776,7 +2780,7 @@ impl OrchestrationService {
             .db
             .run_domain_op(Box::new(move |conn| {
                 let mut repo = DomainRepository::new(conn, project_id);
-                repo.decide_plan(run_id, &principal_id, approved, reason.as_deref())
+                repo.decide_plan(run_id, &principal_id, approved, reason.as_ref())
                     .map(|c| {
                         embed_envelope(
                             json!({ "runId": run_id.to_string(), "sequence": c.sequence }),

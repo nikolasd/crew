@@ -611,12 +611,16 @@ impl CoordinationBroker {
     /// surfaced rather than defaulted: a silently emptied reason would
     /// leave a journaled request whose stated cause had vanished, which
     /// reads as a runtime bug rather than a redaction.
-    fn redact_worker_text(&self, text: String) -> Result<String, CoordinationError> {
+    fn redact_worker_text(
+        &self,
+        text: String,
+    ) -> Result<crew_protocol::Redacted, CoordinationError> {
         self.redactor
             .sanitize_fragment(&crew_protocol::Classified {
                 class: crew_protocol::ContentClass::Visible,
                 value: text,
             })
+            .map(crew_protocol::Redacted::from_sanitized)
             .ok_or_else(|| CoordinationError {
                 code: error_code::INTERNAL_ERROR,
                 message: "a Visible fragment always sanitizes to Some".to_string(),
@@ -691,7 +695,12 @@ impl CoordinationBroker {
             worker_id,
             task_id,
             MessageKind::PeerMessage,
-            self.redact_worker_text(reason)?,
+            // `RunMessage::payload` is still a bare `String`, so the type
+            // guarantee has to be unwrapped here -- the one place in this
+            // file where redacted text leaves `Redacted`. Converting that
+            // field is the natural next step; until then this call is the
+            // visible seam rather than an invisible one.
+            self.redact_worker_text(reason)?.as_str().to_string(),
             None,
             None,
         )
@@ -712,7 +721,12 @@ impl CoordinationBroker {
             worker_id,
             task_id,
             MessageKind::Question,
-            self.redact_worker_text(question)?,
+            // `RunMessage::payload` is still a bare `String`, so the type
+            // guarantee has to be unwrapped here -- the one place in this
+            // file where redacted text leaves `Redacted`. Converting that
+            // field is the natural next step; until then this call is the
+            // visible seam rather than an invisible one.
+            self.redact_worker_text(question)?.as_str().to_string(),
             None,
             None,
         )

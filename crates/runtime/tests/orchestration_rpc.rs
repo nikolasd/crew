@@ -4322,7 +4322,11 @@ async fn seed_pending_child_request(harness: &Harness, run_id: RunId, reason: &s
     let reason = reason.to_string();
     db.run_domain_op(Box::new(move |conn| {
         let mut repo = DomainRepository::new(conn, project_id);
-        repo.request_child(run_id, &reason).map(|_| Value::Null)
+        repo.request_child(
+            run_id,
+            &crew_protocol::Redacted::assert_runtime_authored(reason.clone()),
+        )
+        .map(|_| Value::Null)
     }))
     .await
     .expect("seeding a pending child request must succeed");

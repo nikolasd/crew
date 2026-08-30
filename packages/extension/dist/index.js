@@ -7860,7 +7860,7 @@ from an empty prompt.`,
                   $ref: "#/$defs/WorkerId"
                 },
                 prompt: {
-                  type: "string"
+                  $ref: "#/$defs/Redacted"
                 }
               },
               additionalProperties: false,
@@ -7959,9 +7959,13 @@ from an empty prompt.`,
                 },
                 reason: {
                   description: "The decision's rationale; present only on `ApprovalDecided`\nevents written after R59. Optional in both directions so\nevents persisted before the field existed still deserialize.",
-                  type: [
-                    "string",
-                    "null"
+                  anyOf: [
+                    {
+                      $ref: "#/$defs/Redacted"
+                    },
+                    {
+                      type: "null"
+                    }
                   ]
                 }
               },
@@ -8029,9 +8033,13 @@ from an empty prompt.`,
                   ]
                 },
                 reason: {
-                  type: [
-                    "string",
-                    "null"
+                  anyOf: [
+                    {
+                      $ref: "#/$defs/Redacted"
+                    },
+                    {
+                      type: "null"
+                    }
                   ]
                 }
               },
@@ -8258,9 +8266,13 @@ to say only *that* the turn ended, and how.`,
                   type: "string"
                 },
                 text: {
-                  type: [
-                    "string",
-                    "null"
+                  anyOf: [
+                    {
+                      $ref: "#/$defs/Redacted"
+                    },
+                    {
+                      type: "null"
+                    }
                   ]
                 }
               },
@@ -8316,9 +8328,13 @@ to say only *that* the turn ended, and how.`,
                   ]
                 },
                 detail: {
-                  type: [
-                    "string",
-                    "null"
+                  anyOf: [
+                    {
+                      $ref: "#/$defs/Redacted"
+                    },
+                    {
+                      type: "null"
+                    }
                   ]
                 }
               },
@@ -8460,9 +8476,13 @@ to say only *that* the turn ended, and how.`,
                   type: "boolean"
                 },
                 detail: {
-                  type: [
-                    "string",
-                    "null"
+                  anyOf: [
+                    {
+                      $ref: "#/$defs/Redacted"
+                    },
+                    {
+                      type: "null"
+                    }
                   ]
                 }
               },
@@ -8782,9 +8802,13 @@ contents, never an absolute socket or filesystem path.`,
                 },
                 reason: {
                   description: "`None` when no rationale was given for the decision.",
-                  type: [
-                    "string",
-                    "null"
+                  anyOf: [
+                    {
+                      $ref: "#/$defs/Redacted"
+                    },
+                    {
+                      type: "null"
+                    }
                   ]
                 }
               },
@@ -8824,9 +8848,13 @@ contents, never an absolute socket or filesystem path.`,
                   $ref: "#/$defs/WorkerId"
                 },
                 question: {
-                  type: [
-                    "string",
-                    "null"
+                  anyOf: [
+                    {
+                      $ref: "#/$defs/Redacted"
+                    },
+                    {
+                      type: "null"
+                    }
                   ]
                 }
               },
@@ -8868,9 +8896,13 @@ contents, never an absolute socket or filesystem path.`,
                   type: "string"
                 },
                 question: {
-                  type: [
-                    "string",
-                    "null"
+                  anyOf: [
+                    {
+                      $ref: "#/$defs/Redacted"
+                    },
+                    {
+                      type: "null"
+                    }
                   ]
                 }
               },
@@ -8913,9 +8945,13 @@ contents, never an absolute socket or filesystem path.`,
                   $ref: "#/$defs/AnsweredBy"
                 },
                 answer: {
-                  type: [
-                    "string",
-                    "null"
+                  anyOf: [
+                    {
+                      $ref: "#/$defs/Redacted"
+                    },
+                    {
+                      type: "null"
+                    }
                   ]
                 }
               },
@@ -9347,6 +9383,86 @@ must still deserialize on replay.`,
         "workspaceDirty",
         "childrenActive"
       ]
+    },
+    Redacted: {
+      description: `Text that has crossed the redaction boundary and may therefore become
+durable (ADR-0006, ADR-0028, CREW-29).
+
+The field is private and there is no \`From<String>\` or \`Deref\`, so a
+\`String\` cannot become a \`Redacted\` implicitly. There are exactly two
+constructors and **both are named as claims**:
+[\`Redacted::from_sanitized\`] ("this came out of the redactor") and
+[\`Redacted::assert_runtime_authored\`] ("no caller wrote this").
+
+# The exact strength of the guarantee
+
+This is not "unconstructible without the redactor". The redactor lives
+in the runtime crate and \`RuntimeEvent\` lives here, so a constructor
+reachable from the runtime is unavoidable, and anything reachable from
+the runtime is reachable from anywhere. What the type actually
+guarantees is narrower and still worth having: **a caller-carrying
+field cannot be populated without its author stating which of the two
+claims applies.** The failure mode it eliminates is silence \u2014 a new
+\`String\` field wired straight from request params, which is how all
+four leaks this work found came to exist. It does not stop someone
+asserting the wrong claim; it stops them asserting nothing, and it puts
+the assertion where a reviewer reads it.
+
+# Why this exists on fields rather than on the write path
+
+\`DatabaseHandle::append_event\` is guarded by \`PersistableEvent\`, a type
+only the redactor can construct. \`DomainRepository::append_and_apply\`
+takes a plain [\`RuntimeEvent\`], and every domain event is written that
+way \u2014 so redaction there was *convention*, which is the thing ADR-0006
+exists to eliminate. Most domain events carry no caller text at all
+(states, ids, lease refs), so gating the whole path would put ceremony
+on the safe majority to protect a handful of fields, and ceremony on
+safe cases is what gets skipped. Putting the obligation on the field
+instead means **a new caller-carrying field is a compile error until
+its author decides how it gets sanitized.**
+
+# The property, as an executable pair
+
+These two doctests differ in exactly one token \u2014 the constructor \u2014 so
+together they prove the boundary rather than merely exercising it. The
+negative one alone would be weak evidence: a \`compile_fail\` block passes
+on *any* compilation error, including a typo, which is why the positive
+twin sits beside it.
+
+A bare \`String\` cannot populate a caller-carrying field:
+
+\`\`\`compile_fail
+use crew_protocol::{RunId, RuntimeEvent, TaskId, WorkerId};
+let _ = RuntimeEvent::RunPromptEvent {
+    run_id: RunId::new(),
+    task_id: TaskId::new(),
+    worker_id: WorkerId::new(),
+    prompt: "unredacted".to_string(),
+};
+\`\`\`
+
+The same construction, with the claim stated, compiles:
+
+\`\`\`
+use crew_protocol::{Redacted, RunId, RuntimeEvent, TaskId, WorkerId};
+let _ = RuntimeEvent::RunPromptEvent {
+    run_id: RunId::new(),
+    task_id: TaskId::new(),
+    worker_id: WorkerId::new(),
+    prompt: Redacted::assert_runtime_authored("a fixture, not caller text"),
+};
+\`\`\`
+
+# What it does not prevent
+
+\`Deserialize\` accepts a bare string, because stored events must be read
+back (\`events/replay\`, recovery, the audit export). So a determined
+caller could serialize and deserialize their way to a \`Redacted\`
+holding anything. That is deliberate and it is not the hole this closes:
+the failure mode being eliminated is *forgetting*, not laundering. A
+round trip through serde to bypass the redactor is not something anyone
+does by accident.`,
+      type: "string"
     },
     MessageId: {
       description: "Identifies a single message within a run's transcript.",

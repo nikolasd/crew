@@ -125,6 +125,129 @@ pub struct Classified<T> {
     pub value: T,
 }
 
+/// Text that has crossed the redaction boundary and may therefore become
+/// durable (ADR-0006, ADR-0028, CREW-29).
+///
+/// The field is private and there is no `From<String>` or `Deref`, so a
+/// `String` cannot become a `Redacted` implicitly. There are exactly two
+/// constructors and **both are named as claims**:
+/// [`Redacted::from_sanitized`] ("this came out of the redactor") and
+/// [`Redacted::assert_runtime_authored`] ("no caller wrote this").
+///
+/// # The exact strength of the guarantee
+///
+/// This is not "unconstructible without the redactor". The redactor lives
+/// in the runtime crate and `RuntimeEvent` lives here, so a constructor
+/// reachable from the runtime is unavoidable, and anything reachable from
+/// the runtime is reachable from anywhere. What the type actually
+/// guarantees is narrower and still worth having: **a caller-carrying
+/// field cannot be populated without its author stating which of the two
+/// claims applies.** The failure mode it eliminates is silence — a new
+/// `String` field wired straight from request params, which is how all
+/// four leaks this work found came to exist. It does not stop someone
+/// asserting the wrong claim; it stops them asserting nothing, and it puts
+/// the assertion where a reviewer reads it.
+///
+/// # Why this exists on fields rather than on the write path
+///
+/// `DatabaseHandle::append_event` is guarded by `PersistableEvent`, a type
+/// only the redactor can construct. `DomainRepository::append_and_apply`
+/// takes a plain [`RuntimeEvent`], and every domain event is written that
+/// way — so redaction there was *convention*, which is the thing ADR-0006
+/// exists to eliminate. Most domain events carry no caller text at all
+/// (states, ids, lease refs), so gating the whole path would put ceremony
+/// on the safe majority to protect a handful of fields, and ceremony on
+/// safe cases is what gets skipped. Putting the obligation on the field
+/// instead means **a new caller-carrying field is a compile error until
+/// its author decides how it gets sanitized.**
+///
+/// # The property, as an executable pair
+///
+/// These two doctests differ in exactly one token — the constructor — so
+/// together they prove the boundary rather than merely exercising it. The
+/// negative one alone would be weak evidence: a `compile_fail` block passes
+/// on *any* compilation error, including a typo, which is why the positive
+/// twin sits beside it.
+///
+/// A bare `String` cannot populate a caller-carrying field:
+///
+/// ```compile_fail
+/// use crew_protocol::{RunId, RuntimeEvent, TaskId, WorkerId};
+/// let _ = RuntimeEvent::RunPromptEvent {
+///     run_id: RunId::new(),
+///     task_id: TaskId::new(),
+///     worker_id: WorkerId::new(),
+///     prompt: "unredacted".to_string(),
+/// };
+/// ```
+///
+/// The same construction, with the claim stated, compiles:
+///
+/// ```
+/// use crew_protocol::{Redacted, RunId, RuntimeEvent, TaskId, WorkerId};
+/// let _ = RuntimeEvent::RunPromptEvent {
+///     run_id: RunId::new(),
+///     task_id: TaskId::new(),
+///     worker_id: WorkerId::new(),
+///     prompt: Redacted::assert_runtime_authored("a fixture, not caller text"),
+/// };
+/// ```
+///
+/// # What it does not prevent
+///
+/// `Deserialize` accepts a bare string, because stored events must be read
+/// back (`events/replay`, recovery, the audit export). So a determined
+/// caller could serialize and deserialize their way to a `Redacted`
+/// holding anything. That is deliberate and it is not the hole this closes:
+/// the failure mode being eliminated is *forgetting*, not laundering. A
+/// round trip through serde to bypass the redactor is not something anyone
+/// does by accident.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(transparent)]
+#[ts(export, type = "string")]
+pub struct Redacted(String);
+
+impl Redacted {
+    /// Asserts that `text` was authored by the runtime rather than by any
+    /// caller or vendor, and therefore needs no redaction.
+    ///
+    /// The name is the point. This is the escape hatch, and an exemption
+    /// should read as a claim its author is making — reviewable, and
+    /// falsifiable by anyone who can see where the value came from. Use it
+    /// for run states, ids, lease refs, signal names and the like; never
+    /// for anything that reached the daemon from outside it.
+    #[must_use]
+    pub fn assert_runtime_authored(text: impl Into<String>) -> Self {
+        Self(text.into())
+    }
+
+    /// The sanitized text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Asserts that `text` has already passed through the redactor.
+    ///
+    /// The one legitimate caller is `Redactor::redact`; everything else
+    /// should be reaching for that instead. Kept `pub` because the
+    /// redactor lives in the runtime crate and this type lives in the
+    /// protocol crate — see the type-level note on what that costs.
+    #[must_use]
+    pub fn from_sanitized(text: String) -> Self {
+        Self(text)
+    }
+}
+
+/// Prints the text plainly: by construction it has already crossed the
+/// redaction boundary, so unlike [`Classified`] there is nothing here that
+/// a `{:?}` could leak.
+impl fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
 /// A placeholder printed in place of a redacted `Classified` value; has its
 /// own `Debug` impl so it renders without the surrounding quotes a `&str`
 /// placeholder would otherwise get.
@@ -506,7 +629,7 @@ pub enum RuntimeEvent {
         run_id: RunId,
         task_id: TaskId,
         worker_id: WorkerId,
-        prompt: String,
+        prompt: Redacted,
     },
     /// A message was recorded, sent, acknowledged, or failed.
     MessageEvent {
@@ -529,7 +652,7 @@ pub enum RuntimeEvent {
         /// events persisted before the field existed still deserialize.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        reason: Option<String>,
+        reason: Option<Redacted>,
     },
     /// A child worker was requested or denied.
     ChildEvent {
@@ -538,7 +661,7 @@ pub enum RuntimeEvent {
         child_task_id: Option<TaskId>,
         child_worker_id: Option<WorkerId>,
         child_run_id: Option<RunId>,
-        reason: Option<String>,
+        reason: Option<Redacted>,
     },
     /// Ownership of a task was rebound via `reconcile/omp`.
     ReconcileEvent {
@@ -586,7 +709,7 @@ pub enum RuntimeEvent {
         task_id: TaskId,
         worker_id: WorkerId,
         role: String,
-        text: Option<String>,
+        text: Option<Redacted>,
     },
     /// A tool call lifecycle event from a worker adapter. `detail` has
     /// already crossed the redaction boundary; `None` means the detail
@@ -600,7 +723,7 @@ pub enum RuntimeEvent {
         tool_call_id: String,
         name: String,
         ok: Option<bool>,
-        detail: Option<String>,
+        detail: Option<Redacted>,
     },
     /// Usage/cost reported by a worker adapter.
     AdapterUsageEvent {
@@ -630,7 +753,7 @@ pub enum RuntimeEvent {
         task_id: TaskId,
         worker_id: WorkerId,
         healthy: bool,
-        detail: Option<String>,
+        detail: Option<Redacted>,
     },
     /// A workspace lease lifecycle event (lease acquire/release/inspect/apply/cleanup).
     WorkspaceEvent {
@@ -694,7 +817,7 @@ pub enum RuntimeEvent {
         worker_id: WorkerId,
         approved: bool,
         /// `None` when no rationale was given for the decision.
-        reason: Option<String>,
+        reason: Option<Redacted>,
     },
     /// A worker asked a question that blocks its own progress, without
     /// escalating control (compare [`Self::EscalationRaised`]). `question`
@@ -705,7 +828,7 @@ pub enum RuntimeEvent {
         run_id: RunId,
         task_id: TaskId,
         worker_id: WorkerId,
-        question: Option<String>,
+        question: Option<Redacted>,
     },
     /// A worker escalated a blocking condition to its leader or a human
     /// operator. `reason` is a plain, machine-assigned code (never raw
@@ -716,7 +839,7 @@ pub enum RuntimeEvent {
         task_id: TaskId,
         worker_id: WorkerId,
         reason: String,
-        question: Option<String>,
+        question: Option<Redacted>,
     },
     /// An escalation was answered by the leader or a human user.
     /// `answer` has already crossed the redaction boundary the same way
@@ -726,7 +849,7 @@ pub enum RuntimeEvent {
         task_id: TaskId,
         worker_id: WorkerId,
         answered_by: AnsweredBy,
-        answer: Option<String>,
+        answer: Option<Redacted>,
     },
     /// A worker exceeded its configured turn budget.
     BudgetExceeded {
@@ -923,7 +1046,7 @@ mod tests {
             task_id,
             worker_id,
             approved: false,
-            reason: Some("scope too broad".into()),
+            reason: Some(Redacted::assert_runtime_authored("scope too broad")),
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["type"], "planDecided");
@@ -953,7 +1076,9 @@ mod tests {
             task_id,
             worker_id,
             reason: "ambiguous_requirement".into(),
-            question: Some("should this endpoint be idempotent?".into()),
+            question: Some(Redacted::assert_runtime_authored(
+                "should this endpoint be idempotent?",
+            )),
         };
         let value = serde_json::to_value(&raised).unwrap();
         assert_eq!(value["type"], "escalationRaised");
@@ -965,7 +1090,7 @@ mod tests {
             task_id,
             worker_id,
             answered_by: AnsweredBy::User,
-            answer: Some("yes, make it idempotent".into()),
+            answer: Some(Redacted::assert_runtime_authored("yes, make it idempotent")),
         };
         let value = serde_json::to_value(&answered).unwrap();
         assert_eq!(value["type"], "escalationAnswered");
@@ -1019,19 +1144,21 @@ mod tests {
     fn classified_is_not_reachable_from_new_crew_v2_events() {
         // Compile-time proof mirroring `classified_is_not_reachable_from_runtime_event`:
         // every new free-text field on these variants is a plain
-        // `Option<String>`/`String`, never `Classified<String>`, so raw
+        // `Option<Redacted>`/`Redacted`, never `Classified<String>`, so raw
         // thinking/secret content can only reach these variants already
-        // sanitized.
+        // sanitized. CREW-29 strengthened this from `String`: the field type
+        // now also names *which* boundary the text crossed, so the pin below
+        // asserts something stricter than it used to rather than less.
         let (run_id, task_id, worker_id) = fixture_ids();
         let event = RuntimeEvent::WorkerQuestion {
             run_id,
             task_id,
             worker_id,
-            question: Some("sanitized".into()),
+            question: Some(Redacted::assert_runtime_authored("sanitized")),
         };
         match event {
             RuntimeEvent::WorkerQuestion { question, .. } => {
-                let _: Option<String> = question;
+                let _: Option<Redacted> = question;
             }
             _ => panic!("expected WorkerQuestion"),
         }

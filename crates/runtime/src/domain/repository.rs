@@ -199,7 +199,7 @@ pub enum ChildDecision {
         child_run_id: RunId,
     },
     Deny {
-        reason: String,
+        reason: crew_protocol::Redacted,
     },
 }
 
@@ -971,7 +971,7 @@ impl<'c> DomainRepository<'c> {
         run_id: crew_protocol::RunId,
         task_id: crew_protocol::TaskId,
         worker_id: crew_protocol::WorkerId,
-        prompt: String,
+        prompt: crew_protocol::Redacted,
     ) -> Result<Committed, DomainError> {
         let event = RuntimeEvent::RunPromptEvent {
             run_id,
@@ -1438,7 +1438,11 @@ impl<'c> DomainRepository<'c> {
             task_id,
             worker_id,
             answered_by,
-            answer,
+            // Read back out of `escalations.answer`, which is written from a
+            // `message/send` payload -- already redacted at that boundary
+            // (CREW-28). The claim is that it came out of the redactor,
+            // which it did, one write earlier.
+            answer: answer.map(crew_protocol::Redacted::from_sanitized),
         };
         self.append_and_apply(
             &event,
@@ -1464,7 +1468,7 @@ impl<'c> DomainRepository<'c> {
         &mut self,
         run_id: RunId,
         reason: impl Into<String>,
-        question: Option<String>,
+        question: Option<crew_protocol::Redacted>,
     ) -> Result<Committed, DomainError> {
         let reason = reason.into();
         let (task_id, worker_id): (String, String) = self
@@ -1513,7 +1517,8 @@ impl<'c> DomainRepository<'c> {
                         crew_protocol::EscalationId::new().to_string(),
                         run_id.to_string(),
                         reason,
-                        question,
+                        // TEXT column: the type guarantee ends at the bind.
+                        question.as_ref().map(crew_protocol::Redacted::as_str),
                         Timestamp::now().as_str(),
                     ],
                 )?;
@@ -1938,7 +1943,7 @@ impl<'c> DomainRepository<'c> {
         approval_id: crew_protocol::ApprovalId,
         principal_instance_id: &str,
         decision: &str,
-        reason: &str,
+        reason: &crew_protocol::Redacted,
         decided_by: crew_protocol::DecidedBy,
     ) -> Result<Committed, DomainError> {
         let (run_id_str, task_id_str, action): (String, String, String) = self
@@ -1970,10 +1975,12 @@ impl<'c> DomainRepository<'c> {
             task_id,
             action,
             decided_by: Some(decided_by),
-            reason: Some(reason.to_string()),
+            reason: Some(reason.clone()),
         };
         let decision = decision.to_string();
-        let reason = reason.to_string();
+        // The DB column is TEXT; the type guarantee ends where the value
+        // becomes a bound parameter.
+        let reason = reason.as_str().to_string();
         let principal_instance_id = principal_instance_id.to_string();
         self.append_and_apply(&event, Some(task_id), None, Some(run_id), move |tx| {
             let now = Timestamp::now();
@@ -2178,7 +2185,7 @@ impl<'c> DomainRepository<'c> {
         run_id: RunId,
         principal_instance_id: &str,
         approved: bool,
-        reason: Option<&str>,
+        reason: Option<&crew_protocol::Redacted>,
     ) -> Result<Committed, DomainError> {
         let run_id_str = run_id.to_string();
         // The run row is stable for a run, so reading task_id/worker_id here
@@ -2207,14 +2214,14 @@ impl<'c> DomainRepository<'c> {
 
         let now = Timestamp::now();
         let decision = if approved { "approved" } else { "rejected" };
-        let reason_str = reason.map(str::to_string);
+        let reason_str = reason.map(|r| r.as_str().to_string());
         let principal = principal_instance_id.to_string();
         let event = RuntimeEvent::PlanDecided {
             run_id,
             task_id,
             worker_id,
             approved,
-            reason: reason.map(str::to_string),
+            reason: reason.cloned(),
         };
         self.append_and_apply(
             &event,
@@ -2706,7 +2713,7 @@ impl<'c> DomainRepository<'c> {
     pub fn request_child(
         &mut self,
         parent_run_id: RunId,
-        reason: &str,
+        reason: &crew_protocol::Redacted,
     ) -> Result<Committed, DomainError> {
         let (from_str, task_id_str, worker_id_str): (String, String, String) = self
             .conn
@@ -2741,7 +2748,7 @@ impl<'c> DomainRepository<'c> {
             child_task_id: None,
             child_worker_id: None,
             child_run_id: None,
-            reason: Some(reason.to_string()),
+            reason: Some(reason.clone()),
         };
         self.append_and_apply(
             &event,
@@ -3028,7 +3035,7 @@ impl<'c> DomainRepository<'c> {
                             rusqlite::params![
                                 crew_protocol::EscalationId::new().to_string(),
                                 run_id.to_string(),
-                                question,
+                                question.as_str(),
                                 Timestamp::now().as_str(),
                             ],
                         )?;
@@ -3232,7 +3239,7 @@ mod tests {
             task_id,
             worker_id,
             role: "assistant".to_string(),
-            text: Some("hello".to_string()),
+            text: Some(crew_protocol::Redacted::assert_runtime_authored("hello")),
         };
         let cursor_json = "{\"offset\":10,\"lastEntryId\":null}".to_string();
         let committed = repo
@@ -3295,7 +3302,7 @@ mod tests {
                 task_id,
                 worker_id,
                 role: "assistant".to_string(),
-                text: Some("hello".to_string()),
+                text: Some(crew_protocol::Redacted::assert_runtime_authored("hello")),
             },
             task_id,
             worker_id,
@@ -3311,7 +3318,7 @@ mod tests {
                 task_id,
                 worker_id,
                 role: "assistant".to_string(),
-                text: Some("again".to_string()),
+                text: Some(crew_protocol::Redacted::assert_runtime_authored("again")),
             },
             task_id,
             worker_id,

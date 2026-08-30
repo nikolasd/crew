@@ -263,6 +263,8 @@ async fn decided_event_count(db: &DatabaseHandle) -> i64 {
 
 #[tokio::test]
 async fn concurrent_approve_and_deny_admit_exactly_one_decision() {
+    let no_reason = crew_protocol::Redacted::assert_runtime_authored("no");
+    let ok_reason = crew_protocol::Redacted::assert_runtime_authored("ok");
     let (_state_dir, db) = open_db().await;
     let db = Arc::new(db);
     let project_id = ProjectId::new();
@@ -278,8 +280,8 @@ async fn concurrent_approve_and_deny_admit_exactly_one_decision() {
 
     let (approve, deny) = tokio::join!(
         biased;
-        svc.decide(approval_id, "omp-1", "approve", "ok", DecidedBy::Human),
-        svc.decide(approval_id, "omp-1", "deny", "no", DecidedBy::Human),
+        svc.decide(approval_id, "omp-1", "approve", &ok_reason, DecidedBy::Human),
+        svc.decide(approval_id, "omp-1", "deny", &no_reason, DecidedBy::Human),
     );
 
     // Exactly one call decided the approval; the other was refused as a
@@ -336,6 +338,7 @@ async fn concurrent_approve_and_deny_admit_exactly_one_decision() {
 
 #[tokio::test]
 async fn concurrent_identical_approvals_journal_one_event_and_invoke_the_callback_once() {
+    let ok_reason = crew_protocol::Redacted::assert_runtime_authored("ok");
     let (_state_dir, db) = open_db().await;
     let db = Arc::new(db);
     let project_id = ProjectId::new();
@@ -351,8 +354,8 @@ async fn concurrent_identical_approvals_journal_one_event_and_invoke_the_callbac
 
     let (first, second) = tokio::join!(
         biased;
-        svc.decide(approval_id, "omp-1", "approve", "ok", DecidedBy::Human),
-        svc.decide(approval_id, "omp-1", "approve", "ok", DecidedBy::Human),
+        svc.decide(approval_id, "omp-1", "approve", &ok_reason, DecidedBy::Human),
+        svc.decide(approval_id, "omp-1", "approve", &ok_reason, DecidedBy::Human),
     );
 
     let outcomes = [
@@ -394,6 +397,7 @@ async fn concurrent_identical_approvals_journal_one_event_and_invoke_the_callbac
 
 #[tokio::test]
 async fn deciding_the_same_decision_twice_sequentially_stays_idempotent() {
+    let ok_reason = crew_protocol::Redacted::assert_runtime_authored("ok");
     let (_state_dir, db) = open_db().await;
     let db = Arc::new(db);
     let project_id = ProjectId::new();
@@ -408,10 +412,22 @@ async fn deciding_the_same_decision_twice_sequentially_stays_idempotent() {
     );
 
     let first = svc
-        .decide(approval_id, "omp-1", "approve", "ok", DecidedBy::Human)
+        .decide(
+            approval_id,
+            "omp-1",
+            "approve",
+            &ok_reason,
+            DecidedBy::Human,
+        )
         .await;
     let second = svc
-        .decide(approval_id, "omp-1", "approve", "ok", DecidedBy::Human)
+        .decide(
+            approval_id,
+            "omp-1",
+            "approve",
+            &ok_reason,
+            DecidedBy::Human,
+        )
         .await;
 
     assert!(
@@ -437,6 +453,7 @@ async fn deciding_the_same_decision_twice_sequentially_stays_idempotent() {
 
 #[tokio::test]
 async fn deciding_an_approval_whose_run_has_already_settled_is_refused() {
+    let ok_reason = crew_protocol::Redacted::assert_runtime_authored("ok");
     let (_state_dir, db) = open_db().await;
     let db = Arc::new(db);
     let project_id = ProjectId::new();
@@ -460,7 +477,13 @@ async fn deciding_an_approval_whose_run_has_already_settled_is_refused() {
     fail_the_run(&db, project_id, run_id).await;
 
     let outcome = svc
-        .decide(approval_id, "omp-1", "approve", "ok", DecidedBy::Human)
+        .decide(
+            approval_id,
+            "omp-1",
+            "approve",
+            &ok_reason,
+            DecidedBy::Human,
+        )
         .await;
 
     assert!(

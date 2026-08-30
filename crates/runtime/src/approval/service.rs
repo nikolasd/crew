@@ -170,7 +170,7 @@ impl ApprovalService {
         approval_id: ApprovalId,
         principal_instance_id: &str,
         decision: &str,
-        reason: &str,
+        reason: &crew_protocol::Redacted,
         decided_by: crew_protocol::DecidedBy,
     ) -> Result<DecideOutcome, ApprovalError> {
         let snapshot = self.load_snapshot(approval_id).await?;
@@ -182,7 +182,7 @@ impl ApprovalService {
         let project_id = self.project_id;
         let principal_instance_id_owned = principal_instance_id.to_string();
         let decision_owned = decision.to_string();
-        let reason_owned = reason.to_string();
+        let reason_owned = reason.clone();
         let decided_by_owned = decided_by;
         let mut decide_result = match self
             .db

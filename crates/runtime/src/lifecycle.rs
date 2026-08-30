@@ -958,7 +958,7 @@ fn apply_and_render(
             (
                 None,
                 Some(match detail {
-                    Some(detail) => format!("{label}: {detail}"),
+                    Some(detail) => format!("{label}: {}", detail.as_str()),
                     None => label.to_string(),
                 }),
             )
@@ -1387,7 +1387,7 @@ mod tests {
                 task_id: TaskId::new(),
                 worker_id: WorkerId::new(),
                 healthy,
-                detail: detail.map(str::to_string),
+                detail: detail.map(crew_protocol::Redacted::assert_runtime_authored),
             },
             vendor_event_ref: None,
         }
