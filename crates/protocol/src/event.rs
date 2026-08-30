@@ -202,7 +202,7 @@ pub struct Classified<T> {
 /// the failure mode being eliminated is *forgetting*, not laundering. A
 /// round trip through serde to bypass the redactor is not something anyone
 /// does by accident.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(transparent)]
 #[ts(export, type = "string")]
 pub struct Redacted(String);

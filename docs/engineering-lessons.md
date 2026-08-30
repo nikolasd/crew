@@ -468,6 +468,24 @@ found. `grep -rn "INSERT INTO <table>"` and then the callers of whatever wraps i
 event-append path. A fix scoped to the call site you happened to find leaves every sibling door open,
 and the next person will reasonably read the fix as having closed the class.
 
+**Postscript — the same author, one layer over, three commits later.** CREW-33 fixed the broker by
+enumerating its *routes*: `requestChild`, `askPolicy`, `reportBlocked`. It missed
+`coordination/publishArtifact`, which builds its `RunMessage` **directly** rather than funnelling
+through `send`, so it reached `messages.payload` unredacted through a door none of those three
+routes pass. CREW-34 found it only because the compiler demanded a claim once the field was typed.
+
+The right enumeration was never the routes; it was the constructions — `grep -rn "RunMessage {"`.
+That command had already been run, during CREW-34's own scoping, and its output was read as a
+*count* ("11 sites, bounded, fine") rather than as a list to classify one by one. So the lesson
+above is correct and was not enough on its own: **enumerate the constructions of the durable value,
+not the entry points that reach them**, and when a grep answers with a number, the number is not the
+finding — the list is.
+
+That this recurred for the person who wrote the entry, while writing the entry, is the strongest
+argument for the type-level fix that followed (`Redacted`, described in
+[ADR-0028](adr/0028-submit-prompt-is-journaled-redacted-run-intent.md)'s closing section): a lesson
+has to be remembered at the moment it applies, and a compile error does not.
+
 ## Health Checks (`doctor`)
 
 ### A check scoped to the Crew source tree must not run against `--repo`

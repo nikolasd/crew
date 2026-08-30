@@ -2325,17 +2325,7 @@ impl OrchestrationService {
         // unreachable -- surfaced as an internal error rather than
         // `unwrap_or_default()`, because silently delivering an empty
         // steer would have the worker act on nothing.
-        let payload = {
-            let classified = crew_protocol::Classified {
-                class: crew_protocol::ContentClass::Visible,
-                value: str_field(params, "payload")?,
-            };
-            self.redactor
-                .sanitize_fragment(&classified)
-                .ok_or_else(|| {
-                    ServiceError::internal("a Visible fragment always sanitizes to Some")
-                })?
-        };
+        let payload = self.redact_caller_text(str_field(params, "payload")?)?;
         let recipient_worker_id = params
             .get("recipientWorkerId")
             .and_then(Value::as_str)
@@ -2475,7 +2465,10 @@ impl OrchestrationService {
                     run_id,
                     task_id,
                     sender_worker_id,
-                    follow_up_payload,
+                    // Leaves the durable path here: this text goes to the
+                    // vendor process as a steer, not to the journal, so it
+                    // unwraps out of `Redacted` deliberately.
+                    follow_up_payload.as_str().to_string(),
                     follow_up_kind,
                 )
                 .await
