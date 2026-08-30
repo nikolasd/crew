@@ -1,0 +1,129 @@
+name: Auto-Commit Dist Bundle
+
+on:
+  pull_request:
+    paths:
+      - 'packages/extension/src/**'
+      - 'packages/protocol-ts/**'
+      - '.github/workflows/auto-commit-dist.yml'
+
+concurrency:
+  group: auto-commit-dist-${{ github.head_ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install JS workspace dependencies
+        run: bun install
+
+      - name: Rebuild the extension bundle
+        run: bun run build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux-x64
+          path: packages/extension/dist/index.js
+          retention-days: 1
+
+  push:
+    needs: build
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Job 1 (build) uses the default merge ref to match bundle-check; job 2 uses head.sha
+          # for the compare-and-swap guarantee. Two refs, two reasons:
+          # - Job 1 consistency with bundle-check: build same bytes bundle-check verifies
+          # - Job 2 parentage guarantee: commit rooted at source SHA, non-fast-forward if branch moved
+          # Unifying them breaks one property or the other. See Checkout Ref Strategy in CREW-26 design.
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-linux-x64
+          path: /tmp/dist-artifact
+
+      - name: Check staleness (byte-compare)
+        id: stale
+        run: |
+          if diff -q /tmp/dist-artifact/index.js packages/extension/dist/index.js; then
+            echo "STALE=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "STALE=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint GitHub App token
+        if: steps.stale.outputs.STALE == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CREW_BOT_APP_ID }}
+          private-key: ${{ secrets.CREW_BOT_PRIVATE_KEY }}
+
+      - name: Refresh committed dist
+        if: steps.stale.outputs.STALE == 'true'
+        run: cp /tmp/dist-artifact/index.js packages/extension/dist/index.js
+
+      - name: Create signed commit via GraphQL (if stale)
+        if: steps.stale.outputs.STALE == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          # Read dist file and encode as base64 for GraphQL mutation
+          DIST_B64=$(base64 -i packages/extension/dist/index.js | tr -d '\n')
+
+          # GraphQL mutation: createCommitOnBranch
+          # This creates a commit signed by the GitHub App automatically.
+          # expectedHeadOid ensures atomic compare-and-swap: if the branch moved since job 1 started,
+          # GitHub rejects the mutation with "Branch has been updated since expectedHeadOid",
+          # providing a server-side non-fast-forward guarantee.
+          # gh authenticates from GH_TOKEN -- deliberately NOT GITHUB_TOKEN, so no tool
+          # inside this step (now or added later) picks up the elevated token under the
+          # ambient name every action and gh invocation reads by default.
+          # Branch name passed via --arg (not string-spliced) per gh api graphql docs:
+          # https://cli.github.com/manual/gh_api
+          jq -n \
+            --arg branch "$BRANCH" \
+            --arg repo "${{ github.repository }}" \
+            --arg headSha "${{ github.event.pull_request.head.sha }}" \
+            --arg runId "${{ github.run_id }}" \
+            --arg distContent "$DIST_B64" \
+            '{
+              "query": "mutation CreateCommit($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+              "variables": {
+                "input": {
+                  "branch": {
+                    "repositoryNameWithOwner": $repo,
+                    "branchName": $branch
+                  },
+                  "message": {
+                    "headline": "chore(extension): refresh bundle from linux-x64 CI",
+                    "body": ("Build: https://github.com/" + $repo + "/actions/runs/" + $runId + "\nSource: " + $headSha)
+                  },
+                  "fileChanges": {
+                    "additions": [
+                      {
+                        "path": "packages/extension/dist/index.js",
+                        "contents": $distContent
+                      }
+                    ]
+                  },
+                  "expectedHeadOid": $headSha
+                }
+              }
+            }' | gh api graphql --input -
