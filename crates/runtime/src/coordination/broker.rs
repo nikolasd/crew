@@ -95,6 +95,14 @@ pub struct CoordinationBroker {
     events_tx: broadcast::Sender<EventEnvelope>,
     lease_service: Arc<crate::workspace::LeaseService>,
     artifact_store: Arc<crate::workspace::ArtifactStore>,
+    /// Worker-supplied text becomes durable through this broker, so it
+    /// crosses the ADR-0006 boundary here (CREW-33). Before this the
+    /// broker held no redactor at all, which made every worker-authored
+    /// string it journaled a live exposure -- `requestChild`'s reason into
+    /// `ChildEvent.reason`, and `askPolicy`/`reportBlocked` into
+    /// `messages.payload` through a second entry point CREW-28 did not
+    /// close at `message/send`.
+    redactor: Arc<crate::security::redaction::Redactor>,
 }
 
 impl CoordinationBroker {
@@ -105,6 +113,7 @@ impl CoordinationBroker {
         events_tx: broadcast::Sender<EventEnvelope>,
         lease_service: Arc<crate::workspace::LeaseService>,
         artifact_store: Arc<crate::workspace::ArtifactStore>,
+        redactor: Arc<crate::security::redaction::Redactor>,
     ) -> Self {
         Self {
             db,
@@ -113,6 +122,7 @@ impl CoordinationBroker {
             events_tx,
             lease_service,
             artifact_store,
+            redactor,
         }
     }
 
@@ -557,7 +567,12 @@ impl CoordinationBroker {
         reason: String,
     ) -> Result<Value, CoordinationError> {
         self.require_live_run(run_id).await?;
+        // Bound-check the caller's bytes, then redact. Ordered this way so
+        // an oversized reason is refused on what the worker actually sent
+        // rather than on a redacted string whose length is an artefact of
+        // masking.
         Self::reject_oversized("reason", &reason)?;
+        let reason = self.redact_worker_text(reason)?;
         let (_, sender_worker_id) = self.run_participants(run_id).await?;
         self.charge_rate_limit(sender_worker_id)?;
         let project_id = self.project_id;
@@ -583,6 +598,31 @@ impl CoordinationBroker {
     /// quarantine gate deliberately runs ahead of the charge so a
     /// quarantined worker still sees `POLICY_QUARANTINED`, not
     /// `RATE_LIMITED` -- keep that order.
+    /// Redacts worker-supplied free text before it becomes durable
+    /// (ADR-0006, CREW-33).
+    ///
+    /// Classified `Visible` for the same reason a prompt, a steer and a
+    /// decision reason are: the text is meant to be read by whoever is
+    /// supervising the run, so the secret denylist applies and the prose
+    /// survives. `Thinking`/`Secret` do not arise here -- a worker calling
+    /// `coordination/*` is making a request, not streaming its reasoning.
+    ///
+    /// The `None` arm is unreachable for a `Visible` fragment and is
+    /// surfaced rather than defaulted: a silently emptied reason would
+    /// leave a journaled request whose stated cause had vanished, which
+    /// reads as a runtime bug rather than a redaction.
+    fn redact_worker_text(&self, text: String) -> Result<String, CoordinationError> {
+        self.redactor
+            .sanitize_fragment(&crew_protocol::Classified {
+                class: crew_protocol::ContentClass::Visible,
+                value: text,
+            })
+            .ok_or_else(|| CoordinationError {
+                code: error_code::INTERNAL_ERROR,
+                message: "a Visible fragment always sanitizes to Some".to_string(),
+            })
+    }
+
     pub async fn publish_artifact(
         &self,
         run_id: RunId,
@@ -651,7 +691,7 @@ impl CoordinationBroker {
             worker_id,
             task_id,
             MessageKind::PeerMessage,
-            reason,
+            self.redact_worker_text(reason)?,
             None,
             None,
         )
@@ -672,7 +712,7 @@ impl CoordinationBroker {
             worker_id,
             task_id,
             MessageKind::Question,
-            question,
+            self.redact_worker_text(question)?,
             None,
             None,
         )
