@@ -68,6 +68,28 @@ const VIEWER_CHANNEL_CAPACITY: usize = 256;
 /// [`pump`].
 const READ_CHUNK_BYTES: usize = 4096;
 
+/// CREW-30: the fixed byte sequence [`serve_viewer`] writes to a newly
+/// accepted connection *before* replaying the ring-buffer snapshot or
+/// forwarding any real pane output -- the one thing a bare `connect()`
+/// can never prove on its own. A completed connect shows a listening fd
+/// exists at the socket path; it does not show a real `AttachServer` is
+/// behind it. An fd a racing `fork()`'d child inherited (CREW-30: macOS
+/// has no atomic `SOCK_CLOEXEC`, so `socket()` then
+/// `fcntl(FD_CLOEXEC)` leaves a window) answers that same connect and
+/// then never speaks -- proven with a 40,000-iteration reproducer that
+/// found 0 false positives without concurrent forking and 452 with it,
+/// every one unable to complete even a single write/read round trip.
+/// [`pane_socket::is_live`] requires this marker, not just a completed
+/// connect, before calling a pane live.
+///
+/// Versioned (`ATTACH1`) so a future protocol change can bump it without
+/// silently breaking either direction of cross-version compatibility.
+/// `crewd attach`'s own client path (see [`pump`]'s caller in `cli.rs`)
+/// must tolerate an *older* daemon's `AttachServer` that predates this
+/// marker and never sends it at all -- never blocking on it forever, and
+/// never discarding real pane output it mistook for an absent marker.
+pub const LIVENESS_MARKER: &[u8] = b"CREWATTACH1\n";
+
 /// Errors from the attach server and client plumbing.
 #[derive(Debug, thiserror::Error)]
 pub enum AttachError {
@@ -366,11 +388,12 @@ async fn run_accept_loop(
     }
 }
 
-/// Serves one connected viewer: replays the ring-buffer snapshot, then
-/// pumps live output to the viewer and viewer bytes into both the target
-/// and `on_user_input`, until the socket closes or errors. A single task
-/// owns both halves of the split socket so aborting it (as `stop` does)
-/// closes the connection immediately in both directions.
+/// Serves one connected viewer: writes the CREW-30 [`LIVENESS_MARKER`],
+/// replays the ring-buffer snapshot, then pumps live output to the viewer
+/// and viewer bytes into both the target and `on_user_input`, until the
+/// socket closes or errors. A single task owns both halves of the split
+/// socket so aborting it (as `stop` does) closes the connection
+/// immediately in both directions.
 async fn serve_viewer(
     stream: UnixStream,
     snapshot: Vec<u8>,
@@ -379,6 +402,14 @@ async fn serve_viewer(
     on_user_input: Arc<dyn Fn(Vec<u8>) + Send + Sync>,
 ) {
     let (mut read_half, mut write_half) = stream.into_split();
+
+    // Written first, always, before a single byte of real pane output:
+    // this is what lets a connect that merely completed (CREW-30 -- an fd
+    // a raced fork()'d child inherited also does this much) be told apart
+    // from a connect answered by this function actually running.
+    if write_half.write_all(LIVENESS_MARKER).await.is_err() {
+        return;
+    }
 
     if !snapshot.is_empty() && write_half.write_all(&snapshot).await.is_err() {
         return;
@@ -438,6 +469,49 @@ pub enum PumpOutcome {
 /// Returns [`AttachError::Io`] if the connection fails.
 pub async fn connect(path: &Path) -> Result<UnixStream, AttachError> {
     UnixStream::connect(path).await.map_err(AttachError::from)
+}
+
+/// CREW-30: consumes [`LIVENESS_MARKER`] from a freshly-connected `socket`
+/// if it's there, bounded by `timeout`. Returns `None` when the marker
+/// was read in full -- nothing left to reclaim, [`pump`] can start
+/// straight away. Returns `Some(bytes)` for every other outcome (a
+/// partial read, a timeout, or bytes that don't match): `bytes` is
+/// exactly what was actually read off the wire and the caller **must**
+/// write it to its own output before pumping, never discard it.
+///
+/// That second case is not a failure path to special-case away -- it is
+/// the ordinary way `crewd attach` talks to an *older* daemon whose
+/// `AttachServer` predates this marker and never sends one at all. Such
+/// a daemon's first bytes are real pane output, indistinguishable at the
+/// wire level from "not the marker", so a client that unconditionally
+/// blocked on the marker would hang forever attaching to it, and one
+/// that read-with-timeout-and-discarded would silently drop that
+/// output. Bounding the read and reclaiming whatever it captured is what
+/// makes an old daemon a merely-slower-by-one-timeout attach instead of
+/// either failure.
+pub async fn consume_marker_or_reclaim(
+    socket: &mut UnixStream,
+    timeout: std::time::Duration,
+) -> Option<Vec<u8>> {
+    let mut buf = vec![0u8; LIVENESS_MARKER.len()];
+    let mut filled = 0;
+    let deadline = tokio::time::Instant::now() + timeout;
+    while filled < buf.len() {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, socket.read(&mut buf[filled..])).await {
+            Ok(Ok(0)) => break, // EOF: the peer closed before sending anything more.
+            Ok(Ok(n)) => filled += n,
+            Ok(Err(_)) | Err(_) => break, // read error or the bounded timeout elapsed.
+        }
+    }
+    if filled == buf.len() && buf == LIVENESS_MARKER {
+        return None;
+    }
+    buf.truncate(filled);
+    Some(buf)
 }
 
 /// CREW-18: the crew identity shown in a pane's title bar/tab, set exactly

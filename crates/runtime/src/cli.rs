@@ -1446,12 +1446,26 @@ async fn run_attach(
         paths.pane_socket(&run_id)
     };
 
-    let socket = match attach::connect(&socket_path).await {
+    let mut socket = match attach::connect(&socket_path).await {
         Ok(socket) => socket,
         Err(err) => return fail(&err),
     };
 
     println!("crewd attach: connected. Press Ctrl+] to detach.");
+
+    // CREW-30: consume the server's liveness marker if it sent one --
+    // every current daemon does, right after accepting. An older daemon
+    // (predating the marker) never sends it at all; whatever bytes this
+    // reads in that case are real pane output, not a marker, and must be
+    // written out before the pump starts rather than dropped.
+    if let Some(leftover) =
+        attach::consume_marker_or_reclaim(&mut socket, std::time::Duration::from_millis(250)).await
+        && !leftover.is_empty()
+    {
+        use std::io::Write as _;
+        let _ = std::io::stdout().write_all(&leftover);
+        let _ = std::io::stdout().flush();
+    }
 
     // Set once, here, before the pump starts -- never re-asserted. The
     // vendor process's own later title sequences (if it emits any) simply
