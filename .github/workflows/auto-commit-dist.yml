@@ -85,7 +85,11 @@ jobs:
           BRANCH: ${{ github.head_ref }}
         run: |
           # Read dist file and encode as base64 for GraphQL mutation
-          DIST_B64=$(base64 -i packages/extension/dist/index.js | tr -d '\n')
+          # Write to file instead of variable to avoid MAX_ARG_STRLEN (128 KB per argument).
+          # The bundle is ~484 KB, base64-encoded to ~645 KB, exceeding Linux's exec argument limit.
+          # --rawfile reads the file directly into jq, bypassing shell argument transport.
+          # Trailing newline: tr -d '\n' removes it, so the file has none.
+          base64 packages/extension/dist/index.js | tr -d '\n' > /tmp/dist-content.b64
 
           # GraphQL mutation: createCommitOnBranch
           # This creates a commit signed by the GitHub App automatically.
@@ -95,14 +99,15 @@ jobs:
           # gh authenticates from GH_TOKEN -- deliberately NOT GITHUB_TOKEN, so no tool
           # inside this step (now or added later) picks up the elevated token under the
           # ambient name every action and gh invocation reads by default.
-          # Branch name passed via --arg (not string-spliced) per gh api graphql docs:
+          # Branch name passed via --arg (not string-spliced); dist content via --rawfile (size limit).
+          # Reference: run 33290093785 failed with "Argument list too long" using --arg for distContent.
           # https://cli.github.com/manual/gh_api
           jq -n \
             --arg branch "$BRANCH" \
             --arg repo "${{ github.repository }}" \
             --arg headSha "${{ github.event.pull_request.head.sha }}" \
             --arg runId "${{ github.run_id }}" \
-            --arg distContent "$DIST_B64" \
+            --rawfile distContent /tmp/dist-content.b64 \
             '{
               "query": "mutation CreateCommit($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
               "variables": {
