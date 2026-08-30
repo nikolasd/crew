@@ -10,6 +10,54 @@ permissions:
   contents: read
 
 jobs:
+  # CREW-42: Duplicate changes classification from ci.yml (two-place seam — both files must be
+  # updated together if the docs-only pattern changes). This workflow's build job gates on the
+  # same docs_only output; see ci.yml's changes job for full rationale.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.check.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify changes as docs-only or not
+        id: check
+        run: |
+          # Determine the comparison base depending on event type
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # For PRs, fetch and compare against the merge base
+            git fetch origin "${{ github.base_ref }}"
+            base_ref="origin/${{ github.base_ref }}"
+          else
+            # For push events, compare against the previous commit
+            base_ref="HEAD~1"
+          fi
+
+          # Get the list of changed files (name only, relative to repo root)
+          changed_files=$(git diff --name-only "${base_ref}...HEAD")
+
+          # Determine if all changes are docs-only:
+          # Pattern: *.md (markdown), docs/** (docs directory), assets/** (assets)
+          docs_only=true
+          while read -r file; do
+            # Skip empty lines
+            if [ -z "$file" ]; then
+              continue
+            fi
+            # Check if file matches a docs-only pattern
+            if ! [[ "$file" =~ \.md$ ]] && \
+               ! [[ "$file" =~ ^docs/ ]] && \
+               ! [[ "$file" =~ ^assets/ ]]; then
+              # File does not match any docs pattern — this is a code change
+              docs_only=false
+              break
+            fi
+          done <<< "$changed_files"
+
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   targets:
     runs-on: ubuntu-latest
     outputs:
@@ -23,7 +71,8 @@ jobs:
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
   build:
-    needs: targets
+    needs: [targets, changes]
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
