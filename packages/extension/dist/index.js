@@ -10316,8 +10316,10 @@ CREW-35: the maintainer explicitly chose to put the live,
 capability-granting token in this field rather than only pointing
 at the daemon's own log (the narrower-exposure alternative) --
 \`/crew health\`'s output flows into the leader model's own session
-context/transcript, a wider and less access-controlled surface than
-a local log file, and that tradeoff was seen and accepted for
+context/transcript, including model-initiated checks (the model can
+call the \`crew_health\` tool unprompted, not only a human typing
+\`/crew health\`), a wider and less access-controlled surface than a
+local log file, and that tradeoff was seen and accepted for
 one-click discoverability. Do not "fix" this by hiding the token
 again without a fresh maintainer decision.`,
           type: [
