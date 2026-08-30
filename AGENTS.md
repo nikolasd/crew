@@ -100,7 +100,7 @@ crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/aud
 
 ### Rust
 
-- **Edition 2024, Rust 1.97.1** (pinned in `rust-toolchain.toml`)
+- **Edition 2024, Rust stable** (tracked via `rust-toolchain.toml`, always the latest stable release — matches CI's `dtolnay/rust-toolchain@stable`)
 - `cargo fmt` for formatting, `cargo clippy` for linting (warnings as errors)
 - **Workspace dependencies** in root `Cargo.toml` — all crates reference via `.workspace = true`
 - **Error handling:** `thiserror` for custom error types, `anyhow` for application errors
@@ -160,7 +160,7 @@ crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/aud
 | `biome.json` | Formatter config (TS/JS only; Rust uses cargo fmt) |
 | `bunfig.toml` | Bun config (exact install) |
 | `tsconfig.json` | Root TS config (strict, ESNext, Bun types) |
-| `rust-toolchain.toml` | Rust 1.97.1 with clippy + rustfmt |
+| `rust-toolchain.toml` | Rust stable (rolling) with clippy + rustfmt |
 | `Cargo.toml` | Workspace definition and shared dependencies |
 | `.claude-plugin/marketplace.json` | OMP marketplace catalog for the `crew` plugin |
 | `git-town.toml` | Git Town config (main branch, GitHub forge) |
@@ -172,7 +172,7 @@ crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/aud
 - **Runtime:** Bun 1.3.14+ (pinned via `packageManager` field). NOT Node.js.
 - **Package manager:** Bun workspaces. `bun install` for deps, `bun run <script>` for commands.
 - **Exact install mode:** `bunfig.toml` sets `exact = true` — lockfile is strict.
-- **Rust toolchain:** 1.97.1 via `rust-toolchain.toml`. Use `rustup` for automatic version pinning.
+- **Rust toolchain:** tracks `stable` via `rust-toolchain.toml` — always the latest stable release, no fixed version. Use `rustup` so this is picked up automatically per-directory.
 - **Formatter:** Biome for TS/JS (`bun run format`), `cargo fmt` for Rust. Linting disabled in Biome; use `cargo clippy` for Rust.
 - **Distribution:** Extension + skills install via the OMP marketplace (`.claude-plugin/marketplace.json`, git clone of this repo — public, cloned over HTTPS, no authentication required). The `crewd` binary downloads on demand as a GitHub Release asset via `/crew-install`, verified by SHA-256; a `GITHUB_TOKEN`/`GH_TOKEN` or a local `gh auth login` session is optional but recommended — it raises GitHub's unauthenticated rate limit (60/hour) to 5,000/hour, and is not a permission gate.
 - **Test environment:** Set `CREW_DISABLE_VENDOR_CLI=1` to skip live vendor CLI calls (required in CI to avoid billed model calls).

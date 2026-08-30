@@ -10,9 +10,9 @@ invariants). For the technical *how* of building and testing Crew itself, see
 
 ### Prerequisites
 
-- **Rust** (version 1.97.1, pinned in `rust-toolchain.toml`)
-  - Recommended: install via [rustup](https://rustup.rs) — automatically respects the pinned version
-  - Alternative: `brew install rust` (no automatic version pinning; verify with `rustc --version`)
+- **Rust** (stable channel, tracked by `rust-toolchain.toml` — always the latest stable release, no fixed version)
+  - Recommended: install via [rustup](https://rustup.rs) — automatically tracks the `stable` channel per-directory
+  - Alternative: `brew install rust` (no automatic per-directory tracking; verify with `rustc --version`)
 - **Bun** (version 1.3.14 or later)
   - Install via Homebrew: `brew install oven-sh/bun/bun`
 
@@ -66,7 +66,7 @@ bun run check
 - Follow [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
 - Use `cargo fmt` to format code: `cargo fmt --all`
 - Use `cargo clippy` to check for common issues: `cargo clippy --all-targets --all-features -- -D warnings`
-- Edition 2024, Rust 1.97.1 minimum
+- Edition 2024, Rust stable (whatever `rust-toolchain.toml` currently tracks)
 
 ### TypeScript
 

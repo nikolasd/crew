@@ -14,9 +14,9 @@ and [`manual-testing.md`](manual-testing.md) (QA verification steps).
 
 Before you begin, ensure you have the following installed:
 
-- **Rust 1.97.1+** (pinned by `rust-toolchain.toml`)
-  - Recommended: install via [rustup](https://rustup.rs) — automatically respects the pinned version
-  - Alternative: `brew install rust` (no automatic version pinning; verify with `rustc --version`)
+- **Rust stable** (tracked by `rust-toolchain.toml` — always the latest stable release, no fixed version)
+  - Recommended: install via [rustup](https://rustup.rs) — automatically tracks the `stable` channel per-directory
+  - Alternative: `brew install rust` (no automatic per-directory tracking; verify with `rustc --version`)
 - **Bun 1.3.14+** (pinned by `packageManager` in `package.json`)
   - Install via Homebrew: `brew install oven-sh/bun/bun`
 

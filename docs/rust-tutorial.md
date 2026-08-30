@@ -52,7 +52,7 @@ explain why they failed before they passed.
 
 `cargo test -p crew-protocol` = "run tests for that one workspace package".
 
-The workspace uses Rust edition 2024 and pins `rust-version = "1.97.1"`. The resolver is `"3"`.
+The workspace uses Rust edition 2024 and tracks whatever `rust-toolchain.toml` currently pins to `channel = "stable"` -- no fixed minimum-supported-Rust-version is declared, since the toolchain always moves with the latest stable release. The resolver is `"3"`.
 
 ### Anatomy of a Rust file
 
