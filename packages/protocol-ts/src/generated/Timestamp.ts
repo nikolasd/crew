@@ -2,10 +2,5 @@
 
 /**
  * Canonical UTC RFC 3339 timestamp text, as carried on the wire.
- *
- * Rather than expose [`time::OffsetDateTime`] across generated bindings,
- * Crew normalizes every timestamp to a UTC RFC 3339 string at
- * construction time; downstream consumers (including schemars/ts-rs) only
- * ever see a plain string.
  */
 export type Timestamp = string;

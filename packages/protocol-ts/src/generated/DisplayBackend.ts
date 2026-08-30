@@ -3,14 +3,7 @@
 /**
  * Supported display backends.
  *
- * Reconciled with `crates/runtime`'s config-facing
- * `crew::config::crew::DisplayBackend` (WP9): that enum additionally has
- * `Auto`, which means "no forced backend" and has no concrete backend of
- * its own here -- every other variant of the config enum maps to exactly
- * one of these (`crate::config::protocol_display_backend` in the runtime
- * crate does that mapping). `Terminal` (an always-available, capability-
- * free stub) is retired in the same change: [`Self::Hidden`] is now the
- * one always-available fallback, and it is a real, deliberate "no pane"
- * choice rather than a degraded terminal rendering.
+ * `hidden` is the one always-available fallback, and it is a real,
+ * deliberate "no pane" choice rather than a degraded rendering.
  */
 export type DisplayBackend = "herdr" | "tmux" | "osWindow" | "hidden";

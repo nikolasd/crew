@@ -25,11 +25,12 @@ pub enum CrewMethod {
     EventsSubscribe,
     #[serde(rename = "events/replay")]
     EventsReplay,
-    /// Gracefully stops the daemon. Arbitrated (R82): refused with
-    /// `-32602` while any run is live or another connection is being
-    /// served, unless `params.force == true` (the deliberate, logged
-    /// operator escape hatch). The out-of-band `crewd stop`/SIGTERM
-    /// path is deliberately unarbitrated.
+    // R82. The out-of-band `crewd stop`/SIGTERM path is deliberately
+    // unarbitrated.
+    /// Gracefully stops the daemon. Refused with `-32602` while any run is
+    /// live or another connection is being served, unless
+    /// `params.force == true` (the deliberate, logged operator escape
+    /// hatch).
     #[serde(rename = "runtime/shutdown")]
     RuntimeShutdown,
 
@@ -58,9 +59,10 @@ pub enum CrewMethod {
     RunRetry,
     #[serde(rename = "run/cancel")]
     RunCancel,
-    /// The leader closes a run it considers done (ADR-0027). A TUI vendor
-    /// never exits, so a run is a conversation the leader ends -- this is
-    /// that ending, distinct from `run/cancel`'s abort.
+    // ADR-0027.
+    /// The leader closes a run it considers done. A TUI vendor never exits,
+    /// so a run is a conversation the leader ends -- this is that ending,
+    /// distinct from `run/cancel`'s abort.
     #[serde(rename = "run/finish")]
     RunFinish,
     #[serde(rename = "run/result")]
@@ -133,9 +135,10 @@ pub enum CrewMethod {
     // Policy: violation resolution
     #[serde(rename = "policy/violation/decide")]
     PolicyViolationDecide,
+    // R80.
     /// Lists a project's recorded policy violations with their decision
     /// state, so an operator can find which violation still holds a
-    /// quarantine without diffing the raw event stream (R80).
+    /// quarantine without diffing the raw event stream.
     #[serde(rename = "policy/violation/list")]
     PolicyViolationList,
 
