@@ -16,7 +16,7 @@ use crew_runtime::adapter::{
     AdapterAuthorization, AdapterCapabilities, AdapterMode, AdapterRegistry, ApprovalsCapability,
     DurabilityCapability, FixtureAuthorization, NativeViewCapability, NestedCapability,
     OmpRpcStartupOptions, ProtocolKind, ResumeCapability, StartupOptions, SteeringCapability,
-    UsageCapability, WorkerProfile, WorkspaceControlCapability,
+    TerminalDegradedStartupOptions, UsageCapability, WorkerProfile, WorkspaceControlCapability,
 };
 use crew_runtime::config::{NestedViolationAction, RuntimePolicy, crew::DisplayBackend};
 use crew_runtime::db::DatabaseHandle;
@@ -101,15 +101,19 @@ fn terminal_profile() -> WorkerProfile {
     }
 }
 
+/// Genuinely `StartupOptions::TerminalDegraded` -- unlike this function's
+/// pre-CREW-11 body, which actually built a `Codex`/`mode: "tui"` profile
+/// (a stale mismatch between the name and what it constructed; the loose
+/// "may succeed or fail" assertion its one caller used never caught it).
 fn terminal_degraded_profile() -> WorkerProfile {
     WorkerProfile {
         id: crew_runtime::adapter::ProfileId::new(),
-        adapter: "codex".to_string(),
+        adapter: "tmux".to_string(),
         model: String::new(),
         permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
-        startup_options: StartupOptions::Codex(crew_runtime::adapter::CodexStartupOptions {
-            mode: AdapterMode::Tui,
-            ..Default::default()
+        startup_options: StartupOptions::TerminalDegraded(TerminalDegradedStartupOptions {
+            backend: "tmux".to_string(),
+            underlying_adapter: Some("claude".to_string()),
         }),
         environment_allowlist: Vec::new(),
         source: "test".to_string(),
@@ -220,8 +224,13 @@ async fn a_terminal_profile_uses_terminal_adapter() {
     assert!(result.is_ok() || result.is_err());
 }
 
+/// CREW-11: `TerminalDegraded` is refused at dispatch, not just at
+/// `profile/register` -- a defense-in-depth backstop for a historical row
+/// stored before `WorkerProfile::validate` learned to reject it. This is
+/// no longer host-dependent (no tmux probe is ever reached): every host
+/// gets the same typed refusal.
 #[tokio::test]
-async fn a_terminal_degraded_profile_uses_terminal_adapter() {
+async fn a_terminal_degraded_profile_is_refused_not_started() {
     let (db, _dir, project_id) = harness().await;
     let (run_id, task_id, worker_id) =
         seed_worker_and_run(&db, project_id, Some(&terminal_degraded_profile())).await;
@@ -232,25 +241,14 @@ async fn a_terminal_degraded_profile_uses_terminal_adapter() {
         vec![],
     );
 
-    // TerminalDegraded now constructs a terminal adapter (may succeed or fail based on host)
-    let result = registry
+    let err = registry
         .start(ctx(db, project_id, run_id, task_id, worker_id))
-        .await;
-
-    // On a host without tmux, we expect an error; on a host with tmux, we expect success
-    // The key is that the registry now attempts to construct a terminal adapter
-    match result {
-        Ok(_) => {
-            // Success - terminal adapter was constructed
-        }
-        Err(err) => {
-            // Should contain either "unavailable" (tmux not found) or "process" (other error)
-            assert!(
-                err.contains("unavailable") || err.contains("process"),
-                "unexpected error message: {err}"
-            );
-        }
-    }
+        .await
+        .expect_err("a terminalDegraded profile must never start an adapter");
+    assert!(
+        err.contains("not implemented"),
+        "unexpected error message: {err}"
+    );
 }
 
 #[tokio::test]

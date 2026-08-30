@@ -913,11 +913,16 @@ async fn per_run_policy_overrides_snapshot_only_their_own_run() {
     );
 }
 
-/// A run whose display preference resolves to an available backend
-/// journals exactly one `DisplayPaneAttached`, and reports the winning
-/// backend on the submit response so the caller needs no second call.
+/// CREW-11: `run/submit` must never claim a display outcome it hasn't
+/// observed. The old behavior journaled a placeholder `DisplayPaneAttached`
+/// (empty pane ref -- no vendor pane id exists yet) purely from backend
+/// *availability*, and echoed that same prediction back as
+/// `result.display`. Both were a prediction dressed as a fact: the real
+/// attach (if any) only happens later, through whatever actually drives
+/// the run. This pins the fix -- resolving to an available backend
+/// produces neither the fabricated event nor the field.
 #[tokio::test]
-async fn run_submit_journals_the_display_pane_it_attached() {
+async fn run_submit_makes_no_display_claim_even_when_a_backend_resolves() {
     let harness = Harness::start(|c| {
         c.run_driver = Some(Arc::new(FakeRunDriver) as Arc<dyn RunDriver>);
     })
@@ -942,7 +947,8 @@ async fn run_submit_journals_the_display_pane_it_attached() {
     let worker_id = worker["result"]["workerId"].as_str().unwrap().to_string();
 
     // `hidden` is the one backend that is always available, so this
-    // resolves identically on a developer machine and in headless CI.
+    // resolves identically on a developer machine and in headless CI --
+    // the strongest case for the old code to have fired the placeholder.
     let submit = client
         .call(
             4,
@@ -954,33 +960,27 @@ async fn run_submit_journals_the_display_pane_it_attached() {
             }),
         )
         .await;
-    let run_id = submit["result"]["runId"].as_str().unwrap().to_string();
-    assert_eq!(submit["result"]["display"]["selected"], "hidden");
-    assert_eq!(submit["result"]["display"]["attempts"], json!(["hidden"]));
+    assert!(
+        submit["result"].get("display").is_none(),
+        "run/submit must not echo a resolution-time prediction as a display outcome: {submit:?}"
+    );
 
     let replay = client
         .call(5, "events/replay", json!({ "afterSequence": 0 }))
         .await;
     let attached = pane_events(&replay, "displayPaneAttached");
-    assert_eq!(attached.len(), 1, "exactly one attach: {attached:?}");
-    assert_eq!(attached[0]["runId"], run_id);
-    assert_eq!(attached[0]["backend"], "hidden");
-    assert_eq!(
-        attached[0]["paneRef"], "",
-        "resolution never activates a backend, so there is no vendor pane id yet"
+    assert!(
+        attached.is_empty(),
+        "no attach ever happened for this run, so none may be journaled: {attached:?}"
     );
 }
 
-/// A `mode: "tui"` run whose owning adapter journals its own real pane
-/// events (the `TuiAdapter`'s `PaneCoordinator`) receives **no**
-/// submit-time placeholder `DisplayPaneAttached` at all -- journaling it
-/// would leave the stream with two attaches against one detach, a pane
-/// consumers see attach but never release. Backend *resolution* still
-/// runs and still echoes on the submit response; only the placeholder
-/// event is skipped. The headless sibling above pins the unchanged
-/// placeholder behavior for every other run.
+/// A `mode: "tui"` run's owning adapter journals its own real pane events
+/// (the `TuiAdapter`'s `PaneCoordinator`) once it actually attaches --
+/// `run/submit` itself still makes no display claim of its own, exactly
+/// as the non-TUI case above, and journals no submit-time placeholder.
 #[tokio::test]
-async fn run_submit_skips_the_placeholder_pane_for_a_tui_owned_run() {
+async fn run_submit_makes_no_display_claim_for_a_tui_owned_run_either() {
     let harness = Harness::start(|c| {
         c.run_driver = Some(Arc::new(FakeRunDriver) as Arc<dyn RunDriver>);
     })
@@ -1041,9 +1041,9 @@ async fn run_submit_skips_the_placeholder_pane_for_a_tui_owned_run() {
         submit.get("error").is_none(),
         "run/submit failed: {submit:?}"
     );
-    assert_eq!(
-        submit["result"]["display"]["selected"], "hidden",
-        "backend resolution itself is untouched for a TUI-owned run"
+    assert!(
+        submit["result"].get("display").is_none(),
+        "run/submit must not echo a resolution-time prediction as a display outcome: {submit:?}"
     );
 
     let replay = client
@@ -1052,7 +1052,7 @@ async fn run_submit_skips_the_placeholder_pane_for_a_tui_owned_run() {
     let attached = pane_events(&replay, "displayPaneAttached");
     assert!(
         attached.is_empty(),
-        "a TUI-owned run must get no submit-time placeholder attach: {attached:?}"
+        "a TUI-owned run must get no submit-time placeholder attach either: {attached:?}"
     );
 }
 
@@ -1082,11 +1082,13 @@ fn workspace_event_kinds_for_run(replay: &Value, run_id: &str) -> Vec<String> {
         .collect()
 }
 
-/// An attach is journaled if and only if a backend was actually
-/// selected. Whether `herdr` happens to be installed decides which branch
-/// runs, so the test asserts the correspondence rather than the outcome.
+/// No submit-time attach is journaled regardless of whether the requested
+/// backend actually resolves -- `herdr`, requested with no fallback, may
+/// or may not be installed on the machine running this test, so this
+/// covers the "nothing available" outcome the two tests above (which both
+/// use the always-available `hidden` backend) don't reach.
 #[tokio::test]
-async fn a_pane_is_journaled_exactly_when_a_backend_was_selected() {
+async fn run_submit_journals_no_placeholder_pane_whether_or_not_a_backend_resolves() {
     let harness = Harness::start(|c| {
         c.run_driver = Some(Arc::new(FakeRunDriver) as Arc<dyn RunDriver>);
     })
@@ -1127,22 +1129,19 @@ async fn a_pane_is_journaled_exactly_when_a_backend_was_selected() {
         submit.get("error").is_none(),
         "a headless run still submits: {submit:?}"
     );
-    let selected = submit["result"]["display"]["selected"].clone();
+    assert!(
+        submit["result"].get("display").is_none(),
+        "run/submit must not echo a resolution-time prediction as a display outcome: {submit:?}"
+    );
 
     let replay = client
         .call(5, "events/replay", json!({ "afterSequence": 0 }))
         .await;
     let attached = pane_events(&replay, "displayPaneAttached");
-    match selected.as_str() {
-        Some(backend) => {
-            assert_eq!(attached.len(), 1, "a selection journals one attach");
-            assert_eq!(attached[0]["backend"], backend);
-        }
-        None => assert!(
-            attached.is_empty(),
-            "a headless run must journal no pane at all: {attached:?}"
-        ),
-    }
+    assert!(
+        attached.is_empty(),
+        "no submit-time attach may ever be journaled, whether or not a backend resolved: {attached:?}"
+    );
 }
 
 #[tokio::test]
