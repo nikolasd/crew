@@ -28,6 +28,7 @@ import {
   validateJsonRpcErrorResponse,
   validateJsonRpcNotification,
   validateJsonRpcResponse,
+  validateMessageListResult,
   validatePaneReopenResult,
   validatePolicyViolationListResult,
   validateRetentionCleanResult,
@@ -57,6 +58,7 @@ const RESULT_VALIDATORS: Record<string, ValidateFunction> = {
   "run/result": validateRunResultResult,
   "retention/clean": validateRetentionCleanResult,
   "pane/reopen": validatePaneReopenResult,
+  "message/list": validateMessageListResult,
 };
 
 /** Removes a subscription registered with {@link CrewClient.subscribe}. */

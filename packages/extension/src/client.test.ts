@@ -350,6 +350,72 @@ test("a malformed run/result result (runId not a string) is rejected by schema v
   }
 });
 
+test("a malformed message/list result (a message with a misspelled field name) is rejected by schema validation (CREW-43)", async () => {
+  const fakeSocketPath = mkdtempSync("/tmp/bat-ts-f-") + "/fake.sock";
+  let requestCount = 0;
+
+  const fakeServer: Server = createServer((socket: Socket) => {
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk: string) => {
+      buffer += chunk;
+      let newline = buffer.indexOf("\n");
+      while (newline !== -1) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        const request = JSON.parse(line) as { id: unknown };
+        requestCount += 1;
+
+        if (requestCount === 1) {
+          const result = {
+            runtime: { name: "fake", version: "0.0.0" },
+            negotiated: { major: 1, minor: 0 },
+            projectId: "018f1435-2e2b-7c1a-9d4b-6a1e2f3c4d5b",
+            principal: { role: "ompExtension", instanceId: "omp-1" },
+            allowedMethods: ["message/list"],
+            capabilities: { maxFrameBytes: 1048576, peerCredentialsVerified: true },
+            nextSequence: 1,
+          };
+          socket.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
+        } else {
+          // A message/list result whose one message misspells `messageId`
+          // as `messsageId` -- `additionalProperties: false` must reject
+          // this (an extra, unrecognized field) and `messageId` being
+          // absent must reject it too (a required field missing), not
+          // silently pass a shape the daemon never actually sent.
+          const result = {
+            messages: [
+              {
+                messsageId: "018f1435-2e2b-7c1a-9d4b-6a1e2f3c4d5c",
+                runId: "018f1435-2e2b-7c1a-9d4b-6a1e2f3c4d5d",
+                senderWorkerId: "018f1435-2e2b-7c1a-9d4b-6a1e2f3c4d5e",
+                taskId: "018f1435-2e2b-7c1a-9d4b-6a1e2f3c4d5f",
+                kind: "followUp",
+                payload: "hello",
+                deliveryState: "recorded",
+                createdAt: "2026-08-30T00:00:00Z",
+              },
+            ],
+          };
+          socket.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
+        }
+        newline = buffer.indexOf("\n");
+      }
+    });
+  });
+
+  await new Promise<void>((resolve) => fakeServer.listen(fakeSocketPath, resolve));
+
+  const client = new CrewClient({ socketPath: fakeSocketPath });
+  try {
+    await client.initialize(ompInitParams(repoDir, 1024 * 1024));
+    await expect(client.request("message/list", { runId: "018f1435-2e2b-7c1a-9d4b-6a1e2f3c4d5d" })).rejects.toBeInstanceOf(ValidationError);
+  } finally {
+    client.close();
+    await new Promise<void>((resolve) => fakeServer.close(() => resolve()));
+  }
+});
+
 test("a null result for a validator-less method is rejected by the structural object guard (R55)", async () => {
   const fakeSocketPath = mkdtempSync("/tmp/bat-ts-f-") + "/fake.sock";
   let requestCount = 0;
