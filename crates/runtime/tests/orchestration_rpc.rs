@@ -5742,3 +5742,193 @@ async fn pane_reopen_refuses_a_stale_socket_file_with_no_listener() {
         "the refusal must name pane liveness, not mere absence: {reopen:?}"
     );
 }
+
+// ------------------------------------------------ CREW-27: prompt as intent
+
+/// Every `runPromptEvent` payload in a replay response.
+fn prompt_events(replay: &Value) -> Vec<&Value> {
+    replay["result"]
+        .as_array()
+        .expect("events/replay returns an array")
+        .iter()
+        .map(|e| &e["event"])
+        .filter(|e| e["type"] == "runPromptEvent")
+        .map(|e| &e["payload"])
+        .collect()
+}
+
+/// Submits a run against `adapter: "fake"` with `prompt`, returning
+/// `(task_id, worker_id, run_id)`. Ids start at 2; `initialize` consumed 1.
+async fn submit_fake_run_with_prompt(
+    client: &mut Client,
+    prompt: Option<&str>,
+) -> (String, String, String) {
+    let task = client
+        .call(
+            2,
+            "task/upsert",
+            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
+        )
+        .await;
+    let task_id = task["result"]["taskId"].as_str().unwrap().to_string();
+    let worker = client
+        .call(
+            3,
+            "worker/create",
+            json!({ "fingerprint": "sha256:f", "adapter": "fake", "model": "m" }),
+        )
+        .await;
+    let worker_id = worker["result"]["workerId"].as_str().unwrap().to_string();
+
+    let mut params = json!({ "taskId": task_id, "workerId": worker_id });
+    if let Some(prompt) = prompt {
+        params["prompt"] = json!(prompt);
+    }
+    let submit = client.call(4, "run/submit", params).await;
+    assert!(
+        submit.get("error").is_none(),
+        "run/submit failed: {submit:?}"
+    );
+    let run_id = submit["result"]["runId"].as_str().unwrap().to_string();
+    (task_id, worker_id, run_id)
+}
+
+/// ADR-0028: the prompt is durable run intent. Without it a run's journal
+/// is a set of answers to a question nobody recorded.
+#[tokio::test]
+async fn run_submit_journals_its_prompt_as_durable_intent() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+
+    let (task_id, worker_id, run_id) =
+        submit_fake_run_with_prompt(&mut client, Some("refactor the lease code")).await;
+
+    let replay = client
+        .call(5, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    let prompts = prompt_events(&replay);
+    assert_eq!(
+        prompts.len(),
+        1,
+        "exactly one prompt event for one submit: {prompts:?}"
+    );
+    assert_eq!(prompts[0]["prompt"], "refactor the lease code");
+    assert_eq!(prompts[0]["runId"], run_id);
+    assert_eq!(prompts[0]["taskId"], task_id);
+    assert_eq!(prompts[0]["workerId"], worker_id);
+}
+
+/// ADR-0006's boundary applies to the prompt like any other content. A
+/// prompt is classified `Visible`, so the text survives and the
+/// secret-shaped substring inside it does not.
+#[tokio::test]
+async fn a_secret_shaped_string_in_a_prompt_is_masked_before_it_is_journaled() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+
+    // Matches the built-in `sk-` rule: 16+ chars of [A-Za-z0-9_-] after a
+    // non-word boundary (`security/redaction.rs`).
+    let secret = "sk-ant-api03-AAAABBBBCCCCDDDD1234";
+    let (_, _, _) = submit_fake_run_with_prompt(
+        &mut client,
+        Some(&format!("deploy with {secret} and report back")),
+    )
+    .await;
+
+    let replay = client
+        .call(5, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    let prompts = prompt_events(&replay);
+    assert_eq!(prompts.len(), 1, "one prompt event: {prompts:?}");
+    let journaled = prompts[0]["prompt"].as_str().expect("prompt is a string");
+
+    assert!(
+        !journaled.contains(secret),
+        "the secret must never become durable: {journaled}"
+    );
+    assert!(
+        journaled.contains("deploy with") && journaled.contains("and report back"),
+        "the surrounding prompt text must survive -- a prompt is Visible, \
+         not dropped wholesale: {journaled}"
+    );
+}
+
+/// A run submitted with no prompt journals no prompt event, so absence
+/// stays distinguishable from an empty prompt.
+#[tokio::test]
+async fn a_run_submitted_without_a_prompt_journals_no_prompt_event() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+
+    let (_, _, _) = submit_fake_run_with_prompt(&mut client, None).await;
+
+    let replay = client
+        .call(5, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    assert!(
+        prompt_events(&replay).is_empty(),
+        "no prompt was submitted, so no prompt event may be journaled"
+    );
+}
+
+/// CREW-28: a message payload is caller-supplied content and must cross
+/// the ADR-0006 boundary before it becomes durable, exactly like a submit
+/// prompt. It reached `INSERT INTO messages` verbatim until this.
+#[tokio::test]
+async fn a_secret_shaped_string_in_a_message_payload_is_masked_before_it_is_journaled() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+
+    let (task_id, worker_id, run_id) = submit_fake_run_with_prompt(&mut client, None).await;
+
+    let secret = "sk-ant-api03-EEEEFFFFGGGGHHHH5678";
+    let send = client
+        .call(
+            5,
+            "message/send",
+            json!({
+                "runId": run_id,
+                "senderWorkerId": worker_id,
+                "taskId": task_id,
+                "kind": "steer",
+                "payload": format!("use {secret} for the deploy"),
+            }),
+        )
+        .await;
+    assert!(send.get("error").is_none(), "message/send failed: {send:?}");
+
+    let list = client
+        .call(6, "message/list", json!({ "runId": run_id }))
+        .await;
+    let messages = list["result"]["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 1, "one message: {messages:?}");
+    let payload = messages[0]["payload"]
+        .as_str()
+        .expect("payload is a string");
+
+    assert!(
+        !payload.contains(secret),
+        "a steer's secret must never become durable: {payload}"
+    );
+    assert!(
+        payload.contains("use") && payload.contains("for the deploy"),
+        "the surrounding text must survive -- a payload is Visible, not \
+         dropped wholesale: {payload}"
+    );
+}

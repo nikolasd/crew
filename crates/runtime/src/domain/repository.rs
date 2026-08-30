@@ -951,6 +951,43 @@ impl<'c> DomainRepository<'c> {
             })
     }
 
+    /// Journals `prompt` as `run_id`'s durable intent (ADR-0028).
+    ///
+    /// Appends an event and mutates no table. The prompt is evidence of
+    /// what was *asked*, not run state, so it belongs in the journal
+    /// rather than in a `runs` column -- which also means the retention
+    /// sweep bounds it like every other event, instead of one row pinning
+    /// a prompt forever.
+    ///
+    /// `prompt` must already have crossed the [ADR-0006] boundary. This
+    /// method cannot enforce that: like every event field after redaction
+    /// it is a plain `String`, and the type system's guarantee ends where
+    /// the redactor's output begins. Its sole caller (`run/submit`)
+    /// classifies the prompt `Visible` and passes it through
+    /// `Redactor::sanitize_fragment` first, and the test that proves the
+    /// property byte-scans the database rather than trusting this comment.
+    pub fn record_run_prompt(
+        &mut self,
+        run_id: crew_protocol::RunId,
+        task_id: crew_protocol::TaskId,
+        worker_id: crew_protocol::WorkerId,
+        prompt: String,
+    ) -> Result<Committed, DomainError> {
+        let event = RuntimeEvent::RunPromptEvent {
+            run_id,
+            task_id,
+            worker_id,
+            prompt,
+        };
+        self.append_and_apply(
+            &event,
+            Some(task_id),
+            Some(worker_id),
+            Some(run_id),
+            |_tx| Ok(()),
+        )
+    }
+
     /// Writes `flags` verbatim to `run_id`'s row and journals the matching
     /// `RunFlagsChanged` event. Shared by [`Self::set_run_flag`] and
     /// [`Self::release_quarantine`] so both build their commit from the
