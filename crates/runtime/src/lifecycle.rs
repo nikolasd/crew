@@ -523,7 +523,17 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         .await
         {
             Ok(dashboard) => {
-                tracing::info!(addr = %dashboard.local_addr(), "dashboard_started");
+                // The token is printed exactly once, here, as the whole
+                // URL: every route requires it, so a bare host:port is not
+                // a usable address and printing one would just invite a
+                // 401. Logged at info because an operator who enabled the
+                // dashboard needs to see it; it is a per-run secret, so it
+                // never goes anywhere more durable than the daemon log.
+                tracing::info!(
+                    addr = %dashboard.local_addr(),
+                    url = %format!("http://{}/?token={}", dashboard.local_addr(), dashboard.token()),
+                    "dashboard_started"
+                );
                 Some(dashboard)
             }
             Err(err) => {

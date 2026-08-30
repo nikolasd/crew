@@ -95,6 +95,16 @@ intentionally waiting on a human or peer), unless recovery is explicitly configu
 those. `doctor`'s `stale_runs` check is the live-daemon counterpart: it reports runs silent for
 longer than five minutes without transitioning anything.
 
+**Optional dashboard.** When the crew config sets `dashboard.enabled`, `serve` also binds a
+read-only HTTP listener on `127.0.0.1:<dashboard.port>` (default `4747`) and logs
+`dashboard_started` with the one URL that works — the address plus a `?token=` generated fresh for
+that daemon run. Every route requires the token (loopback keeps other hosts out, but unlike the IPC
+socket a TCP listener cannot check the peer's uid, so other local users are not otherwise excluded);
+untokenized requests get `401`. Every route is a GET — the dashboard is a projection, never a control
+surface. A bind failure logs `dashboard_bind_failed` and leaves the daemon running without a
+dashboard rather than failing startup, which is what you will see if two repositories' daemons are
+configured on the same port.
+
 ### `crewd status`
 
 Prints the runtime's `runtime/status` snapshot as JSON and exits.

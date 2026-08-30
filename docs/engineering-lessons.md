@@ -519,10 +519,69 @@ The general form: a value describing an *intention* must never be returned as th
 *outcome*. When reviewing any result field, ask whether it is measured after the fact or predicted
 before it — and if predicted, say so in its name or its docs.
 
-This class is not confined to code. A stacked pull request displays green checks for a workflow that
-never ran on it, because the real gate is filtered on `pull_request: branches: [main, master]` and a
-stack's child targets its parent instead. Green ticks for a gate that did not execute are the same
-failure wearing different clothes.
+This class is not confined to code. A stacked pull request displayed green checks for a workflow that
+never ran on it: the gate was filtered on `pull_request: branches: [main, master]`, and a stack's
+child targets its parent instead. Green ticks for a gate that did not execute are the same failure
+wearing different clothes. (Closed by widening the trigger to all base branches — CREW-22 — but the
+next entry is about why that sentence deserved to be more than a footnote.)
+
+### A status string is a claim, and needs the same evidence a state edge does
+
+**Locations:** the six instances tabled below, spanning `crates/runtime/src/`, `docs/`,
+`.github/workflows/`, and `crates/runtime/src/dashboard/page.rs`
+
+The previous entry closes with "this class is not confined to code." Six instances later, that
+sentence is the lesson rather than an aside, and the instances have nothing in common except their
+shape: **an artefact asserted something nobody had checked.** Not one was a logic error. Each was a
+string — a result field, a doc comment, a diagram label, a status indicator — that a reader would
+reasonably take as measured, and that nothing measured.
+
+| Artefact | Claimed | Actually | Closed by |
+|---|---|---|---|
+| `pane/reopen`'s result | a live pane | a socket file whose listener was gone | a connect probe, `display::pane_socket::is_live` |
+| `run/submit`'s `result["display"]` | where the pane was placed | the placement *requested*; no consumer anywhere reads it | open when this entry was written (CREW-11) |
+| A stacked PR's green checks | the gate passed | the gate never ran on that base | widening the `pull_request` trigger (CREW-22) |
+| `architecture.md`'s component diagram and list | `config/merge.rs` performs the config merge and fingerprint | the module was not declared in `config/mod.rs` and never compiled | deleting it, and crediting `config/crew.rs` (CREW-23) |
+| `plan.rs`'s own doc comment | its RPCs are unimplemented | they were implemented | correcting the comment (CREW-23) |
+| The dashboard's `reconnecting…` | a retry that can succeed | the daemon had idle-exited; `EventSource` retries forever and nothing respawns it | counting failures, then naming the real cause |
+
+Two things make this a pattern worth a rule rather than six independent fixes.
+
+**The claims were all technically true or once-true.** `reconnecting…` was literally accurate — the
+browser really does keep retrying. `merge.rs` really did contain merge code. `plan.rs`'s comment was
+correct when written. Truth is not the property that failed; *warrant* is. Each artefact stated
+something its author had no way to know at the moment the reader would read it, and none carried the
+evidence that would have made it checkable.
+
+**Every one of them survived a green build.** That is the uncomfortable half. Types, `clippy -D
+warnings`, and 67 test binaries do not read prose, and a result field that is never consumed cannot
+be contradicted by a test. This class is invisible to exactly the tooling the rest of this codebase
+relies on.
+
+[ADR-0023](adr/0023-run-state-edges-from-adapter-evidence.md) already settled the general
+principle for one domain: a run-state edge must derive from adapter evidence, never from inference.
+Nothing established the same standard for prose. The rule is the generalisation:
+
+> Any string a human will read as a status claim needs the same evidentiary standard as a run-state
+> edge. If it is predicted rather than measured, either measure it or say in the string that it is a
+> prediction.
+
+In practice, when writing or reviewing any status-shaped artefact, ask **what would have to be true
+for this to be a lie, and does anything check that?** Concretely: a result field naming an outcome
+should be measured after the fact or renamed to admit it is a request; a "retrying" indicator should
+be able to distinguish a transient failure from a permanent one, and say which; a diagram naming a
+module should be checkable with `git grep` for its `mod` declaration; a doc comment describing
+behaviour should name the test that pins it.
+
+**The sibling with no gate at all.** While implementing the dashboard fix, a new doc comment was
+placed directly above an existing one. The two merged into a single block, which then documented the
+new function — leaving the older function undocumented and the new one carrying a description of
+behaviour it does not have. It compiled, `clippy` was clean, and all 67 test binaries passed, because
+nothing in the toolchain checks that a doc comment describes the item beneath it. Caught by reading
+the diff, which is the only thing that catches it. Doc comments are the one artefact in this
+repository with *no* automated gate whatsoever, which is precisely why they accumulate this failure —
+and why a doc comment asserting an invariant should name the test that enforces it, so the claim
+degrades into a findable dangling reference instead of a quiet lie.
 
 ## Structural Limits and Long-Lived Consumers
 

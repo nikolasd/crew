@@ -516,6 +516,46 @@ pub fn run_owner_not_quarantined_op(run_id: RunId, expected_instance_id: String)
     })
 }
 
+/// Every journaled event for one run, oldest first -- the per-run
+/// transcript the dashboard serves at `/api/run/<id>/events`.
+///
+/// Reads the **journal**, never a vendor's own transcript file on disk:
+/// journaled content has crossed the `Classified` redaction boundary and
+/// had secrets stripped (ADR-0006), while the vendor's file has not.
+/// Serving the file would look like a shortcut and would route around that
+/// boundary.
+///
+/// Uses `idx_events_run_seq` (`events(run_id, sequence)`), so this is an
+/// index scan over one run rather than a walk of the whole journal.
+/// `limit` bounds the response: a long-running worker's transcript is
+/// unbounded, and an HTTP response should not be.
+pub fn run_events_op(run_id: RunId, limit: u32) -> DomainClosure {
+    Box::new(move |conn| {
+        let mut stmt = conn.prepare(
+            "SELECT sequence, timestamp, event_json FROM events
+              WHERE run_id = ?1
+              ORDER BY sequence
+              LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![run_id.to_string(), limit], |row| {
+                let sequence: i64 = row.get(0)?;
+                let timestamp: String = row.get(1)?;
+                let event_json: String = row.get(2)?;
+                Ok(json!({
+                    "sequence": sequence,
+                    "timestamp": timestamp,
+                    // Parsed so the response is real JSON rather than a
+                    // string containing JSON; an unparseable row is
+                    // surfaced as null rather than failing the whole read.
+                    "event": serde_json::from_str::<Value>(&event_json).ok(),
+                }))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(json!({ "runId": run_id.to_string(), "events": rows }))
+    })
+}
+
 /// Reads a terminal run's journal residue for `run/result`: the final
 /// visible message text and the folded usage totals. The usage fold is
 /// adapter-dependent -- Claude journals per-invocation deltas (sum);

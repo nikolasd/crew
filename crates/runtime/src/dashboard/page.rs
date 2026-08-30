@@ -3,6 +3,15 @@
 //! live updates (each event also triggers a state re-fetch, so a lagged
 //! SSE subscription self-heals). No external assets -- the daemon must
 //! render this page with no network access beyond itself.
+//!
+//! **Do not replace the re-fetch with a client-side reducer.** Applying
+//! events incrementally in the browser looks like the obvious
+//! optimisation, and it would require mirroring the server's projection
+//! semantics here exactly and forever -- two reducers that drift. It would
+//! also break the self-healing property above: a viewer that missed an
+//! event would stay wrong instead of correcting on the next one. If the
+//! per-event re-fetch ever becomes a cost worth addressing, debounce it;
+//! do not reduce here. See the parent module's own note.
 
 pub const PAGE_HTML: &str = r##"<!doctype html>
 <html lang="en">
@@ -101,8 +110,33 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
     const live = document.getElementById("live");
     const feed = document.getElementById("feed");
     const source = new EventSource("/events");
-    source.onopen = () => { live.textContent = "live"; live.classList.add("on"); };
-    source.onerror = () => { live.textContent = "reconnecting…"; live.classList.remove("on"); };
+    // "reconnecting" is only honest while a reconnect can plausibly
+    // succeed. The daemon idle-exits when nothing is connected over IPC and
+    // no runs are live, and an open viewer deliberately does NOT count as
+    // activity -- a passive page must not pin a daemon alive. So after a
+    // few failed retries, say the daemon is gone instead of implying a
+    // transient blip the browser will fix. EventSource keeps retrying
+    // either way; only the label changes.
+    let failures = 0;
+    source.onopen = () => {
+      failures = 0;
+      live.textContent = "live";
+      live.classList.add("on");
+      live.title = "receiving events from the daemon";
+    };
+    source.onerror = () => {
+      failures += 1;
+      live.classList.remove("on");
+      if (failures < 3) {
+        live.textContent = "reconnecting…";
+        live.title = "the event stream dropped; retrying";
+      } else {
+        live.textContent = "daemon not running";
+        live.title =
+          "the daemon is not reachable. It exits when idle, and an open dashboard does not keep it alive. " +
+          "Start work in the repository (or run crewd serve) and reload.";
+      }
+    };
     source.onmessage = message => {
       let label = "event";
       try {
