@@ -7451,19 +7451,19 @@ Serialized as the literal method name string used on the wire.`,
           ]
         },
         {
-          description: "Gracefully stops the daemon. Arbitrated (R82): refused with\n`-32602` while any run is live or another connection is being\nserved, unless `params.force == true` (the deliberate, logged\noperator escape hatch). The out-of-band `crewd stop`/SIGTERM\npath is deliberately unarbitrated.",
+          description: "Gracefully stops the daemon. Refused with `-32602` while any run is\nlive or another connection is being served, unless\n`params.force == true` (the deliberate, logged operator escape\nhatch).",
           type: "string",
           const: "runtime/shutdown"
         },
         {
-          description: "The leader closes a run it considers done (ADR-0027). A TUI vendor\nnever exits, so a run is a conversation the leader ends -- this is\nthat ending, distinct from `run/cancel`'s abort.",
+          description: "The leader closes a run it considers done. A TUI vendor never exits,\nso a run is a conversation the leader ends -- this is that ending,\ndistinct from `run/cancel`'s abort.",
           type: "string",
           const: "run/finish"
         },
         {
           description: `Lists a project's recorded policy violations with their decision
 state, so an operator can find which violation still holds a
-quarantine without diffing the raw event stream (R80).`,
+quarantine without diffing the raw event stream.`,
           type: "string",
           const: "policy/violation/list"
         },
@@ -7604,12 +7604,7 @@ number and routing metadata.`,
       ]
     },
     Timestamp: {
-      description: `Canonical UTC RFC 3339 timestamp text, as carried on the wire.
-
-Rather than expose [\`time::OffsetDateTime\`] across generated bindings,
-Crew normalizes every timestamp to a UTC RFC 3339 string at
-construction time; downstream consumers (including schemars/ts-rs) only
-ever see a plain string.`,
+      description: "Canonical UTC RFC 3339 timestamp text, as carried on the wire.",
       type: "string"
     },
     EventSource: {
@@ -7833,15 +7828,9 @@ ever see a plain string.`,
           additionalProperties: false
         },
         {
-          description: `The prompt a run was submitted with, journaled as durable run
-intent (ADR-0028) so every consumer of a run's journal can read the
-question its transcript answers.
-
-\`prompt\` has already crossed the ADR-0006 boundary: the submitting
-service classifies it \`Visible\` and passes it through
-\`Redactor::sanitize_fragment\`, so secret-shaped substrings are
-masked before this event is ever constructed. Carries no \`kind\`,
-like \`RunFlagsEvent\` -- there is one thing it can mean.
+          description: `The prompt a run was submitted with, so every consumer of a run's
+journal can read the question its transcript answers. Already
+redacted: secret-shaped substrings are masked.
 
 A run submitted without a prompt produces no event at all rather
 than one carrying an empty string, so absence stays distinguishable
@@ -7963,7 +7952,7 @@ from an empty prompt.`,
                   ]
                 },
                 reason: {
-                  description: "The decision's rationale; present only on `ApprovalDecided`\nevents written after R59. Optional in both directions so\nevents persisted before the field existed still deserialize.",
+                  description: "The decision's rationale, when one was supplied. Absent on\n`ApprovalDecided` events written before this field existed.",
                   anyOf: [
                     {
                       $ref: "#/$defs/Redacted"
@@ -8204,9 +8193,9 @@ session/thread identifier.`,
         },
         {
           description: `A TUI-mode worker adapter observed its vendor's end-of-turn
-boundary (ADR-0027). Carries no free text: the turn's content was
-already journaled as its own message events, and this event exists
-to say only *that* the turn ended, and how.`,
+boundary. Carries no free text: the turn's content was already
+journaled as its own message events, and this event exists to say
+only *that* the turn ended, and how.`,
           type: "object",
           properties: {
             type: {
@@ -9114,12 +9103,9 @@ change, and approval request/decision produces one of these variants.`,
         },
         {
           description: `OMP accepted a pending child-worker request, binding the created
-child task/worker/run ids. Distinct from
-[\`Self::ChildWorkerRequested\`] so a consumer never has to infer
-"accepted" from whether the child ids happen to be populated
-(R83). Additive and forward-safe; a pre-R83 binary replaying a
-post-R83 journal fails on the unknown variant, the same
-forward-only property as every event-kind addition.`,
+child task/worker/run ids. Distinct from \`childWorkerRequested\` so
+a consumer never has to infer "accepted" from whether the child ids
+happen to be populated.`,
           type: "string",
           const: "childWorkerAccepted"
         },
@@ -9193,9 +9179,9 @@ session/thread identifier.`,
           description: `A TUI-mode worker adapter observed its vendor's own end-of-turn
 boundary: the worker has stopped working and is holding at its
 prompt. Evidence that the turn ended, never that the task
-succeeded (ADR-0027) -- the vendor markers behind it say only
-"this turn is over", and Codex's is literally \`task_complete\`
-whatever the outcome.`,
+succeeded -- the vendor markers behind it say only "this turn is
+over", and Codex's is literally \`task_complete\` whatever the
+outcome.`,
           type: "string",
           const: "adapterTurnEnded"
         },
@@ -9365,16 +9351,14 @@ operator can correlate the violation to its cause.`,
           type: "boolean"
         },
         turnSettled: {
-          description: `The run is in \`waitingUser\` because its vendor finished a TURN
-(ADR-0027), not because the worker asked a question. Both reach the
-same state, and a snapshot reader (\`run/get\`, the monitor) cannot
-otherwise tell "the answer is ready" from "the worker needs you" --
-this is the distinction.
+          description: `True when the run reached \`waitingUser\` because its vendor finished
+a turn, rather than because the worker asked a question. Both look
+the same from the run's state alone; this tells "the answer is
+ready" apart from "the worker needs you".
 
 Cleared when the run goes back to work, so it never outlives the
-pause it describes. \`#[serde(default)]\` because the journal is
-append-only: \`RunFlags\` payloads written before this field existed
-must still deserialize on replay.`,
+pause it describes. Absent on events written before this field
+existed; treat absence as \`false\`.`,
           type: "boolean",
           default: false
         }
@@ -9390,83 +9374,11 @@ must still deserialize on replay.`,
       ]
     },
     Redacted: {
-      description: `Text that has crossed the redaction boundary and may therefore become
-durable (ADR-0006, ADR-0028, CREW-29).
+      description: `Text that has crossed Crew's redaction boundary: secret-shaped
+substrings in it are masked before it is stored or sent, so what a
+consumer reads here is the masked text, never the original.
 
-The field is private and there is no \`From<String>\` or \`Deref\`, so a
-\`String\` cannot become a \`Redacted\` implicitly. There are exactly two
-constructors and **both are named as claims**:
-[\`Redacted::from_sanitized\`] ("this came out of the redactor") and
-[\`Redacted::assert_runtime_authored\`] ("no caller wrote this").
-
-# The exact strength of the guarantee
-
-This is not "unconstructible without the redactor". The redactor lives
-in the runtime crate and \`RuntimeEvent\` lives here, so a constructor
-reachable from the runtime is unavoidable, and anything reachable from
-the runtime is reachable from anywhere. What the type actually
-guarantees is narrower and still worth having: **a caller-carrying
-field cannot be populated without its author stating which of the two
-claims applies.** The failure mode it eliminates is silence \u2014 a new
-\`String\` field wired straight from request params, which is how all
-four leaks this work found came to exist. It does not stop someone
-asserting the wrong claim; it stops them asserting nothing, and it puts
-the assertion where a reviewer reads it.
-
-# Why this exists on fields rather than on the write path
-
-\`DatabaseHandle::append_event\` is guarded by \`PersistableEvent\`, a type
-only the redactor can construct. \`DomainRepository::append_and_apply\`
-takes a plain [\`RuntimeEvent\`], and every domain event is written that
-way \u2014 so redaction there was *convention*, which is the thing ADR-0006
-exists to eliminate. Most domain events carry no caller text at all
-(states, ids, lease refs), so gating the whole path would put ceremony
-on the safe majority to protect a handful of fields, and ceremony on
-safe cases is what gets skipped. Putting the obligation on the field
-instead means **a new caller-carrying field is a compile error until
-its author decides how it gets sanitized.**
-
-# The property, as an executable pair
-
-These two doctests differ in exactly one token \u2014 the constructor \u2014 so
-together they prove the boundary rather than merely exercising it. The
-negative one alone would be weak evidence: a \`compile_fail\` block passes
-on *any* compilation error, including a typo, which is why the positive
-twin sits beside it.
-
-A bare \`String\` cannot populate a caller-carrying field:
-
-\`\`\`compile_fail
-use crew_protocol::{RunId, RuntimeEvent, TaskId, WorkerId};
-let _ = RuntimeEvent::RunPromptEvent {
-    run_id: RunId::new(),
-    task_id: TaskId::new(),
-    worker_id: WorkerId::new(),
-    prompt: "unredacted".to_string(),
-};
-\`\`\`
-
-The same construction, with the claim stated, compiles:
-
-\`\`\`
-use crew_protocol::{Redacted, RunId, RuntimeEvent, TaskId, WorkerId};
-let _ = RuntimeEvent::RunPromptEvent {
-    run_id: RunId::new(),
-    task_id: TaskId::new(),
-    worker_id: WorkerId::new(),
-    prompt: Redacted::assert_runtime_authored("a fixture, not caller text"),
-};
-\`\`\`
-
-# What it does not prevent
-
-\`Deserialize\` accepts a bare string, because stored events must be read
-back (\`events/replay\`, recovery, the audit export). So a determined
-caller could serialize and deserialize their way to a \`Redacted\`
-holding anything. That is deliberate and it is not the hole this closes:
-the failure mode being eliminated is *forgetting*, not laundering. A
-round trip through serde to bypass the redactor is not something anyone
-does by accident.`,
+Carried on the wire as an ordinary JSON string.`,
       type: "string"
     },
     MessageId: {
@@ -9493,13 +9405,11 @@ does by accident.`,
       ]
     },
     TurnOutcome: {
-      description: `How a vendor's turn ended (ADR-0027).
+      description: `How a vendor's turn ended.
 
-This is deliberately *not* a success/failure verdict on the task: only
-the leader can judge that. It distinguishes an ordinary turn boundary
-from one the vendor reached by reporting an API error, so wave 3's
-\`run/finish\` can settle such a run as failed from durable evidence
-rather than by re-parsing message text.`,
+Deliberately *not* a success/failure verdict on the task: only the
+leader can judge that. It distinguishes an ordinary turn boundary from
+one the vendor reached by reporting an API error.`,
       oneOf: [
         {
           description: "The vendor finished its turn and is holding at its prompt.",
@@ -9931,7 +9841,10 @@ what makes it distinguishable.`,
       ]
     },
     DisplayBackend: {
-      description: 'Supported display backends.\n\nReconciled with `crates/runtime`\'s config-facing\n`crew::config::crew::DisplayBackend` (WP9): that enum additionally has\n`Auto`, which means "no forced backend" and has no concrete backend of\nits own here -- every other variant of the config enum maps to exactly\none of these (`crate::config::protocol_display_backend` in the runtime\ncrate does that mapping). `Terminal` (an always-available, capability-\nfree stub) is retired in the same change: [`Self::Hidden`] is now the\none always-available fallback, and it is a real, deliberate "no pane"\nchoice rather than a degraded terminal rendering.',
+      description: `Supported display backends.
+
+\`hidden\` is the one always-available fallback, and it is a real,
+deliberate "no pane" choice rather than a degraded rendering.`,
       oneOf: [
         {
           description: "Herdr terminal multiplexer backend.",
@@ -9985,12 +9898,11 @@ terminal. Changes presentation only; never run ownership.`,
           const: "workspace"
         },
         {
-          description: `A new, separate OS-level window (CREW-9) -- not a tab or split of
-the caller's own terminal at all. \`OsWindowDisplay\`'s honest report
-of what it actually opened when the target terminal has no
-tab-creation mechanism it can drive (e.g. Terminal.app, or Ghostty
-versions predating its AppleScript support): callers must never
-see \`Tab\` echoed back for a placement that was, in fact, a whole
+          description: `A new, separate OS-level window -- not a tab or split of the
+caller's own terminal at all. Reported when the target terminal has
+no tab-creation mechanism Crew can drive (e.g. Terminal.app, or
+Ghostty versions predating its AppleScript support): callers never
+see \`tab\` echoed back for a placement that was, in fact, a whole
 new window.`,
           type: "string",
           const: "window"
@@ -10308,20 +10220,12 @@ range (a self-check that always holds for a live, negotiated session).`,
           $ref: "#/$defs/BinarySource"
         },
         dashboardUrl: {
-          description: `The embedded dashboard's live URL, token included, when
-\`dashboard.enabled\` and the bind succeeded; \`None\` otherwise
-(disabled, or the bind failed and degraded to no dashboard).
+          description: `The embedded dashboard's live URL when \`dashboard.enabled\` and the
+bind succeeded; absent otherwise (disabled, or the bind failed and
+degraded to no dashboard).
 
-CREW-35: the maintainer explicitly chose to put the live,
-capability-granting token in this field rather than only pointing
-at the daemon's own log (the narrower-exposure alternative) --
-\`/crew health\`'s output flows into the leader model's own session
-context/transcript, including model-initiated checks (the model can
-call the \`crew_health\` tool unprompted, not only a human typing
-\`/crew health\`), a wider and less access-controlled surface than a
-local log file, and that tradeoff was seen and accepted for
-one-click discoverability. Do not "fix" this by hiding the token
-again without a fresh maintainer decision.`,
+The URL includes the dashboard's access token, so it grants whoever
+holds it access to the dashboard: treat it as a secret.`,
           type: [
             "string",
             "null"
@@ -10926,13 +10830,8 @@ persistence.`,
           $ref: "#/$defs/MessageKind"
         },
         payload: {
-          description: `The message payload.
-
-Typed [\`Redacted\`] (CREW-34) rather than \`String\`, so "redacted
-before persistence" is enforced by the field rather than asserted
-by this comment. It said exactly that for a long time while nothing
-redacted it -- the claim became true at CREW-28, and true by
-construction here.`,
+          description: `The message payload. Already redacted: secret-shaped substrings are
+masked.`,
           $ref: "#/$defs/Redacted"
         },
         deliveryState: {
