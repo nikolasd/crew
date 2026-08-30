@@ -82,11 +82,13 @@ Ask the model to use `crew_task`, `crew_worker`, and `crew_run`, then open `/cre
 
 `packages/extension/dist/index.js` is committed to git and verified in CI (a `bundle-check` job rebuilds and diffs it), since it's the entry point the marketplace-installed plugin loads. Any change under `packages/extension/src/` must be followed by `bun run build` and committing the rebuilt bundle.
 
-> **Platform note:** the bundle embeds Bun's platform-specific module shim, so a rebuild on a
-> different platform (e.g. macOS/arm64) does **not** byte-match CI's `bundle-check` — observed with
-> Bun 1.3.14, where a darwin-arm64 rebuild diverges from CI's linux-x64 output. Always refresh the
-> committed bundle via the `refresh-bundle` workflow (builds on linux-x64 + pinned Bun and uploads
-> the artifact to commit), or a linux-x64 build, or CI will reject the commit as a stale bundle.
+> **Bundle refresh:** the `auto-commit-dist` workflow automatically refreshes the committed bundle on
+> any PR that touches `packages/extension/src/` or `packages/protocol-ts/` — an App-signed bot commit is
+> created with the rebuilt bundle, and CI re-runs on it to verify. For fork PRs or local verification
+> before pushing, you can manually refresh via the `refresh-bundle` workflow (builds on linux-x64 +
+> pinned Bun and uploads the artifact to commit). **Platform caveat:** the bundle embeds Bun's
+> platform-specific module shim, so a rebuild on a different platform (e.g. macOS/arm64) does **not**
+> byte-match CI's `bundle-check` — observed with Bun 1.3.14. The automation exists to handle this.
 
 ## Contributing
 

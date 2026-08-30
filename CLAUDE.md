@@ -100,7 +100,7 @@ content is redacted before it becomes durable.
 
 Full C4-style diagrams (system context → container → component, plus the event-lifecycle sequence
 diagram and a role/permission table) are in `docs/architecture.md`. Design rationale for anything
-below is captured as an ADR in `docs/adr/0001...` through `0024...` — check there before assuming a
+below is captured as an ADR in `docs/adr/0001...` through `0028...` — check there before assuming a
 structural choice is accidental.
 
 ### Where things live
