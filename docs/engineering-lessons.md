@@ -486,6 +486,77 @@ argument for the type-level fix that followed (`Redacted`, described in
 [ADR-0028](adr/0028-submit-prompt-is-journaled-redacted-run-intent.md)'s closing section): a lesson
 has to be remembered at the moment it applies, and a compile error does not.
 
+### A measurement can be wrong in a way that looks like an answer
+
+**Locations:** `git merge-base --is-ancestor` under squash-merge; `git diff A B` versus a revert;
+`gh pr checks` field parsing; `grep -c` over a single file
+
+The recurring failure across the CREW-27..34 audit was not code that was wrong. It was *measurements
+that looked like proof*. Four worth naming, because each returned a plausible answer to a question
+slightly different from the one asked:
+
+- **`git merge-base --is-ancestor <branch> origin/main` says UNMERGED for every merged branch**, because
+  this repo squash-merges: the squash commit is new, so an original tip is never an ancestor. It
+  answers "is this branch's *history* in main" when the question is "is this branch's *work* in main".
+  Under squash-merge those differ for every branch, always. Use `gh pr list --head <branch> --state all`,
+  or grep main for the content.
+- **`git diff origin/main <branch>` on a branch that is merely behind looks exactly like a revert.**
+  A hunk showing `-#[ignore = ...]` for a just-merged fix reads as "this PR undoes it"; it was the
+  two-endpoint diff showing main's own newer commit. `git log main..branch -- <file>` distinguishes
+  them: no commits touching the file means the three-way merge will keep main's version.
+- **`gh pr checks` parsed by whitespace field misreads every matrix job.** `build (macos-latest,
+  x86_64-apple-darwin, darwin-x64)` puts the *check name's* second word where the status is expected,
+  so passing jobs read as blank and were reported "still running" for several updates. `--json
+  name,state` is the fix; the tell was `mergeStateStatus: CLEAN` contradicting "pending", explained
+  away twice before being believed.
+- **`grep -c "Redactor\|sanitize" <one file>` answers "does this file redact", not "is this write
+  redacted".** It was correct twice, which is what made it trusted the third time — when the write had
+  a second entry point in a file nobody had grepped.
+
+**The lesson:** the first measurement you reach for is usually the one that cannot distinguish the two
+cases you care about. A local rebuild cannot tell "the bundle is stale" from "I am on the wrong
+platform"; both produce a large diff. Before trusting a check, ask what *else* would produce this
+same output. And when a cheap check contradicts an expensive one, the cheap one is the suspect — the
+contradiction is the signal, not the noise to be explained away.
+
+### Thresholds calibrated on an idle machine are not thresholds
+
+**Locations:** `pane_reopen_refuses_a_stale_socket_file_with_no_listener`,
+`is_live_has_no_false_positives_under_fork_and_cpu_load`,
+`a_multi_line_prompt_reaches_the_pty_framed_as_one_intact_paste`, the conformance kill-switch fixture test
+
+Four tests in this suite fail under CPU contention and pass alone. Individually each reads as a flake;
+together they are one mistake made four times — a timing threshold chosen while the machine was quiet.
+
+- The pane-reopen test's connect probe raced a `fork()`ed child holding an inherited fd (CREW-30) —
+  proven at 1.13% under fork load, 0% in 40,000 clean iterations.
+- The liveness race test declared `MAX_DURATION: 60s` and ran 52 minutes, because the deadline is
+  checked at the *top* of each iteration and so bounds iterations attempted, not wall clock (CREW-38).
+- The paste test's per-chunk write timeout expired when the mock vendor was starved of CPU: "the
+  vendor stopped consuming input 2 of 5 chunks into a 4533 byte prompt". Passes alone in 1.62s.
+- The conformance kill-switch fixture test: flaky under load, clean alone in 7.4s.
+
+**The lesson:** a timeout written on a quiet machine encodes the machine, not the requirement. Ask what
+the threshold is *for* — if it exists to catch a hang, it can be generous; if it exists to bound a
+gate's runtime, it has to be enforced somewhere that a single stalled iteration cannot skip. And
+`RUST_TEST_THREADS=1` does not save you: it serialises tests within a binary and does nothing about
+other processes on the box.
+
+### A test's name is a claim, and it is the claim people trust
+
+**Location:** `run_timeout_ack_extend_rearms_nudge_noops_and_abort_cancels` (CREW-40)
+
+That test asserted `rearmed: true` on a run whose activity clock was never tracked — the harness's fake
+drivers bypass the adapter event pipeline that alone populates it. So the assertion re-exercised the
+very lie the ticket existed to fix, and the test's *name* promised a re-arm it never observed. The fix
+renamed it as well as correcting it, and moved the genuine proof to a unit test against `ActivityClock`
+that sets up a really-tracked run.
+
+**The lesson:** a name in a test list is read far more often than a body. When a test's evidence
+changes, the name is part of what has to change — and a name asserting more than the body proves is the
+same defect as a comment asserting more than the code does, in the place people are least likely to
+check.
+
 ## Health Checks (`doctor`)
 
 ### A check scoped to the Crew source tree must not run against `--repo`
@@ -651,6 +722,53 @@ the diff, which is the only thing that catches it. Doc comments are the one arte
 repository with *no* automated gate whatsoever, which is precisely why they accumulate this failure —
 and why a doc comment asserting an invariant should name the test that enforces it, so the claim
 degrades into a findable dangling reference instead of a quiet lie.
+
+### A protocol type's doc comment is a shipped artifact, not an internal note
+
+**Location:** `crates/protocol/src/`, `packages/protocol-ts/schema/crew.schema.json`
+
+`schemars` lifts Rust doc comments into the JSON Schema's `description` fields — the *whole* comment,
+not the first paragraph. Measured on the committed schema: `Redacted`'s description is 3,386 characters
+across 14 paragraphs, including its "What it does not prevent" section. Across the file, descriptions
+are **25,267 bytes in 207 fields, 21% of the 118 KB schema** — and `validate.ts` imports that schema at
+runtime, so all of it ships in the extension bundle.
+
+That means ADR numbers, ticket IDs and sentences like "the claim became true at CREW-28" are wire
+artifacts, addressed to a reader who has none of that context.
+
+**The lesson:** `///` on a protocol type is consumer-facing API prose; `//` is not lifted, because `///`
+desugars to `#[doc = "..."]` and `//` desugars to nothing — a derive macro can only see attributes, so
+this is a language guarantee rather than a `schemars` behaviour. Put the contract in `///` and the
+history in `//` directly beside it. Split by *audience*, not by paragraph: a consequence like "this
+field may be absent on older events, treat absence as false" is wire-relevant even though the reason
+for it (`#[serde(default)]`, append-only journal) is not.
+
+Avoid `#[schemars(description = "...")]` for this: it leaves two descriptions of one field in the same
+file with nothing checking they agree — see the next entry.
+
+### Cite the source, do not copy it — a lifted quote is a second copy with no guard
+
+**Locations:** `docs/architecture.md`'s redaction section, `packages/protocol-ts/src/index.ts`,
+`.github/workflows/ci.yml` ↔ `build-matrix.yml`, `crates/xtask`'s two codegen allowlists
+
+Prose describing a guarantee drifts toward the guarantee the writer wishes existed. `architecture.md`'s
+redaction section claimed `Redacted` was "unconstructible except via the Redactor" and that you "cannot
+accidentally construct a Redacted field with unredacted input" — through four review passes, while the
+type's own doc comment said the opposite in careful detail, and while the same section described the
+second constructor two paragraphs later. The fix was to lift from the doc comment, which had already
+been argued into correctness.
+
+But lifting has its own failure mode, and this repo has three instances of it: the hand-maintained
+`protocol-ts` barrel that drifts from generated bindings (caught by `generate --check`), the `changes`
+job duplicated across two workflows (caught by a comment, because nothing mechanical can), and two
+codegen allowlists that must agree with nothing checking that they do. **A verbatim quote is a second
+copy** — and worse than a paraphrase in one way: a paraphrase invites checking, while a quote looks
+like the source.
+
+**The lesson:** prefer a short true sentence plus a pointer to the definition over a reproduced
+paragraph. The pointer sends the reader to the copy that cannot go stale, because it lives beside the
+code. If a copy is unavoidable, say in the text that it *is* a copy and name its source, so whoever
+finds a discrepancy knows which side is authoritative instead of guessing.
 
 ## Structural Limits and Long-Lived Consumers
 

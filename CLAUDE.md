@@ -151,7 +151,8 @@ These are enforced in review, not just style preference:
 
 ## Conventions worth knowing before editing
 
-- **Rust**: edition 2024, toolchain pinned at 1.97.1 (`rust-toolchain.toml`). Workspace deps live in
+- **Rust**: edition 2024, toolchain tracks `stable` (`rust-toolchain.toml`, always the latest stable
+  release — no fixed version, matches CI's `dtolnay/rust-toolchain@stable`). Workspace deps live in
   root `Cargo.toml`, referenced via `.workspace = true`. `thiserror` for typed errors, `anyhow` at
   the application boundary. `tokio` multi-thread runtime. A single-thread actor owns the one
   `rusqlite::Connection` (`crates/runtime/src/db/actor.rs`) — don't reach for a connection pool.

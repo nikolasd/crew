@@ -17,7 +17,7 @@ way `architecture.md` says it does.
 
 ## Prerequisites
 
-Same as [development.md](development.md#prerequisites): Rust 1.97.1+, Bun 1.3.14+,
+Same as [development.md](development.md#prerequisites): Rust stable, Bun 1.3.14+,
 `omp` ≥ 17.0.7 on your `PATH`. Build both sides first:
 
 ```bash
