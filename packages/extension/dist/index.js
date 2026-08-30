@@ -7828,6 +7828,57 @@ ever see a plain string.`,
           additionalProperties: false
         },
         {
+          description: `The prompt a run was submitted with, journaled as durable run
+intent (ADR-0028) so every consumer of a run's journal can read the
+question its transcript answers.
+
+\`prompt\` has already crossed the ADR-0006 boundary: the submitting
+service classifies it \`Visible\` and passes it through
+\`Redactor::sanitize_fragment\`, so secret-shaped substrings are
+masked before this event is ever constructed. Carries no \`kind\`,
+like \`RunFlagsEvent\` -- there is one thing it can mean.
+
+A run submitted without a prompt produces no event at all rather
+than one carrying an empty string, so absence stays distinguishable
+from an empty prompt.`,
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "runPromptEvent"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                prompt: {
+                  type: "string"
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId",
+                "prompt"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
           description: "A message was recorded, sent, acknowledged, or failed.",
           type: "object",
           properties: {
