@@ -88,6 +88,27 @@ async fn read_exact_within(
     buf
 }
 
+/// Connects to `path` and consumes CREW-30's liveness marker, which
+/// every `AttachServer` in this test file's own binary always sends
+/// first -- these tests exercise real pane content arriving *after* it,
+/// not the marker itself (see `pane_socket.rs`'s own tests, and
+/// `attach.rs`'s own `consume_marker_or_reclaim` tests, for that).
+async fn connect_past_marker(path: &std::path::Path) -> tokio::net::UnixStream {
+    let mut stream = attach::connect(path).await.unwrap();
+    let marker = read_exact_within(
+        &mut stream,
+        crew_runtime::display::attach::LIVENESS_MARKER.len(),
+        Duration::from_secs(5),
+    )
+    .await;
+    assert_eq!(
+        marker,
+        crew_runtime::display::attach::LIVENESS_MARKER,
+        "this test's own AttachServer must always send the current marker"
+    );
+    stream
+}
+
 // --------------------------------------------------------------- basics
 
 #[tokio::test]
@@ -96,7 +117,7 @@ async fn a_connected_viewer_receives_live_output() {
     let (_dir, path) = temp_socket_path();
     let server = AttachServer::start(path.clone(), target, Box::new(|_| {})).unwrap();
 
-    let mut viewer = attach::connect(&path).await.unwrap();
+    let mut viewer = connect_past_marker(&path).await;
 
     output_tx.send(b"hello viewer".to_vec()).unwrap();
 
@@ -117,7 +138,7 @@ async fn a_late_viewer_receives_the_ring_buffer_replay() {
     // ring buffer before the late viewer connects.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let mut late_viewer = attach::connect(&path).await.unwrap();
+    let mut late_viewer = connect_past_marker(&path).await;
     let seen = read_exact_within(
         &mut late_viewer,
         b"already happened".len(),
@@ -147,7 +168,7 @@ async fn viewer_bytes_reach_both_the_target_and_on_user_input() {
     )
     .unwrap();
 
-    let mut viewer = attach::connect(&path).await.unwrap();
+    let mut viewer = connect_past_marker(&path).await;
     viewer.write_all(b"typed keystrokes").await.unwrap();
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -174,8 +195,8 @@ async fn two_concurrent_viewers_both_receive_the_same_output() {
     let (_dir, path) = temp_socket_path();
     let server = AttachServer::start(path.clone(), target, Box::new(|_| {})).unwrap();
 
-    let mut viewer_a = attach::connect(&path).await.unwrap();
-    let mut viewer_b = attach::connect(&path).await.unwrap();
+    let mut viewer_a = connect_past_marker(&path).await;
+    let mut viewer_b = connect_past_marker(&path).await;
     // Let both connections register their subscription before the send,
     // so this test asserts fan-out rather than incidentally relying on
     // ring-buffer replay.
@@ -197,7 +218,7 @@ async fn stop_closes_connected_clients_and_unlinks_the_socket_file() {
     let (_dir, path) = temp_socket_path();
     let server = AttachServer::start(path.clone(), target, Box::new(|_| {})).unwrap();
 
-    let mut viewer = attach::connect(&path).await.unwrap();
+    let mut viewer = connect_past_marker(&path).await;
 
     server.stop();
 
@@ -229,8 +250,8 @@ async fn a_disconnecting_viewer_never_affects_a_second_viewer() {
     let (_dir, path) = temp_socket_path();
     let server = AttachServer::start(path.clone(), target, Box::new(|_| {})).unwrap();
 
-    let viewer_a = attach::connect(&path).await.unwrap();
-    let mut viewer_b = attach::connect(&path).await.unwrap();
+    let viewer_a = connect_past_marker(&path).await;
+    let mut viewer_b = connect_past_marker(&path).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     drop(viewer_a);
@@ -433,7 +454,7 @@ async fn composed_path_against_a_real_pty_process_running_cat() {
     let (_dir, path) = temp_socket_path();
     let server = AttachServer::start(path.clone(), Arc::clone(&target), Box::new(|_| {})).unwrap();
 
-    let mut viewer = attach::connect(&path).await.unwrap();
+    let mut viewer = connect_past_marker(&path).await;
     viewer.write_all(b"crew-attach-roundtrip\r").await.unwrap();
 
     // `cat` echoes stdin back to stdout on the pty, so the viewer's own
@@ -466,4 +487,90 @@ async fn composed_path_against_a_real_pty_process_running_cat() {
 
     server.stop();
     drop(target);
+}
+
+// ------------------------------------------------ consume_marker_or_reclaim
+
+/// Binds a bare `UnixListener` at `path` synchronously (so a test can
+/// connect immediately after, with no bind-race), then spawns a task that
+/// accepts the first connection, writes `bytes`, and holds the socket open
+/// well past any test's bounded read -- simulating an *older* `AttachServer`
+/// (pre-CREW-30) that never sends [`attach::LIVENESS_MARKER`] and whose
+/// first bytes are real pane output the client must reclaim, not discard.
+fn spawn_raw_server_writing(path: &std::path::Path, bytes: &'static [u8]) {
+    let listener = tokio::net::UnixListener::bind(path).expect("bind raw server");
+    tokio::spawn(async move {
+        if let Ok((mut stream, _addr)) = listener.accept().await {
+            let _ = stream.write_all(bytes).await;
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+    });
+}
+
+/// The marker-present leg: a real `AttachServer` always sends
+/// `LIVENESS_MARKER` first, so consuming it must return `None` -- nothing
+/// left to reclaim, `pump` can start straight away.
+#[tokio::test]
+async fn consume_marker_or_reclaim_returns_none_when_the_marker_arrives_in_full() {
+    let (target, _writes, _output_tx) = FakeTarget::new();
+    let (_dir, path) = temp_socket_path();
+    let server = AttachServer::start(path.clone(), target, Box::new(|_| {})).unwrap();
+
+    let mut socket = attach::connect(&path).await.unwrap();
+    let reclaimed = attach::consume_marker_or_reclaim(&mut socket, Duration::from_secs(5)).await;
+    assert_eq!(
+        reclaimed, None,
+        "a real AttachServer's marker must be consumed in full, nothing left to reclaim"
+    );
+
+    server.stop();
+}
+
+/// The backward-compatibility leg: an older daemon predating this marker
+/// never sends one at all, so its first bytes are real pane output,
+/// indistinguishable at the wire level from "not the marker". Those bytes
+/// must come back verbatim for the caller to replay, never be discarded.
+///
+/// The probe only ever reads exactly `LIVENESS_MARKER.len()` bytes -- it is
+/// a fixed-size handshake read, not a drain-everything-available read -- so
+/// this test's fake server writes exactly that many bytes. Any output an
+/// old daemon sends beyond that stays in the kernel's socket buffer
+/// untouched, for `pump`'s own forward loop to pick up right after.
+#[tokio::test]
+async fn consume_marker_or_reclaim_reclaims_bytes_from_a_server_that_never_sends_the_marker() {
+    let (_dir, path) = temp_socket_path();
+    let old_daemon_bytes: &[u8] = b"totally-old!";
+    assert_eq!(old_daemon_bytes.len(), attach::LIVENESS_MARKER.len());
+    spawn_raw_server_writing(&path, old_daemon_bytes);
+
+    let mut socket = attach::connect(&path).await.unwrap();
+    let reclaimed =
+        attach::consume_marker_or_reclaim(&mut socket, Duration::from_millis(200)).await;
+    assert_eq!(
+        reclaimed.as_deref(),
+        Some(old_daemon_bytes),
+        "bytes that aren't the marker must be handed back verbatim, never discarded"
+    );
+}
+
+/// The partial-read leg: the peer sends fewer bytes than the marker's
+/// length and then stalls (a slow write, or a connection that never
+/// completes the handshake either way). The bounded timeout must still
+/// fire and reclaim exactly what was captured, not hang forever waiting
+/// for a full marker that will never arrive.
+#[tokio::test]
+async fn consume_marker_or_reclaim_reclaims_a_partial_read_when_the_peer_stalls_mid_marker() {
+    let (_dir, path) = temp_socket_path();
+    // Fewer bytes than LIVENESS_MARKER.len() (12), so the read can never
+    // complete a full match.
+    spawn_raw_server_writing(&path, b"CR");
+
+    let mut socket = attach::connect(&path).await.unwrap();
+    let reclaimed =
+        attach::consume_marker_or_reclaim(&mut socket, Duration::from_millis(200)).await;
+    assert_eq!(
+        reclaimed.as_deref(),
+        Some(&b"CR"[..]),
+        "a partial read that never completes must reclaim exactly what was captured before the timeout"
+    );
 }
