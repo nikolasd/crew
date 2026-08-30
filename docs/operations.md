@@ -124,11 +124,11 @@ Uninstalling works in any session:
 /marketplace uninstall crew@crew   # removes the extension + skills
 ```
 
-**This repository is private.** `/marketplace add` git-clones it, so it needs your own GitHub read
-access to `nikolasd/crew` (an SSH key registered with GitHub, or a `gh auth login` session backed
-by a git credential helper). `/crew-install` additionally needs a `GITHUB_TOKEN` or
-`GH_TOKEN` environment variable, or that same `gh auth login` session, to download the asset — see
-the README's [Installation](../README.md#installation) section. The `crewd` binary itself resolves
+**This repository is public.** `/marketplace add` clones it via HTTPS — no authentication required.
+`/crew-install` downloads the `crewd` binary via the GitHub REST API; a `GITHUB_TOKEN` or
+`GH_TOKEN` environment variable (or a `gh auth login` session) is optional but recommended — without
+one you may hit GitHub's unauthenticated rate limit (60 requests/hour); with one, it's 5,000/hour.
+See the README's [Installation](../README.md#installation) section for details. The `crewd` binary itself resolves
 in two tiers (see
 [`getting-started.md`](getting-started.md#how-the-extension-finds-and-starts-crewd)): `OMP_CREW_BINARY`
 (a local-development override) if set, otherwise the SHA-256-verified binary
