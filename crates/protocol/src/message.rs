@@ -110,3 +110,12 @@ pub struct RunMessage {
     #[serde(rename = "replyTo", skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<MessageId>,
 }
+
+/// Result of `message/list`: every message journaled for a run, oldest
+/// first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct MessageListResult {
+    pub messages: Vec<RunMessage>,
+}

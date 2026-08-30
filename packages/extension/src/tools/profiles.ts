@@ -45,7 +45,7 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
       .string()
       .optional()
       .describe(
-        "The model identifier this profile uses. Optional: if omitted and no model is already configured for this adapter (in .omp/crew.json), registration is refused with a typed 'model-not-configured' error -- ask the user which model to use, then call crew_profile again with it. The first time a model is given explicitly for an adapter with none configured, it is persisted into the repository's .omp/crew.json for future sessions to reuse silently. crew_profile never overwrites an already-recorded model, and never silently ignores an explicit value that conflicts with one: passing a *different* model than the one already configured is refused with a typed 'model-conflict' error naming the stored value -- correct it via /crew config or by editing crew.json directly, never by passing a new value here. Passing the same value as already configured is a no-op success.",
+        "The model identifier this profile uses. Optional: if omitted and no model is already configured for this adapter (in .omp/crew.json), registration is refused with a typed 'model-not-configured' error -- ask the user which model to use, then call crew_profile again with it. The first time a model is given explicitly for an adapter with none configured, it is persisted into the repository's .omp/crew.json for future sessions to reuse silently. crew_profile never overwrites an already-recorded model, and never silently ignores an explicit value that conflicts with one: passing a *different* model than the one already configured is refused with a typed 'model-conflict' error naming the stored value -- correct it by editing the repository's .omp/crew.json directly (/crew config path locates it; /crew config has no set/edit subcommand), never by passing a new value here. Passing the same value as already configured is a no-op success.",
       ),
     startupOptions: pi.zod
       .record(pi.zod.string(), pi.zod.unknown())
@@ -90,7 +90,7 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
           content: [
             {
               type: "text",
-              text: `model already configured as ${configuredModel} for adapter ${input.adapter} -- crew_profile never overwrites a stored model; change it via /crew config or by editing the repository's .omp/crew.json directly.`,
+              text: `model already configured as ${configuredModel} for adapter ${input.adapter} -- crew_profile never overwrites a stored model; edit the repository's .omp/crew.json directly to change it (/crew config path locates it).`,
             },
           ],
           details: { code: "model-conflict", adapter: input.adapter, configuredModel },
