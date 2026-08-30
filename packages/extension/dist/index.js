@@ -6947,7 +6947,7 @@ var import__2020 = __toESM(require_2020(), 1);
 var crew_schema_default = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   title: "ProtocolDocument",
-  description: "Root schema document referencing every exported request/result/event\ntype, so that a single `schemars` invocation produces one JSON Schema\nwith everything reachable from the wire protocol in `$defs`.",
+  description: "Root schema document referencing every exported request/result/event\ntype, so that a single `schemars` invocation produces one JSON Schema\nwith everything reachable from the wire protocol in `$defs`.\n\nCREW-44: this struct and `crates/xtask/src/main.rs`'s TS export\nallowlist (`export_bindings`'s `export!` call) are two independent\nlists that must agree on every *wire-message* type (not on bare\nid/enum/param types -- see that file's `NOT_WIRE_MESSAGE_ROOTS`, which\nis where those belong instead). CREW-43 found `RunMessage` and\n`MessageListResult` on the TS side with no field here at all, and\nnothing caught it until a human noticed. Adding a message type to the\nTS export list without a matching field here (or vice versa) now fails\n`generate --check` via `check_export_list_is_schema_reachable` in that\nsame xtask file -- if you add a wire-message type to one list, add it\nto the other too.",
   type: "object",
   properties: {
     initializeParams: {
