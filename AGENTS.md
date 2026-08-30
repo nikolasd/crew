@@ -47,7 +47,7 @@ OMP Extension (TypeScript)  ──JSON-RPC 2.0 over NDJSON──>  crewd daemon 
 | `fixtures/` | Cross-language golden fixtures (protocol frames, state roots, configs) |
 | `tests/` | Conformance test runner |
 | `release/` | Release build inputs and evidence: `targets.json` (platform build matrix, read by xtask and CI) plus per-version release checklists and live adapter conformance results |
-| `docs/` | Engineering documentation (start with `getting-started.md`, `architecture.md`; `cli-reference.md` and `plugin-usage.md` cover the two user-facing surfaces) |
+| `docs/` | Engineering documentation (start with `development.md` (Crew Development Guide), `architecture.md` (Crew Architecture); `cli-reference.md` and `user-guide.md` (Crew User Guide) cover the two user-facing surfaces) |
 | `scripts/` | Setup and build scripts |
 
 ---

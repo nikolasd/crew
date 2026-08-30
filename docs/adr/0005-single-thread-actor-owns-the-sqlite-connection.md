@@ -78,6 +78,6 @@ has to be remembered at every call site.
 
 ## Links
 
-* Narrated in `../journal.md`, commit `8cd8ad8`; the Rust primer's Day 6 was written to explain
+* Narrated in the engineering journal (since deleted; its durable lessons live in `../engineering-lessons.md`), commit `8cd8ad8`; the Rust tutorial's Day 6 was written to explain
   this exact file
 * Reused, unmodified, by every later mutation added through Task 2 onward (see ADR-0011, ADR-0012)

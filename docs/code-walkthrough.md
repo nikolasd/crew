@@ -1,14 +1,14 @@
-# Code walkthrough
+# Crew Code Walkthrough
 
 A guided tour for navigating, tracing, debugging, and testing the codebase. Read
 [architecture.md](architecture.md) first for the *why*; this document is the *where and how*.
 
 **Audience & purpose:** contributors navigating, debugging, or testing the codebase — a companion
-to [getting-started.md](getting-started.md), the developer manual. If you're looking for what the
-extension's tools *do* rather than how they're implemented, see [plugin-usage.md](plugin-usage.md)
+to [development.md](development.md), the developer manual. If you're looking for what the
+extension's tools *do* rather than how they're implemented, see [user-guide.md](user-guide.md)
 instead.
 
-New to Rust? Read the [Rust primer](rust-primer.md) alongside this — it teaches Rust using this
+New to Rust? Read the [Rust tutorial](rust-tutorial.md) alongside this — it teaches Rust using this
 repository's own code.
 
 ## 1. Map of the source
@@ -150,7 +150,7 @@ binary into a leaf package with a deterministic manifest).
 | `src/approval-ui.ts` | Approval UI components |
 | `src/tools/index.ts` | Registers all 11 tools with OMP |
 | `src/tools/shared.ts` | `callOrchestration` — the one execute body every orchestration tool uses; maps `JsonRpcRemoteError` to a stable tool error |
-| `src/tools/{profiles,workers,tasks,runs,workspaces,artifacts,children,violations,messages,approvals,reconcile}.ts` | `crew_profile`, `crew_worker`, `crew_task`, `crew_run`, `crew_workspace`, `crew_artifact`, `crew_child`, `crew_violation`, `crew_message`, `crew_approval`, `crew_reconcile` — see [plugin-usage.md](plugin-usage.md) for what each does |
+| `src/tools/{profiles,workers,tasks,runs,workspaces,artifacts,children,violations,messages,approvals,reconcile}.ts` | `crew_profile`, `crew_worker`, `crew_task`, `crew_run`, `crew_workspace`, `crew_artifact`, `crew_child`, `crew_violation`, `crew_message`, `crew_approval`, `crew_reconcile` — see [user-guide.md](user-guide.md) for what each does |
 | `src/omp-native/events.ts` | Normalizes `task:subagent:lifecycle\|progress\|event` bus payloads into `OmpNativeAgentFact` |
 | `src/omp-native/reconcile.ts` | `OmpNativeReconciler` (150 ms progress coalescing, terminal-immediate), `reconcileAcrossRestart` (undetected parent-scoped runs become `lost`), `createOmpProcessEpoch`, `reconcileWithRuntime` |
 | `src/monitor/model.ts` | `reduceEvent` — the pure event-reducer building `MonitorState` |

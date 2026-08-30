@@ -4,7 +4,7 @@ Thank you for your interest in contributing to Crew! This document provides guid
 
 **Audience & purpose:** contributors — the process guide (branch/PR/release flow, non-negotiable
 invariants). For the technical *how* of building and testing Crew itself, see
-[`docs/getting-started.md`](docs/getting-started.md), the developer manual.
+[`docs/development.md`](docs/development.md) (Crew Development Guide), the developer manual.
 
 ## Development Environment
 
@@ -39,7 +39,7 @@ cargo test
 cargo test --test adapter_contract
 cargo test --test approval
 cargo test --test audit
-# ... (see docs/getting-started.md for full list)
+# ... (see docs/development.md for full list)
 ```
 
 ### TypeScript Tests
@@ -103,7 +103,7 @@ packages/extension/       The OMP extension: client, launcher, platform loader, 
                           tools, OMP-native reconciliation, embedded /crew monitor
 packages/protocol-ts/     Generated TypeScript bindings + JSON Schema + Ajv validators
 fixtures/                 Cross-language golden fixtures (protocol frames, state roots, repo ids)
-docs/                     Engineering documentation (start here: docs/getting-started.md)
+docs/                     Engineering documentation (start here: docs/development.md)
 ```
 
 ## Making Changes
@@ -175,9 +175,9 @@ Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/
 
 When contributing, consider updating documentation:
 
-- **docs/plugin-usage.md** — the user manual: every tool/command an OMP session can call
-- **docs/getting-started.md** — the developer manual: building, configuring, and testing Crew from source
-- **docs/code-walkthrough.md** / **docs/rust-primer.md** — developer-manual companions: source map, debugging playbook, Rust-via-this-codebase tutorial
+- **docs/user-guide.md** (Crew User Guide) — the user manual: every tool/command an OMP session can call
+- **docs/development.md** (Crew Development Guide) — the developer manual: building, configuring, and testing Crew from source
+- **docs/code-walkthrough.md** (Crew Code Walkthrough) / **docs/rust-tutorial.md** (Learning Rust with this codebase as the textbook) — developer-manual companions: source map, debugging playbook, Rust-via-this-codebase tutorial
 - **docs/manual-testing.md** — manual/QA verification procedures
 - **docs/architecture.md** — system design (the C4-model "why")
 - **docs/cli-reference.md** — `crewd` CLI command reference

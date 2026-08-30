@@ -1,12 +1,12 @@
 # `crewd` CLI Reference
 
 `crewd` is the Crew runtime daemon binary. Most users never invoke it directly — the OMP
-extension spawns and connects to it automatically (see [`plugin-usage.md`](plugin-usage.md), the
+extension spawns and connects to it automatically (see [`user-guide.md`](user-guide.md), the
 user manual, and [`packages/extension/src/runtime.ts`](../packages/extension/src/runtime.ts)).
 
 **Audience & purpose:** anyone who needs to run `crewd` by hand: debugging, scripting, CI, or
 writing a new display backend or supervisor integration. A companion reference to both
-[`plugin-usage.md`](plugin-usage.md) (the user manual) and [`getting-started.md`](getting-started.md)
+[`user-guide.md`](user-guide.md) (the user manual) and [`development.md`](development.md)
 (the developer manual) — this document is pure flag reference, not a workflow guide; see
 [`operations.md`](operations.md) for the procedures these flags are used in.
 
@@ -217,7 +217,7 @@ effective config differs from the built-in defaults). Both report facts about th
 layer (`crewd config`, below), never fail the overall `doctor` exit code.
 
 `crew_doctor` (the OMP tool/`/crew doctor` command) runs this same check catalog without
-requiring a live runtime connection — see [`plugin-usage.md`](plugin-usage.md).
+requiring a live runtime connection — see [`user-guide.md`](user-guide.md).
 
 ### `crewd config`
 

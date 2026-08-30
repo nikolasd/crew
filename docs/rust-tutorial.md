@@ -2,7 +2,7 @@
 
 **Audience & purpose:** anyone learning Rust with this repository as the textbook — most often a
 contributor with a TypeScript background, but the material stands on its own for any newcomer. A
-companion to [getting-started.md](getting-started.md), the developer manual, and to
+companion to [development.md](development.md), the developer manual, and to
 [`docs/adr/`](adr/) and [engineering-lessons.md](engineering-lessons.md).
 
 You know TypeScript. You don't know Rust. This guide gets you productive in the Crew Rust crates in

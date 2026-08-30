@@ -66,4 +66,4 @@ cargo build -p crew-runtime
 echo ""
 echo "Setup complete."
 echo "  Run 'bun run check' before opening a PR (schema drift + build + all tests)."
-echo "  See docs/getting-started.md for environment variables and workflows."
+echo "  See docs/development.md for environment variables and workflows."

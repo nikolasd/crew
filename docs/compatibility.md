@@ -3,7 +3,7 @@
 **Audience & purpose:** anyone deciding whether Crew supports their platform, or checking which
 adapter-conformance scenarios currently pass against which vendor CLI version. This is a
 compatibility *matrix*, not a general reference — for configuration, protocol methods, or the
-CLI, see [getting-started.md](getting-started.md) (the developer manual),
+CLI, see [development.md](development.md) (the developer manual),
 [architecture.md](architecture.md), and [cli-reference.md](cli-reference.md) respectively; this
 document exists only for the two tables below.
 
@@ -30,7 +30,7 @@ Windows equivalent is implemented), and the packaged binaries are built against 
 ### Platform-Specific Notes
 
 - **macOS**: Requires Xcode Command Line Tools for native compilation from source (contributors
-  only — installed users get a prebuilt binary, see [getting-started.md](getting-started.md)).
+  only — installed users get a prebuilt binary, see [development.md](development.md)).
 - **Linux**: glibc only; musl (e.g. Alpine) is rejected by `platform_supported`, not silently
   degraded.
 - **Display backends**: Herdr and tmux both require the matching binary to be installed and,
@@ -194,5 +194,5 @@ because it's newer. If you hit a version gap:
    isolate which scenario regressed.
 
 For anything else — upgrading Crew itself, configuration, or the CLI — see
-[`operations.md`](operations.md#upgrading), [`getting-started.md`](getting-started.md), and
+[`operations.md`](operations.md#upgrading), [`development.md`](development.md), and
 [`cli-reference.md`](cli-reference.md).

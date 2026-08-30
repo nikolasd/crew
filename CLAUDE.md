@@ -116,7 +116,7 @@ structural choice is accidental.
 | `fixtures/` | Cross-language golden fixtures (protocol frames, state roots, repo ids, configs) that Rust and TS tests both read |
 | `tests/conformance/` | Golden-frame adapter conformance runner |
 | `release/` | Release build inputs and evidence — `targets.json` (platform build matrix, read by xtask and CI) plus per-version release checklists and live adapter conformance results |
-| `docs/` | Start with `getting-started.md` and `architecture.md`; `engineering-lessons.md` documents past bugs and the invariant that closed each one |
+| `docs/` | Start with `development.md` (Crew Development Guide) and `architecture.md` (Crew Architecture); `engineering-lessons.md` documents past bugs and the invariant that closed each one |
 
 ### Cross-language coupling to keep in mind
 
