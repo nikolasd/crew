@@ -1,4 +1,4 @@
-name: Dry-Run Release Build
+name: Cross-Platform Build Check
 
 on:
   push:
