@@ -138,8 +138,13 @@ touches every domain mutation, not one call site. Stated so that whoever picks u
 work sizes it correctly, and does not conclude that adding one `sanitize` call closes the class. Closing the
 message-path gap is its own decision with its own security reasoning, and is tracked separately; it
 is not folded in here, because a decision about run intent should not quietly also change how
-message content is persisted. The false doc comment is corrected as part of this change, since
-leaving a comment claiming a security property the code does not have is not defensible once known.
+message content is persisted.
+
+The false doc comment on `Message::payload` is deliberately **not** edited. Its words — "redacted
+before persistence" — are what the code *should* do, so the fix is to make them true rather than to
+soften them into an accurate description of a gap. That is the separately tracked follow-up which
+routes the message payload through the redactor; once it lands the comment is correct exactly as
+written, and this paragraph is the record that for a period it was not.
 
 ### A rationale this decision invalidates
 

@@ -5882,3 +5882,53 @@ async fn a_run_submitted_without_a_prompt_journals_no_prompt_event() {
         "no prompt was submitted, so no prompt event may be journaled"
     );
 }
+
+/// CREW-28: a message payload is caller-supplied content and must cross
+/// the ADR-0006 boundary before it becomes durable, exactly like a submit
+/// prompt. It reached `INSERT INTO messages` verbatim until this.
+#[tokio::test]
+async fn a_secret_shaped_string_in_a_message_payload_is_masked_before_it_is_journaled() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+
+    let (task_id, worker_id, run_id) = submit_fake_run_with_prompt(&mut client, None).await;
+
+    let secret = "sk-ant-api03-EEEEFFFFGGGGHHHH5678";
+    let send = client
+        .call(
+            5,
+            "message/send",
+            json!({
+                "runId": run_id,
+                "senderWorkerId": worker_id,
+                "taskId": task_id,
+                "kind": "steer",
+                "payload": format!("use {secret} for the deploy"),
+            }),
+        )
+        .await;
+    assert!(send.get("error").is_none(), "message/send failed: {send:?}");
+
+    let list = client
+        .call(6, "message/list", json!({ "runId": run_id }))
+        .await;
+    let messages = list["result"]["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 1, "one message: {messages:?}");
+    let payload = messages[0]["payload"]
+        .as_str()
+        .expect("payload is a string");
+
+    assert!(
+        !payload.contains(secret),
+        "a steer's secret must never become durable: {payload}"
+    );
+    assert!(
+        payload.contains("use") && payload.contains("for the deploy"),
+        "the surrounding text must survive -- a payload is Visible, not \
+         dropped wholesale: {payload}"
+    );
+}

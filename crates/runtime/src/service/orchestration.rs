@@ -2284,7 +2284,30 @@ impl OrchestrationService {
         let sender_worker_id = parse_worker_id(params.get("senderWorkerId"))?;
         let task_id = parse_task_id(params.get("taskId"))?;
         let kind = parse_message_kind(params.get("kind"))?;
-        let payload = str_field(params, "payload")?;
+        // CREW-28: the payload is caller-supplied content and becomes
+        // durable in `messages.payload`, so it crosses the ADR-0006
+        // boundary here -- it previously reached `INSERT INTO messages`
+        // verbatim, which is what made a steer carrying an API key a
+        // durable secret. Classified `Visible` for the same reason a
+        // submit prompt is (ADR-0028): a leader-authored steer is meant to
+        // be read, so the denylist applies and the text survives.
+        //
+        // `sanitize_fragment` returns `None` only for `Thinking`/`Secret`,
+        // and this fragment is always `Visible`, so the `None` arm is
+        // unreachable -- surfaced as an internal error rather than
+        // `unwrap_or_default()`, because silently delivering an empty
+        // steer would have the worker act on nothing.
+        let payload = {
+            let classified = crew_protocol::Classified {
+                class: crew_protocol::ContentClass::Visible,
+                value: str_field(params, "payload")?,
+            };
+            self.redactor
+                .sanitize_fragment(&classified)
+                .ok_or_else(|| {
+                    ServiceError::internal("a Visible fragment always sanitizes to Some")
+                })?
+        };
         let recipient_worker_id = params
             .get("recipientWorkerId")
             .and_then(Value::as_str)
