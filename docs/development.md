@@ -1,14 +1,14 @@
-# Crew Getting Started Guide
+# Crew Development Guide
 
 **Audience & purpose:** the Crew developer manual, for contributors building Crew from source and
 working in this codebase day to day — setup, the patterns and invariants this repo actually
 enforces, and where to find more. For running/debugging an already-installed `crewd` (flags,
 troubleshooting workflows), see [`cli-reference.md`](cli-reference.md) instead — that content used
 to live here and has moved. Its other companions are [`code-walkthrough.md`](code-walkthrough.md)
-(source map and debugging playbook), [`rust-primer.md`](rust-primer.md) (Rust via this codebase),
+(source map and debugging playbook), [`rust-tutorial.md`](rust-tutorial.md) (Rust via this codebase),
 and [`manual-testing.md`](manual-testing.md) (QA verification steps).
 
-> **Just want to use Crew, not build it?** See [README.md's Installation section](../README.md#installation) — `/marketplace add nikolasd/crew` then `/marketplace install crew@crew` installs the extension, then a session restart, then `/crew-install` in the new session downloads the runtime binary; no build step, no GitHub access needed (the repository is public). Then see [`plugin-usage.md`](plugin-usage.md), the user manual. This guide is for developing Crew itself.
+> **Just want to use Crew, not build it?** See [README.md's Installation section](../README.md#installation) — `/marketplace add nikolasd/crew` then `/marketplace install crew@crew` installs the extension, then a session restart, then `/crew-install` in the new session downloads the runtime binary; no build step, no GitHub access needed (the repository is public). Then see [`user-guide.md`](user-guide.md), the user manual. This guide is for developing Crew itself.
 
 ## Prerequisites
 
