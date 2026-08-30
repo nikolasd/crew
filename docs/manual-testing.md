@@ -1,9 +1,9 @@
-# Manual testing
+# Manual Testing Guide
 
 **Audience & purpose:** contributors doing pre-release or post-change QA — a companion to
-[getting-started.md](getting-started.md), the developer manual. Not for end users; if you're
+[development.md](development.md), the developer manual. Not for end users; if you're
 looking for how to *use* Crew rather than verify a change to it, see
-[plugin-usage.md](plugin-usage.md).
+[user-guide.md](user-guide.md).
 
 Every automated suite (`bun run check`) runs without a model call and without a human watching a
 screen. Some things can only be verified by actually running `omp`, calling a tool with a real
@@ -17,7 +17,7 @@ way `architecture.md` says it does.
 
 ## Prerequisites
 
-Same as [getting-started.md](getting-started.md#prerequisites): Rust 1.97.1+, Bun 1.3.14+,
+Same as [development.md](development.md#prerequisites): Rust 1.97.1+, Bun 1.3.14+,
 `omp` ≥ 17.0.7 on your `PATH`. Build both sides first:
 
 ```bash
@@ -256,7 +256,7 @@ monitor but exposed as a CLI subcommand for direct testing.
 
 ## 3. The orchestration tools (needs a real model call)
 
-The 11 orchestration tools (`crew_profile`, `crew_worker`, `crew_task`, `crew_run`, `crew_workspace`, `crew_artifact`, `crew_child`, `crew_violation`, `crew_message`, `crew_approval`, `crew_reconcile` — see [`plugin-usage.md`](plugin-usage.md) for what each does) are regular OMP tools the model *chooses* to call — this
+The 11 orchestration tools (`crew_profile`, `crew_worker`, `crew_task`, `crew_run`, `crew_workspace`, `crew_artifact`, `crew_child`, `crew_violation`, `crew_message`, `crew_approval`, `crew_reconcile` — see [`user-guide.md`](user-guide.md) for what each does) are regular OMP tools the model *chooses* to call — this
 genuinely needs a model, and each step below takes something like ten seconds to a couple of
 minutes. Work in a scratch repository, never this one:
 
@@ -562,7 +562,7 @@ export OMP_CREW_BINARY="$PWD/target/debug/crewd"
 EXT="$PWD/packages/extension/dist/index.js"
 
 # Terminal A: start a daemon + a TUI run against one of the four adapters,
-# then leave it open. See plugin-usage.md for the exact run tool.
+# then leave it open. See user-guide.md for the exact run tool.
 omp --extension "$EXT"
 
 # Terminal B: tail the journal for the OutOfBandInput event

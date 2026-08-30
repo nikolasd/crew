@@ -50,7 +50,7 @@ silently marked as started.
 
 * Until adapters ship, every real `run/submit` against a production daemon returns
   `adapter_unavailable` — which is correct but must be clearly documented (and is: see
-  `getting-started.md`'s smoke-testing walkthrough) so it isn't mistaken for a bug during the
+  `development.md`'s smoke-testing walkthrough) so it isn't mistaken for a bug during the
   Orchestration Extension milestone's own review.
 
 ## Pros and Cons of the Options
