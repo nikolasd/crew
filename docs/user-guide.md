@@ -33,7 +33,7 @@ environment variable (or a `gh auth login` session) is optional but recommended 
 may hit GitHub's unauthenticated rate limit (60 requests/hour); with one, it's 5,000/hour.
 
 **Skills and rules load automatically — no extra manifest entry needed.** `packages/extension/`
-ships `skills/` (three skills, §3) and `rules/` (`crew-delegation-guard.md`) as plain sibling
+ships `skills/` (four skills, §3) and `rules/` (`crew-delegation-guard.md`) as plain sibling
 directories next to `dist/`, and `packages/extension/package.json` declares only `omp.extensions`
 — nothing skill- or rule-specific. That's sufficient: OMP's `omp-plugins` provider (priority 90)
 discovers `skills/` and `rules/*.{md,mdc}` by directory convention for any extension package it
@@ -70,10 +70,10 @@ If this fails instead, skip to [When something breaks](#6-when-something-breaks)
 
 ## 3. Just ask
 
-Once installed, you drive Crew with plain language — the model calls the tools. The three
-installed skills (`crew-orchestration`, `crew-approvals`, `crew-troubleshooting`, under
-`packages/extension/skills/`) already carry these workflows, so the model doesn't need a tool-call
-hint from you. Some examples of what to say, and what happens:
+Once installed, you drive Crew with plain language — the model calls the tools. The four
+installed skills (`crew-orchestration`, `crew-approvals`, `crew-troubleshooting`, `crew-recovery`,
+under `packages/extension/skills/`) already carry these workflows, so the model doesn't need a
+tool-call hint from you. Some examples of what to say, and what happens:
 
 | You say | What Crew does |
 |---|---|

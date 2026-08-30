@@ -33,7 +33,7 @@ A policy violation quarantines a run — it makes no further progress until ever
 
 - A proposed plan is not a run authorization. Decide the plan gate before `crew_spawn`; never bypass a human-required write-plan decision.
 - `BUDGET_EXCEEDED` is an observed limit, not an invitation to retry the same message. Escalate for a higher planned budget or finish/stop the run.
-- A `WorkerTimeout` gives the leader exactly three choices: `run/timeoutAck` `extend`, `crew_send` a nudge, or `run/timeoutAck` `abort`. Do not poll the worker or send duplicate instructions through a vendor pane.
+- A `WorkerTimeout` gives the leader exactly three choices: `run/timeoutAck` `extend`, `crew_send` a nudge, or `run/timeoutAck` `abort`. Do not poll the worker or send duplicate instructions through a vendor pane. An `extend` refusal (`-32602`, no tracked timeout) can mean the run settled in the meantime — expected and benign, not a fault to retry or escalate.
 
 ## Child spawn requests
 
@@ -45,3 +45,7 @@ When a worker wants to spawn a nested child, it records the intent — nothing h
   - **Deny** requires a `reason` explaining the refusal.
 
 A request is only an intent — accepting is what actually creates the child run.
+
+## Reason text is redacted before it becomes durable
+
+Every free-text `reason` you supply — a deny reason here, an approval or plan decision's `reason` — is redacted (secret-shaped substrings masked) before it's journaled. Expect the reason you see later in the transcript or an export to potentially differ from what you typed if it happened to contain something that looked like a credential. This is expected, not a bug: don't be surprised by masked text in the journal, and don't rely on a reason being preserved verbatim for later reference.
