@@ -60,6 +60,7 @@ export type * from "./generated/PolicyViolationListResult";
 export type * from "./generated/PolicyViolationSummary";
 export type * from "./generated/ProjectId";
 export type * from "./generated/ProtocolVersion";
+export type * from "./generated/Redacted";
 export type * from "./generated/ReleaseRequest";
 export type * from "./generated/RepositoryIdentity";
 export type * from "./generated/RequestId";
