@@ -3198,7 +3198,7 @@
           "$ref": "#/$defs/BinarySource"
         },
         "dashboardUrl": {
-          "description": "The embedded dashboard's live URL, token included, when\n`dashboard.enabled` and the bind succeeded; `None` otherwise\n(disabled, or the bind failed and degraded to no dashboard).\n\nCREW-35: the maintainer explicitly chose to put the live,\ncapability-granting token in this field rather than only pointing\nat the daemon's own log (the narrower-exposure alternative) --\n`/crew health`'s output flows into the leader model's own session\ncontext/transcript, a wider and less access-controlled surface than\na local log file, and that tradeoff was seen and accepted for\none-click discoverability. Do not \"fix\" this by hiding the token\nagain without a fresh maintainer decision.",
+          "description": "The embedded dashboard's live URL, token included, when\n`dashboard.enabled` and the bind succeeded; `None` otherwise\n(disabled, or the bind failed and degraded to no dashboard).\n\nCREW-35: the maintainer explicitly chose to put the live,\ncapability-granting token in this field rather than only pointing\nat the daemon's own log (the narrower-exposure alternative) --\n`/crew health`'s output flows into the leader model's own session\ncontext/transcript, including model-initiated checks (the model can\ncall the `crew_health` tool unprompted, not only a human typing\n`/crew health`), a wider and less access-controlled surface than a\nlocal log file, and that tradeoff was seen and accepted for\none-click discoverability. Do not \"fix\" this by hiding the token\nagain without a fresh maintainer decision.",
           "type": [
             "string",
             "null"
