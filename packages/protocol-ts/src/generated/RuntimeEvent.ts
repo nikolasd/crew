@@ -20,7 +20,7 @@ import type { WorkspaceEvent } from "./WorkspaceEvent";
 
 /**
  * A sanitized, durable runtime event. Fields are plain, already-sanitized
- * types (never [`Classified`]) so that raw thinking/secret content can
+ * types (never `Classified`) so that raw thinking/secret content can
  * never reach the durable log through this type.
  */
 export type RuntimeEvent = { "type": "runtimeStarted" } | { "type": "runtimeStopping" } | { "type": "diagnostic", "payload": { level: DiagnosticLevel, code: string, message: string, } } | { "type": "taskEvent", "payload": { kind: RuntimeEventKind, taskId: TaskId, ownerClientInstanceId: string, revision: number, } } | { "type": "workerEvent", "payload": { kind: RuntimeEventKind, workerId: WorkerId, profileId: string, } } | { "type": "runEvent", "payload": { kind: RuntimeEventKind, runId: RunId, taskId: TaskId, workerId: WorkerId, state: string, } } | { "type": "runFlagsEvent", "payload": { runId: RunId, flags: RunFlags, } } | { "type": "runPromptEvent", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, prompt: Redacted, } } | { "type": "messageEvent", "payload": { kind: RuntimeEventKind, messageId: MessageId, runId: RunId, taskId: TaskId, deliveryState: string, } } | { "type": "approvalEvent", "payload": { kind: RuntimeEventKind, approvalId: ApprovalId, runId: RunId, taskId: TaskId, action: string, decidedBy: DecidedBy | null, 

@@ -3,7 +3,7 @@ import type { SubtaskSpec } from "./SubtaskSpec";
 
 /**
  * A proposed decomposition of a run into subtasks, carried by
- * [`RuntimeEvent::PlanProposed`] and returned by `plan/get`, awaiting
+ * the `planProposed` event and returned by `plan/get`, awaiting
  * `plan/decide`.
  */
 export type PlanSpec = { subtasks: Array<SubtaskSpec>, };

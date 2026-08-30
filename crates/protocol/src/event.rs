@@ -309,7 +309,7 @@ pub enum EventSource {
     Runtime,
 }
 
-/// The severity of a [`RuntimeEvent::Diagnostic`].
+/// The severity of a `diagnostic` event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -319,7 +319,7 @@ pub enum DiagnosticLevel {
     Error,
 }
 
-/// Who answered a [`RuntimeEvent::EscalationRaised`] escalation.
+/// Who answered an `escalationRaised` escalation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -328,7 +328,7 @@ pub enum AnsweredBy {
     User,
 }
 
-/// Which liveness deadline a [`RuntimeEvent::WorkerTimeout`] event reports.
+/// Which liveness deadline a `workerTimeout` event reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -337,13 +337,13 @@ pub enum TimeoutKind {
     Total,
 }
 
-/// One subtask within a [`PlanSpec`], as proposed by `plan/propose`.
+/// One subtask within a `PlanSpec`, as proposed by `plan/propose`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]
 pub struct SubtaskSpec {
     /// The caller-assigned identifier for this subtask within its plan;
-    /// distinct from a [`TaskId`], since a proposed subtask is not yet a
+    /// distinct from a `TaskId`, since a proposed subtask is not yet a
     /// registered task until (and unless) the plan is approved.
     pub id: String,
     pub description: String,
@@ -358,7 +358,7 @@ pub struct SubtaskSpec {
 }
 
 /// A proposed decomposition of a run into subtasks, carried by
-/// [`RuntimeEvent::PlanProposed`] and returned by `plan/get`, awaiting
+/// the `planProposed` event and returned by `plan/get`, awaiting
 /// `plan/decide`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -531,8 +531,8 @@ pub enum RuntimeEventKind {
     AdapterNestedWorkerObserved,
     /// A TUI-mode worker adapter's transcript classified an assistant
     /// message as a question awaiting a human answer, rather than a
-    /// completed message. Carried on the same [`RuntimeEvent::AdapterMessageEvent`]
-    /// shape as [`Self::AdapterMessageFinal`] (role/text), distinguished
+    /// completed message. Carried on the same `adapterMessageEvent`
+    /// shape as `adapterMessageFinal` (role/text), distinguished
     /// only by this `kind`.
     #[serde(rename = "adapterQuestionDetected")]
     AdapterQuestionDetected,
@@ -596,7 +596,7 @@ pub enum RuntimeEventKind {
 }
 
 /// A sanitized, durable runtime event. Fields are plain, already-sanitized
-/// types (never [`Classified`]) so that raw thinking/secret content can
+/// types (never `Classified`) so that raw thinking/secret content can
 /// never reach the durable log through this type.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(
@@ -851,7 +851,7 @@ pub enum RuntimeEvent {
         reason: Option<Redacted>,
     },
     /// A worker asked a question that blocks its own progress, without
-    /// escalating control (compare [`Self::EscalationRaised`]). `question`
+    /// escalating control (compare `escalationRaised`). `question`
     /// has already crossed the redaction boundary; `None` means the
     /// entire fragment was `Thinking`/`Secret`-classified and was
     /// dropped, not that the question was empty.
@@ -864,7 +864,7 @@ pub enum RuntimeEvent {
     /// A worker escalated a blocking condition to its leader or a human
     /// operator. `reason` is a plain, machine-assigned code (never raw
     /// worker content); `question` has already crossed the redaction
-    /// boundary the same way [`Self::WorkerQuestion`]'s field has.
+    /// boundary the same way `workerQuestion`'s field has.
     EscalationRaised {
         run_id: RunId,
         task_id: TaskId,
@@ -874,7 +874,7 @@ pub enum RuntimeEvent {
     },
     /// An escalation was answered by the leader or a human user.
     /// `answer` has already crossed the redaction boundary the same way
-    /// [`Self::WorkerQuestion`]'s field has.
+    /// `workerQuestion`'s field has.
     EscalationAnswered {
         run_id: RunId,
         task_id: TaskId,

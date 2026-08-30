@@ -70,7 +70,7 @@ pub struct ApprovalDecision {
 
 /// Who produced an approval decision. Sent by `approval/decide` and
 /// enforced by the runtime: an approval created with
-/// `human_required: true` may only be decided by [`DecidedBy::Human`].
+/// `human_required: true` may only be decided by `human`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
