@@ -7338,7 +7338,7 @@ confirm how the runtime identified it.`,
           type: "string"
         },
         scopedRunId: {
-          description: "The run this connection is scoped to. Absent for every role except\n`workerMcp`, whose scope-token binding determines it -- never a\nvalue the client can request or override.",
+          description: "The run this connection is scoped to. `null` for every role except\n`workerMcp`, whose scope-token binding determines it -- never a\nvalue the client can request or override.",
           anyOf: [
             {
               $ref: "#/$defs/RunId"
@@ -8236,10 +8236,7 @@ only *that* the turn ended, and how.`,
           additionalProperties: false
         },
         {
-          description: `A visible message chunk or final message from a worker adapter.
-\`text\` has already crossed the redaction boundary; absent means
-the entire fragment was classified as sensitive and dropped, not
-that the message was empty.`,
+          description: "A visible message chunk or final message from a worker adapter.\n`text` has already crossed the redaction boundary; `null` means\nthe entire fragment was classified as sensitive and dropped, not\nthat the message was empty.",
           type: "object",
           properties: {
             type: {
@@ -8292,10 +8289,7 @@ that the message was empty.`,
           additionalProperties: false
         },
         {
-          description: `A tool call lifecycle event from a worker adapter. \`detail\` has
-already crossed the redaction boundary; absent means the detail
-fragment was classified as sensitive and dropped, not that it was
-empty.`,
+          description: "A tool call lifecycle event from a worker adapter. `detail` has\nalready crossed the redaction boundary; `null` means the detail\nfragment was classified as sensitive and dropped, not that it was\nempty.",
           type: "object",
           properties: {
             type: {
@@ -8455,7 +8449,7 @@ empty.`,
           additionalProperties: false
         },
         {
-          description: "A worker adapter's protocol health changed. `detail` has already\ncrossed the redaction boundary; absent means the detail fragment\nwas classified as sensitive and dropped, not that it was empty.",
+          description: "A worker adapter's protocol health changed. `detail` has already\ncrossed the redaction boundary; `null` means the detail fragment\nwas classified as sensitive and dropped, not that it was empty.",
           type: "object",
           properties: {
             type: {
@@ -8803,7 +8797,7 @@ contents, never an absolute socket or filesystem path.`,
                   type: "boolean"
                 },
                 reason: {
-                  description: "Absent when no rationale was given for the decision.",
+                  description: "`null` when no rationale was given for the decision.",
                   anyOf: [
                     {
                       $ref: "#/$defs/Redacted"
@@ -8830,7 +8824,7 @@ contents, never an absolute socket or filesystem path.`,
           additionalProperties: false
         },
         {
-          description: "A worker asked a question that blocks its own progress, without\nescalating control (compare `escalationRaised`). `question`\nhas already crossed the redaction boundary; absent means the\nentire fragment was classified as sensitive and dropped, not\nthat the question was empty.",
+          description: "A worker asked a question that blocks its own progress, without\nescalating control (compare `escalationRaised`). `question`\nhas already crossed the redaction boundary; `null` means the\nentire fragment was classified as sensitive and dropped, not\nthat the question was empty.",
           type: "object",
           properties: {
             type: {
@@ -9273,8 +9267,7 @@ specific merge of org/repo/user/per-run layers.`,
                   type: "string"
                 },
                 vendor_child_id: {
-                  description: `Present only for a nested-worker violation; absent for any
-violation with no vendor child, such as a cost ceiling.`,
+                  description: "Present (non-`null`) only for a nested-worker violation; `null`\nfor any violation with no vendor child, such as a cost ceiling.",
                   type: [
                     "string",
                     "null"
@@ -9956,8 +9949,7 @@ new window.`,
           type: "boolean"
         },
         turnBudget: {
-          description: `The maximum number of turns this subtask may take; absent means no
-explicit budget was proposed.`,
+          description: "The maximum number of turns this subtask may take; `null` means no\nexplicit budget was proposed.",
           type: [
             "integer",
             "null"
@@ -9999,7 +9991,7 @@ explicit budget was proposed.`,
           $ref: "#/$defs/DisplayBackend"
         },
         width: {
-          description: "Optional width override (None = auto-detect).",
+          description: "Optional width override; auto-detected when not set.",
           type: [
             "integer",
             "null"
@@ -10009,7 +10001,7 @@ explicit budget was proposed.`,
           maximum: 65535
         },
         height: {
-          description: "Optional height override (None = auto-detect).",
+          description: "Optional height override; auto-detected when not set.",
           type: [
             "integer",
             "null"
@@ -10125,7 +10117,7 @@ explicit budget was proposed.`,
       ]
     },
     JsonRpcErrorResponse: {
-      description: "A JSON-RPC 2.0 error response envelope. `id` is absent when the request\nidentifier could not be determined (for example, on a parse error).",
+      description: "A JSON-RPC 2.0 error response envelope. `id` is `null` when the request\nidentifier could not be determined (for example, on a parse error) --\nJSON-RPC 2.0 requires the key present with a `null` value here, per\n\xA75, never an omitted key.",
       type: "object",
       properties: {
         jsonrpc: {
@@ -10233,7 +10225,7 @@ range (a self-check that always holds for a live, negotiated session).`,
         },
         dashboardUrl: {
           description: `The embedded dashboard's live URL when \`dashboard.enabled\` and the
-bind succeeded; absent otherwise (disabled, or the bind failed and
+bind succeeded; \`null\` otherwise (disabled, or the bind failed and
 degraded to no dashboard).
 
 The URL includes the dashboard's access token, so it grants whoever
@@ -10565,7 +10557,7 @@ child at all (a cost ceiling does not).`,
           ]
         },
         resolution: {
-          description: '`"release"` or `"cancel"` once decided; absent while open.',
+          description: '`"release"` or `"cancel"` once decided; `null` while open.',
           type: [
             "string",
             "null"
@@ -10589,7 +10581,7 @@ child at all (a cost ceiling does not).`,
       ]
     },
     RunResultResult: {
-      description: "Result of `run/result`: a terminal run's final journaled output.\n\n`result_text: None` means the run journaled no visible final message\n(or it was fully redacted) -- distinct from an error. `usage: None`\nmeans the adapter never reported usage (e.g. Copilot under ACP v1).",
+      description: "Result of `run/result`: a terminal run's final journaled output.\n\n`resultText` is `null` when the run journaled no visible final message\n(or it was fully redacted) -- distinct from an error. `usage` is\n`null` when the adapter never reported usage (e.g. Copilot under\nACP v1).",
       type: "object",
       properties: {
         runId: {
@@ -10698,7 +10690,7 @@ child at all (a cost ceiling does not).`,
       ]
     },
     PlanGetResult: {
-      description: "Result of `plan/get`: the most recently proposed plan for a run and its\ndecision, if any. `plan: None` means no plan has been proposed yet;\n`approved: None` means a plan exists but has not yet been decided.",
+      description: "Result of `plan/get`: the most recently proposed plan for a run and its\ndecision, if any. `plan` is `null` when no plan has been proposed yet;\n`approved` is `null` when a plan exists but has not yet been decided.",
       type: "object",
       properties: {
         runId: {
