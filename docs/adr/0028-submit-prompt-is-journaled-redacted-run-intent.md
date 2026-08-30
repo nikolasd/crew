@@ -117,6 +117,23 @@ The two exposure classes are therefore *different rather than nested*, and it is
 So this decision produces a system where the redacted content is the widely distributed one and the
 unredacted content is the narrowly held one — defensible, but only while stated.
 
+> **Amendment, 2026-08-30.** The table above was incomplete as a statement of fact, and the missing
+> row is the worst one. Auditing the class this ADR describes turned up three more caller-supplied
+> free-text fields reaching `event_json` with no redaction — `ApprovalEvent.reason`,
+> `PlanDecided.reason` and `ChildEvent.reason`, each read straight from request params by
+> `approval/decide`, `plan/decide` and `coordination/child/decide`:
+>
+> | | durable | redacted | in `audit export` |
+> |---|---|---|---|
+> | decision reasons (before CREW-32) | yes | **no** | **yes** |
+>
+> These were strictly worse than the steer payload this ADR compared itself against: a payload lives
+> in `messages`, which `audit/export.rs` never reads, while a reason is a `RuntimeEvent` in `events`
+> — so it was exportable, not merely durable. Closed by CREW-32, which routes all three through the
+> redactor. Recorded here rather than silently fixed because this ADR's own framing — two exposure
+> classes, the redacted one widely distributed — was built on a survey that had missed a third, and a
+> reader comparing paths deserves to know the survey was the incomplete part rather than the code.
+
 **The cause is structural, and worth naming because it is larger than one missing call.** There are
 two paths by which an event becomes durable, and only one of them is the boundary ADR-0006
 describes. `DatabaseHandle::append_event` takes a `PersistableEvent` — a type with no public

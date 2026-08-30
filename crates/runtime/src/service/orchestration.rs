@@ -368,6 +368,30 @@ impl OrchestrationService {
         broadcast_committed(&self.events_tx, value);
     }
 
+    /// Redacts a caller-supplied free-text field before it becomes durable
+    /// (ADR-0006, CREW-32).
+    ///
+    /// A decision rationale is prose a human or leader wrote, so it can
+    /// contain anything they had in front of them -- including a key they
+    /// were explaining. It is journaled as a `RuntimeEvent`, which means
+    /// `events/replay`, the dashboard transcript, and `audit export` all
+    /// read it; an unredacted reason is exportable, not merely durable.
+    ///
+    /// `Visible` for the same reason a prompt and a steer are: the text is
+    /// meant to be read, so the denylist applies and the prose survives.
+    /// The `None` arm is unreachable for a `Visible` fragment, and is
+    /// surfaced rather than defaulted because a silently emptied rationale
+    /// would record that a reason exists when none does -- the exact thing
+    /// this field's own empty-check (R59) refuses at the boundary.
+    fn redact_caller_text(&self, text: String) -> Result<String, ServiceError> {
+        self.redactor
+            .sanitize_fragment(&crew_protocol::Classified {
+                class: crew_protocol::ContentClass::Visible,
+                value: text,
+            })
+            .ok_or_else(|| ServiceError::internal("a Visible fragment always sanitizes to Some"))
+    }
+
     /// Dispatches one already role-authorized orchestration method.
     /// `principal` is consulted for ownership checks: `reconcile/omp`,
     /// `task/upsert`, `approval/decide`, every run-lifecycle mutation
@@ -2571,7 +2595,7 @@ impl OrchestrationService {
                 "decision must be \"approve\" or \"deny\"",
             ));
         }
-        let reason = str_field(params, "reason")?;
+        let reason = self.redact_caller_text(str_field(params, "reason")?)?;
         // The rationale is an audit fact (R59): an empty one is refused at
         // the boundary rather than silently persisted as a record that a
         // rationale exists when none does.
@@ -2742,7 +2766,9 @@ impl OrchestrationService {
         let reason = params
             .get("reason")
             .and_then(Value::as_str)
-            .map(str::to_string);
+            .map(str::to_string)
+            .map(|text| self.redact_caller_text(text))
+            .transpose()?;
 
         let project_id = self.project_id;
         let principal_id = principal.instance_id.clone();
@@ -3115,7 +3141,7 @@ impl OrchestrationService {
                 Ok(result)
             }
             "deny" => {
-                let reason = str_field(params, "reason")?;
+                let reason = self.redact_caller_text(str_field(params, "reason")?)?;
                 let mut result = self
                     .db
                     .run_domain_op(Box::new(move |conn| {
