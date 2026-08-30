@@ -414,6 +414,58 @@ reported honestly per backend, so a caller that cares can already tell what it g
 
 ---
 
+## True Graceful Stop (`crew_stop { outcome: "done" }`)
+
+**Specified by:** CREW-35 (skills-audit tool-surface fixes, 2026-08-30)
+**References:** `packages/extension/src/tools/leader.ts` (`registerStopTool`), `crates/runtime/src/service/orchestration.rs` (`run_cancel`)
+
+### What it is
+
+`crew_stop`'s two `outcome` values used to imply a real behavioral distinction: `'done'` documented
+as "graceful wrap-up then soft cancel (the worker finishes its current turn)" versus `'abort'`'s
+"immediate cancel". The extension backed this by sending `run/cancel` a `mode: "soft"` parameter for
+`'done'`. The daemon's `run_cancel` handler never reads a `mode` parameter at all -- both outcomes
+call the identical immediate-cancel path (`CancelScope::Worker`, which kills the vendor process
+right away). The only real difference between the two outcomes is that `'done'` fires a courtesy
+`message/send` follow-up a moment before the same kill; there is no grace period, and no
+server-side distinction between "let it finish its turn" and "stop it now."
+
+CREW-35 fixed the dishonesty (removed the ignored `mode` parameter, rewrote the tool description to
+say plainly that both outcomes kill immediately). This entry tracks the feature the old description
+was describing, in case it's ever worth actually building: a `run/cancel` (or dedicated `run/stop`)
+mode that gives a live vendor process a bounded window to reach its own turn boundary --
+`waitingUser`, a natural pause point -- before the hard kill, rather than killing mid-turn every
+time.
+
+### Why deferred
+
+- No adapter today exposes a "wrap up your current turn" signal a supervisor could send and wait on
+  -- building this would mean either a new coordination-channel message every adapter kind has to
+  handle, or a bounded wait against activity/turn-end evidence that already exists (the same
+  `TurnEnded` fact `run/finish`/`run/result` read) without actually asking the vendor to hurry.
+- No operator has reported that immediate-kill loses meaningful in-flight state today. The
+  vendor's own transcript/journal already captures everything up to the kill; what a grace period
+  would additionally protect is unclear without a concrete failure report.
+- A naive implementation (block `crew_stop` until turn-end or a timeout) would make a tool the
+  leader expects to be fast into one with an unbounded-feeling latency tail, trading one honesty
+  problem (claims a distinction that isn't there) for a responsiveness one.
+
+### Decision trigger
+
+Either of:
+
+1. **A concrete report of lost in-flight state** from an immediate kill that a bounded grace window
+   would have prevented -- not speculation that graceful stops are "generally better."
+2. **An adapter gains a real "wrap up now" signal** (a coordination message a vendor process can act
+   on to reach its own turn boundary early) for an unrelated reason, making a genuine graceful stop
+   cheap to wire rather than a new mechanism built just for this.
+
+Explicitly *not* a trigger: wanting the two outcome names to mean something different from each
+other for its own sake -- the current fix (say what each one actually does) already resolves that
+without inventing new server behavior.
+
+---
+
 ## `run/list` Canonical Result Type
 
 **Specified by:** CREW-43 (RunMessage codegen fix, 2026-08-30)

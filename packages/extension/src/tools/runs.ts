@@ -1,6 +1,10 @@
-// `crew_run`: submits, lists, fetches, retries, and cancels runs.
-// `submit`, `retry`, and `cancel` are tier `exec` -- they start, restart,
-// or stop adapter processes. `retry` creates a distinct run (never mutates the prior one).
+// `crew_run`: submits, lists, fetches, retries, cancels, and settles runs.
+// `submit`, `retry`, `cancel`, `timeoutAck`, and `finish` are tier `exec`
+// -- they start, restart, stop, or settle adapter processes. `retry`
+// creates a distinct run (never mutates the prior one). `finish` is the
+// leader's own ADR-0027 settle decision (run/finish), distinct from
+// `cancel`: it states an outcome and works on any non-terminal run, not
+// only one that has stopped producing output.
 
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
@@ -11,23 +15,28 @@ export const CREW_RUN_TOOL_NAME = "crew_run";
 
 export function registerRunTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["submit", "list", "get", "retry", "cancel", "result"]).describe("Which run operation to perform."),
+    op: pi.zod.enum(["submit", "list", "get", "retry", "cancel", "result", "timeoutAck", "finish"]).describe("Which run operation to perform."),
     prompt: pi.zod.string().optional().describe("Required for submit and retry: the instruction the worker executes. Crew stores no task text, so the task's description must be passed here."),
     taskId: pi.zod.string().optional().describe("Required for submit: the task to execute. Optional filter for list."),
     workerId: pi.zod.string().optional().describe("Required for submit and retry: the worker to execute with."),
     workspaceMode: pi.zod.enum(["shared", "isolated", "copy"]).optional().describe("Optional workspace mode for submit and retry: 'shared' (the repository itself, the default), 'isolated' (a per-run git worktree), or 'copy' (a per-run copy of the repository)."),
     priority: pi.zod.number().int().optional().describe("Optional priority for submit."),
-    runId: pi.zod.string().optional().describe("Required for get, cancel, and result: the run id."),
+    runId: pi.zod.string().optional().describe("Required for get, cancel, result, timeoutAck, and finish: the run id."),
     priorRunId: pi.zod.string().optional().describe("Required for retry: the terminal run id to retry."),
+    decision: pi.zod
+      .enum(["extend", "nudge", "abort"])
+      .optional()
+      .describe("Required for timeoutAck: how to respond to a WorkerTimeout fact. 'extend' re-arms both liveness deadlines with a fresh window. 'nudge' is a server-side no-op -- follow up with crew_send (op: 'send') to actually nudge the worker. 'abort' cancels the run (same effect as op: 'cancel')."),
+    outcome: pi.zod.enum(["succeeded", "failed"]).optional().describe("Optional for finish (default 'succeeded'): the leader's judgment of how the run went. Never inferred from the vendor's own turn markers -- only the leader can judge whether the task actually succeeded."),
   });
 
   pi.registerTool({
     name: CREW_RUN_TOOL_NAME,
     label: "Crew Run",
     description:
-      "Use to execute, monitor, or manage task execution by external workers. Use op: 'submit' to start execution (requires taskId from crew_task, workerId from crew_worker, and prompt -- the instruction text the worker executes), op: 'get' to check progress/status of a run, op: 'result' to read a finished run's final output text and token usage (requires runId; refused until the run reaches a terminal state -- chain work by passing resultText into the next submit's prompt), op: 'list' to list runs for a task, op: 'retry' to re-execute a terminal run (creates a new runId and starts a fresh worker process; pass prompt again), or op: 'cancel' to stop a running run. After submitting, monitor with op: 'get'. If the run fails, retry with op: 'retry' (new runId). If stuck, cancel with op: 'cancel'.",
+      "Use to execute, monitor, or manage task execution by external workers. Use op: 'submit' to start execution (requires taskId from crew_task, workerId from crew_worker, and prompt -- the instruction text the worker executes), op: 'get' to check progress/status of a run, op: 'result' to read a run's output text and token usage (requires runId; readable once the run is terminal OR has settled a turn without exiting -- a TUI vendor's process outlives its turn, so 'waitingUser' with a journaled turn-end already qualifies, per ADR-0027 -- chain work by passing resultText into the next submit's prompt), op: 'list' to list runs for a task, op: 'retry' to re-execute a terminal run (creates a new runId and starts a fresh worker process; pass prompt again), op: 'cancel' to stop a running run immediately, op: 'timeoutAck' to decide a WorkerTimeout fact (requires runId and decision: 'extend' | 'nudge' | 'abort'), or op: 'finish' to end a run as the leader's own settle decision (requires runId; optional outcome: 'succeeded' | 'failed', default 'succeeded' -- states the outcome rather than inferring it, and works on any non-terminal run, not only one that has settled a turn). After submitting, monitor with op: 'get'. If the run fails, retry with op: 'retry' (new runId). If stuck, cancel with op: 'cancel'.",
     parameters: params,
-    approval: (args) => (typeof args === "object" && args !== null && "op" in args && (args.op === "submit" || args.op === "retry" || args.op === "cancel") ? "exec" : "read"),
+    approval: (args) => (typeof args === "object" && args !== null && "op" in args && (args.op === "submit" || args.op === "retry" || args.op === "cancel" || args.op === "timeoutAck" || args.op === "finish") ? "exec" : "read"),
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
       const client = await ctx.getClient(extCtx);
       switch (input.op) {
@@ -68,6 +77,10 @@ export function registerRunTool(pi: ExtensionAPI, ctx: OrchestrationToolContext)
         }
         case "cancel":
           return callOrchestration(client, "run/cancel", { runId: input.runId });
+        case "timeoutAck":
+          return callOrchestration(client, "run/timeoutAck", { runId: input.runId, decision: input.decision });
+        case "finish":
+          return callOrchestration(client, "run/finish", { runId: input.runId, outcome: input.outcome });
       }
     },
   });

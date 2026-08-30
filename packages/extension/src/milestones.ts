@@ -6,7 +6,9 @@
 //
 // Milestones: terminal run states (succeeded | failed | cancelled |
 // lost), workerQuestion, workerTimeout, budgetExceeded, escalationRaised,
-// and the FIRST transition to `working` per run. Everything else (tool
+// the FIRST transition to `working` per run, and a settled turn (CREW-35 --
+// ADR-0027's `waitingUser` + `turnSettled`, the leader's cue that an answer
+// is ready without waiting for a terminal state). Everything else (tool
 // activity, message chunks, repeated working transitions) is noise and is
 // never surfaced.
 
@@ -53,6 +55,7 @@ function lookupKey(e: EventEnvelope): string | undefined {
  */
 export class MilestoneTracker {
   readonly #sawWorking = new Set<string>();
+  readonly #sawSettled = new Set<string>();
 
   isMilestone(e: EventEnvelope): boolean {
     const event: RuntimeEvent = e.event;
@@ -70,6 +73,24 @@ export class MilestoneTracker {
           this.#sawWorking.add(runId);
           return true;
         }
+        return false;
+      }
+      case "runFlagsEvent": {
+        // `turnSettled` is the ADR-0027 signal a `runEvent` alone can't
+        // give: `waitingUser` is reached both by a settled turn and by a
+        // worker question (its own, separately-milestoned event type), and
+        // only this flag tells them apart. One-shot per settle episode --
+        // `run/finish` (or a follow-up resuming the run) clears the flag,
+        // which re-arms this for the run's next settle.
+        const runId = event.payload.runId;
+        if (event.payload.flags.turnSettled) {
+          if (this.#sawSettled.has(runId)) {
+            return false;
+          }
+          this.#sawSettled.add(runId);
+          return true;
+        }
+        this.#sawSettled.delete(runId);
         return false;
       }
       case "workerQuestion":
@@ -115,6 +136,12 @@ export function formatDigest(e: EventEnvelope, lookup: RunLookup): string | unde
         return `${capitalize(who)} started working.`;
       }
       return undefined;
+    }
+    case "runFlagsEvent": {
+      if (!event.payload.flags.turnSettled) {
+        return undefined;
+      }
+      return `${capitalize(who)} settled a turn and is waiting on the leader (not terminal -- ` + `the vendor is still parked, not exited). Read the answer via crew_run { op: "result", runId }, ` + `then either crew_send to follow up or crew_run { op: "finish", runId, outcome } to close it.`;
     }
     case "workerQuestion": {
       const question = event.payload.question ?? "(no question text captured)";

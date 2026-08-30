@@ -381,6 +381,11 @@ async fn dispatch(
                 protocol_healthy: is_protocol_healthy(negotiated_version),
                 uptime_seconds: shared.started_at.elapsed().as_secs(),
                 binary_source: shared.config.binary_source,
+                // CREW-35: the maintainer explicitly chose to include the
+                // live token here (not just point at the daemon log) --
+                // see `RuntimeStatus::dashboard_url`'s doc comment for the
+                // tradeoff and why this is deliberate, not an oversight.
+                dashboard_url: shared.dashboard_url.get().cloned(),
             };
             let value = serde_json::to_value(&status)
                 .expect("RuntimeStatus is a plain, serializable wire type");

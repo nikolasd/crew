@@ -40,6 +40,12 @@ pub(crate) struct Shared {
     /// [`Self::orchestration`] and exposed post-bind for the adapter
     /// registry's resume support bundle (see `Server::violation_service`).
     pub(crate) violation: Arc<crate::policy::ViolationService>,
+    /// The dashboard's live URL (token included), set at most once, after
+    /// `bind` -- like [`Self::coordination`]/the violation service, the
+    /// dashboard only exists post-bind (it subscribes to this same
+    /// `events_tx`). `None` until (and unless) a dashboard bind succeeds;
+    /// read by `runtime/status` (CREW-35).
+    pub(crate) dashboard_url: std::sync::OnceLock<String>,
 }
 
 impl Shared {
@@ -267,6 +273,7 @@ impl Server {
             orchestration,
             coordination,
             violation: Arc::clone(&violation_service),
+            dashboard_url: std::sync::OnceLock::new(),
         });
 
         Ok(Self {
@@ -321,6 +328,16 @@ impl Server {
     #[must_use]
     pub fn events_sender(&self) -> broadcast::Sender<crew_protocol::EventEnvelope> {
         self.shared.events_tx.clone()
+    }
+
+    /// Records the dashboard's live URL (token included) for `runtime/status`
+    /// to report, once the dashboard has bound successfully -- post-bind for
+    /// the same reason as [`Self::coordination_broker`]/[`Self::events_sender`]:
+    /// the dashboard only exists after `Server::bind` has already produced
+    /// this server's own event sender. A no-op if called more than once
+    /// (there is exactly one dashboard per daemon run).
+    pub fn set_dashboard_url(&self, url: String) {
+        let _ = self.shared.dashboard_url.set(url);
     }
 
     /// The policy-violation service this server constructed at bind time,

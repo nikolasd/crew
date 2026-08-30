@@ -60,6 +60,27 @@ function message(): EventEnvelope {
   });
 }
 
+const ALL_FALSE_FLAGS = {
+  degradedControl: false,
+  needsReconciliation: false,
+  protocolUnhealthy: false,
+  policyQuarantined: false,
+  workspaceDirty: false,
+  turnSettled: false,
+  childrenActive: false,
+};
+
+/** A `runFlagsEvent` for `id` carrying every flag false except `turnSettled`. */
+function flags(id: string, turnSettled: boolean): EventEnvelope {
+  return envelope({
+    runId: id,
+    event: {
+      type: "runFlagsEvent",
+      payload: { runId: id, flags: { ...ALL_FALSE_FLAGS, turnSettled } },
+    },
+  });
+}
+
 function tracker(): MilestoneTracker {
   return new MilestoneTracker();
 }
@@ -70,14 +91,7 @@ const ROWS: RunLookup = {
     taskId: "task-1",
     workerId: "worker-1",
     state: "working",
-    flags: {
-      degradedControl: false,
-      needsReconciliation: false,
-      protocolUnhealthy: false,
-      policyQuarantined: false,
-      workspaceDirty: false,
-      childrenActive: false,
-    },
+    flags: ALL_FALSE_FLAGS,
     pendingApprovalCount: 0,
     openViolations: {},
     firstSeenAt: "2026-01-01T00:00:00Z",
@@ -162,6 +176,34 @@ test("failed digest contains the two-consecutive-failures rule and reason", () =
   expect(digest).toContain("FAILED");
   expect(digest).toContain("process exited 1");
   expect(digest).toContain("Two consecutive failures");
+});
+
+test("a settled turn (runFlagsEvent turnSettled:true) is a milestone, once per settle episode", () => {
+  const t = tracker();
+  // First settle: milestone.
+  expect(t.isMilestone(flags("run-1", true))).toBe(true);
+  // A repeat while still settled (e.g. an unrelated flag also changed):
+  // not a milestone again -- the leader was already told.
+  expect(t.isMilestone(flags("run-1", true))).toBe(false);
+  // Un-settling (run/finish clears the flag, or a follow-up resumes the
+  // run) re-arms it for the run's next settle.
+  expect(t.isMilestone(flags("run-1", false))).toBe(false);
+  expect(t.isMilestone(flags("run-1", true))).toBe(true);
+  // Independent per run.
+  expect(t.isMilestone(flags("run-2", true))).toBe(true);
+});
+
+test("a runFlagsEvent with turnSettled false is never a milestone on its own", () => {
+  const t = tracker();
+  expect(t.isMilestone(flags("run-1", false))).toBe(false);
+});
+
+test("settled-turn digest points the leader at crew_run result and finish", () => {
+  const digest = formatDigest(flags("run-1", true), ROWS);
+  expect(digest).toBeDefined();
+  expect(digest).toContain("settled a turn");
+  expect(digest).toContain('crew_run { op: "result"');
+  expect(digest).toContain('crew_run { op: "finish"');
 });
 
 test("question digest contains the question text and triage instruction", () => {
