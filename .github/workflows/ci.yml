@@ -28,7 +28,7 @@ jobs:
   # Fast canary jobs (format, typecheck, generate-check, bundle-check, clippy) stay UNCONDITIONAL
   # and report status on every PR — they catch bugs too quickly and cheaply to skip.
   # workflow-level paths-ignore would break required status checks (skipped ≠ passed),
-  # so this job-level approach (skipped via if: counts as passed for branch protection) is necessary.
+  # so this job-level approach (skipped via if: believed to count as passed for branch protection, unverified for the matrix fan-out which would be marked required) is necessary.
   #
   # SEAM WARNING (ci.yml ↔ build-matrix.yml): Both workflows duplicate this classification.
   # If ci.yml tightens the pattern and build-matrix.yml doesn't, the build matrix silently keeps
