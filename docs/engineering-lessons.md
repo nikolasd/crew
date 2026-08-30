@@ -636,6 +636,19 @@ Non-empty means refresh the bundle. `packages/protocol-ts` counts because
 so the schema is *embedded in the bundle* — generated TypeScript types are erased at build time and
 do not affect it, but a schema change does.
 
+**Run it after committing.** `origin/main...HEAD` compares *commits*, so it reports nothing while
+the regenerated files are still sitting in the working tree — which is exactly the moment you reach
+for it, right after `bun run generate`. An empty result then means "you have not committed yet", not
+"no refresh needed", and the two are indistinguishable from the output. Either commit first, or check
+`git status` alongside it.
+
+**And do not try to confirm staleness by rebuilding locally.** On any machine that is not linux-x64
+the rebuilt bundle differs from CI's *always*, because Bun embeds a platform-specific module shim —
+so a local `bun run build` followed by `git diff` produces a large diff whether or not the committed
+bundle is stale, and it cannot distinguish the two. That diff is not evidence. The content test is:
+grep the fresh build and the committed bundle for a string only the change introduces (a new event
+name, say). Present in one and absent in the other is proof; a byte diff is not.
+
 ---
 
 ## Test Suite Integrity

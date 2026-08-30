@@ -47,6 +47,12 @@
 
 mod page;
 
+/// The served page's markup. Public so the brand-compliance tests can
+/// assert against it: BRAND.md §01 forbids redrawing the mark, and the
+/// only way to enforce that mechanically is to compare the inlined copy
+/// against the master SVG on disk.
+pub use page::PAGE_HTML;
+
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
@@ -528,9 +534,28 @@ async fn state_snapshot(deps: &DashboardDeps) -> Result<String, String> {
         .run_domain_op(query::pending_escalation_list_op(deps.project_id))
         .await
         .map_err(|e| e.to_string())?;
+    let workers_json = workers
+        .get("workers")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+    let usage = deps
+        .db
+        .run_domain_op(query::usage_by_run_op(deps.project_id))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut workers_json = workers_json;
+    let mut runs_json = runs
+        .get("runs")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+    annotate_runs_with_worker_profile(&mut runs_json, &workers_json);
+    annotate_runs_with_usage(&mut runs_json, usage.get("usageByRun"));
+    annotate_workers_with_spend(&mut workers_json, &runs_json);
+
     let state = serde_json::json!({
-        "runs": runs.get("runs").cloned().unwrap_or_else(|| serde_json::json!([])),
-        "workers": workers.get("workers").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "runs": runs_json,
+        "workers": workers_json,
         "budgets": budgets.get("budgets").cloned().unwrap_or_else(|| serde_json::json!([])),
         "pendingEscalations": escalations
             .get("pendingEscalations")
@@ -538,6 +563,125 @@ async fn state_snapshot(deps: &DashboardDeps) -> Result<String, String> {
             .unwrap_or_else(|| serde_json::json!([])),
     });
     Ok(state.to_string())
+}
+
+/// Copies each worker's `adapter` and `model` onto its runs' rows.
+///
+/// The page colours a run by its runtime (BRAND.md §02) and labels it
+/// `adapter · model`, and a run row does not carry either field --
+/// `row_to_run_json` is shared with `run/get` and `run/list`, and widening
+/// it for one viewer's benefit would change a hot RPC the monitor calls on
+/// every event.
+///
+/// Joined here rather than in the page because the snapshot already holds
+/// both lists: this is one pass over data in hand, no extra query, and no
+/// second derivation in the browser to drift from this one.
+///
+/// An adapter with no [BRAND.md §02] colour is still copied verbatim. The
+/// *page* decides a name is unrecognised and renders it neutral; if the
+/// runtime made that call, adding a colour later would mean changing Rust.
+/// A run whose worker row is absent gets no fields at all, so the page can
+/// tell "unbranded" from "unknown" rather than displaying a guess.
+fn annotate_runs_with_worker_profile(runs: &mut serde_json::Value, workers: &serde_json::Value) {
+    let mut profile_by_worker: std::collections::HashMap<&str, (&str, &str)> =
+        std::collections::HashMap::new();
+    for worker in workers.as_array().into_iter().flatten() {
+        if let (Some(id), Some(adapter), Some(model)) = (
+            worker["workerId"].as_str(),
+            worker["profileRef"]["adapter"].as_str(),
+            worker["profileRef"]["model"].as_str(),
+        ) {
+            profile_by_worker.insert(id, (adapter, model));
+        }
+    }
+
+    for run in runs.as_array_mut().into_iter().flatten() {
+        let Some((adapter, model)) = run["workerId"]
+            .as_str()
+            .and_then(|id| profile_by_worker.get(id))
+            .copied()
+        else {
+            continue;
+        };
+        run["adapter"] = serde_json::Value::String(adapter.to_string());
+        run["model"] = serde_json::Value::String(model.to_string());
+    }
+}
+
+/// Attaches each run's folded usage to its row, as an explicit `null`
+/// when its vendor reported none.
+///
+/// The `null` is the point. Copilot reports no usage at all under ACP v1,
+/// and Codex reports tokens but never a price -- so "no cost" is a real,
+/// common answer, and it is not zero. A zero is a number somebody
+/// reported; this is the absence of one. Writing the key with `null` says
+/// that, where omitting the key would leave the page unable to tell
+/// "nothing was reported" from "this build does not compute usage".
+fn annotate_runs_with_usage(
+    runs: &mut serde_json::Value,
+    usage_by_run: Option<&serde_json::Value>,
+) {
+    for run in runs.as_array_mut().into_iter().flatten() {
+        let folded = run["runId"]
+            .as_str()
+            .and_then(|id| usage_by_run?.get(id))
+            .cloned();
+        run["usage"] = folded.unwrap_or(serde_json::Value::Null);
+    }
+}
+
+/// Sums each worker's runs into one spend figure that names its own
+/// coverage.
+///
+/// A dollar total over a worker whose runs include non-reporting vendors
+/// understates its real spend, and presenting it bare would be a lie by
+/// omission -- the reader has no way to see that three of five runs
+/// contributed nothing. So the total ships with `runsTotal` and
+/// `runsReportingCost`, and the page qualifies the figure whenever
+/// coverage is partial. A worker whose every run reported can show a clean
+/// total, because there the number really is the whole story.
+///
+/// `costUsd` stays `None` when no run reported a cost: a worker running a
+/// vendor that never prices its turns shows an em-dash, not `$0.00`.
+fn annotate_workers_with_spend(workers: &mut serde_json::Value, runs: &serde_json::Value) {
+    for worker in workers.as_array_mut().into_iter().flatten() {
+        let Some(worker_id) = worker["workerId"].as_str().map(str::to_string) else {
+            continue;
+        };
+        let mut runs_total = 0_u64;
+        let mut runs_reporting_cost = 0_u64;
+        let mut runs_reporting_tokens = 0_u64;
+        let mut cost: Option<f64> = None;
+        let mut input = 0_u64;
+        let mut output = 0_u64;
+
+        for run in runs.as_array().into_iter().flatten() {
+            if run["workerId"].as_str() != Some(worker_id.as_str()) {
+                continue;
+            }
+            runs_total += 1;
+            let usage = &run["usage"];
+            if usage.is_null() {
+                continue;
+            }
+            runs_reporting_tokens += 1;
+            input += usage["inputTokens"].as_u64().unwrap_or(0);
+            output += usage["outputTokens"].as_u64().unwrap_or(0);
+            if let Some(run_cost) = usage["costUsd"].as_f64() {
+                runs_reporting_cost += 1;
+                cost = Some(cost.unwrap_or(0.0) + run_cost);
+            }
+        }
+
+        worker["spend"] = serde_json::json!({
+            "costUsd": cost,
+            "inputTokens": input,
+            "outputTokens": output,
+            "runsTotal": runs_total,
+            "runsReportingCost": runs_reporting_cost,
+            "runsReportingTokens": runs_reporting_tokens,
+        });
+    }
 }
 
 /// One SSE viewer: one `data:` frame per broadcast [`EventEnvelope`],
