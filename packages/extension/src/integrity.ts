@@ -16,3 +16,6 @@ import { readFileSync } from "node:fs";
 export function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
+
+// CREW-26 acceptance test marker: real code change to guarantee bundle staleness
+export const CREW26_ACCEPTANCE_MARKER = 1;
