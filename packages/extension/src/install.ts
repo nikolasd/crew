@@ -26,7 +26,7 @@ export interface RuntimeInstallContext {
   readonly target: string;
   /** Absolute Crew state root the binary is cached under. */
   readonly stateRoot: string;
-  /** GitHub token for this private repo; forwarded as `Authorization: Bearer <token>`. */
+  /** Optional GitHub token; forwarded as `Authorization: Bearer <token>` if given (nikolasd/crew is public, so this only raises the rate limit, never gates access). */
   readonly token?: string;
 }
 
@@ -131,11 +131,13 @@ function installErrorCode(err: unknown): string {
 }
 
 /**
- * Resolves a GitHub token for downloading release assets from this private
- * repository: `GITHUB_TOKEN`, then `GH_TOKEN`, then a local `gh auth token`
- * session. Returns `undefined` (not thrown) when none is available -- the
- * resulting `http-error` from `downloadRuntime` already names the failed
- * request, and `unknown-error` here would only obscure it.
+ * Resolves a GitHub token for downloading release assets from this public
+ * repository, optional but recommended (an authenticated request gets
+ * GitHub's 5,000/hour rate limit rather than 60/hour unauthenticated):
+ * `GITHUB_TOKEN`, then `GH_TOKEN`, then a local `gh auth token` session.
+ * Returns `undefined` (not thrown) when none is available -- the resulting
+ * `http-error` from `downloadRuntime` already names the failed request, and
+ * `unknown-error` here would only obscure it.
  */
 function resolveGitHubToken(env: Readonly<Record<string, string | undefined>>): string | undefined {
   return env.GITHUB_TOKEN || env.GH_TOKEN || tryGhAuthToken();
