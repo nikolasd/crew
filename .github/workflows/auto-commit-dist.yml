@@ -85,7 +85,15 @@ jobs:
           BRANCH: ${{ github.head_ref }}
         run: |
           # Read dist file and encode as base64 for GraphQL mutation
-          DIST_B64=$(base64 -i packages/extension/dist/index.js | tr -d '\n')
+          base64 packages/extension/dist/index.js | tr -d '\n' > /tmp/dist-content.b64
+          # The mutation's `contents` must be exactly the base64 with no trailing
+          # newline. `tr -d '\n'` guarantees that today -- this check is what keeps it
+          # true, because `base64 -w0` looks like an equivalent simplification and
+          # still emits a final newline.
+          [ -n "$(tail -c1 /tmp/dist-content.b64)" ] || {
+            echo "base64 file ends in a newline; contents would be corrupt" >&2
+            exit 1
+          }
 
           # GraphQL mutation: createCommitOnBranch
           # This creates a commit signed by the GitHub App automatically.
@@ -95,14 +103,15 @@ jobs:
           # gh authenticates from GH_TOKEN -- deliberately NOT GITHUB_TOKEN, so no tool
           # inside this step (now or added later) picks up the elevated token under the
           # ambient name every action and gh invocation reads by default.
-          # Branch name passed via --arg (not string-spliced) per gh api graphql docs:
+          # Branch name passed via --arg (not string-spliced); dist content via --rawfile (size limit).
+          # Reference: run 33290093785 failed with "Argument list too long" using --arg for distContent.
           # https://cli.github.com/manual/gh_api
           jq -n \
             --arg branch "$BRANCH" \
             --arg repo "${{ github.repository }}" \
             --arg headSha "${{ github.event.pull_request.head.sha }}" \
             --arg runId "${{ github.run_id }}" \
-            --arg distContent "$DIST_B64" \
+            --rawfile distContent /tmp/dist-content.b64 \
             '{
               "query": "mutation CreateCommit($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
               "variables": {
