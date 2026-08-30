@@ -156,7 +156,14 @@ impl Harness {
         let lease_service = Arc::new(
             LeaseService::open_in_memory(self.project_id).expect("in-memory lease service"),
         );
-        CoordinationBroker::new(db, self.project_id, events_tx, lease_service, store)
+        CoordinationBroker::new(
+            db,
+            self.project_id,
+            events_tx,
+            lease_service,
+            store,
+            Arc::new(crew_runtime::security::redaction::Redactor::new()),
+        )
     }
 }
 
@@ -1204,6 +1211,7 @@ async fn sweep_unacknowledged_as_unknown_settles_recorded_and_sent_messages() {
         events_tx,
         lease_service,
         Arc::new(crew_runtime::workspace::ArtifactStore::new()),
+        Arc::new(crew_runtime::security::redaction::Redactor::new()),
     );
     let swept = broker.sweep_unacknowledged_as_unknown().await.unwrap();
     assert_eq!(swept, 1);
@@ -1217,5 +1225,136 @@ async fn sweep_unacknowledged_as_unknown_settles_recorded_and_sent_messages() {
     assert_eq!(
         state, "unknown",
         "unacknowledged message must settle at unknown, not acknowledged"
+    );
+}
+
+// ----------------------------- CREW-33: worker-supplied text is content
+
+/// A vendor-key-shaped string a worker might echo into a coordination call.
+const BROKER_SECRET: &str = "sk-ant-api03-QQQQRRRRSSSSTTTT7890";
+
+fn assert_masked(text: &str, what: &str) {
+    assert!(
+        !text.contains(BROKER_SECRET),
+        "{what} must not carry a secret into durable storage: {text}"
+    );
+    assert!(
+        text.contains("blocked on") && text.contains("rotation"),
+        "{what} must keep its prose -- worker text is Visible, not dropped \
+         wholesale: {text}"
+    );
+}
+
+/// `coordination/requestChild`'s reason is worker-supplied and lands in
+/// `ChildEvent.reason` in the `events` table — which `audit/export.rs`
+/// reads, so it is exportable, not merely durable. Read back through
+/// `events/replay` for that reason.
+#[tokio::test]
+async fn a_child_request_reason_from_a_worker_is_redacted_before_journaling() {
+    let harness = Harness::start().await;
+    let mut omp = omp_client(&harness, "omp-1").await;
+    let (token, run_id, _task_id, _worker_id) = seed_scoped_run(&harness, &mut omp).await;
+    let mut worker = worker_client(&harness, &token).await;
+
+    let asked = worker
+        .call(
+            2,
+            "coordination/requestChild",
+            json!({
+                "runId": run_id.to_string(),
+                "reason": format!("blocked on {BROKER_SECRET} rotation"),
+            }),
+        )
+        .await;
+    assert!(asked.get("error").is_none(), "requestChild: {asked:?}");
+
+    let replay = omp
+        .call(9, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    let payload = replay["result"]
+        .as_array()
+        .expect("events/replay array")
+        .iter()
+        .map(|e| &e["event"])
+        .find(|e| e["type"] == "childEvent" && !e["payload"]["reason"].is_null())
+        .map(|e| &e["payload"])
+        .expect("a childEvent carrying the request reason");
+    assert_masked(
+        payload["reason"].as_str().expect("reason"),
+        "a child-request reason",
+    );
+}
+
+/// `coordination/askPolicy` routes worker text into `messages.payload`
+/// through `send_internal` — a second entry point into the same
+/// `INSERT INTO messages` CREW-28 closed at `message/send`. Read back
+/// through `message/list`, the path a consumer uses.
+#[tokio::test]
+async fn an_ask_policy_question_from_a_worker_is_redacted_before_journaling() {
+    let harness = Harness::start().await;
+    let mut omp = omp_client(&harness, "omp-1").await;
+    let (token, run_id, _task_id, _worker_id) = seed_scoped_run(&harness, &mut omp).await;
+    let mut worker = worker_client(&harness, &token).await;
+
+    let asked = worker
+        .call(
+            2,
+            "coordination/askPolicy",
+            json!({
+                "runId": run_id.to_string(),
+                "question": format!("blocked on {BROKER_SECRET} rotation"),
+            }),
+        )
+        .await;
+    assert!(asked.get("error").is_none(), "askPolicy: {asked:?}");
+
+    let list = omp
+        .call(9, "message/list", json!({ "runId": run_id.to_string() }))
+        .await;
+    let messages = list["result"]["messages"].as_array().expect("messages");
+    let question = messages
+        .iter()
+        .find(|m| m["kind"] == "question")
+        .expect("a question message");
+    assert_masked(
+        question["payload"].as_str().expect("payload"),
+        "an askPolicy question",
+    );
+}
+
+/// `coordination/reportBlocked` takes the same route as `askPolicy`.
+#[tokio::test]
+async fn a_blocked_report_from_a_worker_is_redacted_before_journaling() {
+    let harness = Harness::start().await;
+    let mut omp = omp_client(&harness, "omp-1").await;
+    let (token, run_id, _task_id, _worker_id) = seed_scoped_run(&harness, &mut omp).await;
+    let mut worker = worker_client(&harness, &token).await;
+
+    let reported = worker
+        .call(
+            2,
+            "coordination/reportBlocked",
+            json!({
+                "runId": run_id.to_string(),
+                "reason": format!("blocked on {BROKER_SECRET} rotation"),
+            }),
+        )
+        .await;
+    assert!(
+        reported.get("error").is_none(),
+        "reportBlocked: {reported:?}"
+    );
+
+    let list = omp
+        .call(9, "message/list", json!({ "runId": run_id.to_string() }))
+        .await;
+    let messages = list["result"]["messages"].as_array().expect("messages");
+    let peer = messages
+        .iter()
+        .find(|m| m["kind"] == "peerMessage")
+        .expect("a peerMessage");
+    assert_masked(
+        peer["payload"].as_str().expect("payload"),
+        "a reportBlocked reason",
     );
 }
