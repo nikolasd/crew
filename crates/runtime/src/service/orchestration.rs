@@ -2934,6 +2934,13 @@ impl OrchestrationService {
     ///   clock to re-arm -- never submitted, or already settled/forgotten --
     ///   since there is no legitimate pending timeout to act on either way,
     ///   and a leader must be able to tell a real re-arm from a no-op.
+    ///   **This refusal is an expected, benign outcome, not a fault to
+    ///   escalate or retry**: the run can legitimately settle between its
+    ///   `WorkerTimeout` being journaled and the leader's `extend` arriving
+    ///   for it (the leader did the right thing, just slightly late) --
+    ///   without this note, a leader would eventually learn to distrust
+    ///   every error this method returns, which defeats the point of
+    ///   refusing honestly in the first place.
     /// * `nudge` is deliberately a no-op server-side: nudging means the
     ///   leader follows up with `crew_send`/`message/send`, which carries
     ///   its own budget/journal semantics -- double-writing it here would
