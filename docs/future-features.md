@@ -414,6 +414,59 @@ reported honestly per backend, so a caller that cares can already tell what it g
 
 ---
 
+## `run/list` Canonical Result Type
+
+**Specified by:** CREW-43 (RunMessage codegen fix, 2026-08-30)
+**References:** `crates/protocol/src/run.rs` (`Run`), `crates/runtime/src/service/query.rs`
+(`run_list_op`/`row_to_run_json`), `crates/runtime/src/service/orchestration.rs:1130` (`run_list`)
+
+### What it is
+
+`message/list` (CREW-43) and every other multi-row read RPC now has a canonical protocol result
+type, schema-validated via Ajv on the extension side. `run/list` is the one holdout: its result is
+still validated only structurally (any JSON object passes), the same gap `RunMessage` had before
+CREW-43 closed it.
+
+The gap isn't an oversight of the same shape, though — it was investigated, not just noticed.
+`run_list_op`'s actual wire response (`row_to_run_json`) includes two fields the existing `Run`
+protocol type doesn't declare at all: `createdAt` (required) and `policyFingerprint` (optional, the
+merged-policy snapshot a run was authorized under). `Run` is not dormant: it's the *write-side*
+domain type, constructed at submit time (`repo.submit_run(&run, ...)`) before either field exists or
+is assigned, and used that way at `event_sink.rs:815,1033,1335`, `run_lifecycle.rs:580`,
+`orchestration.rs:1020`, `audit/retention.rs:300`, and `adapter/registry.rs:2428`. `run/list`'s
+actual response is the *read-side* shape — a genuinely different struct, not a partially-filled-in
+version of the same one.
+
+### Why deferred
+
+Closing this cleanly needs one of two real design choices, not a mechanical fix:
+
+1. **A second, read-side struct** (e.g. `RunSummary`, holding everything `row_to_run_json` returns)
+   distinct from `Run`, with a mapping between them wherever both are in scope. More wire surface,
+   two types to keep in sync by hand where their fields overlap.
+2. **Redefine `Run` itself** to carry `created_at`/`policy_fingerprint` as optional fields, changing
+   what every write-side call site constructs (each would need to either supply `None` explicitly or
+   rely on a default) and blurring `Run`'s current contract as "the shape submit-time code
+   constructs" into "the shape submit-time code constructs, plus fields it never has yet."
+
+Neither is a wire-safety fix on the order of `RunMessage`'s -- both are a real API-shape decision
+with call-site consequences, so CREW-43 reported this rather than picking one under a
+tool-surface-honesty ticket's scope.
+
+### Decision trigger
+
+Either of:
+
+1. **A `run/list` consumer needs schema-validated fields beyond what structural checking already
+   covers** — a concrete bug or drift traced to `run/list`'s unchecked shape, not a hypothetical.
+2. **A third read-side list RPC needs the same treatment**, making the "just `Run` isn't reusable
+   here" case worth solving once with a general read-side-result convention rather than per-method.
+
+Explicitly *not* a trigger: closing the gap for symmetry with `message/list` alone -- the two
+methods' underlying shapes are different in a way that matters, not merely presented differently.
+
+---
+
 ## How to use this document
 
 1. **Adding a future feature:** Append a new section with the feature name, what it is, concrete scenarios that justify it, why it's deferred, and a decision trigger.
