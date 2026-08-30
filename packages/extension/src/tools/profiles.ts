@@ -104,7 +104,7 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
           content: [
             {
               type: "text",
-              text: `no model configured for adapter ${input.adapter} -- ask the user which model to use, then call crew_profile again with it; the answer will be persisted for future sessions.`,
+              text: `no model configured for adapter ${input.adapter} -- ask the user which model to use, then call crew_profile again with it; the answer will be persisted for future sessions. [CREW26-ACCEPT]`,
             },
           ],
           details: { code: "model-not-configured", adapter: input.adapter },
