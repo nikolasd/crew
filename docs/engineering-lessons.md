@@ -874,6 +874,44 @@ production code path a test can pin. The corrected test itself
 
 ---
 
+### Changing a doc comment's sigil is a test-suite edit when that comment holds a code fence
+
+**Location:** `crates/protocol/src/event.rs` (`Redacted`, now `RedactedBoundaryDoctests`) -- CREW-45
+
+**The bug:** CREW-45 moved maintainer-facing history out of protocol doc comments, because
+`schemars` lifts a `///` comment verbatim into `crew.schema.json`'s `description` while a `//`
+comment desugars to nothing a derive macro can see. `Redacted`'s doc comment was the largest such
+block at 3,386 bytes -- and buried in it, below four sections of prose, sat the `compile_fail` /
+positive doctest pair written by CREW-29 as the executable proof that a bare `String` cannot
+populate a caller-carrying field. Moving the block wholesale to `//`, which is what the change was
+mechanically *about*, would have deleted both tests. Not disabled them, not failed them: a doctest
+only runs from a `///`, `//!` or `#[doc]` comment, so under `//` the code fences become ordinary
+prose and simply stop existing as tests. There is no error, no warning, and no diff signal that
+distinguishes "prose moved" from "proof deleted" -- both are the same two characters, on adjacent
+lines, in the same hunk. `cargo test` stays green because the tests it no longer runs cannot fail.
+
+A `compile_fail` doctest is doubly exposed here. It is already the weaker half of its pair (it
+passes on *any* compilation error, which is why the positive twin sits beside it), and it is the
+half whose disappearance is least likely to be noticed, because nothing downstream depends on it
+having run.
+
+**The lesson:** Treat any edit that changes a doc comment's *sigil* as an edit to the test suite,
+not to documentation, whenever that comment contains a code fence. The guard is a count taken
+**before** the edit -- `cargo test --doc -p crew-protocol`, note the number and the names -- and
+compared after; that comparison is the only thing standing between a prose reorganization and the
+silent removal of a proof. Where the prose must leave the `///` but the doctests must keep running,
+the rescue is to move the fences to their own `#[cfg(doctest)] struct FooDoctests;` item: the tests
+still run, and the schema never sees a wall of Rust. This codebase already records that *a test's
+name is a claim*; the sharper case is that a test can stop making any claim at all without its name
+changing, or its file changing, or anything going red.
+
+**Regression tests:** The rescued pair itself, on `RedactedBoundaryDoctests` in
+`crates/protocol/src/event.rs` -- one `compile_fail`, one positive, verified as the same two tests
+before and after the move rather than assumed. `schema_compatibility_passes_against_the_committed_schema`
+covers the other half of CREW-45 (that the shipped descriptions actually changed).
+
+---
+
 ## Deletion Sweeps
 
 ### A deletion sweep must sweep claims, not just references
