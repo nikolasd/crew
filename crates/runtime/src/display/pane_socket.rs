@@ -29,6 +29,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use tokio::io::AsyncReadExt;
 use tokio::net::UnixStream;
 
 /// How recently a socket must have been touched to be spared by the sweep
@@ -41,15 +42,48 @@ use tokio::net::UnixStream;
 /// within seconds, so the margin is free.
 const SWEEP_MIN_AGE: Duration = Duration::from_secs(30);
 
-/// Whether a pane attach socket has a listener behind it right now.
+/// How long [`is_live`] waits for [`super::attach::LIVENESS_MARKER`]
+/// after a connect succeeds, before deciding the pane is not live after
+/// all. `is_live` is called at most once per `pane/reopen` (never in a
+/// hot loop) and the marker is already in the kernel's send buffer by the
+/// time a real `AttachServer` accepts, so this bound is rarely spent in
+/// practice -- if it ever needs raising, that is itself evidence worth
+/// reporting, not a knob to casually retune.
+const LIVENESS_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// Whether a pane attach socket has a real `AttachServer` behind it right
+/// now.
 ///
-/// Connecting is the probe, because it is the only portable one. The
-/// connection is dropped immediately; the attach server's accept loop
-/// spawns a viewer task that finds the peer gone and exits, which costs a
-/// task and no durable state — deliberately preferred over trusting
-/// `Path::exists`, which is what the bug was.
+/// CREW-30: a completed `connect()` alone is not enough. It proves a
+/// listening fd exists at the path; it does not prove the process behind
+/// it is `AttachServer` rather than, say, a `fork()`'d child that
+/// inherited the fd without close-on-exec (macOS has no atomic
+/// `SOCK_CLOEXEC`, so `socket()` then `fcntl(FD_CLOEXEC)` leaves a
+/// window) and never speaks -- proven with a 40,000-iteration reproducer
+/// that found the false connect 0 times without concurrent forking and
+/// 452 times with it, never once able to complete a single write/read
+/// round trip. So the probe now requires the one thing only a real
+/// `AttachServer` does: write [`super::attach::LIVENESS_MARKER`] the
+/// instant it accepts, before anything else. `is_live` connects, then
+/// requires that exact marker within [`LIVENESS_PROBE_TIMEOUT`].
+///
+/// **This trades a possible false negative for the false positive it
+/// closes, deliberately.** A real `AttachServer` whose accept loop is
+/// somehow slow enough to miss the timeout makes `pane/reopen` refuse a
+/// pane that actually is live -- recoverable (retry, or `pane/reopen`
+/// again) and honest. Claiming a dead pane is live is the lie CREW-15
+/// existed to kill, and this fix exists because it turned out CREW-15
+/// had not fully killed it. Anyone tempted to "fix" a false negative here
+/// by loosening this check should read this paragraph first.
 pub async fn is_live(socket: &Path) -> bool {
-    UnixStream::connect(socket).await.is_ok()
+    let Ok(mut stream) = UnixStream::connect(socket).await else {
+        return false;
+    };
+    let mut buf = [0u8; super::attach::LIVENESS_MARKER.len()];
+    matches!(
+        tokio::time::timeout(LIVENESS_PROBE_TIMEOUT, stream.read_exact(&mut buf)).await,
+        Ok(Ok(_)) if buf == *super::attach::LIVENESS_MARKER
+    )
 }
 
 /// Removes every socket in `panes_dir` that no longer has a listener,
@@ -60,28 +94,47 @@ pub async fn is_live(socket: &Path) -> bool {
 /// including other repositories' — are left alone, as are sockets younger
 /// than [`SWEEP_MIN_AGE`]. A missing directory is not an error: there is
 /// simply nothing to sweep.
+///
+/// CREW-30: `is_live` now waits up to [`LIVENESS_PROBE_TIMEOUT`] for a
+/// real protocol response instead of returning the instant a bare
+/// connect refuses, so probing candidates one at a time here would let N
+/// stale sockets left behind by a crash add up to N times that timeout
+/// to every daemon startup. Every candidate old enough to judge is
+/// probed concurrently instead (`join_all`) -- startup pays at most one
+/// timeout's worth of wall-clock time no matter how many sockets a
+/// crashed daemon left behind, not one per socket.
 pub async fn sweep_stale(panes_dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(panes_dir) else {
         return Vec::new();
     };
     let now = SystemTime::now();
+    let candidates: Vec<PathBuf> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("sock") {
+                return None;
+            }
+            // A socket too young to judge is left alone -- see SWEEP_MIN_AGE.
+            if let Ok(metadata) = entry.metadata()
+                && let Ok(modified) = metadata.modified()
+                && now
+                    .duration_since(modified)
+                    .map(|age| age < SWEEP_MIN_AGE)
+                    .unwrap_or(true)
+            {
+                return None;
+            }
+            Some(path)
+        })
+        .collect();
+
+    let liveness =
+        futures_util::future::join_all(candidates.iter().map(|path| is_live(path))).await;
+
     let mut removed = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("sock") {
-            continue;
-        }
-        // A socket too young to judge is left alone -- see SWEEP_MIN_AGE.
-        if let Ok(metadata) = entry.metadata()
-            && let Ok(modified) = metadata.modified()
-            && now
-                .duration_since(modified)
-                .map(|age| age < SWEEP_MIN_AGE)
-                .unwrap_or(true)
-        {
-            continue;
-        }
-        if is_live(&path).await {
+    for (path, live) in candidates.into_iter().zip(liveness) {
+        if live {
             continue;
         }
         if std::fs::remove_file(&path).is_ok() {
@@ -95,6 +148,7 @@ pub async fn sweep_stale(panes_dir: &Path) -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use tokio::io::AsyncWriteExt;
     // std's listener, deliberately, not tokio's: dropping a tokio
     // `UnixListener` defers the fd close to its reactor, so a probe
     // immediately after the drop can still see a listening socket. std
@@ -130,12 +184,56 @@ mod tests {
             .expect("temp dir")
     }
 
+    /// Binds a real (tokio) `UnixListener` at `path` and spawns a task
+    /// that accepts exactly one connection and writes CREW-30's liveness
+    /// marker to it -- the minimal stand-in for a real `AttachServer`
+    /// these tests need to exercise `is_live`'s positive leg. Kept
+    /// running for the test's lifetime by the spawned task itself, not
+    /// by the returned handle.
+    fn spawn_marker_server(path: &Path) -> tokio::task::JoinHandle<()> {
+        let listener = tokio::net::UnixListener::bind(path).expect("bind");
+        tokio::spawn(async move {
+            if let Ok((mut stream, _addr)) = listener.accept().await {
+                let _ = stream
+                    .write_all(crate::display::attach::LIVENESS_MARKER)
+                    .await;
+            }
+        })
+    }
+
+    /// The positive leg: `is_live` must still say yes when something that
+    /// actually speaks the attach protocol is behind the socket. A probe
+    /// that always says no would pass every "not live" test in this file
+    /// perfectly and never be caught without this.
     #[tokio::test]
-    async fn a_socket_with_a_listener_is_live() {
+    async fn a_socket_serving_the_liveness_marker_is_live() {
         let dir = short_dir();
         let path = dir.path().join("live.sock");
-        let _listener = UnixListener::bind(&path).expect("bind");
+        let _server = spawn_marker_server(&path);
         assert!(is_live(&path).await);
+    }
+
+    /// The floor: a bare accepting listener that completes a connect but
+    /// never speaks the marker protocol at all (the exact shape CREW-30's
+    /// fork-inheritance false positive takes: something answers, nothing
+    /// ever responds) must never read as live. Deterministic and cheap,
+    /// so it always runs -- the fork-load reproducer in
+    /// `pane_socket_liveness_race.rs` is the probabilistic crown on top
+    /// of this floor, not a replacement for it.
+    #[tokio::test]
+    async fn a_bare_accepting_listener_that_never_speaks_the_protocol_is_not_live() {
+        let dir = short_dir();
+        let path = dir.path().join("mute.sock");
+        let listener = tokio::net::UnixListener::bind(&path).expect("bind");
+        let _server = tokio::spawn(async move {
+            // Accepts and holds the connection open, but (unlike
+            // `spawn_marker_server`) never writes anything -- exactly
+            // what an fd a raced fork()'d child inherited looks like from
+            // the probing side: a connect that succeeds, then silence.
+            let _kept_alive = listener.accept().await;
+            std::future::pending::<()>().await;
+        });
+        assert!(!is_live(&path).await);
     }
 
     #[tokio::test]
@@ -161,7 +259,7 @@ mod tests {
         backdate(&dead);
 
         let live = dir.path().join("live.sock");
-        let _listener = UnixListener::bind(&live).expect("bind");
+        let _server = spawn_marker_server(&live);
         backdate(&live);
 
         let removed = sweep_stale(dir.path()).await;
