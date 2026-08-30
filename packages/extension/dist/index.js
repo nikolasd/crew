@@ -7031,6 +7031,10 @@ var crew_schema_default = {
     paneReopenResult: {
       description: "`pane/reopen` result payload.",
       $ref: "#/$defs/PaneReopenResult"
+    },
+    messageListResult: {
+      description: "`message/list` result payload.",
+      $ref: "#/$defs/MessageListResult"
     }
   },
   required: [
@@ -7058,7 +7062,8 @@ var crew_schema_default = {
     "planGetResult",
     "runTimeoutAckResult",
     "retentionCleanResult",
-    "paneReopenResult"
+    "paneReopenResult",
+    "messageListResult"
   ],
   $defs: {
     InitializeParams: {
@@ -10845,6 +10850,153 @@ child at all (a cost ceiling does not).`,
         "backend",
         "paneRef"
       ]
+    },
+    MessageListResult: {
+      description: "Result of `message/list`: every message journaled for a run, oldest\nfirst.",
+      type: "object",
+      properties: {
+        messages: {
+          type: "array",
+          items: {
+            $ref: "#/$defs/RunMessage"
+          }
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "messages"
+      ]
+    },
+    RunMessage: {
+      description: `A message within a run's transcript.
+
+Every message is correlated, journaled, bounded, and redacted before
+persistence.`,
+      type: "object",
+      properties: {
+        messageId: {
+          description: "The message identifier (UUIDv7).",
+          $ref: "#/$defs/MessageId"
+        },
+        runId: {
+          description: "The run this message belongs to.",
+          $ref: "#/$defs/RunId"
+        },
+        senderWorkerId: {
+          description: "The sender worker ID.",
+          $ref: "#/$defs/WorkerId"
+        },
+        recipientWorkerId: {
+          description: "The recipient worker ID, if targeted.",
+          anyOf: [
+            {
+              $ref: "#/$defs/WorkerId"
+            },
+            {
+              type: "null"
+            }
+          ]
+        },
+        taskId: {
+          description: "The task ID this message relates to.",
+          $ref: "#/$defs/TaskId"
+        },
+        kind: {
+          description: "Semantic message kind.",
+          $ref: "#/$defs/MessageKind"
+        },
+        payload: {
+          description: `The message payload.
+
+Typed [\`Redacted\`] (CREW-34) rather than \`String\`, so "redacted
+before persistence" is enforced by the field rather than asserted
+by this comment. It said exactly that for a long time while nothing
+redacted it -- the claim became true at CREW-28, and true by
+construction here.`,
+          $ref: "#/$defs/Redacted"
+        },
+        deliveryState: {
+          description: "Delivery state.",
+          $ref: "#/$defs/DeliveryState"
+        },
+        createdAt: {
+          description: "When the message was created (UTC RFC 3339).",
+          $ref: "#/$defs/Timestamp"
+        },
+        sentAt: {
+          description: "When the message was sent to the adapter (UTC RFC 3339).",
+          anyOf: [
+            {
+              $ref: "#/$defs/Timestamp"
+            },
+            {
+              type: "null"
+            }
+          ]
+        },
+        acknowledgedAt: {
+          description: "When the message was acknowledged by the recipient (UTC RFC 3339).",
+          anyOf: [
+            {
+              $ref: "#/$defs/Timestamp"
+            },
+            {
+              type: "null"
+            }
+          ]
+        },
+        replyTo: {
+          description: "ID of a prior message this is a reply to.",
+          anyOf: [
+            {
+              $ref: "#/$defs/MessageId"
+            },
+            {
+              type: "null"
+            }
+          ]
+        }
+      },
+      additionalProperties: false,
+      required: [
+        "messageId",
+        "runId",
+        "senderWorkerId",
+        "taskId",
+        "kind",
+        "payload",
+        "deliveryState",
+        "createdAt"
+      ]
+    },
+    MessageKind: {
+      description: "Semantic message kinds for worker coordination.",
+      type: "string",
+      enum: [
+        "assign",
+        "steer",
+        "followUp",
+        "question",
+        "answer",
+        "peerMessage",
+        "approvalDecision",
+        "cancel",
+        "shutdown"
+      ]
+    },
+    DeliveryState: {
+      description: `The delivery state of a message.
+
+A runtime crash between intent and adapter acknowledgement leaves
+\`unknown\` after recovery; it does not resend automatically.`,
+      type: "string",
+      enum: [
+        "recorded",
+        "sent",
+        "acknowledged",
+        "failed",
+        "unknown"
+      ]
     }
   }
 };
@@ -10888,6 +11040,7 @@ var validatePlanProposeResult = def("PlanProposeResult");
 var validatePlanDecideResult = def("PlanDecideResult");
 var validatePlanGetResult = def("PlanGetResult");
 var validateRunTimeoutAckResult = def("RunTimeoutAckResult");
+var validateMessageListResult = def("MessageListResult");
 var validateEventEnvelopeArray = ajv.compile({
   $id: "urn:crew:schema:event-envelope-array.json",
   type: "array",
@@ -10923,7 +11076,8 @@ var RESULT_VALIDATORS = {
   "policy/violation/list": validatePolicyViolationListResult,
   "run/result": validateRunResultResult,
   "retention/clean": validateRetentionCleanResult,
-  "pane/reopen": validatePaneReopenResult
+  "pane/reopen": validatePaneReopenResult,
+  "message/list": validateMessageListResult
 };
 
 class JsonRpcRemoteError extends Error {
@@ -12752,7 +12906,7 @@ function injectTuiMode(adapter, startupOptions) {
 function registerProfileTool(pi, ctx) {
   const params = pi.zod.object({
     adapter: pi.zod.string().describe("The adapter name this profile launches, e.g. claude, codex, copilot, ompRpc, terminalDegraded."),
-    model: pi.zod.string().optional().describe("The model identifier this profile uses. Optional: if omitted and no model is already configured for this adapter (in .omp/crew.json), registration is refused with a typed 'model-not-configured' error -- ask the user which model to use, then call crew_profile again with it. The first time a model is given explicitly for an adapter with none configured, it is persisted into the repository's .omp/crew.json for future sessions to reuse silently. crew_profile never overwrites an already-recorded model, and never silently ignores an explicit value that conflicts with one: passing a *different* model than the one already configured is refused with a typed 'model-conflict' error naming the stored value -- correct it via /crew config or by editing crew.json directly, never by passing a new value here. Passing the same value as already configured is a no-op success."),
+    model: pi.zod.string().optional().describe("The model identifier this profile uses. Optional: if omitted and no model is already configured for this adapter (in .omp/crew.json), registration is refused with a typed 'model-not-configured' error -- ask the user which model to use, then call crew_profile again with it. The first time a model is given explicitly for an adapter with none configured, it is persisted into the repository's .omp/crew.json for future sessions to reuse silently. crew_profile never overwrites an already-recorded model, and never silently ignores an explicit value that conflicts with one: passing a *different* model than the one already configured is refused with a typed 'model-conflict' error naming the stored value -- correct it by editing the repository's .omp/crew.json directly (/crew config path locates it; /crew config has no set/edit subcommand), never by passing a new value here. Passing the same value as already configured is a no-op success."),
     startupOptions: pi.zod.record(pi.zod.string(), pi.zod.unknown()).optional().describe("Adapter-specific startup options, tagged by adapter kind, e.g. { claude: { mode: 'tui' } }. For a reserved adapter (claude, codex, copilot, ompRpc), an omitted mode is filled in as 'tui' automatically -- headless is retired. Other options depend on the adapter (see crew-orchestration skill)."),
     environmentAllowlist: pi.zod.array(pi.zod.string()).optional().describe("Environment variable names this profile's process is allowed to read."),
     permissionEnvelope: pi.zod.record(pi.zod.string(), pi.zod.unknown()).optional()
@@ -12783,7 +12937,7 @@ function registerProfileTool(pi, ctx) {
           content: [
             {
               type: "text",
-              text: `model already configured as ${configuredModel} for adapter ${input.adapter} -- crew_profile never overwrites a stored model; change it via /crew config or by editing the repository's .omp/crew.json directly.`
+              text: `model already configured as ${configuredModel} for adapter ${input.adapter} -- crew_profile never overwrites a stored model; edit the repository's .omp/crew.json directly to change it (/crew config path locates it).`
             }
           ],
           details: { code: "model-conflict", adapter: input.adapter, configuredModel },
