@@ -565,6 +565,97 @@ pub(crate) fn fold_usage_event(
 /// accumulate, and a cumulative reporter's last value already *is* its
 /// running total.
 ///
+/// How much of a prompt's first line the task summary carries.
+///
+/// A bound is needed because a prompt is unbounded by design (ADR-0028
+/// chose not to truncate at write time), and an `/api/state` response
+/// should not grow with prompt length. Generous rather than tight: the
+/// cell's visual fit is CSS's job, since only the browser knows the
+/// viewport, and truncating to a guessed column width here would throw
+/// away text no later reader could recover.
+const TASK_SUMMARY_MAX_CHARS: usize = 160;
+
+/// Each run's task summary — the first line of its journaled prompt
+/// (ADR-0028), keyed by run id.
+///
+/// The prompt is the only honest source for "what is this run doing".
+/// Tasks store no text, and the first journaled *assistant* message is the
+/// answer rather than the request — putting that under a heading reading
+/// "task" would be exactly the kind of confident mislabelling the
+/// dashboard has been shedding.
+///
+/// First line only: a prompt is frequently paragraphs and a table cell is
+/// one line. An over-long line is truncated with a trailing ellipsis, so a
+/// shortened summary announces that it was shortened rather than reading
+/// like the whole instruction.
+///
+/// A run with no prompt event is absent from the map, and the caller
+/// distinguishes that from an empty prompt. Only the FIRST prompt event
+/// per run is used: a resumed or re-steered run can journal more, and the
+/// question the run started from is the one this column answers.
+pub fn task_summary_by_run_op(project_id: ProjectId) -> DomainClosure {
+    Box::new(move |conn| {
+        let mut stmt = conn.prepare(
+            "SELECT e.run_id, e.event_json
+               FROM events e
+               JOIN runs r ON e.run_id = r.run_id
+               JOIN workers w ON r.worker_id = w.worker_id
+              WHERE w.project_id = ?1
+                AND e.event_json LIKE '%runPromptEvent%'
+              ORDER BY e.run_id, e.sequence",
+        )?;
+        let rows = stmt.query_map([project_id.to_string()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        let mut summaries: serde_json::Map<String, Value> = serde_json::Map::new();
+        for row in rows {
+            let (run_id, raw) = row?;
+            // Ordered by sequence, so the first row for a run id wins and
+            // later prompt events are ignored.
+            if summaries.contains_key(&run_id) {
+                continue;
+            }
+            let Ok(event) = serde_json::from_str::<Value>(&raw) else {
+                continue;
+            };
+            // Re-verify the type tag: the LIKE prefilter would otherwise
+            // false-positive on message text mentioning the string, the
+            // same two-step every other op here uses.
+            if event.get("type").and_then(Value::as_str) != Some("runPromptEvent") {
+                continue;
+            }
+            let Some(prompt) = event["payload"]["prompt"].as_str() else {
+                continue;
+            };
+            let Some(summary) = first_line_summary(prompt) else {
+                continue;
+            };
+            summaries.insert(run_id, Value::String(summary));
+        }
+        Ok(json!({ "taskSummaryByRun": summaries }))
+    })
+}
+
+/// The first non-empty line of `prompt`, bounded by
+/// [`TASK_SUMMARY_MAX_CHARS`] and marked with an ellipsis when shortened.
+/// `None` when the prompt is blank, so a whitespace-only prompt yields no
+/// summary rather than an empty cell.
+///
+/// Counts and slices by `char`, not by byte: a prompt is user text and may
+/// be any script, and byte slicing would panic mid-codepoint.
+fn first_line_summary(prompt: &str) -> Option<String> {
+    let line = prompt
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    if line.chars().count() <= TASK_SUMMARY_MAX_CHARS {
+        return Some(line.to_string());
+    }
+    let kept: String = line.chars().take(TASK_SUMMARY_MAX_CHARS).collect();
+    Some(format!("{kept}…"))
+}
+
 /// A run with no usage event is absent from the map. The caller renders
 /// that as "nothing reported", which is not the same fact as zero.
 pub fn usage_by_run_op(project_id: ProjectId) -> DomainClosure {

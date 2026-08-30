@@ -48,8 +48,19 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
   .card .runtime { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 12px; }
   .cell { width: 10px; height: 10px; flex: none; }
   td .cell { display: inline-block; vertical-align: -1px; margin-right: 6px; }
+  /* The task cell absorbs the table's spare width and clips with an
+     ellipsis. The server already bounds the string; how much of it fits is
+     the viewport's business, which only the browser knows. The full first
+     line stays available as the cell's tooltip. */
+  td.task { max-width: 0; width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td.task:empty::after { content: "—"; color: #5a6270; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #1c1f26; font-size: 13px; }
+  /* Every cell stays on one line so rows keep a uniform height; the task
+     cell is the only one allowed to absorb slack, and it clips rather than
+     wraps. Without this the wide task column squeezes `worker` and `cost`
+     into two-line cells and the table goes ragged. */
+  td { white-space: nowrap; }
   th { color: #8a93a4; font-weight: normal; }
   .state { padding: 1px 8px; border-radius: 10px; font-size: 12px; background: #23262d; }
   .state.working { background: #1d3a5f; color: #7fb7ff; }
@@ -89,8 +100,8 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
   <section>
     <h2>Runs</h2>
     <table>
-      <thead><tr><th>run</th><th>state</th><th>worker</th><th>cost</th><th>started</th><th>completed</th></tr></thead>
-      <tbody id="runs"><tr><td colspan="6" class="empty">loading…</td></tr></tbody>
+      <thead><tr><th>run</th><th>state</th><th>worker</th><th>task</th><th>cost</th><th>started</th><th>completed</th></tr></thead>
+      <tbody id="runs"><tr><td colspan="7" class="empty">loading…</td></tr></tbody>
     </table>
   </section>
   <section>
@@ -208,12 +219,13 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
           <td title="${esc(run.runId)}">${esc(short(run.runId))}</td>
           <td><span class="state ${esc(run.state)}">${esc(run.state)}</span></td>
           <td title="${esc(run.workerId)}" style="color:${colour}"><span class="cell" style="background:${colour}"></span>${esc(label || short(run.workerId))}</td>
+          <td class="task" title="${esc(run.taskSummary || "")}">${esc(run.taskSummary || "—")}</td>
           <td class="spend" title="${esc(costTitle(run.usage))}">${esc(spendOf(run.usage))}</td>
           <td title="${esc(run.startedAt || "")}">${esc(clock(run.startedAt))}</td>
           <td title="${esc(run.completedAt || "")}">${esc(clock(run.completedAt))}</td>
         </tr>`;
         }).join("")
-      : `<tr><td colspan="6" class="empty">no runs yet</td></tr>`;
+      : `<tr><td colspan="7" class="empty">no runs yet</td></tr>`;
 
     const workers = state.workers || [];
     document.getElementById("workers").innerHTML = workers.length

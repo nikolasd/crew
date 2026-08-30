@@ -544,6 +544,12 @@ async fn state_snapshot(deps: &DashboardDeps) -> Result<String, String> {
         .await
         .map_err(|e| e.to_string())?;
 
+    let task_summaries = deps
+        .db
+        .run_domain_op(query::task_summary_by_run_op(deps.project_id))
+        .await
+        .map_err(|e| e.to_string())?;
+
     let mut workers_json = workers_json;
     let mut runs_json = runs
         .get("runs")
@@ -551,6 +557,7 @@ async fn state_snapshot(deps: &DashboardDeps) -> Result<String, String> {
         .unwrap_or_else(|| serde_json::json!([]));
     annotate_runs_with_worker_profile(&mut runs_json, &workers_json);
     annotate_runs_with_usage(&mut runs_json, usage.get("usageByRun"));
+    annotate_runs_with_task_summary(&mut runs_json, task_summaries.get("taskSummaryByRun"));
     annotate_workers_with_spend(&mut workers_json, &runs_json);
 
     let state = serde_json::json!({
@@ -605,6 +612,27 @@ fn annotate_runs_with_worker_profile(runs: &mut serde_json::Value, workers: &ser
         };
         run["adapter"] = serde_json::Value::String(adapter.to_string());
         run["model"] = serde_json::Value::String(model.to_string());
+    }
+}
+
+/// Attaches each run's task summary to its row, as an explicit `null`
+/// when it has no journaled prompt.
+///
+/// The `null` is deliberate and matches `usage`: a run submitted without a
+/// prompt is a normal thing, and the page must be able to render nothing
+/// rather than a placeholder that reads like data. Omitting the key
+/// instead would leave the page unable to tell "no prompt was journaled"
+/// from "this build does not compute summaries".
+fn annotate_runs_with_task_summary(
+    runs: &mut serde_json::Value,
+    summary_by_run: Option<&serde_json::Value>,
+) {
+    for run in runs.as_array_mut().into_iter().flatten() {
+        let summary = run["runId"]
+            .as_str()
+            .and_then(|id| summary_by_run?.get(id))
+            .cloned();
+        run["taskSummary"] = summary.unwrap_or(serde_json::Value::Null);
     }
 }
 

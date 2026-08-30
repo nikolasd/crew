@@ -949,3 +949,88 @@ async fn a_malformed_run_id_on_the_transcript_route_is_a_400() {
     );
     harness.server.stop();
 }
+
+// -------------------------------------------- CREW-31: the task column
+
+/// Journals a prompt against a seeded run, the way `run/submit` does. The
+/// text is already redacted by the time it reaches the repository, so the
+/// helper passes it through as the service would.
+async fn journal_prompt(db: &DatabaseHandle, project_id: ProjectId, seeded: Seeded, prompt: &str) {
+    let prompt = prompt.to_string();
+    db.run_domain_op(Box::new(move |conn| {
+        let mut repo = DomainRepository::new(conn, project_id);
+        repo.record_run_prompt(seeded.run_id, seeded.task_id, seeded.worker_id, prompt)?;
+        Ok(serde_json::json!({}))
+    }))
+    .await
+    .expect("journal prompt");
+}
+
+/// The task column shows what a run was asked to do, taken from the one
+/// honest source: its journaled prompt (ADR-0028). Only the first line --
+/// a prompt is often paragraphs, and a table cell is one line.
+#[tokio::test]
+async fn a_runs_task_summary_is_the_first_line_of_its_journaled_prompt() {
+    let harness = start_dashboard().await;
+    let seeded =
+        seed_run_returning_ids(&harness.db, harness.project_id, "claude", "opus-5", None).await;
+    journal_prompt(
+        &harness.db,
+        harness.project_id,
+        seeded,
+        "Refactor the lease code\n\nDetails follow on the next lines.\nAnd more.",
+    )
+    .await;
+
+    let run = one_run(&harness, seeded.run_id).await;
+    assert_eq!(
+        run["taskSummary"].as_str(),
+        Some("Refactor the lease code"),
+        "the summary is the prompt's first line, without the body: {run}"
+    );
+}
+
+/// A run with no journaled prompt carries an explicit null, so the page can
+/// render nothing rather than a placeholder that looks like data. Absence
+/// stated, not implied by a missing key.
+#[tokio::test]
+async fn a_run_with_no_journaled_prompt_states_that_it_has_no_task_summary() {
+    let harness = start_dashboard().await;
+    let seeded =
+        seed_run_returning_ids(&harness.db, harness.project_id, "codex", "gpt-5", None).await;
+
+    let run = one_run(&harness, seeded.run_id).await;
+    assert!(
+        run.as_object()
+            .is_some_and(|row| row.contains_key("taskSummary")),
+        "the row must state its summary even when there is none: {run}"
+    );
+    assert!(
+        run["taskSummary"].is_null(),
+        "no prompt journaled means null, never an empty string: {run}"
+    );
+}
+
+/// A single-line prompt longer than the cap is truncated *and says so*.
+/// Showing a shortened string with no indication it was shortened is the
+/// same class of quiet lie this dashboard keeps closing.
+#[tokio::test]
+async fn an_overlong_first_line_is_truncated_with_a_visible_marker() {
+    let harness = start_dashboard().await;
+    let seeded =
+        seed_run_returning_ids(&harness.db, harness.project_id, "claude", "opus-5", None).await;
+    let long = "x".repeat(400);
+    journal_prompt(&harness.db, harness.project_id, seeded, &long).await;
+
+    let run = one_run(&harness, seeded.run_id).await;
+    let summary = run["taskSummary"].as_str().expect("a summary");
+    assert!(
+        summary.chars().count() < 400,
+        "an overlong line must be bounded: {} chars",
+        summary.chars().count()
+    );
+    assert!(
+        summary.ends_with('…'),
+        "truncation must be visible, not silent: {summary}"
+    );
+}
