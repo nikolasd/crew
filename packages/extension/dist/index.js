@@ -10301,6 +10301,24 @@ range (a self-check that always holds for a live, negotiated session).`,
         binarySource: {
           description: "Where the running binary was loaded from.",
           $ref: "#/$defs/BinarySource"
+        },
+        dashboardUrl: {
+          description: `The embedded dashboard's live URL, token included, when
+\`dashboard.enabled\` and the bind succeeded; \`None\` otherwise
+(disabled, or the bind failed and degraded to no dashboard).
+
+CREW-35: the maintainer explicitly chose to put the live,
+capability-granting token in this field rather than only pointing
+at the daemon's own log (the narrower-exposure alternative) --
+\`/crew health\`'s output flows into the leader model's own session
+context/transcript, a wider and less access-controlled surface than
+a local log file, and that tradeoff was seen and accepted for
+one-click discoverability. Do not "fix" this by hiding the token
+again without a fresh maintainer decision.`,
+          type: [
+            "string",
+            "null"
+          ]
         }
       },
       additionalProperties: false,
@@ -11763,7 +11781,7 @@ function errorCode(err) {
   return "connection-failed";
 }
 function formatStatus(status) {
-  return [
+  const lines = [
     `Crew runtime: ${status.running ? "running" : "not running"}`,
     `Protocol: ${status.protocol.major}.${status.protocol.minor} (healthy: ${status.protocolHealthy})`,
     `Project: ${status.projectId}`,
@@ -11771,7 +11789,11 @@ function formatStatus(status) {
     `Schema version: ${status.schemaVersion}`,
     `Uptime: ${status.uptimeSeconds}s`,
     `Binary source: ${status.binarySource}`
-  ].join(`
+  ];
+  if (status.dashboardUrl !== null) {
+    lines.push(`Dashboard: ${status.dashboardUrl}`);
+  }
+  return lines.join(`
 `);
 }
 
@@ -12521,12 +12543,12 @@ function registerStopTool(pi, ctx) {
   const params = pi.zod.object({
     op: pi.zod.enum(["stop"]).describe("Stop a running worker."),
     runId: pi.zod.string().describe("The run to stop."),
-    outcome: pi.zod.enum(["done", "abort"]).describe("'done' = graceful wrap-up then soft cancel; 'abort' = immediate cancel.")
+    outcome: pi.zod.enum(["done", "abort"]).describe("Both cancel the run immediately -- there is no server-side graceful/soft stop today. 'done' additionally sends a wrap-up follow-up message first; 'abort' does not.")
   });
   pi.registerTool({
     name: CREW_STOP_TOOL_NAME,
     label: "Crew Stop",
-    description: "Use to stop a worker. outcome 'done' sends a wrap-up follow-up then cancels softly (the worker finishes its current turn); outcome 'abort' cancels the run immediately. Cleanup (workspace release) is never automatic -- the leader does that.",
+    description: "Use to stop a worker. Both outcomes cancel the run immediately (kill the vendor process) -- there is no graceful/soft stop today. outcome 'done' additionally sends a wrap-up follow-up message right before the same cancel, so the worker's own transcript records why it stopped; outcome 'abort' cancels with no message. Cleanup (workspace release) is never automatic -- the leader does that.",
     parameters: params,
     approval: "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -12539,7 +12561,7 @@ function registerStopTool(pi, ctx) {
         kind: "followUp",
         payload: "Wrap-up: stopping this run per leader instruction."
       });
-      return callOrchestration(client, "run/cancel", { runId: input.runId, mode: "soft" });
+      return callOrchestration(client, "run/cancel", { runId: input.runId });
     }
   });
 }
@@ -12551,7 +12573,7 @@ function registerFinishTool(pi, ctx) {
   pi.registerTool({
     name: CREW_FINISH_TOOL_NAME,
     label: "Crew Finish",
-    description: "Use to cancel the remaining live runs of a plan once the leader is done. Takes the explicit run ids you spawned. Workspace release is left to the leader -- never automatic.",
+    description: "Use to cancel the remaining live runs of a plan once the leader is done -- this ends them via cancellation (run/cancel), the same as crew_stop { outcome: 'abort' }, in a loop over the given run ids. It never calls the ADR-0027 leader-settle (run/finish): settling states an outcome per run, which doesn't fit a bulk call. To settle (not merely cancel) a single run with a stated outcome, use crew_run { op: 'finish', runId, outcome }. Takes the explicit run ids you spawned. Workspace release is left to the leader -- never automatic.",
     parameters: params,
     approval: "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -12853,21 +12875,23 @@ function registerReconcileTool(pi, ctx) {
 var CREW_RUN_TOOL_NAME = "crew_run";
 function registerRunTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["submit", "list", "get", "retry", "cancel", "result"]).describe("Which run operation to perform."),
+    op: pi.zod.enum(["submit", "list", "get", "retry", "cancel", "result", "timeoutAck", "finish"]).describe("Which run operation to perform."),
     prompt: pi.zod.string().optional().describe("Required for submit and retry: the instruction the worker executes. Crew stores no task text, so the task's description must be passed here."),
     taskId: pi.zod.string().optional().describe("Required for submit: the task to execute. Optional filter for list."),
     workerId: pi.zod.string().optional().describe("Required for submit and retry: the worker to execute with."),
     workspaceMode: pi.zod.enum(["shared", "isolated", "copy"]).optional().describe("Optional workspace mode for submit and retry: 'shared' (the repository itself, the default), 'isolated' (a per-run git worktree), or 'copy' (a per-run copy of the repository)."),
     priority: pi.zod.number().int().optional().describe("Optional priority for submit."),
-    runId: pi.zod.string().optional().describe("Required for get, cancel, and result: the run id."),
-    priorRunId: pi.zod.string().optional().describe("Required for retry: the terminal run id to retry.")
+    runId: pi.zod.string().optional().describe("Required for get, cancel, result, timeoutAck, and finish: the run id."),
+    priorRunId: pi.zod.string().optional().describe("Required for retry: the terminal run id to retry."),
+    decision: pi.zod.enum(["extend", "nudge", "abort"]).optional().describe("Required for timeoutAck: how to respond to a WorkerTimeout fact. 'extend' re-arms both liveness deadlines with a fresh window. 'nudge' is a server-side no-op -- follow up with crew_send (op: 'send') to actually nudge the worker. 'abort' cancels the run (same effect as op: 'cancel')."),
+    outcome: pi.zod.enum(["succeeded", "failed"]).optional().describe("Optional for finish (default 'succeeded'): the leader's judgment of how the run went. Never inferred from the vendor's own turn markers -- only the leader can judge whether the task actually succeeded.")
   });
   pi.registerTool({
     name: CREW_RUN_TOOL_NAME,
     label: "Crew Run",
-    description: "Use to execute, monitor, or manage task execution by external workers. Use op: 'submit' to start execution (requires taskId from crew_task, workerId from crew_worker, and prompt -- the instruction text the worker executes), op: 'get' to check progress/status of a run, op: 'result' to read a finished run's final output text and token usage (requires runId; refused until the run reaches a terminal state -- chain work by passing resultText into the next submit's prompt), op: 'list' to list runs for a task, op: 'retry' to re-execute a terminal run (creates a new runId and starts a fresh worker process; pass prompt again), or op: 'cancel' to stop a running run. After submitting, monitor with op: 'get'. If the run fails, retry with op: 'retry' (new runId). If stuck, cancel with op: 'cancel'.",
+    description: "Use to execute, monitor, or manage task execution by external workers. Use op: 'submit' to start execution (requires taskId from crew_task, workerId from crew_worker, and prompt -- the instruction text the worker executes), op: 'get' to check progress/status of a run, op: 'result' to read a run's output text and token usage (requires runId; readable once the run is terminal OR has settled a turn without exiting -- a TUI vendor's process outlives its turn, so 'waitingUser' with a journaled turn-end already qualifies, per ADR-0027 -- chain work by passing resultText into the next submit's prompt), op: 'list' to list runs for a task, op: 'retry' to re-execute a terminal run (creates a new runId and starts a fresh worker process; pass prompt again), op: 'cancel' to stop a running run immediately, op: 'timeoutAck' to decide a WorkerTimeout fact (requires runId and decision: 'extend' | 'nudge' | 'abort'), or op: 'finish' to end a run as the leader's own settle decision (requires runId; optional outcome: 'succeeded' | 'failed', default 'succeeded' -- states the outcome rather than inferring it, and works on any non-terminal run, not only one that has settled a turn). After submitting, monitor with op: 'get'. If the run fails, retry with op: 'retry' (new runId). If stuck, cancel with op: 'cancel'.",
     parameters: params,
-    approval: (args) => typeof args === "object" && args !== null && ("op" in args) && (args.op === "submit" || args.op === "retry" || args.op === "cancel") ? "exec" : "read",
+    approval: (args) => typeof args === "object" && args !== null && ("op" in args) && (args.op === "submit" || args.op === "retry" || args.op === "cancel" || args.op === "timeoutAck" || args.op === "finish") ? "exec" : "read",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
       const client = await ctx.getClient(extCtx);
       switch (input.op) {
@@ -12908,6 +12932,10 @@ function registerRunTool(pi, ctx) {
         }
         case "cancel":
           return callOrchestration(client, "run/cancel", { runId: input.runId });
+        case "timeoutAck":
+          return callOrchestration(client, "run/timeoutAck", { runId: input.runId, decision: input.decision });
+        case "finish":
+          return callOrchestration(client, "run/finish", { runId: input.runId, outcome: input.outcome });
       }
     }
   });
@@ -13119,6 +13147,7 @@ function lookupKey(e) {
 
 class MilestoneTracker {
   #sawWorking = new Set;
+  #sawSettled = new Set;
   isMilestone(e) {
     const event = e.event;
     switch (event.type) {
@@ -13135,6 +13164,18 @@ class MilestoneTracker {
           this.#sawWorking.add(runId);
           return true;
         }
+        return false;
+      }
+      case "runFlagsEvent": {
+        const runId = event.payload.runId;
+        if (event.payload.flags.turnSettled) {
+          if (this.#sawSettled.has(runId)) {
+            return false;
+          }
+          this.#sawSettled.add(runId);
+          return true;
+        }
+        this.#sawSettled.delete(runId);
         return false;
       }
       case "workerQuestion":
@@ -13172,6 +13213,12 @@ function formatDigest(e, lookup) {
         return `${capitalize(who)} started working.`;
       }
       return;
+    }
+    case "runFlagsEvent": {
+      if (!event.payload.flags.turnSettled) {
+        return;
+      }
+      return `${capitalize(who)} settled a turn and is waiting on the leader (not terminal -- ` + `the vendor is still parked, not exited). Read the answer via crew_run { op: "result", runId }, ` + `then either crew_send to follow up or crew_run { op: "finish", runId, outcome } to close it.`;
     }
     case "workerQuestion": {
       const question = event.payload.question ?? "(no question text captured)";
