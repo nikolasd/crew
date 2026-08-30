@@ -4,7 +4,7 @@ Thank you for your interest in contributing to Crew! This document provides guid
 
 **Audience & purpose:** contributors — the process guide (branch/PR/release flow, non-negotiable
 invariants). For the technical *how* of building and testing Crew itself, see
-[`docs/getting-started.md`](docs/getting-started.md), the developer manual.
+[`docs/development.md`](docs/development.md) (Crew Development Guide), the developer manual.
 
 ## Development Environment
 
@@ -39,7 +39,7 @@ cargo test
 cargo test --test adapter_contract
 cargo test --test approval
 cargo test --test audit
-# ... (see docs/getting-started.md for full list)
+# ... (see docs/development.md for full list)
 ```
 
 ### TypeScript Tests
@@ -103,7 +103,7 @@ packages/extension/       The OMP extension: client, launcher, platform loader, 
                           tools, OMP-native reconciliation, embedded /crew monitor
 packages/protocol-ts/     Generated TypeScript bindings + JSON Schema + Ajv validators
 fixtures/                 Cross-language golden fixtures (protocol frames, state roots, repo ids)
-docs/                     Engineering documentation (start here: docs/getting-started.md)
+docs/                     Engineering documentation (start here: docs/development.md)
 ```
 
 ## Making Changes
@@ -168,16 +168,16 @@ Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/
 **Requires:** only the default `GITHUB_TOKEN` (already available to the workflow) — no separate secret to configure.
 
 **Release checklist, before tagging:**
-- `packages/extension/dist/index.js` is rebuilt (`bun run build`) and the diff is committed — it's the exact file a marketplace-installed plugin loads, and CI's `bundle-check` job rejects a stale one. **Platform caveat:** the bundle embeds Bun's platform-specific module shim, so a rebuild on a different platform (e.g. macOS/arm64) does **not** byte-match CI's linux-x64 `bundle-check` (observed with Bun 1.3.14). Refresh the committed bundle via the `refresh-bundle` workflow (builds on linux-x64 + pinned Bun and uploads the artifact to commit), or a linux-x64 build.
+- `packages/extension/dist/index.js` is rebuilt (`bun run build`) and the diff is committed — it's the exact file a marketplace-installed plugin loads, and CI's `bundle-check` job rejects a stale one. The `auto-commit-dist` workflow automatically handles this on PR branches that touch extension/protocol source (App-signed bot commit, then CI re-runs). For fork PRs or local verification, you can manually refresh via the `refresh-bundle` workflow (builds on linux-x64 + pinned Bun and uploads the artifact to commit). **Platform caveat:** the bundle embeds Bun's platform-specific module shim, so a rebuild on a different platform (e.g. macOS/arm64) does **not** byte-match CI's linux-x64 `bundle-check` (observed with Bun 1.3.14) — this is why the automation exists.
 - `.claude-plugin/marketplace.json`'s versions are enforced automatically: `bun run generate --check` fails on any drift from `packages/extension/package.json`, so no manual check is needed.
 
 ## Documentation
 
 When contributing, consider updating documentation:
 
-- **docs/plugin-usage.md** — the user manual: every tool/command an OMP session can call
-- **docs/getting-started.md** — the developer manual: building, configuring, and testing Crew from source
-- **docs/code-walkthrough.md** / **docs/rust-primer.md** — developer-manual companions: source map, debugging playbook, Rust-via-this-codebase tutorial
+- **docs/user-guide.md** (Crew User Guide) — the user manual: every tool/command an OMP session can call
+- **docs/development.md** (Crew Development Guide) — the developer manual: building, configuring, and testing Crew from source
+- **docs/code-walkthrough.md** (Crew Code Walkthrough) / **docs/rust-tutorial.md** (Learning Rust with this codebase as the textbook) — developer-manual companions: source map, debugging playbook, Rust-via-this-codebase tutorial
 - **docs/manual-testing.md** — manual/QA verification procedures
 - **docs/architecture.md** — system design (the C4-model "why")
 - **docs/cli-reference.md** — `crewd` CLI command reference

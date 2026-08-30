@@ -2,7 +2,7 @@
 
 **Audience & purpose:** contributors debugging something that feels like it might have happened
 before — a companion to [code-walkthrough.md](code-walkthrough.md)'s debugging playbook and the
-developer manual ([getting-started.md](getting-started.md)). This document catalogs hard-won
+developer manual ([development.md](development.md)). This document catalogs hard-won
 lessons from smoke testing, production incidents, and debugging. These are the kind of things that
 should be discovered by reading documentation, not by trial and error.
 

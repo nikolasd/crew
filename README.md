@@ -50,7 +50,7 @@ hit GitHub's unauthenticated API rate limit (60 requests/hour). With a token (fr
 GITHUB_TOKEN=...`, `export GH_TOKEN=...`, or a local `gh auth login` session), the limit is 5,000
 requests/hour. The binary is cached under your Crew state root.
 
-Once installed, [`docs/plugin-usage.md`](docs/plugin-usage.md) is the user manual: every tool and
+Once installed, [`docs/user-guide.md`](docs/user-guide.md) (Crew User Guide) is the user manual: every tool and
 command the extension registers, and the recommended flow for running a task through it.
 
 **To uninstall:**
@@ -60,7 +60,7 @@ command the extension registers, and the recommended flow for running a task thr
 
 ## Development
 
-For contributors building or modifying Crew itself (not for end users — see [Installation](#installation) above). [`docs/getting-started.md`](docs/getting-started.md) is the developer manual — start there for the full setup/build/test/config walkthrough.
+For contributors building or modifying Crew itself (not for end users — see [Installation](#installation) above). [`docs/development.md`](docs/development.md) (Crew Development Guide) is the developer manual — start there for the full setup/build/test/config walkthrough.
 
 **Prerequisites:** Bun 1.3.14+, macOS or glibc Linux on arm64/x64, and Rust — via [rustup](https://rustup.rs) (recommended: automatically respects the pinned `1.97.1` in `rust-toolchain.toml`) or your system package manager. For the full OMP integration you also need OMP ≥ 17.0.7.
 
@@ -78,21 +78,23 @@ OMP_CREW_BINARY="$PWD/target/debug/crewd" \
   omp --extension ./packages/extension/src/index.ts
 ```
 
-Ask the model to use `crew_task`, `crew_worker`, and `crew_run`, then open `/crew` to watch runs live. See [docs/plugin-usage.md](docs/plugin-usage.md) for the full tool reference and [docs/manual-testing.md](docs/manual-testing.md) for the full walkthrough. For running `crewd` directly instead of through OMP, see [docs/cli-reference.md](docs/cli-reference.md).
+Ask the model to use `crew_task`, `crew_worker`, and `crew_run`, then open `/crew` to watch runs live. See [docs/user-guide.md](docs/user-guide.md) for the full tool reference and [docs/manual-testing.md](docs/manual-testing.md) for the full walkthrough. For running `crewd` directly instead of through OMP, see [docs/cli-reference.md](docs/cli-reference.md).
 
 `packages/extension/dist/index.js` is committed to git and verified in CI (a `bundle-check` job rebuilds and diffs it), since it's the entry point the marketplace-installed plugin loads. Any change under `packages/extension/src/` must be followed by `bun run build` and committing the rebuilt bundle.
 
-> **Platform note:** the bundle embeds Bun's platform-specific module shim, so a rebuild on a
-> different platform (e.g. macOS/arm64) does **not** byte-match CI's `bundle-check` — observed with
-> Bun 1.3.14, where a darwin-arm64 rebuild diverges from CI's linux-x64 output. Always refresh the
-> committed bundle via the `refresh-bundle` workflow (builds on linux-x64 + pinned Bun and uploads
-> the artifact to commit), or a linux-x64 build, or CI will reject the commit as a stale bundle.
+> **Bundle refresh:** the `auto-commit-dist` workflow automatically refreshes the committed bundle on
+> any PR that touches `packages/extension/src/` or `packages/protocol-ts/` — an App-signed bot commit is
+> created with the rebuilt bundle, and CI re-runs on it to verify. For fork PRs or local verification
+> before pushing, you can manually refresh via the `refresh-bundle` workflow (builds on linux-x64 +
+> pinned Bun and uploads the artifact to commit). **Platform caveat:** the bundle embeds Bun's
+> platform-specific module shim, so a rebuild on a different platform (e.g. macOS/arm64) does **not**
+> byte-match CI's `bundle-check` — observed with Bun 1.3.14. The automation exists to handle this.
 
 ## Contributing
 
 Contributions are welcome. Before submitting a PR:
 
-1. Read [`docs/getting-started.md`](docs/getting-started.md) and [`docs/architecture.md`](docs/architecture.md).
+1. Read [`docs/development.md`](docs/development.md) (Crew Development Guide) and [`docs/architecture.md`](docs/architecture.md) (Crew Architecture).
 2. Run `bun run check` — schema drift, build, and all tests must pass.
 3. Follow the [Non-Negotiable Invariants](CONTRIBUTING.md#non-negotiable-invariants) — changes that weaken them will be rejected.
 4. Use descriptive commit messages. Reference issue numbers when applicable.

@@ -100,7 +100,7 @@ content is redacted before it becomes durable.
 
 Full C4-style diagrams (system context → container → component, plus the event-lifecycle sequence
 diagram and a role/permission table) are in `docs/architecture.md`. Design rationale for anything
-below is captured as an ADR in `docs/adr/0001...` through `0024...` — check there before assuming a
+below is captured as an ADR in `docs/adr/0001...` through `0028...` — check there before assuming a
 structural choice is accidental.
 
 ### Where things live
@@ -116,7 +116,7 @@ structural choice is accidental.
 | `fixtures/` | Cross-language golden fixtures (protocol frames, state roots, repo ids, configs) that Rust and TS tests both read |
 | `tests/conformance/` | Golden-frame adapter conformance runner |
 | `release/` | Release build inputs and evidence — `targets.json` (platform build matrix, read by xtask and CI) plus per-version release checklists and live adapter conformance results |
-| `docs/` | Start with `getting-started.md` and `architecture.md`; `engineering-lessons.md` documents past bugs and the invariant that closed each one |
+| `docs/` | Start with `development.md` (Crew Development Guide) and `architecture.md` (Crew Architecture); `engineering-lessons.md` documents past bugs and the invariant that closed each one |
 
 ### Cross-language coupling to keep in mind
 

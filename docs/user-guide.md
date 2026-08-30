@@ -1,4 +1,4 @@
-# Using the Crew OMP Extension
+# Crew User Guide
 
 **Audience & purpose:** the Crew user manual, for anyone using Crew through OMP — you drive it
 with plain language, and the model calls the tools on your behalf. You never need to touch the
@@ -64,7 +64,7 @@ Binary source: package
 
 `Binary source: package` means the verified, downloaded-and-cached binary is running. `override`
 means `OMP_CREW_BINARY` was set and is running instead — the local-development path, described in
-[`getting-started.md`](getting-started.md#how-the-extension-finds-and-starts-crewd).
+[`development.md`](development.md#how-the-extension-finds-and-starts-crewd).
 
 If this fails instead, skip to [When something breaks](#6-when-something-breaks).
 
@@ -811,7 +811,7 @@ a task or run — see those entries above for the full result shape.
 
 ## Appendix B — how the runtime binary is resolved
 
-Moved to [`getting-started.md` § How the extension finds and starts `crewd`](getting-started.md#how-the-extension-finds-and-starts-crewd)
+Moved to [`development.md` § How the extension finds and starts `crewd`](development.md#how-the-extension-finds-and-starts-crewd)
 — you don't need it to use the tools above. Short version: an existing daemon is reused if its
 socket answers; otherwise `OMP_CREW_BINARY` (developer override) or the checksum-verified
 `<state root>/bin/<version>/crewd` cache is spawned, and `crew_health` reports which one as

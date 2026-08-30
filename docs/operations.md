@@ -1,7 +1,7 @@
 # Crew Operations Guide
 
 **Audience & purpose:** end users and operators who need to run `crewd` by hand, troubleshoot a
-stuck daemon, or upgrade/uninstall — a companion to [`plugin-usage.md`](plugin-usage.md), the user
+stuck daemon, or upgrade/uninstall — a companion to [`user-guide.md`](user-guide.md), the user
 manual (day-to-day tool usage doesn't need this document; troubleshooting does). This guide covers
 running and troubleshooting the `crewd` daemon in practice: lifecycle procedures, crash recovery,
 upgrades, and the real (as opposed to imagined) install/uninstall path. For the full flag-by-flag
@@ -21,7 +21,7 @@ crewd serve --repo <path> --state-dir "$HOME/.omp/crew" [--idle-seconds <n>]
 ```
 
 In normal use you don't run this yourself — the OMP extension spawns it on first use per
-repository (see [`getting-started.md`](getting-started.md#how-the-extension-finds-and-starts-crewd)).
+repository (see [`development.md`](development.md#how-the-extension-finds-and-starts-crewd)).
 Run it by hand for debugging or CI. See [`cli-reference.md`](cli-reference.md#crewd-serve) for
 every flag, and the [state-directory note](cli-reference.md#before-you-start-state-directories)
 before you pick a `--state-dir` — the CLI's own default when it's omitted resolves the same
@@ -60,7 +60,7 @@ crewd monitor --repo <path> --state-dir "$HOME/.omp/crew" --run-id <run-id>
 There's no separate "replay" vs. "live" mode — `monitor` always replays what's already journaled
 and then keeps tailing new events until you interrupt it. If the daemon restarts mid-session,
 `monitor` reconnects and resumes from where it left off rather than exiting. For day-to-day use
-inside OMP, prefer `/crew` (see [`plugin-usage.md`](plugin-usage.md#4-watching-runs))
+inside OMP, prefer `/crew` (see [`user-guide.md`](user-guide.md#4-watching-runs))
 — this CLI form is for scripting or debugging outside an OMP session.
 
 ### Diagnosing a runtime
@@ -124,13 +124,13 @@ Uninstalling works in any session:
 /marketplace uninstall crew@crew   # removes the extension + skills
 ```
 
-**This repository is private.** `/marketplace add` git-clones it, so it needs your own GitHub read
-access to `nikolasd/crew` (an SSH key registered with GitHub, or a `gh auth login` session backed
-by a git credential helper). `/crew-install` additionally needs a `GITHUB_TOKEN` or
-`GH_TOKEN` environment variable, or that same `gh auth login` session, to download the asset — see
-the README's [Installation](../README.md#installation) section. The `crewd` binary itself resolves
+**This repository is public.** `/marketplace add` clones it via HTTPS — no authentication required.
+`/crew-install` downloads the `crewd` binary via the GitHub REST API; a `GITHUB_TOKEN` or
+`GH_TOKEN` environment variable (or a `gh auth login` session) is optional but recommended — without
+one you may hit GitHub's unauthenticated rate limit (60 requests/hour); with one, it's 5,000/hour.
+See the README's [Installation](../README.md#installation) section for details. The `crewd` binary itself resolves
 in two tiers (see
-[`getting-started.md`](getting-started.md#how-the-extension-finds-and-starts-crewd)): `OMP_CREW_BINARY`
+[`development.md`](development.md#how-the-extension-finds-and-starts-crewd)): `OMP_CREW_BINARY`
 (a local-development override) if set, otherwise the SHA-256-verified binary
 `/crew-install` cached under the Crew state root — there's no separate binary install
 step beyond that command.
@@ -153,7 +153,7 @@ separate step. `/marketplace upgrade crew@crew` refreshes the extension + skills
 repository; if that bumps the extension's version, re-run `/crew-install` to download the
 matching binary (a version-mismatched cached binary is rejected rather than silently reused). If
 you're testing an unreleased build instead, use the `OMP_CREW_BINARY` override described in
-[`getting-started.md`](getting-started.md#how-the-extension-finds-and-starts-crewd) instead of
+[`development.md`](development.md#how-the-extension-finds-and-starts-crewd) instead of
 installing anything.
 
 1. **Stop the running daemon** for any repository you're about to touch: `crewd stop --repo ...`
