@@ -103,6 +103,15 @@ pub async fn is_live(socket: &Path) -> bool {
 /// probed concurrently instead (`join_all`) -- startup pays at most one
 /// timeout's worth of wall-clock time no matter how many sockets a
 /// crashed daemon left behind, not one per socket.
+///
+/// A live probe also now costs one `snapshot_and_subscribe()` on the
+/// `AttachServer` side (a ring-buffer clone plus a broadcast subscription,
+/// both dropped microseconds later when the probe's connection closes) --
+/// before CREW-30 a probe cost only a connect and a refused SYN. A pane
+/// snapshot today is a screen buffer, not scrollback, so N concurrent
+/// probes doing N concurrent snapshot clones at startup is not a real
+/// concern; re-check this the moment a snapshot ever grows to include
+/// scrollback.
 pub async fn sweep_stale(panes_dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(panes_dir) else {
         return Vec::new();
