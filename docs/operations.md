@@ -195,3 +195,49 @@ For open implementation gaps (as opposed to operational issues): the open-items 
 the maintainer's local, gitignored `REVIEW.md` (not present in a fresh clone), verified against
 the current codebase. Engineering lessons from closed findings — every fix, with the test that proved it — live
 in [`engineering-lessons.md`](engineering-lessons.md).
+
+## Dashboard
+
+The dashboard is a live, read-only web interface showing your runs, their status, cost, and transcript. To reach it:
+
+1. **Enable and configure** in your crew config (`~/.omp/crew.json` or `.omp/crew.json` at the repo root):
+```json
+{
+  "dashboard": { "enabled": true, "port": 4747 }
+}
+```
+
+2. **Get the URL and token**: When the daemon starts, it prints:
+```
+dashboard_started addr=127.0.0.1:4747 url=http://127.0.0.1:4747/?token=8f3c…
+```
+
+The token is per-daemon-run and required for every request. The URL may also appear in `/crew health` output (depends on your OMP/Crew versions).
+
+3. **Open in your browser** using the full URL with token.
+
+**Note:** Port conflicts: if two daemons try the same port, the second logs `dashboard_bind_failed` and runs without a dashboard.
+
+### Cost and Task Columns
+
+The cost column shows what each run consumed:
+- **Dollars** ($): Reported only for vendors with billable pricing. Blank otherwise.
+- **Tokens**: Model tokens consumed, where reported. Blank if unavailable.
+- **Dash (—)**: Shown when neither cost nor tokens are available.
+- **Totals**: Sum dollars and tokens separately; blank if that column is all blanks.
+
+The task column shows the **first line of the first journaled prompt** (160 characters, truncated if longer).
+
+## Prompt Journaling Privacy
+
+Every prompt you submit, every decision you make, and every model response are recorded in a durable **journal** (SQLite database in your Crew state directory). This is by design — it lets you replay runs, audit what happened, and recover from crashes.
+
+Before any text reaches the journal, Crew's **Redactor** passes over it and masks secrets (API keys, tokens, passwords, custom patterns you've configured). The redacted version is what's stored. See [ADR-0028](adr/0028-submit-prompt-is-journaled-redacted-run-intent.md) for the redaction design.
+
+Redacted journal content appears in:
+- **Session transcripts** (what you see as you work)
+- **Audit exports** (`/crew export`) — the full journal
+- **Event streams** (`/events` and `events/replay`) — live and replay
+- **Dashboard** — task prompts (first line, truncated) and run transcripts
+
+To start fresh and erase all runs/journals/state for a repo: delete the Crew state directory (default: `~/.omp/crew/` or the path set in `CREW_STATE_DIR`). Crew will recreate it empty on the next run.

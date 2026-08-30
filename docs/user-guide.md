@@ -816,3 +816,38 @@ Moved to [`development.md` § How the extension finds and starts `crewd`](develo
 socket answers; otherwise `OMP_CREW_BINARY` (developer override) or the checksum-verified
 `<state root>/bin/<version>/crewd` cache is spawned, and `crew_health` reports which one as
 "Binary source".
+
+## Choosing a Model Once
+
+Crew persists your model choice for future sessions. The first time you run a task without a configured model, the `crew_profile` tool returns an error: "no model configured for adapter X — ask the user which model to use, then call crew_profile again with it; the answer will be persisted for future sessions."
+
+**The flow:** The leader (model or operator) asks you which model to use in conversation. You answer with a model identifier (e.g., `claude-sonnet-4-20250514`). The leader calls `crew_profile` again with your answer, which persists it to the repository's `.omp/crew.json` — no further prompts on that repository.
+
+**To change your model later:**
+- **Locate the config:** Run `/crew config path` to find the `.omp/crew.json` file in your repository
+- **Edit it:** Open the file and change the `adapters.<adapter>.model` field, or
+- **Inspect current:** Run `/crew config print effective` to see what's currently configured
+
+There is no interactive `/crew config` editor — edit `.omp/crew.json` directly. The repository's `.omp/crew.json` takes precedence over any global `~/.omp/crew.json`.
+
+## Watching Runs on the Dashboard
+
+Crew runs a live dashboard showing your active and completed runs, their status, cost, and transcript. Enable it in your config (`~/.omp/crew.json` or `.omp/crew.json` in your repo):
+
+```json
+{
+  "dashboard": { "enabled": true, "port": 4747 }
+}
+```
+
+When the daemon starts, it prints the dashboard URL with a per-run bearer token. Open that URL in your browser. The cost column shows billable spend (dollars, where reported) and model tokens (where available); the task column shows the first line of the first prompt you submitted (160 characters).
+
+For detailed operations and troubleshooting, see [operations.md § Dashboard](../operations.md#dashboard).
+
+## Privacy: What Gets Stored
+
+Every prompt, decision, and response is recorded in a durable journal (SQLite in your Crew state directory). Before storing, the **Redactor** masks secrets (API keys, tokens, credentials, custom patterns you configure) — only the redacted version is persisted.
+
+Redacted content appears in transcripts, audit exports (`/crew export`), event streams (`/events`), and the dashboard. To erase all state: delete your Crew state directory (`~/.omp/crew/` by default, or `$CREW_STATE_DIR`); Crew recreates it empty on the next run.
+
+For design and auditing details, see [operations.md § Prompt Journaling Privacy](../operations.md#prompt-journaling-privacy) and ADR-0028.
