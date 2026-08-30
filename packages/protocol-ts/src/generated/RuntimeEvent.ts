@@ -35,6 +35,6 @@ reason?: Redacted, } } | { "type": "childEvent", "payload": { kind: RuntimeEvent
  */
 paneRef: string, } } | { "type": "outOfBandInput", "payload": { runId: RunId, backend: DisplayBackend, paneRef: string, } } | { "type": "planProposed", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, plan: PlanSpec, } } | { "type": "planDecided", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, approved: boolean, 
 /**
- * Absent when no rationale was given for the decision.
+ * `null` when no rationale was given for the decision.
  */
 reason: Redacted | null, } } | { "type": "workerQuestion", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, question: Redacted | null, } } | { "type": "escalationRaised", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, reason: string, question: Redacted | null, } } | { "type": "escalationAnswered", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, answeredBy: AnsweredBy, answer: Redacted | null, } } | { "type": "budgetExceeded", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, turnsUsed: number, turnLimit: number, } } | { "type": "workerTimeout", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, kind: TimeoutKind, sinceMs: number, } };

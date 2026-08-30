@@ -119,7 +119,7 @@ pub struct RuntimeCapabilities {
 pub struct ClientPrincipalSummary {
     pub role: ClientRole,
     pub instance_id: String,
-    /// The run this connection is scoped to. Absent for every role except
+    /// The run this connection is scoped to. `null` for every role except
     /// `workerMcp`, whose scope-token binding determines it -- never a
     /// value the client can request or override.
     pub scoped_run_id: Option<RunId>,
@@ -181,7 +181,7 @@ pub struct RuntimeStatus {
     // discoverability. Do not "fix" this by hiding the token again without
     // a fresh maintainer decision.
     /// The embedded dashboard's live URL when `dashboard.enabled` and the
-    /// bind succeeded; absent otherwise (disabled, or the bind failed and
+    /// bind succeeded; `null` otherwise (disabled, or the bind failed and
     /// degraded to no dashboard).
     ///
     /// The URL includes the dashboard's access token, so it grants whoever
@@ -305,8 +305,10 @@ pub struct JsonRpcError {
     pub data: Option<serde_json::Value>,
 }
 
-/// A JSON-RPC 2.0 error response envelope. `id` is absent when the request
-/// identifier could not be determined (for example, on a parse error).
+/// A JSON-RPC 2.0 error response envelope. `id` is `null` when the request
+/// identifier could not be determined (for example, on a parse error) --
+/// JSON-RPC 2.0 requires the key present with a `null` value here, per
+/// §5, never an omitted key.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]

@@ -32,7 +32,7 @@ pub struct PolicyViolationSummary {
     pub created_at: String,
     /// Set once decided via `policy/violation/decide`.
     pub resolved_at: Option<String>,
-    /// `"release"` or `"cancel"` once decided; absent while open.
+    /// `"release"` or `"cancel"` once decided; `null` while open.
     pub resolution: Option<String>,
     pub resolved_by: Option<String>,
 }

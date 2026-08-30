@@ -20,7 +20,7 @@ adapter: string,
  */
 writes: boolean, 
 /**
- * The maximum number of turns this subtask may take; absent means no
+ * The maximum number of turns this subtask may take; `null` means no
  * explicit budget was proposed.
  */
 turnBudget: number | null, };

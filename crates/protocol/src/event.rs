@@ -352,7 +352,7 @@ pub struct SubtaskSpec {
     pub adapter: String,
     /// Whether this subtask is expected to write to the workspace.
     pub writes: bool,
-    /// The maximum number of turns this subtask may take; absent means no
+    /// The maximum number of turns this subtask may take; `null` means no
     /// explicit budget was proposed.
     pub turn_budget: Option<u32>,
 }
@@ -588,8 +588,8 @@ pub enum RuntimeEventKind {
         /// authorized under, so the violation is auditable against a
         /// specific merge of org/repo/user/per-run layers.
         policy_fingerprint: String,
-        /// Present only for a nested-worker violation; absent for any
-        /// violation with no vendor child, such as a cost ceiling.
+        /// Present (non-`null`) only for a nested-worker violation; `null`
+        /// for any violation with no vendor child, such as a cost ceiling.
         vendor_child_id: Option<String>,
         vendor_parent_ref: Option<String>,
         action: String,
@@ -749,7 +749,7 @@ pub enum RuntimeEvent {
     // as ContentClass::Thinking or ::Secret has nothing Visible to mask,
     // so there is no partial-text form to carry.
     /// A visible message chunk or final message from a worker adapter.
-    /// `text` has already crossed the redaction boundary; absent means
+    /// `text` has already crossed the redaction boundary; `null` means
     /// the entire fragment was classified as sensitive and dropped, not
     /// that the message was empty.
     AdapterMessageEvent {
@@ -763,7 +763,7 @@ pub enum RuntimeEvent {
     // See AdapterMessageEvent above: a wholesale-sensitive fragment has
     // nothing Visible left to mask, so it's dropped rather than redacted.
     /// A tool call lifecycle event from a worker adapter. `detail` has
-    /// already crossed the redaction boundary; absent means the detail
+    /// already crossed the redaction boundary; `null` means the detail
     /// fragment was classified as sensitive and dropped, not that it was
     /// empty.
     AdapterToolEvent {
@@ -798,7 +798,7 @@ pub enum RuntimeEvent {
     // See AdapterMessageEvent above: a wholesale-sensitive fragment has
     // nothing Visible left to mask, so it's dropped rather than redacted.
     /// A worker adapter's protocol health changed. `detail` has already
-    /// crossed the redaction boundary; absent means the detail fragment
+    /// crossed the redaction boundary; `null` means the detail fragment
     /// was classified as sensitive and dropped, not that it was empty.
     AdapterProtocolHealthEvent {
         run_id: RunId,
@@ -868,14 +868,14 @@ pub enum RuntimeEvent {
         task_id: TaskId,
         worker_id: WorkerId,
         approved: bool,
-        /// Absent when no rationale was given for the decision.
+        /// `null` when no rationale was given for the decision.
         reason: Option<Redacted>,
     },
     // See AdapterMessageEvent above: a wholesale-sensitive fragment has
     // nothing Visible left to mask, so it's dropped rather than redacted.
     /// A worker asked a question that blocks its own progress, without
     /// escalating control (compare `escalationRaised`). `question`
-    /// has already crossed the redaction boundary; absent means the
+    /// has already crossed the redaction boundary; `null` means the
     /// entire fragment was classified as sensitive and dropped, not
     /// that the question was empty.
     WorkerQuestion {

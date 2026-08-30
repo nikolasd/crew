@@ -37,8 +37,8 @@ pub struct PlanDecideResult {
 }
 
 /// Result of `plan/get`: the most recently proposed plan for a run and its
-/// decision, if any. `plan: None` means no plan has been proposed yet;
-/// `approved: None` means a plan exists but has not yet been decided.
+/// decision, if any. `plan` is `null` when no plan has been proposed yet;
+/// `approved` is `null` when a plan exists but has not yet been decided.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]

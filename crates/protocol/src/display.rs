@@ -96,9 +96,9 @@ pub enum DisplayPlacement {
 pub struct DisplayConfig {
     /// The backend to use.
     pub backend: DisplayBackend,
-    /// Optional width override (None = auto-detect).
+    /// Optional width override; auto-detected when not set.
     pub width: Option<u16>,
-    /// Optional height override (None = auto-detect).
+    /// Optional height override; auto-detected when not set.
     pub height: Option<u16>,
 }
 
