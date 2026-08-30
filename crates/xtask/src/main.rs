@@ -192,6 +192,67 @@ fn render_schema() -> Result<Vec<u8>> {
     crew_protocol::render_schema().context("serializing schema to JSON")
 }
 
+/// Types on the export allowlist below that are deliberately NOT
+/// wire-message roots -- bare id newtypes and enums, request/param shapes
+/// with no canonical result-document counterpart, and generic-dummy
+/// instantiations of a wrapper already covered by its own concrete entry.
+/// None of these need to be reachable from `schema.rs`'s `ProtocolDocument`,
+/// because nothing consumes them as a standalone JSON Schema root: an id
+/// is only ever read as a *field* of some other type (already reachable
+/// there transitively), and a request/param shape has no independent
+/// schema-validated consumer today.
+///
+/// CREW-44: this list, and the assertion in `check_export_list_is_schema_reachable`
+/// that reads it, exist because CREW-43 found `RunMessage` and
+/// `MessageListResult` on the export allowlist below with no counterpart in
+/// `ProtocolDocument` -- nothing caught it until a human noticed. A type
+/// belongs on the export allowlist AND in `ProtocolDocument` the moment it's
+/// a wire message (a request/result/event with an independent consumer);
+/// it belongs here instead only when it's a bare id/enum/param shape with
+/// no such consumer. Adding a new *message* type to the export allowlist
+/// without also adding it to `ProtocolDocument` (see the matching comment
+/// there) now fails `generate --check` instead of silently doing nothing.
+const NOT_WIRE_MESSAGE_ROOTS: &[&str] = &[
+    // Bare id newtypes -- read only as fields of other exported types.
+    "ApprovalId",
+    "ArtifactId",
+    "MessageId",
+    "OperationId",
+    "ProjectId",
+    "RequestId",
+    "RunId",
+    "TaskId",
+    "WorkerId",
+    // Bare enums -- read only as fields of other exported types.
+    "BinarySource",
+    "ClientRole",
+    "ContentClass",
+    "CrewMethod",
+    "DiagnosticLevel",
+    "DisplayBackend",
+    "MessageKind",
+    // Request/param shapes: the argument side of an RPC call, not a result
+    // a client schema-validates against -- see `packages/protocol-ts/src/validate.ts`,
+    // which only validates results (and the `initialize`/envelope requests
+    // it names explicitly), never an arbitrary request's own param shape.
+    "ApplyRequest",
+    "ArtifactFetchRequest",
+    "ArtifactListRequest",
+    "InitializeParams",
+    "InspectRequest",
+    "LeaseRequest",
+    "ReleaseRequest",
+    // Generic wrapper types, exported here with a dummy type argument
+    // purely so `ts-rs` emits the generic TypeScript declaration; the
+    // concrete instantiations a client actually receives (e.g. the plain
+    // `JsonRpcResponse` success/error split) are what's schema-validated,
+    // under their own already-listed names.
+    "JsonRpcNotification",
+    "JsonRpcRequest",
+    "JsonRpcResponse",
+    "Classified",
+];
+
 /// Exports TypeScript bindings for the explicit allowlist of wire types
 /// below, alongside all of their transitive dependencies. This list — not
 /// `#[ts(export)]` — decides what is generated: a type carrying the derive
@@ -199,14 +260,24 @@ fn render_schema() -> Result<Vec<u8>> {
 /// nothing (R60's root cause). Idempotent and order independent: `ts-rs`
 /// merges declarations into their target files sorted by type name
 /// regardless of call order.
-fn export_bindings(dir: &Path) -> Result<()> {
+///
+/// Returns every exported root's bare identifier (no generic parameters --
+/// `TS::ident()`, not `TS::name()`), so the caller can check each one
+/// against `ProtocolDocument`'s reachable schema (see
+/// `check_export_list_is_schema_reachable`).
+fn export_bindings(dir: &Path) -> Result<Vec<String>> {
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+
+    let mut idents = Vec::new();
 
     macro_rules! export {
         ($($ty:ty),+ $(,)?) => {
-            $(<$ty as TS>::export_all_to(dir).with_context(|| {
-                format!("exporting {} bindings to {}", stringify!($ty), dir.display())
-            })?;)+
+            $(
+                <$ty as TS>::export_all_to(dir).with_context(|| {
+                    format!("exporting {} bindings to {}", stringify!($ty), dir.display())
+                })?;
+                idents.push(<$ty as TS>::ident());
+            )+
         };
     }
 
@@ -278,6 +349,62 @@ fn export_bindings(dir: &Path) -> Result<()> {
         PaneReopenResult,
     );
 
+    Ok(idents)
+}
+
+/// Fails closed: every root on the export allowlist above must be either
+/// reachable from `ProtocolDocument`'s schema (a `$defs` key) or explicitly
+/// named in `NOT_WIRE_MESSAGE_ROOTS` as a deliberate non-message type. A
+/// type in neither is new and unclassified -- exactly the state `RunMessage`
+/// and `MessageListResult` were silently left in before CREW-43 -- so this
+/// is an error, not a warning, naming the offending type(s) and both places
+/// to fix it.
+fn check_export_list_is_schema_reachable(
+    schema_bytes: &[u8],
+    root_idents: &[String],
+) -> Result<()> {
+    let schema: serde_json::Value =
+        serde_json::from_slice(schema_bytes).context("parsing rendered schema as JSON")?;
+    let defs = schema
+        .get("$defs")
+        .and_then(serde_json::Value::as_object)
+        .context("rendered schema has no $defs object")?;
+
+    let unclassified: Vec<&str> = root_idents
+        .iter()
+        .map(String::as_str)
+        .filter(|ident| !defs.contains_key(*ident) && !NOT_WIRE_MESSAGE_ROOTS.contains(ident))
+        .collect();
+
+    if !unclassified.is_empty() {
+        bail!(
+            "{} export-allowlist type(s) are neither reachable from ProtocolDocument's schema \
+             nor listed in NOT_WIRE_MESSAGE_ROOTS: {unclassified:?} -- if this is a wire message \
+             (a request/result/event with an independent consumer), add it as a field on \
+             ProtocolDocument in crates/protocol/src/schema.rs; if it's a bare id/enum/param \
+             shape with no independent consumer, add it to NOT_WIRE_MESSAGE_ROOTS in this file. \
+             See CREW-44 (this is the CREW-43 regression guard).",
+            unclassified.len()
+        );
+    }
+
+    // Reverse direction: every NOT_WIRE_MESSAGE_ROOTS entry must still be a
+    // real export-allowlist root. Otherwise a type removed from the export
+    // list (or renamed) leaves a stale exclusion that would silently exempt
+    // any future, unrelated type that happens to reuse the same name.
+    let stale_exclusions: Vec<&str> = NOT_WIRE_MESSAGE_ROOTS
+        .iter()
+        .copied()
+        .filter(|ident| !root_idents.iter().any(|root| root == ident))
+        .collect();
+    if !stale_exclusions.is_empty() {
+        bail!(
+            "{} NOT_WIRE_MESSAGE_ROOTS entr(y/ies) no longer appear in the export allowlist: \
+             {stale_exclusions:?} -- remove the stale entry from NOT_WIRE_MESSAGE_ROOTS in this \
+             file, so it can't silently exempt a future, unrelated type of the same name.",
+            stale_exclusions.len()
+        );
+    }
     Ok(())
 }
 
@@ -402,7 +529,8 @@ fn run_generate(check: bool) -> Result<()> {
             .with_context(|| format!("writing {}", temp_schema_path.display()))?;
 
         let temp_generated_dir = temp.path().join("generated");
-        export_bindings(&temp_generated_dir)?;
+        let root_idents = export_bindings(&temp_generated_dir)?;
+        check_export_list_is_schema_reachable(&schema_bytes, &root_idents)?;
 
         compare_files(&temp_schema_path, &schema_path, "schema")?;
         compare_dirs(&temp_generated_dir, &generated_dir)?;
@@ -430,7 +558,8 @@ fn run_generate(check: bool) -> Result<()> {
     fs::create_dir_all(&generated_dir)
         .with_context(|| format!("creating {}", generated_dir.display()))?;
     clear_ts_files(&generated_dir)?;
-    export_bindings(&generated_dir)?;
+    let root_idents = export_bindings(&generated_dir)?;
+    check_export_list_is_schema_reachable(&schema_bytes, &root_idents)?;
 
     println!(
         "generate: wrote {} and TypeScript bindings to {}",
