@@ -7615,7 +7615,7 @@ number and routing metadata.`,
       ]
     },
     RuntimeEvent: {
-      description: "A sanitized, durable runtime event. Fields are plain, already-sanitized\ntypes (never [`Classified`]) so that raw thinking/secret content can\nnever reach the durable log through this type.",
+      description: "A sanitized, durable runtime event. Fields are plain, already-sanitized\ntypes (never `Classified`) so that raw thinking/secret content can\nnever reach the durable log through this type.",
       oneOf: [
         {
           type: "object",
@@ -8822,7 +8822,7 @@ contents, never an absolute socket or filesystem path.`,
           additionalProperties: false
         },
         {
-          description: "A worker asked a question that blocks its own progress, without\nescalating control (compare [`Self::EscalationRaised`]). `question`\nhas already crossed the redaction boundary; `None` means the\nentire fragment was `Thinking`/`Secret`-classified and was\ndropped, not that the question was empty.",
+          description: "A worker asked a question that blocks its own progress, without\nescalating control (compare `escalationRaised`). `question`\nhas already crossed the redaction boundary; `None` means the\nentire fragment was `Thinking`/`Secret`-classified and was\ndropped, not that the question was empty.",
           type: "object",
           properties: {
             type: {
@@ -8867,7 +8867,7 @@ contents, never an absolute socket or filesystem path.`,
           additionalProperties: false
         },
         {
-          description: "A worker escalated a blocking condition to its leader or a human\noperator. `reason` is a plain, machine-assigned code (never raw\nworker content); `question` has already crossed the redaction\nboundary the same way [`Self::WorkerQuestion`]'s field has.",
+          description: "A worker escalated a blocking condition to its leader or a human\noperator. `reason` is a plain, machine-assigned code (never raw\nworker content); `question` has already crossed the redaction\nboundary the same way `workerQuestion`'s field has.",
           type: "object",
           properties: {
             type: {
@@ -8916,7 +8916,7 @@ contents, never an absolute socket or filesystem path.`,
           additionalProperties: false
         },
         {
-          description: "An escalation was answered by the leader or a human user.\n`answer` has already crossed the redaction boundary the same way\n[`Self::WorkerQuestion`]'s field has.",
+          description: "An escalation was answered by the leader or a human user.\n`answer` has already crossed the redaction boundary the same way\n`workerQuestion`'s field has.",
           type: "object",
           properties: {
             type: {
@@ -9059,7 +9059,7 @@ contents, never an absolute socket or filesystem path.`,
       ]
     },
     DiagnosticLevel: {
-      description: "The severity of a [`RuntimeEvent::Diagnostic`].",
+      description: "The severity of a `diagnostic` event.",
       type: "string",
       enum: [
         "info",
@@ -9171,7 +9171,7 @@ session/thread identifier.`,
           const: "adapterNestedWorkerObserved"
         },
         {
-          description: "A TUI-mode worker adapter's transcript classified an assistant\nmessage as a question awaiting a human answer, rather than a\ncompleted message. Carried on the same [`RuntimeEvent::AdapterMessageEvent`]\nshape as [`Self::AdapterMessageFinal`] (role/text), distinguished\nonly by this `kind`.",
+          description: "A TUI-mode worker adapter's transcript classified an assistant\nmessage as a question awaiting a human answer, rather than a\ncompleted message. Carried on the same `adapterMessageEvent`\nshape as `adapterMessageFinal` (role/text), distinguished\nonly by this `kind`.",
           type: "string",
           const: "adapterQuestionDetected"
         },
@@ -9390,7 +9390,7 @@ Carried on the wire as an ordinary JSON string.`,
       type: "string"
     },
     DecidedBy: {
-      description: "Who produced an approval decision. Sent by `approval/decide` and\nenforced by the runtime: an approval created with\n`human_required: true` may only be decided by [`DecidedBy::Human`].",
+      description: "Who produced an approval decision. Sent by `approval/decide` and\nenforced by the runtime: an approval created with\n`human_required: true` may only be decided by `human`.",
       oneOf: [
         {
           description: "A human answered an interactive dialog.",
@@ -9910,7 +9910,7 @@ new window.`,
       ]
     },
     PlanSpec: {
-      description: "A proposed decomposition of a run into subtasks, carried by\n[`RuntimeEvent::PlanProposed`] and returned by `plan/get`, awaiting\n`plan/decide`.",
+      description: "A proposed decomposition of a run into subtasks, carried by\nthe `planProposed` event and returned by `plan/get`, awaiting\n`plan/decide`.",
       type: "object",
       properties: {
         subtasks: {
@@ -9926,11 +9926,11 @@ new window.`,
       ]
     },
     SubtaskSpec: {
-      description: "One subtask within a [`PlanSpec`], as proposed by `plan/propose`.",
+      description: "One subtask within a `PlanSpec`, as proposed by `plan/propose`.",
       type: "object",
       properties: {
         id: {
-          description: "The caller-assigned identifier for this subtask within its plan;\ndistinct from a [`TaskId`], since a proposed subtask is not yet a\nregistered task until (and unless) the plan is approved.",
+          description: "The caller-assigned identifier for this subtask within its plan;\ndistinct from a `TaskId`, since a proposed subtask is not yet a\nregistered task until (and unless) the plan is approved.",
           type: "string"
         },
         description: {
@@ -9963,7 +9963,7 @@ new window.`,
       ]
     },
     AnsweredBy: {
-      description: "Who answered a [`RuntimeEvent::EscalationRaised`] escalation.",
+      description: "Who answered an `escalationRaised` escalation.",
       type: "string",
       enum: [
         "leader",
@@ -9971,7 +9971,7 @@ new window.`,
       ]
     },
     TimeoutKind: {
-      description: "Which liveness deadline a [`RuntimeEvent::WorkerTimeout`] event reports.",
+      description: "Which liveness deadline a `workerTimeout` event reports.",
       type: "string",
       enum: [
         "inactivity",
