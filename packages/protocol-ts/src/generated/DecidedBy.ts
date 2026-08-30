@@ -3,6 +3,6 @@
 /**
  * Who produced an approval decision. Sent by `approval/decide` and
  * enforced by the runtime: an approval created with
- * `human_required: true` may only be decided by [`DecidedBy::Human`].
+ * `human_required: true` may only be decided by `human`.
  */
 export type DecidedBy = "human" | "model";

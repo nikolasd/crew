@@ -3,7 +3,7 @@ import type { JsonRpcError } from "./JsonRpcError";
 import type { RequestId } from "./RequestId";
 
 /**
- * A JSON-RPC 2.0 error response envelope. `id` is `None` when the request
+ * A JSON-RPC 2.0 error response envelope. `id` is absent when the request
  * identifier could not be determined (for example, on a parse error).
  */
 export type JsonRpcErrorResponse = { jsonrpc: string, id: RequestId | null, error: JsonRpcError, };

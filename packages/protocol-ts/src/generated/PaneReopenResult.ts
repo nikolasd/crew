@@ -5,7 +5,7 @@ import type { RunId } from "./RunId";
 /**
  * Result of `pane/reopen`: the pane freshly created for a live run's
  * attach socket. `pane_ref` is empty exactly when the resolved backend
- * was `Hidden` (nothing visible to reopen onto) -- not an error, mirroring
+ * was `hidden` (nothing visible to reopen onto) -- not an error, mirroring
  * the submit-time pane semantics.
  */
 export type PaneReopenResult = { runId: RunId, backend: DisplayBackend, paneRef: string, };

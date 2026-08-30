@@ -119,7 +119,7 @@ pub struct RuntimeCapabilities {
 pub struct ClientPrincipalSummary {
     pub role: ClientRole,
     pub instance_id: String,
-    /// The run this connection is scoped to. `None` for every role except
+    /// The run this connection is scoped to. Absent for every role except
     /// `workerMcp`, whose scope-token binding determines it -- never a
     /// value the client can request or override.
     pub scoped_run_id: Option<RunId>,
@@ -305,7 +305,7 @@ pub struct JsonRpcError {
     pub data: Option<serde_json::Value>,
 }
 
-/// A JSON-RPC 2.0 error response envelope. `id` is `None` when the request
+/// A JSON-RPC 2.0 error response envelope. `id` is absent when the request
 /// identifier could not be determined (for example, on a parse error).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

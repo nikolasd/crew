@@ -96,3 +96,175 @@ pub fn render_schema() -> Result<Vec<u8>, serde_json::Error> {
     text.push('\n');
     Ok(text.into_bytes())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::render_schema;
+
+    /// Backticked names this test does not require to resolve as a
+    /// `$defs` key or a real wire value -- each with why it's exempt, not
+    /// just that it is. CREW-46 (see `docs/engineering-lessons.md`).
+    const ALLOWED_UNRESOLVED_BACKTICKED_NAMES: &[(&str, &str)] = &[(
+        "Terminal",
+        "DisplayBackend::Hidden's description deliberately names the \
+         retired `Terminal` variant to explain what `hidden` replaced. \
+         The sentence's whole point is that `Terminal` no longer exists --\
+         \"fixing\" the reference would make the sentence false.",
+    )];
+
+    /// Every `const` string and every `enum` array element anywhere in
+    /// `value`, recursively -- i.e. every string a wire consumer could
+    /// legitimately see as a discriminator or literal value. Must walk
+    /// every branch of every `oneOf`/`anyOf`, not just the first: CREW-46's
+    /// own review nearly shipped a version of this check that read only
+    /// `RuntimeEventKind`'s first `oneOf` branch (a 23-value enum) and
+    /// missed the other ~20 single-`const` branches, which is exactly how
+    /// `approvalDecided` was first misreported as unresolvable.
+    fn collect_wire_values(value: &serde_json::Value, out: &mut HashSet<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::String(s)) = map.get("const") {
+                    out.insert(s.clone());
+                }
+                if let Some(serde_json::Value::Array(items)) = map.get("enum") {
+                    for item in items {
+                        if let serde_json::Value::String(s) = item {
+                            out.insert(s.clone());
+                        }
+                    }
+                }
+                for v in map.values() {
+                    collect_wire_values(v, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect_wire_values(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Every `description` string anywhere in `value`, recursively.
+    fn collect_descriptions<'a>(value: &'a serde_json::Value, out: &mut Vec<&'a str>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::String(s)) = map.get("description") {
+                    out.push(s);
+                }
+                for v in map.values() {
+                    collect_descriptions(v, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect_descriptions(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Every backticked identifier in `text` that starts with an uppercase
+    /// ASCII letter (e.g. `` `PlanProposed` `` -> `"PlanProposed"`), a
+    /// generic parameter list like `<T>` stripped off (e.g.
+    /// `` `Classified<T>` `` -> `"Classified"`) since the parameter isn't
+    /// part of the name to look up.
+    fn backticked_pascal_case_identifiers(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut rest = text;
+        while let Some(open) = rest.find('`') {
+            rest = &rest[open + 1..];
+            let Some(close) = rest.find('`') else {
+                break;
+            };
+            let inner = &rest[..close];
+            rest = &rest[close + 1..];
+            let name: String = inner
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+                out.push(name);
+            }
+        }
+        out
+    }
+
+    fn lower_first(name: &str) -> String {
+        let mut chars = name.chars();
+        match chars.next() {
+            Some(first) => first.to_lowercase().chain(chars).collect(),
+            None => String::new(),
+        }
+    }
+
+    /// Regression guard for CREW-46: a shipped description's backticked
+    /// PascalCase name must be either a real `$defs` type reference or an
+    /// actual wire value (an enum/const string anywhere in the schema),
+    /// unless it's in `ALLOWED_UNRESOLVED_BACKTICKED_NAMES` with a reason.
+    /// Anything else is either a miscased wire name (`PlanProposed` where
+    /// the wire says `planProposed` -- CREW-46's first six fixes) or a
+    /// dangling Rust-only name with nothing on the wire to resolve to
+    /// (`Classified`, `RuntimePolicy` -- CREW-46's two `//` moves).
+    #[test]
+    fn shipped_descriptions_only_name_defs_keys_or_real_wire_values() {
+        let schema_bytes = render_schema().expect("schema renders");
+        let schema: serde_json::Value =
+            serde_json::from_slice(&schema_bytes).expect("schema parses as JSON");
+
+        let defs_keys: HashSet<String> = schema["$defs"]
+            .as_object()
+            .expect("schema has $defs")
+            .keys()
+            .cloned()
+            .collect();
+
+        let mut wire_values = HashSet::new();
+        collect_wire_values(&schema, &mut wire_values);
+
+        let mut descriptions = Vec::new();
+        collect_descriptions(&schema, &mut descriptions);
+
+        let allowed: HashSet<&str> = ALLOWED_UNRESOLVED_BACKTICKED_NAMES
+            .iter()
+            .map(|(name, _)| *name)
+            .collect();
+
+        let mut miscased = Vec::new();
+        let mut unresolvable = Vec::new();
+        for desc in &descriptions {
+            for name in backticked_pascal_case_identifiers(desc) {
+                if defs_keys.contains(&name)
+                    || wire_values.contains(&name)
+                    || allowed.contains(name.as_str())
+                {
+                    continue;
+                }
+                if wire_values.contains(&lower_first(&name)) {
+                    miscased.push((name, desc.to_string()));
+                } else {
+                    unresolvable.push((name, desc.to_string()));
+                }
+            }
+        }
+
+        assert!(
+            miscased.is_empty(),
+            "shipped description(s) name a PascalCase identifier whose camelCase form IS a \
+             real wire value -- rewrite to the wire form: {miscased:#?}"
+        );
+        assert!(
+            unresolvable.is_empty(),
+            "shipped description(s) name a backticked identifier that is neither a $defs key \
+             nor any enum/const value anywhere in the schema, nor listed in \
+             ALLOWED_UNRESOLVED_BACKTICKED_NAMES with a reason -- either it's a Rust-only name \
+             that should move to a `//` comment (see CREW-46's `Classified`/`RuntimePolicy` \
+             fix), or it needs an allowlist entry explaining why it's deliberately unresolved: \
+             {unresolvable:#?}"
+        );
+    }
+}

@@ -20,13 +20,13 @@ code: string,
  */
 observed_event_sequence: number, 
 /**
- * The SHA-256 fingerprint of the `RuntimePolicy` this run was
+ * The SHA-256 fingerprint of the resolved policy this run was
  * authorized under, so the violation is auditable against a
  * specific merge of org/repo/user/per-run layers.
  */
 policy_fingerprint: string, 
 /**
- * Present only for a nested-worker violation; `None` for any
+ * Present only for a nested-worker violation; absent for any
  * violation with no vendor child, such as a cost ceiling.
  */
 vendor_child_id: string | null, vendor_parent_ref: string | null, action: string, } } | { "policyViolationDecided": { violation_id: PolicyViolationId, resolution: string, resolved_by: string, } };

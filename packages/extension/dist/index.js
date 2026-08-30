@@ -7338,7 +7338,7 @@ confirm how the runtime identified it.`,
           type: "string"
         },
         scopedRunId: {
-          description: "The run this connection is scoped to. `None` for every role except\n`workerMcp`, whose scope-token binding determines it -- never a\nvalue the client can request or override.",
+          description: "The run this connection is scoped to. Absent for every role except\n`workerMcp`, whose scope-token binding determines it -- never a\nvalue the client can request or override.",
           anyOf: [
             {
               $ref: "#/$defs/RunId"
@@ -7468,12 +7468,12 @@ quarantine without diffing the raw event stream.`,
           const: "policy/violation/list"
         },
         {
-          description: "Proposes a decomposition of a run into subtasks, persisting a\n`PlanProposed` event pending `plan/decide`.",
+          description: "Proposes a decomposition of a run into subtasks, persisting a\n`planProposed` event pending `plan/decide`.",
           type: "string",
           const: "plan/propose"
         },
         {
-          description: "Approves or rejects a previously proposed plan, persisting a\n`PlanDecided` event.",
+          description: "Approves or rejects a previously proposed plan, persisting a\n`planDecided` event.",
           type: "string",
           const: "plan/decide"
         },
@@ -7484,7 +7484,7 @@ if any.`,
           const: "plan/get"
         },
         {
-          description: "The leader acknowledges a `WorkerTimeout` event, resolving how the\nrun proceeds.",
+          description: "The leader acknowledges a `workerTimeout` event, resolving how the\nrun proceeds.",
           type: "string",
           const: "run/timeoutAck"
         },
@@ -7615,7 +7615,9 @@ number and routing metadata.`,
       ]
     },
     RuntimeEvent: {
-      description: "A sanitized, durable runtime event. Fields are plain, already-sanitized\ntypes (never [`Classified`]) so that raw thinking/secret content can\nnever reach the durable log through this type.",
+      description: `A sanitized, durable runtime event. Fields are plain, already-sanitized
+values, so raw thinking/secret content can never reach the durable log
+through this type.`,
       oneOf: [
         {
           type: "object",
@@ -7952,7 +7954,7 @@ from an empty prompt.`,
                   ]
                 },
                 reason: {
-                  description: "The decision's rationale, when one was supplied. Absent on\n`ApprovalDecided` events written before this field existed.",
+                  description: "The decision's rationale, when one was supplied. Absent on\n`approvalDecided` events written before this field existed.",
                   anyOf: [
                     {
                       $ref: "#/$defs/Redacted"
@@ -8234,7 +8236,10 @@ only *that* the turn ended, and how.`,
           additionalProperties: false
         },
         {
-          description: "A visible message chunk or final message from a worker adapter.\n`text` has already crossed the redaction boundary; `None` means\nthe entire fragment was `Thinking`/`Secret`-classified and was\ndropped, not that the message was empty.",
+          description: `A visible message chunk or final message from a worker adapter.
+\`text\` has already crossed the redaction boundary; absent means
+the entire fragment was classified as sensitive and dropped, not
+that the message was empty.`,
           type: "object",
           properties: {
             type: {
@@ -8287,7 +8292,10 @@ only *that* the turn ended, and how.`,
           additionalProperties: false
         },
         {
-          description: "A tool call lifecycle event from a worker adapter. `detail` has\nalready crossed the redaction boundary; `None` means the detail\nfragment was `Thinking`/`Secret`-classified and was dropped, not\nthat it was empty.",
+          description: `A tool call lifecycle event from a worker adapter. \`detail\` has
+already crossed the redaction boundary; absent means the detail
+fragment was classified as sensitive and dropped, not that it was
+empty.`,
           type: "object",
           properties: {
             type: {
@@ -8447,7 +8455,7 @@ only *that* the turn ended, and how.`,
           additionalProperties: false
         },
         {
-          description: "A worker adapter's protocol health changed. `detail` has already\ncrossed the redaction boundary; `None` means the detail fragment\nwas `Thinking`/`Secret`-classified and was dropped, not that it\nwas empty.",
+          description: "A worker adapter's protocol health changed. `detail` has already\ncrossed the redaction boundary; absent means the detail fragment\nwas classified as sensitive and dropped, not that it was empty.",
           type: "object",
           properties: {
             type: {
@@ -8795,7 +8803,7 @@ contents, never an absolute socket or filesystem path.`,
                   type: "boolean"
                 },
                 reason: {
-                  description: "`None` when no rationale was given for the decision.",
+                  description: "Absent when no rationale was given for the decision.",
                   anyOf: [
                     {
                       $ref: "#/$defs/Redacted"
@@ -8822,7 +8830,7 @@ contents, never an absolute socket or filesystem path.`,
           additionalProperties: false
         },
         {
-          description: "A worker asked a question that blocks its own progress, without\nescalating control (compare [`Self::EscalationRaised`]). `question`\nhas already crossed the redaction boundary; `None` means the\nentire fragment was `Thinking`/`Secret`-classified and was\ndropped, not that the question was empty.",
+          description: "A worker asked a question that blocks its own progress, without\nescalating control (compare `escalationRaised`). `question`\nhas already crossed the redaction boundary; absent means the\nentire fragment was classified as sensitive and dropped, not\nthat the question was empty.",
           type: "object",
           properties: {
             type: {
@@ -8867,7 +8875,7 @@ contents, never an absolute socket or filesystem path.`,
           additionalProperties: false
         },
         {
-          description: "A worker escalated a blocking condition to its leader or a human\noperator. `reason` is a plain, machine-assigned code (never raw\nworker content); `question` has already crossed the redaction\nboundary the same way [`Self::WorkerQuestion`]'s field has.",
+          description: "A worker escalated a blocking condition to its leader or a human\noperator. `reason` is a plain, machine-assigned code (never raw\nworker content); `question` has already crossed the redaction\nboundary the same way `workerQuestion`'s field has.",
           type: "object",
           properties: {
             type: {
@@ -8916,7 +8924,7 @@ contents, never an absolute socket or filesystem path.`,
           additionalProperties: false
         },
         {
-          description: "An escalation was answered by the leader or a human user.\n`answer` has already crossed the redaction boundary the same way\n[`Self::WorkerQuestion`]'s field has.",
+          description: "An escalation was answered by the leader or a human user.\n`answer` has already crossed the redaction boundary the same way\n`workerQuestion`'s field has.",
           type: "object",
           properties: {
             type: {
@@ -9059,7 +9067,7 @@ contents, never an absolute socket or filesystem path.`,
       ]
     },
     DiagnosticLevel: {
-      description: "The severity of a [`RuntimeEvent::Diagnostic`].",
+      description: "The severity of a `diagnostic` event.",
       type: "string",
       enum: [
         "info",
@@ -9171,7 +9179,7 @@ session/thread identifier.`,
           const: "adapterNestedWorkerObserved"
         },
         {
-          description: "A TUI-mode worker adapter's transcript classified an assistant\nmessage as a question awaiting a human answer, rather than a\ncompleted message. Carried on the same [`RuntimeEvent::AdapterMessageEvent`]\nshape as [`Self::AdapterMessageFinal`] (role/text), distinguished\nonly by this `kind`.",
+          description: "A TUI-mode worker adapter's transcript classified an assistant\nmessage as a question awaiting a human answer, rather than a\ncompleted message. Carried on the same `adapterMessageEvent`\nshape as `adapterMessageFinal` (role/text), distinguished\nonly by this `kind`.",
           type: "string",
           const: "adapterQuestionDetected"
         },
@@ -9238,7 +9246,7 @@ ceiling exceeded, nested worker denied, or adapter not authorized).`,
           additionalProperties: false
         },
         {
-          description: "A policy violation was recorded for an already-running worker (mid-run\nviolation, not pre-authorization). Quarantine/cancel state is tracked\nin `Run.flags.policy_quarantined`.",
+          description: "A policy violation was recorded for an already-running worker (mid-run\nviolation, not pre-authorization). Quarantine/cancel state is tracked\non the run's `flags.policyQuarantined`.",
           type: "object",
           properties: {
             policyViolationRecorded: {
@@ -9259,11 +9267,14 @@ operator can correlate the violation to its cause.`,
                   minimum: 0
                 },
                 policy_fingerprint: {
-                  description: "The SHA-256 fingerprint of the `RuntimePolicy` this run was\nauthorized under, so the violation is auditable against a\nspecific merge of org/repo/user/per-run layers.",
+                  description: `The SHA-256 fingerprint of the resolved policy this run was
+authorized under, so the violation is auditable against a
+specific merge of org/repo/user/per-run layers.`,
                   type: "string"
                 },
                 vendor_child_id: {
-                  description: "Present only for a nested-worker violation; `None` for any\nviolation with no vendor child, such as a cost ceiling.",
+                  description: `Present only for a nested-worker violation; absent for any
+violation with no vendor child, such as a cost ceiling.`,
                   type: [
                     "string",
                     "null"
@@ -9390,7 +9401,7 @@ Carried on the wire as an ordinary JSON string.`,
       type: "string"
     },
     DecidedBy: {
-      description: "Who produced an approval decision. Sent by `approval/decide` and\nenforced by the runtime: an approval created with\n`human_required: true` may only be decided by [`DecidedBy::Human`].",
+      description: "Who produced an approval decision. Sent by `approval/decide` and\nenforced by the runtime: an approval created with\n`human_required: true` may only be decided by `human`.",
       oneOf: [
         {
           description: "A human answered an interactive dialog.",
@@ -9910,7 +9921,7 @@ new window.`,
       ]
     },
     PlanSpec: {
-      description: "A proposed decomposition of a run into subtasks, carried by\n[`RuntimeEvent::PlanProposed`] and returned by `plan/get`, awaiting\n`plan/decide`.",
+      description: "A proposed decomposition of a run into subtasks, carried by\nthe `planProposed` event and returned by `plan/get`, awaiting\n`plan/decide`.",
       type: "object",
       properties: {
         subtasks: {
@@ -9926,11 +9937,11 @@ new window.`,
       ]
     },
     SubtaskSpec: {
-      description: "One subtask within a [`PlanSpec`], as proposed by `plan/propose`.",
+      description: "One subtask within a `PlanSpec`, as proposed by `plan/propose`.",
       type: "object",
       properties: {
         id: {
-          description: "The caller-assigned identifier for this subtask within its plan;\ndistinct from a [`TaskId`], since a proposed subtask is not yet a\nregistered task until (and unless) the plan is approved.",
+          description: "The caller-assigned identifier for this subtask within its plan;\ndistinct from a `TaskId`, since a proposed subtask is not yet a\nregistered task until (and unless) the plan is approved.",
           type: "string"
         },
         description: {
@@ -9945,7 +9956,8 @@ new window.`,
           type: "boolean"
         },
         turnBudget: {
-          description: "The maximum number of turns this subtask may take; `None` means no\nexplicit budget was proposed.",
+          description: `The maximum number of turns this subtask may take; absent means no
+explicit budget was proposed.`,
           type: [
             "integer",
             "null"
@@ -9963,7 +9975,7 @@ new window.`,
       ]
     },
     AnsweredBy: {
-      description: "Who answered a [`RuntimeEvent::EscalationRaised`] escalation.",
+      description: "Who answered an `escalationRaised` escalation.",
       type: "string",
       enum: [
         "leader",
@@ -9971,7 +9983,7 @@ new window.`,
       ]
     },
     TimeoutKind: {
-      description: "Which liveness deadline a [`RuntimeEvent::WorkerTimeout`] event reports.",
+      description: "Which liveness deadline a `workerTimeout` event reports.",
       type: "string",
       enum: [
         "inactivity",
@@ -10113,7 +10125,7 @@ new window.`,
       ]
     },
     JsonRpcErrorResponse: {
-      description: "A JSON-RPC 2.0 error response envelope. `id` is `None` when the request\nidentifier could not be determined (for example, on a parse error).",
+      description: "A JSON-RPC 2.0 error response envelope. `id` is absent when the request\nidentifier could not be determined (for example, on a parse error).",
       type: "object",
       properties: {
         jsonrpc: {
@@ -10553,7 +10565,7 @@ child at all (a cost ceiling does not).`,
           ]
         },
         resolution: {
-          description: '`"release"` or `"cancel"` once decided; `None` while open.',
+          description: '`"release"` or `"cancel"` once decided; absent while open.',
           type: [
             "string",
             "null"
@@ -10620,7 +10632,7 @@ child at all (a cost ceiling does not).`,
       type: "string"
     },
     RunUsage: {
-      description: "Token usage folded from a run's journaled `AdapterUsageEvent`s.\n\nThe runtime applies the adapter-correct fold before this leaves the\ndaemon: Claude journals per-invocation deltas (summed); every other\nreporting adapter journals cumulative totals (last one wins). Codex\nnever reports cost, so `cost_usd` is `null` there.",
+      description: "Token usage folded from a run's journaled `adapterUsageEvent`s.\n\nThe runtime applies the adapter-correct fold before this leaves the\ndaemon: Claude journals per-invocation deltas (summed); every other\nreporting adapter journals cumulative totals (last one wins). Codex\nnever reports cost, so `cost_usd` is `null` there.",
       type: "object",
       properties: {
         inputTokens: {
@@ -10648,7 +10660,7 @@ child at all (a cost ceiling does not).`,
       ]
     },
     PlanProposeResult: {
-      description: "Result of `plan/propose`: the sequence of the `PlanProposed` event it\npersisted.",
+      description: "Result of `plan/propose`: the sequence of the `planProposed` event it\npersisted.",
       type: "object",
       properties: {
         runId: {
@@ -10667,7 +10679,7 @@ child at all (a cost ceiling does not).`,
       ]
     },
     PlanDecideResult: {
-      description: "Result of `plan/decide`: the sequence of the `PlanDecided` event it\npersisted.",
+      description: "Result of `plan/decide`: the sequence of the `planDecided` event it\npersisted.",
       type: "object",
       properties: {
         runId: {
@@ -10755,7 +10767,7 @@ child at all (a cost ceiling does not).`,
       ]
     },
     PaneReopenResult: {
-      description: "Result of `pane/reopen`: the pane freshly created for a live run's\nattach socket. `pane_ref` is empty exactly when the resolved backend\nwas `Hidden` (nothing visible to reopen onto) -- not an error, mirroring\nthe submit-time pane semantics.",
+      description: "Result of `pane/reopen`: the pane freshly created for a live run's\nattach socket. `pane_ref` is empty exactly when the resolved backend\nwas `hidden` (nothing visible to reopen onto) -- not an error, mirroring\nthe submit-time pane semantics.",
       type: "object",
       properties: {
         runId: {
