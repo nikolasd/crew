@@ -426,3 +426,11 @@ looks like it should have been recovered and wasn't:
 See [`docs/architecture.md`](architecture.md#error-codes) for the separate table of JSON-RPC-level
 error codes (`-32700`…`-32004`) returned *inside* the protocol, as opposed to the CLI's own process
 exit codes above.
+
+## Attach Socket Liveness: CREWATTACH1 Marker
+
+When you call `/crew attach` or `crewd attach`, the daemon opens a Unix socket and the client connects. The very first bytes sent across the socket are the ASCII string `CREWATTACH1` (crates/runtime/src/display/attach.rs:L91, written by AttachServer on accept at L410).
+
+**Why the marker?** When a child process inherits a socket from its parent, the child and parent may both see "live" data they didn't send (a false positive on liveness). The marker lets a probe know definitively whether the socket it reached is actually live or a stale inherited handle from a previous daemon. The probe must see the marker within 250ms (crates/runtime/src/display/attach.rs:L82, L510 client-side consume_marker_or_reclaim).
+
+**Probe failures (-32602):** If a probe connects and does NOT see the marker (or sees something else), it knows the pane is stale and returns error `-32602` (JSON-RPC Invalid params — the deliberate false-negative trade: better to say "not ready" than to guess). This is a safety choice: missing a marker is uncommon, so defaulting to "try again" is safer than trying to decode corrupted data.

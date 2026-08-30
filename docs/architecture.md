@@ -895,3 +895,18 @@ flowchart LR
 ```
 
 The daemon persists intent before execution and redacts content before journal durability. OMP retains the task graph and all leader decisions: plan approval, timeout disposition, budget escalation, and merge/finish decisions. A pane is a view over a live attach socket, not a second worker-control channel.
+
+
+## Redaction: Two-Level Design (CREW-29 + CREW-34)
+
+Crew eliminates silent bypasses of the redaction boundary through type discipline and per-path proofs.
+
+**The Redacted Type (CREW-29):** A wrapper around text that has crossed the redaction boundary. Caller-carrying fields (prompts, decisions, artifact descriptions) cannot accept a bare `String` — the author must state which of two claims applies: `assert_runtime_authored()` for runtime-generated text (state names, identifiers, diagnostic codes), or `from_sanitized()` for text the Redactor has already processed. A bare string does not compile; the goal is to eliminate *forgetting*, not to prevent determined laundering (Deserialize accepts bare strings, since stored events must be read back).  The name is the point: an exemption is a reviewable claim the author makes visible at the call site. Defined in crates/protocol/src/event.rs.
+
+**Redaction Path 1 — coordination routes (CREW-34):** Message payloads on the broker's `send` pathway are redacted by the Redactor before the journal. The per-path property is proven by the coordination RPC tests (crates/runtime/tests/coordination.rs) — a_child_request_reason_from_a_worker_is_redacted, an_ask_policy_question_from_a_worker_is_redacted, a_blocked_report_from_a_worker_is_redacted, a_published_artifact_description_from_a_worker_is_redacted — each reading the secret back through events/replay or message/list.
+
+**Redaction Path 2 — leader RPC (CREW-34):** The `message_send` leader RPC redacts via `redact_caller_text` before building the RunMessage directly (crates/runtime/src/service/orchestration.rs). The per-path property is proven by RPC tests that read the secret back through consumer paths (events/replay, message/list), which would fail if redaction were skipped.
+
+**Misuse Prevention (CREW-34):** A test in crates/runtime/tests/coordination.rs asserts a published artifact's description is masked. Its value as a *guard* was established by mutation rather than assumed: temporarily replacing the redaction with `assert_runtime_authored()` on worker text — the change a hurried author would make to silence the compiler — makes it fail. This is the escape hatch's guard: the type system cannot stop false claims, but the test suite does.
+
+**Compile-Fail Pair (CREW-29):** Two doctests in the `Redacted` type's own doc comment prove the boundary: one shows that a bare string does not compile, the other shows the same construction with the claim stated does compile. Together they verify the design rather than merely exercising it.
