@@ -86,6 +86,11 @@ hint from you. Some examples of what to say, and what happens:
 | "that failed, try again" | Retries with the original prompt restated (Crew doesn't remember it for you) |
 | "stop it" | Cancels the run |
 
+The first time you run something on a given adapter with no model configured yet, Crew asks you
+which model to use — once. Your answer is written into the repository's `.omp/crew.json` and
+reused silently on every later run against that adapter, for good; nothing ever guesses a model
+on your behalf.
+
 ## 4. Watching runs
 
 `/crew` opens (or refreshes) a live widget above the editor showing every active run: state icon,

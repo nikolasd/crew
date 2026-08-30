@@ -13,7 +13,7 @@ Crew executes durable worker runs. OMP owns the task graph and the leader's deci
 
 To run any task via Claude, Codex, Copilot, or OMP-RPC:
 
-1. **Register a profile** — `crew_profile { adapter: "claude", model: "sonnet", startupOptions: { claude: { mode: "tui" } } }`. The profile captures adapter, model, startup options (with **required** `mode: "tui"`; headless is retired), and environment allowlist. Receives a `profileId`.
+1. **Register a profile** — `crew_profile { adapter: "claude", model: "sonnet", startupOptions: { claude: { mode: "tui" } } }`. The profile captures adapter, model, startup options, and environment allowlist. Receives a `profileId`. `model` is optional-with-ask-once: if omitted and none is configured yet for that adapter, you get a typed `model-not-configured` error instead of a guess — ask the user which model to use, then call `crew_profile` again with it; the answer is persisted into the repo's `.omp/crew.json` and reused silently on every later call, for that adapter, for good. `mode: "tui"` is filled in automatically for a reserved adapter (claude, codex, copilot, ompRpc) when omitted — headless is retired, but you never have to remember to spell out the replacement.
 2. **Create a worker** — `crew_worker { op: "create", profileId }`. The worker identity binds to that profile permanently. Receives a `workerId`.
 3. **Submit a run** — `crew_run { op: "submit", taskId, workerId, prompt }` to execute a task. The prompt is the full instruction; Crew stores identity, not prose.
 

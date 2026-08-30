@@ -1417,6 +1417,13 @@ async fn run_attach(
     use crew_runtime::display::attach;
     use crew_runtime::paths::RuntimePaths;
 
+    // CREW-18: resolved alongside the socket path, only on the `--repo`
+    // path -- `--socket` (mainly for tests, per `run_attach`'s own doc)
+    // carries no repository/project context to look a run's worker and
+    // adapter up from, so it just skips the title; a raw socket path is
+    // never surfaced to an interactive user's terminal anyway.
+    let mut pane_title: Option<String> = None;
+
     let socket_path = if let Some(socket) = socket_override {
         socket
     } else {
@@ -1435,6 +1442,7 @@ async fn run_attach(
             Ok(paths) => paths,
             Err(err) => return fail(&err),
         };
+        pane_title = resolve_pane_title(&paths, run_id).await;
         paths.pane_socket(&run_id)
     };
 
@@ -1444,6 +1452,15 @@ async fn run_attach(
     };
 
     println!("crewd attach: connected. Press Ctrl+] to detach.");
+
+    // Set once, here, before the pump starts -- never re-asserted. The
+    // vendor process's own later title sequences (if it emits any) simply
+    // overwrite this one and win, exactly like any other program sharing
+    // a terminal would.
+    if let Some(title) = &pane_title {
+        print!("{}", attach::osc_set_title(title));
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+    }
 
     let guard = match RawModeGuard::enable() {
         Ok(guard) => guard,
@@ -1462,6 +1479,45 @@ async fn run_attach(
         Ok(_) => ExitCode::SUCCESS,
         Err(err) => fail(&err),
     }
+}
+
+/// Best-effort: the pane title for `run_id`, or `None` if the database is
+/// unreachable or the run/worker/profile join comes up empty -- a title
+/// is a nicety, never worth refusing to attach over.
+async fn resolve_pane_title(
+    paths: &crew_runtime::paths::RuntimePaths,
+    run_id: crew_protocol::RunId,
+) -> Option<String> {
+    let db = crew_runtime::db::DatabaseHandle::start(paths.database.clone())
+        .await
+        .ok()?;
+    let project_id = paths.project_id;
+    let run_id_string = run_id.to_string();
+    let row = db
+        .run_domain_op(Box::new(move |conn| {
+            conn.query_row(
+                "SELECT r.worker_id, p.adapter
+                 FROM runs r
+                 JOIN workers w ON w.worker_id = r.worker_id
+                 JOIN worker_profiles p ON p.id = w.profile_id
+                 WHERE r.run_id = ?1 AND w.project_id = ?2",
+                rusqlite::params![run_id_string, project_id.to_string()],
+                |row| {
+                    Ok(serde_json::json!({
+                        "workerId": row.get::<_, String>(0)?,
+                        "adapter": row.get::<_, String>(1)?,
+                    }))
+                },
+            )
+            .map_err(crew_runtime::domain::DomainError::from)
+        }))
+        .await
+        .ok()?;
+    let worker_id = row["workerId"].as_str()?;
+    let adapter = row["adapter"].as_str()?;
+    Some(crew_runtime::display::attach::pane_title(
+        worker_id, adapter,
+    ))
 }
 
 /// Puts this process's stdin into raw mode (no line buffering, no echo,
@@ -1643,5 +1699,90 @@ mod tests {
             !paths.database.exists(),
             "a refused export must not have silently created the database either"
         );
+    }
+
+    /// CREW-18: `resolve_pane_title` joins a run to its worker's adapter
+    /// exactly the way `pane/reopen`'s own handler does, then formats it
+    /// through `attach::pane_title` -- this pins the join, not the
+    /// formatting (already covered directly in `attach.rs`'s own tests).
+    #[tokio::test]
+    async fn resolve_pane_title_joins_run_to_worker_and_adapter() {
+        let state_root = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
+        let paths =
+            crew_runtime::paths::RuntimePaths::resolve(state_root.path(), repo.path()).unwrap();
+
+        let run_id = crew_protocol::RunId::new();
+        let worker_id = crew_protocol::WorkerId::new();
+        let profile_row_id = crew_protocol::WorkerId::new().to_string();
+        {
+            let db = crew_runtime::db::DatabaseHandle::start(paths.database.clone())
+                .await
+                .unwrap();
+            let project_id = paths.project_id;
+            let (run_id, worker_id, profile_row_id) = (
+                run_id.to_string(),
+                worker_id.to_string(),
+                profile_row_id.clone(),
+            );
+            db.run_domain_op(Box::new(move |conn| {
+                conn.execute(
+                    "INSERT INTO tasks (task_id, project_id, owner_client_instance_id, revision, created_at, updated_at)
+                     VALUES ('11111111-1111-7111-8111-111111111111', ?1, 'test-owner', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                    rusqlite::params![project_id.to_string()],
+                )?;
+                conn.execute(
+                    "INSERT INTO worker_profiles (id, fingerprint, adapter, model, permission_envelope)
+                     VALUES (?1, 'sha256:test', 'claude', 'test-model', '{}')",
+                    rusqlite::params![profile_row_id],
+                )?;
+                conn.execute(
+                    "INSERT INTO workers (worker_id, project_id, profile_id, created_at)
+                     VALUES (?1, ?2, ?3, '2026-01-01T00:00:00Z')",
+                    rusqlite::params![worker_id, project_id.to_string(), profile_row_id],
+                )?;
+                conn.execute(
+                    "INSERT INTO runs (run_id, task_id, worker_id, state, created_at)
+                     VALUES (?1, '11111111-1111-7111-8111-111111111111', ?2, 'queued', '2026-01-01T00:00:00Z')",
+                    rusqlite::params![run_id, worker_id],
+                )?;
+                Ok(serde_json::Value::Null)
+            }))
+            .await
+            .unwrap();
+            db.shutdown().await.unwrap();
+        }
+
+        let title = resolve_pane_title(&paths, run_id)
+            .await
+            .expect("the seeded run/worker/profile join must resolve");
+        assert_eq!(
+            title,
+            crew_runtime::display::attach::pane_title(&worker_id.to_string(), "claude")
+        );
+    }
+
+    /// An unknown run resolves to no title -- best-effort, never a reason
+    /// to refuse the attach itself.
+    #[tokio::test]
+    async fn resolve_pane_title_is_none_for_an_unknown_run() {
+        let state_root = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
+        let paths =
+            crew_runtime::paths::RuntimePaths::resolve(state_root.path(), repo.path()).unwrap();
+        {
+            // Touch the database into existence without seeding anything.
+            crew_runtime::db::DatabaseHandle::start(paths.database.clone())
+                .await
+                .unwrap()
+                .shutdown()
+                .await
+                .unwrap();
+        }
+
+        let title = resolve_pane_title(&paths, crew_protocol::RunId::new()).await;
+        assert!(title.is_none());
     }
 }
