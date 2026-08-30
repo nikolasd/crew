@@ -26,7 +26,9 @@ export function registerRunTool(pi: ExtensionAPI, ctx: OrchestrationToolContext)
     decision: pi.zod
       .enum(["extend", "nudge", "abort"])
       .optional()
-      .describe("Required for timeoutAck: how to respond to a WorkerTimeout fact. 'extend' re-arms both liveness deadlines with a fresh window. 'nudge' is a server-side no-op -- follow up with crew_send (op: 'send') to actually nudge the worker. 'abort' cancels the run (same effect as op: 'cancel')."),
+      .describe(
+        "Required for timeoutAck: how to respond to a WorkerTimeout fact. 'extend' re-arms both liveness deadlines with a fresh window. 'nudge' is a server-side no-op -- follow up with crew_send (op: 'send') to actually nudge the worker. 'abort' cancels the run (same effect as op: 'cancel'). 'extend' can be refused (code -32602, 'no tracked timeout to extend') if the run settled between the timeout being journaled and this call arriving -- an expected, benign race (you acted correctly, just slightly late), not a fault: do not retry or escalate it, just move on (read the run's state with op: 'get' if unsure).",
+      ),
     outcome: pi.zod.enum(["succeeded", "failed"]).optional().describe("Optional for finish (default 'succeeded'): the leader's judgment of how the run went. Never inferred from the vendor's own turn markers -- only the leader can judge whether the task actually succeeded."),
   });
 
