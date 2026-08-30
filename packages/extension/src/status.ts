@@ -188,7 +188,9 @@ function formatStatus(status: RuntimeStatus): string {
   // the narrower alternative (pointing at the daemon log instead). See
   // `RuntimeStatus.dashboardUrl`'s doc comment for the tradeoff. This
   // means the token now enters this session's own context/transcript
-  // every time health is checked while the dashboard is enabled.
+  // every time health is checked while the dashboard is enabled --
+  // including model-initiated checks: the `crew_health` tool can be
+  // called unprompted, not only a human typing `/crew health`.
   if (status.dashboardUrl !== null) {
     lines.push(`Dashboard: ${status.dashboardUrl}`);
   }
