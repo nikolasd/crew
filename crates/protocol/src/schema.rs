@@ -26,18 +26,24 @@ use crate::{
 /// Root schema document referencing every exported request/result/event
 /// type, so that a single `schemars` invocation produces one JSON Schema
 /// with everything reachable from the wire protocol in `$defs`.
-///
-/// CREW-44: this struct and `crates/xtask/src/main.rs`'s TS export
-/// allowlist (`export_bindings`'s `export!` call) are two independent
-/// lists that must agree on every *wire-message* type (not on bare
-/// id/enum/param types -- see that file's `NOT_WIRE_MESSAGE_ROOTS`, which
-/// is where those belong instead). CREW-43 found `RunMessage` and
-/// `MessageListResult` on the TS side with no field here at all, and
-/// nothing caught it until a human noticed. Adding a message type to the
-/// TS export list without a matching field here (or vice versa) now fails
-/// `generate --check` via `check_export_list_is_schema_reachable` in that
-/// same xtask file -- if you add a wire-message type to one list, add it
-/// to the other too.
+//
+// CREW-44: this struct and `crates/xtask/src/main.rs`'s TS export
+// allowlist (`export_bindings`'s `export!` call) are two independent
+// lists that must agree on every *wire-message* type (not on bare
+// id/enum/param types -- see that file's `NOT_WIRE_MESSAGE_ROOTS`, which
+// is where those belong instead). CREW-43 found `RunMessage` and
+// `MessageListResult` on the TS side with no field here at all, and
+// nothing caught it until a human noticed. Adding a message type to the
+// TS export list without a matching field here (or vice versa) now fails
+// `generate --check` via `check_export_list_is_schema_reachable` in that
+// same xtask file -- if you add a wire-message type to one list, add it
+// to the other too.
+//
+// Deliberately `//`, not `///`: a doc comment here is generated schema
+// content (schemars emits it as this root's `description`), not private
+// engineering commentary -- CREW-44 is a code-organization note for future
+// editors of this file, and belongs out of band from what every schema
+// consumer reads as the file's own description.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProtocolDocument {

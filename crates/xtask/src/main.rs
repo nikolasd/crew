@@ -387,6 +387,24 @@ fn check_export_list_is_schema_reachable(
             unclassified.len()
         );
     }
+
+    // Reverse direction: every NOT_WIRE_MESSAGE_ROOTS entry must still be a
+    // real export-allowlist root. Otherwise a type removed from the export
+    // list (or renamed) leaves a stale exclusion that would silently exempt
+    // any future, unrelated type that happens to reuse the same name.
+    let stale_exclusions: Vec<&str> = NOT_WIRE_MESSAGE_ROOTS
+        .iter()
+        .copied()
+        .filter(|ident| !root_idents.iter().any(|root| root == ident))
+        .collect();
+    if !stale_exclusions.is_empty() {
+        bail!(
+            "{} NOT_WIRE_MESSAGE_ROOTS entr(y/ies) no longer appear in the export allowlist: \
+             {stale_exclusions:?} -- remove the stale entry from NOT_WIRE_MESSAGE_ROOTS in this \
+             file, so it can't silently exempt a future, unrelated type of the same name.",
+            stale_exclusions.len()
+        );
+    }
     Ok(())
 }
 
