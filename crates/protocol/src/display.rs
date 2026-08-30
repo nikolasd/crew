@@ -7,17 +7,17 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+// Reconciled with `crates/runtime`'s config-facing
+// `crew::config::crew::DisplayBackend` (WP9): that enum additionally has
+// `Auto`, meaning "no forced backend", which has no concrete backend of its
+// own here -- every other variant of the config enum maps to exactly one of
+// these (`crate::config::protocol_display_backend` in the runtime crate
+// does that mapping). `Terminal` (an always-available, capability-free
+// stub) was retired in the same change.
 /// Supported display backends.
 ///
-/// Reconciled with `crates/runtime`'s config-facing
-/// `crew::config::crew::DisplayBackend` (WP9): that enum additionally has
-/// `Auto`, which means "no forced backend" and has no concrete backend of
-/// its own here -- every other variant of the config enum maps to exactly
-/// one of these (`crate::config::protocol_display_backend` in the runtime
-/// crate does that mapping). `Terminal` (an always-available, capability-
-/// free stub) is retired in the same change: [`Self::Hidden`] is now the
-/// one always-available fallback, and it is a real, deliberate "no pane"
-/// choice rather than a degraded terminal rendering.
+/// `hidden` is the one always-available fallback, and it is a real,
+/// deliberate "no pane" choice rather than a degraded rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -79,12 +79,12 @@ pub enum DisplayPlacement {
     Tab,
     /// A new workspace (Herdr only; unsupported by tmux).
     Workspace,
-    /// A new, separate OS-level window (CREW-9) -- not a tab or split of
-    /// the caller's own terminal at all. `OsWindowDisplay`'s honest report
-    /// of what it actually opened when the target terminal has no
-    /// tab-creation mechanism it can drive (e.g. Terminal.app, or Ghostty
-    /// versions predating its AppleScript support): callers must never
-    /// see `Tab` echoed back for a placement that was, in fact, a whole
+    // CREW-9. `OsWindowDisplay` reports this rather than echoing `Tab`.
+    /// A new, separate OS-level window -- not a tab or split of the
+    /// caller's own terminal at all. Reported when the target terminal has
+    /// no tab-creation mechanism Crew can drive (e.g. Terminal.app, or
+    /// Ghostty versions predating its AppleScript support): callers never
+    /// see `tab` echoed back for a placement that was, in fact, a whole
     /// new window.
     Window,
 }
@@ -148,27 +148,26 @@ pub struct DisplayPreference {
     pub ordered: Vec<DisplayBackend>,
     /// Where to put the pane once a backend is chosen.
     pub placement: DisplayPlacement,
+    // CREW-9. Used only by `OsWindowDisplay`, to target the right terminal
+    // application instead of always assuming Terminal.app. tmux/herdr are
+    // self-detecting (they query whatever server already exists,
+    // independent of who spawned the daemon), so this only matters once
+    // resolution has fallen through to a bare terminal window.
+    //
+    // A closed enum rather than a bare string for a structural reason, not
+    // a stylistic one: this value ends up selecting and parameterizing an
+    // `osascript` invocation, and an environment variable must never be
+    // interpolated into script text.
     /// The program that launched the OMP session issuing this request, from
-    /// its own `$TERM_PROGRAM` (CREW-9) -- used only by `OsWindowDisplay` to
-    /// target the right terminal application instead of always assuming
-    /// Terminal.app. Every other backend ignores this entirely: tmux/herdr
-    /// are self-detecting (they query whatever server already exists,
-    /// independent of who spawned the daemon), so this field only matters
-    /// once resolution has already fallen through to a bare terminal
-    /// window.
+    /// its own `$TERM_PROGRAM`. Only the `osWindow` backend reads it; every
+    /// other backend ignores it entirely.
     ///
-    /// Deliberately NOT the raw `$TERM_PROGRAM` string: that variable names
-    /// whatever process launched *this one*, which may be a multiplexer
-    /// (`tmux`) or something else entirely, not necessarily the terminal
-    /// emulator the user is sitting in -- calling this "hostTerminal" would
-    /// overclaim what it actually is. A closed, caller-untrusted enum
-    /// rather than a bare string for a structural reason, not just a
-    /// stylistic one: this value ends up selecting and parameterizing an
-    /// `osascript` invocation, and an environment variable must never be
-    /// interpolated into script text. `None` (absent) and
-    /// `Some(HostProgramHint::Other)` (present but unrecognized) are
-    /// deliberately equivalent -- both mean "no specific hint", falling
-    /// back to today's default.
+    /// Deliberately NOT "the host terminal": `$TERM_PROGRAM` names whatever
+    /// process launched the session, which may be a multiplexer (`tmux`) or
+    /// something else entirely, not necessarily the terminal emulator the
+    /// user is sitting in. Absent and `other` (present but unrecognized)
+    /// are equivalent -- both mean "no specific hint", falling back to the
+    /// default.
     #[serde(default)]
     pub launch_program: Option<HostProgramHint>,
 }
@@ -210,12 +209,12 @@ pub struct DisplaySelection {
     /// Every backend tried, in order, so an operator can see why the
     /// preferred one lost.
     pub attempts: Vec<DisplayBackend>,
-    /// Echoes [`DisplayPreference::launch_program`] through resolution
-    /// (CREW-9) -- carried here, rather than as a separate parameter
-    /// threaded alongside `Option<DisplaySelection>` through
-    /// `build_adapter`'s already-long argument list, because this struct
-    /// is already the one bundle that survives that exact call chain down
-    /// to `PaneAttachRequest`.
+    // CREW-9. Carried here, rather than as a separate parameter threaded
+    // alongside `Option<DisplaySelection>` through `build_adapter`'s
+    // already-long argument list, because this struct is already the one
+    // bundle that survives that exact call chain down to
+    // `PaneAttachRequest`.
+    /// Echoes [`DisplayPreference::launch_program`] through resolution.
     pub launch_program: Option<HostProgramHint>,
 }
 
