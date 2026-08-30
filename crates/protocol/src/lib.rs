@@ -47,7 +47,7 @@ pub use ids::{
     ApprovalId, ArtifactId, EscalationId, MessageId, OperationId, PolicyViolationId, ProjectId,
     RunId, TaskId, WorkerId,
 };
-pub use message::{DeliveryState, MessageKind, RunMessage};
+pub use message::{DeliveryState, MessageKind, MessageListResult, RunMessage};
 pub use method::CrewMethod;
 pub use plan::{PlanDecideResult, PlanGetResult, PlanProposeResult, RunTimeoutAckResult};
 pub use retention::RetentionCleanResult;

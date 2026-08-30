@@ -9,6 +9,90 @@ permissions:
   contents: read
 
 jobs:
+  # CREW-42: Classify changes to optimize CI cost for docs-only PRs.
+  # This cheap job runs on every PR/push and exposes `docs_only: true/false`.
+  # Expensive jobs (test matrix, security, build) use `if: needs.changes.outputs.docs_only != 'true'`
+  # to skip when the PR touches only documentation.
+  #
+  # Classification rule: docs_only = ALL changed files match:
+  #   - ^docs/ (anything under docs/ directory), OR
+  #   - Top-level .md files ONLY: README.md, CONTRIBUTING.md, CLAUDE.md, AGENTS.md
+  #
+  # This rule is anchored to prevent false negatives (docs classification for code changes):
+  # - Exclude assets/** entirely (logo.svg is a build input with test coverage in crates/runtime/tests/)
+  # - Exclude packages/extension/skills/*.md and packages/extension/rules/*.md — these are
+  #   runtime-loaded functional artifacts discovered by directory convention; a skill edit
+  #   is a behavior change, not documentation
+  # - Exclude bare *.md not at repo root (e.g., crates/*/README.md is project metadata, not docs)
+  #
+  # Fast canary jobs (format, typecheck, generate-check, bundle-check, clippy) stay UNCONDITIONAL
+  # and report status on every PR — they catch bugs too quickly and cheaply to skip.
+  # workflow-level paths-ignore would break required status checks (skipped ≠ passed),
+  # so this job-level approach (skipped via if: believed to count as passed for branch protection, unverified for the matrix fan-out which would be marked required) is necessary.
+  #
+  # SEAM WARNING (ci.yml ↔ build-matrix.yml): Both workflows duplicate this classification.
+  # If ci.yml tightens the pattern and build-matrix.yml doesn't, the build matrix silently keeps
+  # skipping changes the test job runs — a release build that never ran for a change that needed it.
+  # Both must be updated together; see build-matrix.yml's identical changes job and its seam comment.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.check.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify changes as docs-only or not
+        id: check
+        run: |
+          set -euo pipefail
+
+          # Determine the comparison base depending on event type
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # For PRs, fetch and compare against the merge base
+            git fetch origin "${{ github.base_ref }}"
+            base_ref="origin/${{ github.base_ref }}"
+          else
+            # For push events, compare against the previous commit
+            base_ref="HEAD~1"
+          fi
+
+          # Get the list of changed files (name only, relative to repo root)
+          changed_files=$(git diff --name-only "${base_ref}...HEAD")
+
+          # FAIL CLOSED: if diff fails or returns empty, classify as code (not docs)
+          # Empty changed_files with no error is unusual but possible in edge cases;
+          # defaulting to code-only is safer than silently skipping all CI.
+          if [ -z "$changed_files" ]; then
+            echo "no changed files resolved against ${base_ref}; refusing to classify as docs-only" >&2
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Determine if all changes are docs-only:
+          # Pattern: ^docs/ (anything in docs/) OR top-level .md files only
+          docs_only=true
+          while read -r file; do
+            # Skip empty lines
+            if [ -z "$file" ]; then
+              continue
+            fi
+            # Check if file matches a docs-only pattern:
+            # - Starts with docs/ (including docs/adr/*, docs/assets/*, etc.)
+            # - Is a top-level .md file (no slashes): README.md, CONTRIBUTING.md, CLAUDE.md, AGENTS.md
+            if [[ "$file" =~ ^docs/ ]] || [[ "$file" =~ ^[^/]+\.md$ ]]; then
+              # Passes the docs pattern, continue checking others
+              continue
+            else
+              # File does not match any docs pattern — this is a code change
+              docs_only=false
+              break
+            fi
+          done <<< "$changed_files"
+
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   format:
     runs-on: ubuntu-latest
     steps:
@@ -49,6 +133,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       # A failure on one platform must not cancel the other before it reports its own
@@ -147,6 +233,8 @@ jobs:
         run: git diff --exit-code -- packages/extension/dist/index.js
 
   security:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       # gitleaks (below) diffs only the tip commit (`--log-opts=-1`) against its

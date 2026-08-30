@@ -2922,7 +2922,18 @@ impl OrchestrationService {
     /// reports; the leader decides).
     ///
     /// * `extend` re-arms BOTH of the run's liveness deadlines with a fresh
-    ///   window (the same shared clock WP19's sweep reads).
+    ///   window (the same shared clock WP19's sweep reads). CREW-40: refused
+    ///   (never a fabricated `rearmed: true`) when the run has no tracked
+    ///   clock to re-arm -- never submitted, or already settled/forgotten --
+    ///   since there is no legitimate pending timeout to act on either way,
+    ///   and a leader must be able to tell a real re-arm from a no-op.
+    ///   **This refusal is an expected, benign outcome, not a fault to
+    ///   escalate or retry**: the run can legitimately settle between its
+    ///   `WorkerTimeout` being journaled and the leader's `extend` arriving
+    ///   for it (the leader did the right thing, just slightly late) --
+    ///   without this note, a leader would eventually learn to distrust
+    ///   every error this method returns, which defeats the point of
+    ///   refusing honestly in the first place.
     /// * `nudge` is deliberately a no-op server-side: nudging means the
     ///   leader follows up with `crew_send`/`message/send`, which carries
     ///   its own budget/journal semantics -- double-writing it here would
@@ -2937,7 +2948,12 @@ impl OrchestrationService {
         let decision = str_field(params, "decision")?;
         match decision.as_str() {
             "extend" => {
-                self.activity.extend(&run_id, std::time::Instant::now());
+                if !self.activity.extend(&run_id, std::time::Instant::now()) {
+                    return Err(ServiceError::invalid_params(format!(
+                        "run {run_id} has no tracked timeout to extend (never submitted, or \
+                         already settled)"
+                    )));
+                }
                 Ok(json!({
                     "runId": run_id.to_string(),
                     "decision": "extend",

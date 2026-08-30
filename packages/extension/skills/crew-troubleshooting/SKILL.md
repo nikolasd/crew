@@ -42,4 +42,4 @@ Every Crew tool error has this shape: text `"<method> failed: <message>"`, `deta
 | `manifest-invalid` | Re-run `/crew-install`. The cached manifest is corrupt or for another platform. |
 | `unsupported-platform` | Crew only supports macOS and glibc Linux, arm64/x64. Other platforms are not supported. |
 | `connection-failed` | Run `/crew doctor` for a detailed check without needing a live daemon. |
-| `http-error` (from `/crew-install`) | **This repository is private.** The download needs read access via a `GITHUB_TOKEN` or `GH_TOKEN` environment variable, or a local `gh auth login` session. Set one of those and retry the install. |
+| `http-error` (from `/crew-install`) | Usually a GitHub API rate limit (the repository is public, so no token is required, but an unauthenticated request is capped at 60/hour vs. 5,000/hour authenticated). Set a `GITHUB_TOKEN` or `GH_TOKEN` environment variable, or run `gh auth login`, then retry the install. |

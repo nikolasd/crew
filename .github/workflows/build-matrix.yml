@@ -1,0 +1,144 @@
+name: Cross-Platform Build Check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # CREW-42: Duplicate changes classification from ci.yml (two-place seam — both files must be
+  # updated together if the docs-only pattern changes). This workflow's build job gates on the
+  # same docs_only output; see ci.yml's changes job for full rationale.
+  #
+  # Classification rule: docs_only = ALL changed files match:
+  #   - ^docs/ (anything under docs/ directory), OR
+  #   - Top-level .md files ONLY: README.md, CONTRIBUTING.md, CLAUDE.md, AGENTS.md
+  #
+  # This rule is anchored to prevent false negatives (docs classification for code changes):
+  # - Exclude assets/** entirely (logo.svg is a build input with test coverage in crates/runtime/tests/)
+  # - Exclude packages/extension/skills/*.md and packages/extension/rules/*.md — these are
+  #   runtime-loaded functional artifacts discovered by directory convention; a skill edit
+  #   is a behavior change, not documentation
+  # - Exclude bare *.md not at repo root (e.g., crates/*/README.md is project metadata, not docs)
+  #
+  # SEAM WARNING (build-matrix.yml ↔ ci.yml): If build-matrix.yml tightens the pattern and ci.yml
+  # doesn't, the test job silently runs on changes the build matrix skips — a test-passing PR
+  # that never built for the platforms it supports. Symmetric risk.
+  #
+  # REQUIRED-CHECKS WARNING: If anyone ever marks per-combination build checks as REQUIRED
+  # status, a skipped matrix job leaves them "Expected" forever and docs PRs become unmergeable.
+  # This is a latent issue today but a risk once required checks are enabled.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.check.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify changes as docs-only or not
+        id: check
+        run: |
+          set -euo pipefail
+
+          # Determine the comparison base depending on event type
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # For PRs, fetch and compare against the merge base
+            git fetch origin "${{ github.base_ref }}"
+            base_ref="origin/${{ github.base_ref }}"
+          else
+            # For push events, compare against the previous commit
+            base_ref="HEAD~1"
+          fi
+
+          # Get the list of changed files (name only, relative to repo root)
+          changed_files=$(git diff --name-only "${base_ref}...HEAD")
+
+          # FAIL CLOSED: if diff fails or returns empty, classify as code (not docs)
+          # Empty changed_files with no error is unusual but possible in edge cases;
+          # defaulting to code-only is safer than silently skipping all CI.
+          if [ -z "$changed_files" ]; then
+            echo "no changed files resolved against ${base_ref}; refusing to classify as docs-only" >&2
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Determine if all changes are docs-only:
+          # Pattern: ^docs/ (anything in docs/) OR top-level .md files only
+          # Note: Using here-string (<<<) not pipe (|) so the loop's docs_only=false assignment
+          # persists after the loop. A pipe creates a subshell where the assignment would be lost,
+          # and all files would incorrectly classify as docs-only.
+          docs_only=true
+          while read -r file; do
+            # Skip empty lines
+            if [ -z "$file" ]; then
+              continue
+            fi
+            # Check if file matches a docs-only pattern:
+            # - Starts with docs/ (including docs/adr/*, docs/assets/*, etc.)
+            # - Is a top-level .md file (no slashes): README.md, CONTRIBUTING.md, CLAUDE.md, AGENTS.md
+            if [[ "$file" =~ ^docs/ ]] || [[ "$file" =~ ^[^/]+\.md$ ]]; then
+              # Passes the docs pattern, continue checking others
+              continue
+            else
+              # File does not match any docs pattern — this is a code change
+              docs_only=false
+              break
+            fi
+          done <<< "$changed_files"
+
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
+  targets:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.read.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: read
+        name: Read release/targets.json
+        run: |
+          MATRIX=$(jq -c '{include: [.targets[] | {os, rust_target: .rust, leaf_target: .leaf}]}' release/targets.json)
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [targets, changes]
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install Linux ARM64 cross-compiler
+        if: matrix.leaf_target == 'linux-arm64-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          # The apt package installs fine, but it provides no binary named
+          # `gcc-aarch64-linux-gnu` -- the executable is
+          # `aarch64-linux-gnu-gcc`, the name the release.yml arm64 leg uses.
+          # The old wording made rustc fail at the link step with
+          # "linker `gcc-aarch64-linux-gnu` not found" on every push.
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc-ar" >> "$GITHUB_ENV"
+
+      - name: Build crewd
+        run: cargo build --release --target ${{ matrix.rust_target }} --bin crewd
+
+      - name: Assemble leaf package
+        run: |
+          cargo run -p crew-xtask -- package \
+            --target ${{ matrix.leaf_target }} \
+            --binary target/${{ matrix.rust_target }}/release/crewd

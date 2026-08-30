@@ -2740,7 +2740,7 @@ async fn omp_extension_plan_methods_reach_real_handlers_and_timeout_ack_stays_st
 }
 
 #[tokio::test]
-async fn run_timeout_ack_extend_rearms_nudge_noops_and_abort_cancels() {
+async fn run_timeout_ack_nudge_noops_and_abort_cancels() {
     let harness = Harness::start(|c| {
         c.run_driver = Some(Arc::new(FakeRunDriver));
     })
@@ -2748,22 +2748,10 @@ async fn run_timeout_ack_extend_rearms_nudge_noops_and_abort_cancels() {
     let mut client = omp_client(&harness, "omp-1").await;
     let (_task_id, _worker_id, run_id) = submit_run_with_driver(&mut client, "omp-1").await;
 
-    // extend re-arms the run's liveness clock.
-    let extend = client
-        .call(
-            2,
-            "run/timeoutAck",
-            json!({ "runId": run_id, "decision": "extend" }),
-        )
-        .await;
-    assert!(extend.get("error").is_none(), "extend failed: {extend:?}");
-    assert_eq!(extend["result"]["decision"], "extend");
-    assert_eq!(extend["result"]["rearmed"], true);
-
     // nudge is a server-side no-op.
     let nudge = client
         .call(
-            3,
+            2,
             "run/timeoutAck",
             json!({ "runId": run_id, "decision": "nudge" }),
         )
@@ -2774,20 +2762,20 @@ async fn run_timeout_ack_extend_rearms_nudge_noops_and_abort_cancels() {
     // abort cancels the run.
     let abort = client
         .call(
-            4,
+            3,
             "run/timeoutAck",
             json!({ "runId": run_id, "decision": "abort" }),
         )
         .await;
     assert!(abort.get("error").is_none(), "abort failed: {abort:?}");
     assert_eq!(abort["result"]["decision"], "abort");
-    let get = client.call(5, "run/get", json!({ "runId": run_id })).await;
+    let get = client.call(4, "run/get", json!({ "runId": run_id })).await;
     assert_eq!(get["result"]["state"], "cancelled", "{get:?}");
 
     // An unknown decision is the caller's error.
     let bogus = client
         .call(
-            6,
+            5,
             "run/timeoutAck",
             json!({ "runId": run_id, "decision": "wiggle" }),
         )
@@ -2795,6 +2783,47 @@ async fn run_timeout_ack_extend_rearms_nudge_noops_and_abort_cancels() {
     assert_eq!(
         bogus["error"]["code"], -32602,
         "unknown decision must be invalid_params: {bogus:?}"
+    );
+}
+
+/// CREW-40: `extend`'s `rearmed` field must be honest. A run with no
+/// tracked activity clock -- never submitted (this test), or submitted and
+/// since settled/forgotten -- has nothing for `extend` to actually re-arm.
+/// `ActivityClock::extend` used to silently no-op in that case while
+/// `run_timeout_ack` still unconditionally reported `"rearmed": true`: a
+/// leader could never tell a real re-arm from this lie from the response
+/// alone. Same fabricated-success shape CREW-15/CREW-30 exist to kill, at
+/// a different call site.
+///
+/// A `FakeRunDriver`-submitted run (as `run_timeout_ack_nudge_noops_and_abort_cancels`
+/// uses) is no different from "never submitted" here: this harness's fake
+/// drivers dispatch RPCs without going through the real adapter event
+/// pipeline that alone populates the activity clock (`RunLifecycleSink`'s
+/// `touch`, on the vendor's first journaled event) -- so neither kind of
+/// test run in this file ever has a tracked clock to extend. The genuine
+/// "extend re-arms a really-tracked run" mechanism is unit-tested directly
+/// against `ActivityClock` in `adapter/activity.rs`
+/// (`extend_rearms_a_tracked_run_and_reports_it_did`), where it doesn't
+/// need a real adapter to set up.
+#[tokio::test]
+async fn run_timeout_ack_extend_refuses_a_run_with_no_tracked_timeout() {
+    let harness = Harness::start(|_| {}).await;
+    let mut client = omp_client(&harness, "omp-1").await;
+
+    // Never submitted -- structurally valid, but no activity clock was
+    // ever created for it (that only happens on real vendor activity).
+    let never_submitted = RunId::new();
+    let extend = client
+        .call(
+            2,
+            "run/timeoutAck",
+            json!({ "runId": never_submitted, "decision": "extend" }),
+        )
+        .await;
+    assert_eq!(
+        extend["error"]["code"], -32602,
+        "extend on a run with no tracked timeout must be refused, not silently report \
+         rearmed:true: {extend:?}"
     );
 }
 

@@ -9,7 +9,7 @@
 #   docker run --platform linux/amd64 -v $REPO:/src -w /src oven/bun:1.3.14 \
 #     sh -c "bun install && bun run build"
 # on a source copy. See the bundle-check job in ci.yml.
-name: refresh-bundle
+name: Refresh Committed Bundle (manual)
 
 on:
   workflow_dispatch:
