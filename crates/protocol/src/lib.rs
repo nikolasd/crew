@@ -40,8 +40,8 @@ pub use display::{
 pub use event::RunFlags;
 pub use event::{
     AnsweredBy, Classified, ContentClass, DiagnosticLevel, EventEnvelope, EventSource, PlanSpec,
-    RuntimeEvent, RuntimeEventKind, SubtaskSpec, TimeoutKind, Timestamp, TimestampParseError,
-    TurnOutcome,
+    Redacted, RuntimeEvent, RuntimeEventKind, SubtaskSpec, TimeoutKind, Timestamp,
+    TimestampParseError, TurnOutcome,
 };
 pub use ids::{
     ApprovalId, ArtifactId, EscalationId, MessageId, OperationId, PolicyViolationId, ProjectId,

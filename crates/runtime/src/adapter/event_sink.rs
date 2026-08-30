@@ -211,8 +211,17 @@ impl DomainAdapterEventSink {
     /// Sanitizes a single classified fragment: `Visible` text is
     /// redaction-scanned and kept; `Thinking`/`Secret` fragments are
     /// dropped to `None`, never coerced to an empty string.
-    fn sanitize(&self, fragment: Classified<String>) -> Option<String> {
-        self.redactor.sanitize_fragment(&fragment)
+    ///
+    /// Returns [`Redacted`] rather than `String` (CREW-29), so every
+    /// vendor-text field on a `RuntimeEvent` can only be filled from the
+    /// redactor's own output. That is what makes this the single blessed
+    /// route for vendor content: a new field cannot be populated by
+    /// forgetting to call this, only by explicitly asserting the text was
+    /// runtime-authored instead.
+    fn sanitize(&self, fragment: Classified<String>) -> Option<crew_protocol::Redacted> {
+        self.redactor
+            .sanitize_fragment(&fragment)
+            .map(crew_protocol::Redacted::from_sanitized)
     }
 
     /// Applies the same built-in regex rules to a short, always-visible,
@@ -1108,7 +1117,10 @@ mod question_detected_tests {
                 assert_eq!(*got_run_id, run_id);
                 assert_eq!(*got_task_id, task_id);
                 assert_eq!(*got_worker_id, worker_id);
-                assert_eq!(question.as_deref(), Some("which branch should I target?"));
+                assert_eq!(
+                question.as_ref().map(crew_protocol::Redacted::as_str),
+                Some("which branch should I target?")
+            );
             }
             other => panic!("expected WorkerQuestion, got {other:?}"),
         }
