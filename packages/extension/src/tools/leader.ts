@@ -193,13 +193,21 @@ export function registerStopTool(pi: ExtensionAPI, ctx: OrchestrationToolContext
   const params = pi.zod.object({
     op: pi.zod.enum(["stop"]).describe("Stop a running worker."),
     runId: pi.zod.string().describe("The run to stop."),
-    outcome: pi.zod.enum(["done", "abort"]).describe("'done' = graceful wrap-up then soft cancel; 'abort' = immediate cancel."),
+    outcome: pi.zod.enum(["done", "abort"]).describe("Both cancel the run immediately -- there is no server-side graceful/soft stop today. 'done' additionally sends a wrap-up follow-up message first; 'abort' does not."),
   });
 
   pi.registerTool({
     name: CREW_STOP_TOOL_NAME,
     label: "Crew Stop",
-    description: "Use to stop a worker. outcome 'done' sends a wrap-up follow-up then cancels softly (the worker finishes its current turn); outcome 'abort' cancels the run immediately. Cleanup (workspace release) is never automatic -- the leader does that.",
+    // CREW-35: `outcome: "done"` used to send `run/cancel` a `mode: "soft"`
+    // hint implying a gentler stop (finish the current turn, then exit).
+    // The daemon never reads a `mode` param on `run/cancel` at all -- both
+    // outcomes call the identical immediate-cancel path (CancelScope::Worker,
+    // kills the vendor process). The only real difference is that 'done'
+    // fires a courtesy follow-up message first. A true graceful stop is
+    // tracked in docs/future-features.md rather than claimed here.
+    description:
+      "Use to stop a worker. Both outcomes cancel the run immediately (kill the vendor process) -- there is no graceful/soft stop today. outcome 'done' additionally sends a wrap-up follow-up message right before the same cancel, so the worker's own transcript records why it stopped; outcome 'abort' cancels with no message. Cleanup (workspace release) is never automatic -- the leader does that.",
     parameters: params,
     approval: "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx): Promise<AgentToolResult<unknown>> {
@@ -212,7 +220,7 @@ export function registerStopTool(pi: ExtensionAPI, ctx: OrchestrationToolContext
         kind: "followUp",
         payload: "Wrap-up: stopping this run per leader instruction.",
       });
-      return callOrchestration(client, "run/cancel", { runId: input.runId, mode: "soft" });
+      return callOrchestration(client, "run/cancel", { runId: input.runId });
     },
   });
 }
@@ -228,7 +236,15 @@ export function registerFinishTool(pi: ExtensionAPI, ctx: OrchestrationToolConte
   pi.registerTool({
     name: CREW_FINISH_TOOL_NAME,
     label: "Crew Finish",
-    description: "Use to cancel the remaining live runs of a plan once the leader is done. Takes the explicit run ids you spawned. Workspace release is left to the leader -- never automatic.",
+    // CREW-35: this tool only ever calls run/cancel, in a loop, over every
+    // named run id -- it never calls run/finish (the ADR-0027 leader-settle
+    // that states an outcome). That's a deliberate scope choice, not an
+    // oversight: cancelling a batch needs no per-run judgment, but settling
+    // does (each run needs its own succeeded/failed), so a bulk "just end
+    // these" call doesn't fit the settle semantics cleanly. crew_run
+    // { op: "finish" } is the real settle path, one run at a time.
+    description:
+      "Use to cancel the remaining live runs of a plan once the leader is done -- this ends them via cancellation (run/cancel), the same as crew_stop { outcome: 'abort' }, in a loop over the given run ids. It never calls the ADR-0027 leader-settle (run/finish): settling states an outcome per run, which doesn't fit a bulk call. To settle (not merely cancel) a single run with a stated outcome, use crew_run { op: 'finish', runId, outcome }. Takes the explicit run ids you spawned. Workspace release is left to the leader -- never automatic.",
     parameters: params,
     approval: "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx): Promise<AgentToolResult<unknown>> {

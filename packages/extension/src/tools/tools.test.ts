@@ -86,6 +86,100 @@ test("read-only ops resolve to tier read, mutating worker/run ops resolve to tie
   expect(runApproval({ op: "get" })).toBe("read");
   expect(runApproval({ op: "retry" })).toBe("exec");
   expect(runApproval({ op: "result" })).toBe("read");
+  // CREW-35: timeoutAck can abort a run (delegates to run/cancel); finish
+  // settles it (tears down the vendor session). Both mutate, both exec.
+  expect(runApproval({ op: "timeoutAck" })).toBe("exec");
+  expect(runApproval({ op: "finish" })).toBe("exec");
+});
+
+test("crew_run rejects a decision outside extend/nudge/abort, and an outcome outside succeeded/failed (CREW-35)", () => {
+  const { api, tools } = createFakeApi();
+  registerOrchestrationTools(api, {
+    getClient: () => {
+      throw new Error("not exercised in this test");
+    },
+  });
+  const run = tools.get("crew_run");
+  const schema = run?.parameters as zod.ZodObject;
+  for (const decision of ["extend", "nudge", "abort"]) {
+    expect(schema.safeParse({ op: "timeoutAck", runId: "r-1", decision }).success).toBe(true);
+  }
+  expect(schema.safeParse({ op: "timeoutAck", runId: "r-1", decision: "give it more time" }).success).toBe(false);
+  for (const outcome of ["succeeded", "failed"]) {
+    expect(schema.safeParse({ op: "finish", runId: "r-1", outcome }).success).toBe(true);
+  }
+  expect(schema.safeParse({ op: "finish", runId: "r-1" }).success).toBe(true); // outcome is optional
+  expect(schema.safeParse({ op: "finish", runId: "r-1", outcome: "cancelled" }).success).toBe(false);
+});
+
+test("crew_run timeoutAck calls run/timeoutAck with runId and decision", async () => {
+  const { api, tools } = createFakeApi();
+  const calls: Array<{ method: string; params: unknown }> = [];
+  const stubClient = {
+    request: async (method: string, params: unknown) => {
+      calls.push({ method, params });
+      if (method === "run/timeoutAck") {
+        return { runId: "r-1", decision: "extend", rearmed: true };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    },
+  };
+  registerOrchestrationTools(api, { getClient: async () => stubClient as unknown as CrewClient });
+  const run = tools.get("crew_run");
+  const result = await run?.execute("call-1", { op: "timeoutAck", runId: "r-1", decision: "extend" }, undefined, undefined, fakeExtensionContext("/tmp"));
+  expect(result?.isError).toBeUndefined();
+  expect(calls).toEqual([{ method: "run/timeoutAck", params: { runId: "r-1", decision: "extend" } }]);
+});
+
+test("crew_run finish calls run/finish with runId and outcome, defaulting outcome to undefined when omitted", async () => {
+  const { api, tools } = createFakeApi();
+  const calls: Array<{ method: string; params: unknown }> = [];
+  const stubClient = {
+    request: async (method: string, params: unknown) => {
+      calls.push({ method, params });
+      if (method === "run/finish") {
+        return { runId: "r-1", state: "succeeded" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    },
+  };
+  registerOrchestrationTools(api, { getClient: async () => stubClient as unknown as CrewClient });
+  const run = tools.get("crew_run");
+
+  const withOutcome = await run?.execute("call-1", { op: "finish", runId: "r-1", outcome: "failed" }, undefined, undefined, fakeExtensionContext("/tmp"));
+  expect(withOutcome?.isError).toBeUndefined();
+
+  const withoutOutcome = await run?.execute("call-2", { op: "finish", runId: "r-1" }, undefined, undefined, fakeExtensionContext("/tmp"));
+  expect(withoutOutcome?.isError).toBeUndefined();
+
+  expect(calls).toEqual([
+    { method: "run/finish", params: { runId: "r-1", outcome: "failed" } },
+    { method: "run/finish", params: { runId: "r-1", outcome: undefined } },
+  ]);
+});
+
+test("crew_run finish surfaces run/finish's illegal-transition error verbatim, never swallowed (CREW-35 negative path)", async () => {
+  const { api, tools } = createFakeApi();
+  const { JsonRpcRemoteError } = await import("../client");
+  const stubClient = {
+    request: async (method: string) => {
+      // Mirrors the daemon's real shape for finishing a run still too
+      // early to finish (`queued`/`starting`): `run_finish` walks straight
+      // to the target state, which is illegal from those two states
+      // (`RunState::can_transition_to`), surfaced as ILLEGAL_TRANSITION.
+      if (method === "run/finish") {
+        throw new JsonRpcRemoteError(-32100, "illegal run transition for r-1: queued -> succeeded", undefined);
+      }
+      throw new Error(`unexpected method: ${method}`);
+    },
+  };
+  registerOrchestrationTools(api, { getClient: async () => stubClient as unknown as CrewClient });
+  const run = tools.get("crew_run");
+  const result = await run?.execute("call-1", { op: "finish", runId: "r-1" }, undefined, undefined, fakeExtensionContext("/tmp"));
+  expect(result?.isError).toBe(true);
+  const details = result?.details as { code: number; message: string };
+  expect(details.code).toBe(-32100);
+  expect(details.message).toContain("illegal run transition");
 });
 
 test("every op's approval tier matches whether it mutates", () => {
@@ -363,6 +457,32 @@ test("crew_worker tool maps a JSON-RPC error to a stable, non-throwing tool erro
   const details = result.details as { code: number; message: string };
   expect(typeof details.code).toBe("number");
   expect(typeof details.message).toBe("string");
+
+  cached?.close();
+});
+
+test("crew_run finish surfaces the real daemon's not-found error for a nonexistent (but well-formed) run id (CREW-35 negative path)", async () => {
+  const { api, tools } = createFakeApi();
+  let cached: CrewClient | undefined;
+  registerOrchestrationTools(api, {
+    getClient: async () => {
+      cached ??= await connectedClient();
+      return cached;
+    },
+  });
+
+  const runTool = tools.get("crew_run");
+  expect(runTool).toBeDefined();
+  if (runTool === undefined) throw new Error("unreachable");
+
+  // A structurally valid run id that was never submitted -- `run/finish`
+  // must refuse it as not-found, and the tool must surface that verbatim
+  // rather than throwing or silently swallowing it.
+  const result = await runTool.execute("call-1", { op: "finish", runId: "018f0000-0000-7000-8000-000000000000" }, undefined, undefined, fakeExtensionContext(repoDir));
+  expect(result.isError).toBe(true);
+  const details = result.details as { code: number; message: string };
+  expect(typeof details.code).toBe("number");
+  expect(details.message).toContain("not found");
 
   cached?.close();
 });

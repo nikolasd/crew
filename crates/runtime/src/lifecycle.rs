@@ -523,17 +523,22 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         .await
         {
             Ok(dashboard) => {
-                // The token is printed exactly once, here, as the whole
-                // URL: every route requires it, so a bare host:port is not
-                // a usable address and printing one would just invite a
-                // 401. Logged at info because an operator who enabled the
-                // dashboard needs to see it; it is a per-run secret, so it
-                // never goes anywhere more durable than the daemon log.
-                tracing::info!(
-                    addr = %dashboard.local_addr(),
-                    url = %format!("http://{}/?token={}", dashboard.local_addr(), dashboard.token()),
-                    "dashboard_started"
+                // Every route requires the token, so a bare host:port is
+                // not a usable address on its own; the whole URL is what's
+                // worth surfacing. Logged at info because an operator who
+                // enabled the dashboard needs to see it.
+                let url = format!(
+                    "http://{}/?token={}",
+                    dashboard.local_addr(),
+                    dashboard.token()
                 );
+                tracing::info!(addr = %dashboard.local_addr(), url = %url, "dashboard_started");
+                // CREW-35: also recorded for `runtime/status` to report
+                // (`/crew health`'s dashboard-discoverability gap) -- the
+                // maintainer explicitly chose token-in-output over the
+                // narrower "point at the daemon log" alternative; see
+                // `RuntimeStatus::dashboard_url`'s doc comment.
+                server.set_dashboard_url(url);
                 Some(dashboard)
             }
             Err(err) => {

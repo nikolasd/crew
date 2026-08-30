@@ -170,6 +170,19 @@ pub struct RuntimeStatus {
     pub uptime_seconds: u64,
     /// Where the running binary was loaded from.
     pub binary_source: BinarySource,
+    /// The embedded dashboard's live URL, token included, when
+    /// `dashboard.enabled` and the bind succeeded; `None` otherwise
+    /// (disabled, or the bind failed and degraded to no dashboard).
+    ///
+    /// CREW-35: the maintainer explicitly chose to put the live,
+    /// capability-granting token in this field rather than only pointing
+    /// at the daemon's own log (the narrower-exposure alternative) --
+    /// `/crew health`'s output flows into the leader model's own session
+    /// context/transcript, a wider and less access-controlled surface than
+    /// a local log file, and that tradeoff was seen and accepted for
+    /// one-click discoverability. Do not "fix" this by hiding the token
+    /// again without a fresh maintainer decision.
+    pub dashboard_url: Option<String>,
 }
 
 /// Result of a successful `initialize` request.

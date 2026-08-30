@@ -5,12 +5,12 @@
 // go through.
 
 import { afterEach, beforeAll, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { CrewClient } from "./client";
 import { ensureRuntime, type EnsureRuntimeOptions } from "./runtime";
-import { type CrewClientCache, type GetRuntimeStatusContext, resolveClient, resolveClientWithoutSpawning } from "./status";
+import { type CrewClientCache, type GetRuntimeStatusContext, getRuntimeStatus, resolveClient, resolveClientWithoutSpawning } from "./status";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const CREWD = join(REPO_ROOT, "target", "debug", "crewd");
@@ -58,6 +58,15 @@ function options(stateDir: string, repository: string): EnsureRuntimeOptions {
     idleSeconds: 30,
     env: { OMP_CREW_BINARY: CREWD },
   };
+}
+
+/** A `crew.json` config layer enabling the dashboard on an OS-assigned
+ *  (port 0) ephemeral port, so parallel test runs never collide. */
+function dashboardEnabledConfigPath(): string {
+  const dir = mkdtempSync("/tmp/bat-st-cfg-");
+  const path = join(dir, "crew.json");
+  writeFileSync(path, JSON.stringify({ dashboard: { enabled: true, port: 0 } }));
+  return path;
 }
 
 function contextFor(ensureRuntimeOptions: EnsureRuntimeOptions): { ctx: GetRuntimeStatusContext; cache: CrewClientCache } {
@@ -148,4 +157,36 @@ test("resolveClient (spawning) still spawns when nothing is listening", async ()
 
   const status = (await client.request("runtime/status")) as { running: boolean };
   expect(status.running).toBe(true);
+});
+
+// ------------------------------------------------- CREW-35: dashboard URL
+
+test("runtime/status reports no dashboard URL when the dashboard is disabled (the default)", async () => {
+  const stateDir = newStateDir();
+  const repository = newRepo();
+  const { ctx } = contextFor(options(stateDir, repository));
+
+  const result = await getRuntimeStatus(ctx);
+  expect(result.isError).toBeUndefined();
+  const details = result.details as { dashboardUrl: string | null };
+  expect(details.dashboardUrl).toBeNull();
+  expect(result.content[0].text).not.toContain("Dashboard:");
+});
+
+test("runtime/status reports the dashboard's live URL (token included) when enabled, and getRuntimeStatus's text surfaces it verbatim", async () => {
+  const stateDir = newStateDir();
+  const repository = newRepo();
+  const configPath = dashboardEnabledConfigPath();
+  const { ctx } = contextFor({ ...options(stateDir, repository), configPaths: [configPath] });
+
+  const result = await getRuntimeStatus(ctx);
+  expect(result.isError).toBeUndefined();
+  const details = result.details as { dashboardUrl: string | null };
+  expect(details.dashboardUrl).not.toBeNull();
+  // 127.0.0.1 only (never a routable interface), an OS-assigned port, and
+  // the 32-hex-char token `dashboard::generate_token` mints.
+  expect(details.dashboardUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/\?token=[0-9a-f]{32}$/);
+  // CREW-35: the maintainer's explicit choice -- the full URL, token
+  // included, must appear in the text a leader model actually reads.
+  expect(result.content[0].text).toContain(`Dashboard: ${details.dashboardUrl}`);
 });

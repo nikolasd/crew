@@ -136,7 +136,7 @@ test("crew_transcript filters events to the run and normalizes", async () => {
   expect(events.every((e) => e.type === "runEvent" || e.type === "taskEvent")).toBe(true);
 });
 
-test("crew_stop done sends a wrap-up then soft-cancels", async () => {
+test("crew_stop done sends a wrap-up then cancels immediately -- there is no soft/graceful distinction (CREW-35)", async () => {
   const { client, calls } = fakeClient();
   const { tools } = setupLeaderTools(client);
   const result = await tools.get(CREW_STOP_TOOL_NAME)!({ op: "stop", runId: "run-1", outcome: "done" }, fakeExtCtx());
@@ -144,7 +144,10 @@ test("crew_stop done sends a wrap-up then soft-cancels", async () => {
   expect(calls.map((c) => c.method)).toContain("message/send");
   const cancel = calls.find((c) => c.method === "run/cancel");
   expect(cancel).toBeDefined();
-  expect((cancel!.params as { mode: string }).mode).toBe("soft");
+  // No `mode` param: the daemon never reads one, so sending it claimed a
+  // distinction ("soft" cancel) that didn't exist. `done`'s only real
+  // difference from `abort` is the wrap-up message sent above.
+  expect(cancel!.params).toEqual({ runId: "run-1" });
 });
 
 test("crew_stop abort cancels immediately without a wrap-up message", async () => {

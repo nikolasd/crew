@@ -174,7 +174,7 @@ function errorCode(err: unknown): string {
 }
 
 function formatStatus(status: RuntimeStatus): string {
-  return [
+  const lines = [
     `Crew runtime: ${status.running ? "running" : "not running"}`,
     `Protocol: ${status.protocol.major}.${status.protocol.minor} (healthy: ${status.protocolHealthy})`,
     `Project: ${status.projectId}`,
@@ -182,5 +182,15 @@ function formatStatus(status: RuntimeStatus): string {
     `Schema version: ${status.schemaVersion}`,
     `Uptime: ${status.uptimeSeconds}s`,
     `Binary source: ${status.binarySource}`,
-  ].join("\n");
+  ];
+  // CREW-35: the full URL, including its access token, is included here
+  // deliberately -- the maintainer chose one-click discoverability over
+  // the narrower alternative (pointing at the daemon log instead). See
+  // `RuntimeStatus.dashboardUrl`'s doc comment for the tradeoff. This
+  // means the token now enters this session's own context/transcript
+  // every time health is checked while the dashboard is enabled.
+  if (status.dashboardUrl !== null) {
+    lines.push(`Dashboard: ${status.dashboardUrl}`);
+  }
+  return lines.join("\n");
 }
