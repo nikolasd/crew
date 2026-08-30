@@ -812,3 +812,60 @@ async fn a_decision_persists_the_bare_decided_by_token_and_the_reason() {
     );
     assert_eq!(reason.as_deref(), Some("looks good"));
 }
+
+/// CREW-32: an approval rationale is prose a human wrote, so it can carry
+/// a secret they were explaining. It is journaled as an `ApprovalEvent`,
+/// which `events/replay`, the dashboard transcript and `audit export` all
+/// read — so an unredacted reason is exportable, not merely durable.
+#[tokio::test]
+async fn an_approval_decision_reason_is_redacted_before_it_is_journaled() {
+    const SECRET: &str = "sk-ant-api03-MMMMNNNNOOOOPPPP3456";
+
+    let harness = Harness::start(|_| {}).await;
+    let mut owner = omp_client(&harness, "omp-owner").await;
+    let (approval_id, _run_id, _task_id) =
+        seed_pending_approval(&harness, &mut owner, "omp-owner").await;
+
+    let decided = owner
+        .call(
+            2,
+            "approval/decide",
+            json!({
+                "approvalId": approval_id.to_string(),
+                "decision": "approve",
+                "reason": format!("approving because {SECRET} was rotated"),
+                "decidedBy": "human",
+            }),
+        )
+        .await;
+    assert!(
+        decided.get("error").is_none(),
+        "approval/decide failed: {decided:?}"
+    );
+
+    let replay = owner
+        .call(
+            3,
+            "events/replay",
+            serde_json::json!({ "afterSequence": 0 }),
+        )
+        .await;
+    let payload = replay["result"]
+        .as_array()
+        .expect("events/replay returns an array")
+        .iter()
+        .map(|e| &e["event"])
+        .find(|e| e["type"] == "approvalEvent" && !e["payload"]["reason"].is_null())
+        .map(|e| &e["payload"])
+        .expect("an approvalEvent carrying the decision reason");
+
+    let reason = payload["reason"].as_str().expect("a reason");
+    assert!(
+        !reason.contains(SECRET),
+        "an approval rationale must not carry a secret into the journal: {reason}"
+    );
+    assert!(
+        reason.contains("approving because") && reason.contains("was rotated"),
+        "the surrounding prose must survive: {reason}"
+    );
+}

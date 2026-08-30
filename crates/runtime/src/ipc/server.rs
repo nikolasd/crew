@@ -232,12 +232,28 @@ impl Server {
             orchestration = orchestration.with_pane_reopen(coordinator, panes_dir);
         }
         let orchestration = Arc::new(orchestration);
+        // Worker-supplied `coordination/*` text is durable journal text, so
+        // the broker gets the full configured Redactor -- built-in rules
+        // plus the compiled `security.patterns` -- never a built-ins-only
+        // instance, for exactly the reason the ViolationService above does.
+        // The same patterns already failed closed at startup (lifecycle),
+        // so a compile error here can only be a bug.
+        let broker_org_patterns = config
+            .policy
+            .as_ref()
+            .map(|(_, policy)| policy.org_security_patterns.clone())
+            .unwrap_or_default();
+        let broker_redactor = Arc::new(
+            crate::security::redaction::Redactor::with_org_rules(&broker_org_patterns)
+                .map_err(IpcError::Configuration)?,
+        );
         let coordination = Arc::new(crate::coordination::CoordinationBroker::new(
             db.clone(),
             project_id,
             events_tx.clone(),
             lease_service,
             artifact_store,
+            broker_redactor,
         ));
 
         let shared = Arc::new(Shared {
