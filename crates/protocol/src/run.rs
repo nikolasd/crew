@@ -160,7 +160,7 @@ pub struct Run {
 // RunResultResult
 // ---------------------------------------------------------------------------
 
-/// Token usage folded from a run's journaled `AdapterUsageEvent`s.
+/// Token usage folded from a run's journaled `adapterUsageEvent`s.
 ///
 /// The runtime applies the adapter-correct fold before this leaves the
 /// daemon: Claude journals per-invocation deltas (summed); every other

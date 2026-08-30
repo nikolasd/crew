@@ -14,7 +14,7 @@ use ts_rs::TS;
 use crate::event::PlanSpec;
 use crate::ids::RunId;
 
-/// Result of `plan/propose`: the sequence of the `PlanProposed` event it
+/// Result of `plan/propose`: the sequence of the `planProposed` event it
 /// persisted.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -25,7 +25,7 @@ pub struct PlanProposeResult {
     pub sequence: u64,
 }
 
-/// Result of `plan/decide`: the sequence of the `PlanDecided` event it
+/// Result of `plan/decide`: the sequence of the `planDecided` event it
 /// persisted.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

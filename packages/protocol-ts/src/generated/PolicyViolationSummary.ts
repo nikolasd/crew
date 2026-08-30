@@ -22,6 +22,6 @@ action: string, createdAt: string,
  */
 resolvedAt: string | null, 
 /**
- * `"release"` or `"cancel"` once decided; `None` while open.
+ * `"release"` or `"cancel"` once decided; absent while open.
  */
 resolution: string | null, resolvedBy: string | null, };

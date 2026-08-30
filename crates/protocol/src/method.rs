@@ -148,18 +148,18 @@ pub enum CrewMethod {
     // them with a "not yet implemented" JSON-RPC error until a later work
     // package (WP17/WP21) lands their real handlers.
     /// Proposes a decomposition of a run into subtasks, persisting a
-    /// `PlanProposed` event pending `plan/decide`.
+    /// `planProposed` event pending `plan/decide`.
     #[serde(rename = "plan/propose")]
     PlanPropose,
     /// Approves or rejects a previously proposed plan, persisting a
-    /// `PlanDecided` event.
+    /// `planDecided` event.
     #[serde(rename = "plan/decide")]
     PlanDecide,
     /// Fetches the most recently proposed plan for a run and its decision,
     /// if any.
     #[serde(rename = "plan/get")]
     PlanGet,
-    /// The leader acknowledges a `WorkerTimeout` event, resolving how the
+    /// The leader acknowledges a `workerTimeout` event, resolving how the
     /// run proceeds.
     #[serde(rename = "run/timeoutAck")]
     RunTimeoutAck,

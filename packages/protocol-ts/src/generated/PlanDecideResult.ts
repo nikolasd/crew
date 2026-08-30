@@ -2,7 +2,7 @@
 import type { RunId } from "./RunId";
 
 /**
- * Result of `plan/decide`: the sequence of the `PlanDecided` event it
+ * Result of `plan/decide`: the sequence of the `planDecided` event it
  * persisted.
  */
 export type PlanDecideResult = { runId: RunId, sequence: number, };

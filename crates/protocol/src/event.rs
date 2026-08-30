@@ -352,7 +352,7 @@ pub struct SubtaskSpec {
     pub adapter: String,
     /// Whether this subtask is expected to write to the workspace.
     pub writes: bool,
-    /// The maximum number of turns this subtask may take; `None` means no
+    /// The maximum number of turns this subtask may take; absent means no
     /// explicit budget was proposed.
     pub turn_budget: Option<u32>,
 }
@@ -562,9 +562,13 @@ pub enum RuntimeEventKind {
         reason: String,
         is_nested: bool,
     },
+    // `Run` (crates/protocol/src/run.rs) carries this as `flags:
+    // RunFlags`, but isn't itself reachable from ProtocolDocument's
+    // fields, so it has no $defs entry a schema consumer could look
+    // it up by -- named generically below instead.
     /// A policy violation was recorded for an already-running worker (mid-run
     /// violation, not pre-authorization). Quarantine/cancel state is tracked
-    /// in `Run.flags.policy_quarantined`.
+    /// on the run's `flags.policyQuarantined`.
     #[serde(rename = "policyViolationRecorded")]
     PolicyViolationRecorded {
         violation_id: PolicyViolationId,
@@ -576,11 +580,15 @@ pub enum RuntimeEventKind {
         /// operator can correlate the violation to its cause.
         #[ts(type = "number")]
         observed_event_sequence: u64,
-        /// The SHA-256 fingerprint of the `RuntimePolicy` this run was
+        // The resolved policy this fingerprints is `crew_runtime`'s
+        // `RuntimePolicy` (crates/runtime/src/config/mod.rs) -- a
+        // runtime-crate type with no wire name, so the shipped
+        // description below names it generically instead.
+        /// The SHA-256 fingerprint of the resolved policy this run was
         /// authorized under, so the violation is auditable against a
         /// specific merge of org/repo/user/per-run layers.
         policy_fingerprint: String,
-        /// Present only for a nested-worker violation; `None` for any
+        /// Present only for a nested-worker violation; absent for any
         /// violation with no vendor child, such as a cost ceiling.
         vendor_child_id: Option<String>,
         vendor_parent_ref: Option<String>,
@@ -595,9 +603,15 @@ pub enum RuntimeEventKind {
     },
 }
 
+// Fields are plain, already-sanitized types -- never `Classified<T>` --
+// so that raw thinking/secret content can never reach the durable log
+// through this type. `Classified` itself is not a wire type: it's excluded
+// from the shipped schema entirely (see NOT_WIRE_MESSAGE_ROOTS in
+// crates/xtask/src/main.rs), so it has no name a schema consumer could
+// look up; that's why the shipped description below doesn't say it.
 /// A sanitized, durable runtime event. Fields are plain, already-sanitized
-/// types (never `Classified`) so that raw thinking/secret content can
-/// never reach the durable log through this type.
+/// values, so raw thinking/secret content can never reach the durable log
+/// through this type.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(
     tag = "type",
@@ -679,7 +693,7 @@ pub enum RuntimeEvent {
         // R59 added this field; optional in both directions so events
         // persisted before it existed still deserialize.
         /// The decision's rationale, when one was supplied. Absent on
-        /// `ApprovalDecided` events written before this field existed.
+        /// `approvalDecided` events written before this field existed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         reason: Option<Redacted>,
@@ -730,10 +744,14 @@ pub enum RuntimeEvent {
         worker_id: WorkerId,
         outcome: TurnOutcome,
     },
+    // Dropped rather than kept-but-masked because the redactor works on
+    // substrings within Visible content; a fragment classified wholesale
+    // as ContentClass::Thinking or ::Secret has nothing Visible to mask,
+    // so there is no partial-text form to carry.
     /// A visible message chunk or final message from a worker adapter.
-    /// `text` has already crossed the redaction boundary; `None` means
-    /// the entire fragment was `Thinking`/`Secret`-classified and was
-    /// dropped, not that the message was empty.
+    /// `text` has already crossed the redaction boundary; absent means
+    /// the entire fragment was classified as sensitive and dropped, not
+    /// that the message was empty.
     AdapterMessageEvent {
         kind: RuntimeEventKind,
         run_id: RunId,
@@ -742,10 +760,12 @@ pub enum RuntimeEvent {
         role: String,
         text: Option<Redacted>,
     },
+    // See AdapterMessageEvent above: a wholesale-sensitive fragment has
+    // nothing Visible left to mask, so it's dropped rather than redacted.
     /// A tool call lifecycle event from a worker adapter. `detail` has
-    /// already crossed the redaction boundary; `None` means the detail
-    /// fragment was `Thinking`/`Secret`-classified and was dropped, not
-    /// that it was empty.
+    /// already crossed the redaction boundary; absent means the detail
+    /// fragment was classified as sensitive and dropped, not that it was
+    /// empty.
     AdapterToolEvent {
         kind: RuntimeEventKind,
         run_id: RunId,
@@ -775,10 +795,11 @@ pub enum RuntimeEvent {
         artifact_id: ArtifactId,
         artifact_kind: String,
     },
+    // See AdapterMessageEvent above: a wholesale-sensitive fragment has
+    // nothing Visible left to mask, so it's dropped rather than redacted.
     /// A worker adapter's protocol health changed. `detail` has already
-    /// crossed the redaction boundary; `None` means the detail fragment
-    /// was `Thinking`/`Secret`-classified and was dropped, not that it
-    /// was empty.
+    /// crossed the redaction boundary; absent means the detail fragment
+    /// was classified as sensitive and dropped, not that it was empty.
     AdapterProtocolHealthEvent {
         run_id: RunId,
         task_id: TaskId,
@@ -847,14 +868,16 @@ pub enum RuntimeEvent {
         task_id: TaskId,
         worker_id: WorkerId,
         approved: bool,
-        /// `None` when no rationale was given for the decision.
+        /// Absent when no rationale was given for the decision.
         reason: Option<Redacted>,
     },
+    // See AdapterMessageEvent above: a wholesale-sensitive fragment has
+    // nothing Visible left to mask, so it's dropped rather than redacted.
     /// A worker asked a question that blocks its own progress, without
     /// escalating control (compare `escalationRaised`). `question`
-    /// has already crossed the redaction boundary; `None` means the
-    /// entire fragment was `Thinking`/`Secret`-classified and was
-    /// dropped, not that the question was empty.
+    /// has already crossed the redaction boundary; absent means the
+    /// entire fragment was classified as sensitive and dropped, not
+    /// that the question was empty.
     WorkerQuestion {
         run_id: RunId,
         task_id: TaskId,
