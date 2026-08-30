@@ -1,12 +1,12 @@
-# Architecture
+# Crew Architecture
 
 This document explains how the foundation of Crew is designed and why. It assumes you have read
 the [README](../README.md) and want the engineering detail behind it.
 
 **Audience & purpose:** contributors and reviewers who want the design rationale — the *why*
 behind the current shape of the system. This is not a build guide (see
-[getting-started.md](getting-started.md), the developer manual) and not a tool-usage guide (see
-[plugin-usage.md](plugin-usage.md), the user manual). It describes the system as it stands today,
+[development.md](development.md), the developer manual) and not a tool-usage guide (see
+[user-guide.md](user-guide.md), the user manual). It describes the system as it stands today,
 with no history in it — for how it got this way, see [`docs/adr/`](adr/) and
 [engineering-lessons.md](engineering-lessons.md).
 
@@ -200,7 +200,7 @@ graph LR
 - **Integrity** ([`packages/extension/src/integrity.ts`](packages/extension/src/integrity.ts)): `sha256File` — verifies packaged binaries against their manifest checksum
 - **State root resolver** ([`packages/extension/src/state.ts`](packages/extension/src/state.ts)): `resolveStateRoot(env, home)` — must stay semantically identical to Rust's `StateRoot::resolve`
 - **Approval UI** ([`packages/extension/src/approval-ui.ts`](packages/extension/src/approval-ui.ts)): Approval UI components
-- **Orchestration tools** ([`packages/extension/src/tools/`](packages/extension/src/tools/)): 11 tools sharing one `callOrchestration` execute body (`shared.ts`) — `crew_profile`, `crew_worker`, `crew_task`, `crew_run`, `crew_workspace`, `crew_artifact`, `crew_child`, `crew_violation`, `crew_message`, `crew_approval`, `crew_reconcile`. See [plugin-usage.md](plugin-usage.md) for what each does.
+- **Orchestration tools** ([`packages/extension/src/tools/`](packages/extension/src/tools/)): 11 tools sharing one `callOrchestration` execute body (`shared.ts`) — `crew_profile`, `crew_worker`, `crew_task`, `crew_run`, `crew_workspace`, `crew_artifact`, `crew_child`, `crew_violation`, `crew_message`, `crew_approval`, `crew_reconcile`. See [user-guide.md](user-guide.md) for what each does.
 - **OMP-native reconciler** ([`packages/extension/src/omp-native/`](packages/extension/src/omp-native/)): Mirrors OMP bus events into Crew facts
 - **Embedded monitor** ([`packages/extension/src/monitor/`](packages/extension/src/monitor/)): `model.ts`, `render.ts`, `controller.ts`, `compat.ts`
 
