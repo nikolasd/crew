@@ -868,6 +868,38 @@ async fn run_result_reads_an_answer_that_follows_a_content_free_boundary() {
     );
 }
 
+/// Staff's review on #78: the property CREW-49's amendment claims in prose
+/// (a boundary that already carries text is still exactly where the fold
+/// stops) had no direct test -- without one, "always take the LAST
+/// boundary" or "always take the boundary with the most text" would both
+/// have passed CI just as well as the actual rule. Four events, two real
+/// boundaries, text before the FIRST one: the fold must stop there and
+/// never see the second turn's different text at all.
+#[tokio::test]
+async fn run_result_stops_at_the_first_boundary_that_carries_text() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(LifecycleSeedingRunDriver::new(vec![
+            final_text("A"),
+            turn_ended(),
+            final_text("B"),
+            turn_ended(),
+        ])));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let run_id = submit_run(&mut client).await;
+
+    let resp = client
+        .call(5, "run/result", json!({ "runId": run_id }))
+        .await;
+    assert!(resp.get("error").is_none(), "{resp:?}");
+    assert_eq!(
+        resp["result"]["resultText"], "A",
+        "the fold must stop at the first boundary that already carries text, never at a later \
+         boundary with different text: {resp:?}"
+    );
+}
+
 /// The gate is the turn boundary, not the state: a run sitting in
 /// `waitingUser` because the worker asked a QUESTION has not finished a
 /// turn, and must still refuse.
