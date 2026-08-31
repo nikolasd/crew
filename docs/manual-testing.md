@@ -818,16 +818,23 @@ Register a claude profile/worker/task and submit a short run (as in §6a). Expec
 - The full submit prompt is in the journal, **redacted** (`runPromptEvent`, ADR-0028) — check
   `/crew run <runId>` or an audit export, never expect raw text.
 
-A vendor process that dies with no observable outcome is settled `lost` by the backstop — a run
-that shows `succeeded` without a journaled turn end is a bug, not a pass.
+A vendor process that dies with no observable outcome is settled `lost` by the backstop. Two
+routes to `succeeded` are legitimate and neither involves the turn: a clean zero exit
+(`terminal_state_for`, ADR-0023) and an explicit leader `finish`. A journaled turn end is **not**
+one of them — the check is that `succeeded` never appears without either a clean exit or a
+finish. A run that settles `succeeded` off the back of a turn end is the bug ADR-0027 exists to
+prevent, whether or not the turn end itself was journaled correctly.
 
 ### 7b. Follow-up steering into the live pane
 
-On the `waitingUser` run from 7a (before finishing it), send a `crew_message` to its worker.
-Expect the payload to be delivered into the live pane as a follow-up turn
-(`RunDriver::send_follow_up`; delivery is two-phase — text once stdin is wired, Enter only after
-output silence), the run to return to `working`, and a re-settle to `waitingUser` when that turn
-ends.
+On the `waitingUser` run from 7a (before finishing it), send a `crew_message` with kind
+`followUp` to its worker. Expect the payload to be delivered into the live pane as a follow-up
+turn (`RunDriver::send_follow_up`; delivery is two-phase — text once stdin is wired, Enter only
+after output silence), the run to return to `working`, and a re-settle to `waitingUser` when that
+turn ends. Every message kind delivers down this path; the one exception is `steer`, which needs
+the adapter's interrupt-then-compose capability and is **refused with `capability_unsupported`**
+on adapters without it — a typed refusal there is correct behavior, not a finding
+(`crates/runtime/src/adapter/registry.rs`).
 
 ### 7c. A subagent's turn never settles the parent (isSidechain)
 
@@ -860,9 +867,21 @@ so it's not part of the standard pass.
 `/crew health` prints the dashboard's full tokenized URL when the dashboard is enabled (§1).
 Checks:
 
-- Open the printed URL: the page loads and renders (an empty state with no runs).
-- Remove the `token` query parameter and reload: **refused**, not a degraded page — the token
-  really gates (CREW-12).
+- Open the printed URL: the page loads, and the token **disappears from the address bar** — a
+  valid `?token=` on `GET /` is exchanged for the `crew_dashboard` cookie via a 303 redirect so
+  the secret leaves the URL, browser history, and any `Referer`
+  (`crates/runtime/src/dashboard/mod.rs`). The exchange is the design, not a leak — and a reload
+  now renders via the cookie, so a working page after reload is **correct**, not a gate failure.
+- The gate itself is tested without the cookie — a private window, or:
+
+  ```bash
+  curl -s -o /dev/null -w '%{http_code}\n' 'http://127.0.0.1:<port>/'           # expect 401
+  curl -s -o /dev/null -w '%{http_code}\n' 'http://127.0.0.1:<port>/?token=bad' # expect 401
+  ```
+
+  Expect `401` both times, and nothing else: access control runs before routing, so an
+  unauthorized request cannot reach a handler at all — not even a 404, which would confirm which
+  paths exist.
 - With runs present (§3a's queued run needs no model call), runs appear with their states; after
   any §7 run, usage and cost figures populate from `adapterUsageReported` events. The journaled
   prompt is *not* shown on the dashboard today (that column is future work) — read it via
