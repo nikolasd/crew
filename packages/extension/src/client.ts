@@ -6,11 +6,12 @@
 // JSON-RPC envelope of every inbound message and every event notification is
 // schema-validated (Ajv) before it reaches caller code. Result payloads are
 // schema-validated for every method with a canonical protocol result type
-// (`RESULT_VALIDATORS`); every other method's result is structurally
-// validated to be a JSON object, so a null/scalar/array result can never
-// reach tool logic. Framing is newline-delimited JSON with a 4 MiB bootstrap
-// hard limit, tightened to the negotiated `maxFrameBytes` in both directions
-// once `initialize` succeeds.
+// (`RESULT_VALIDATORS`, which is not only objects -- `events/replay`'s is a
+// validated array, CREW-50); every other method's result is structurally
+// validated to be a JSON object, so a null/scalar/array result for one of
+// those can never reach tool logic. Framing is newline-delimited JSON with a
+// 4 MiB bootstrap hard limit, tightened to the negotiated `maxFrameBytes` in
+// both directions once `initialize` succeeds.
 
 import { createConnection, type Socket } from "node:net";
 import type { EventEnvelope, InitializeParams, InitializeResult } from "@nikolasd/crew-protocol";
@@ -59,6 +60,12 @@ const RESULT_VALIDATORS: Record<string, ValidateFunction> = {
   "retention/clean": validateRetentionCleanResult,
   "pane/reopen": validatePaneReopenResult,
   "message/list": validateMessageListResult,
+  // CREW-50: `events/replay`'s result is a bare array, not an object --
+  // `subscribe()` already validated it this way on its own dedicated call
+  // path, but a caller reaching `events/replay` through the generic
+  // `request()` (as `crew_transcript` does, via `callOrchestration`) hit
+  // the object-only structural fallback below instead and always failed.
+  "events/replay": validateEventEnvelopeArray,
 };
 
 /** Removes a subscription registered with {@link CrewClient.subscribe}. */
@@ -133,9 +140,9 @@ export class CrewClient {
 
   /**
    * Sends a JSON-RPC request and resolves with its `result`. Methods with a
-   * canonical protocol result type are schema-validated; every other result
-   * must at least be a JSON object (events/replay's array is validated in
-   * {@link CrewClient.subscribe} before this guard would see it).
+   * canonical protocol result type (including `events/replay`'s array,
+   * CREW-50) are schema-validated via `RESULT_VALIDATORS`; every other
+   * result must at least be a JSON object.
    */
   async request(method: string, params?: unknown): Promise<unknown> {
     if (!this.#initialized && method !== "initialize") {
