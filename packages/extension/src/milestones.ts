@@ -98,6 +98,7 @@ export class MilestoneTracker {
       case "workerTimeout":
       case "budgetExceeded":
       case "escalationRaised":
+      case "paneDowngraded":
         return true;
       default:
         return false;
@@ -157,6 +158,10 @@ export function formatDigest(e: EventEnvelope, lookup: RunLookup): string | unde
     case "escalationRaised": {
       const reason = event.payload.reason;
       return `Escalation raised on ${who}: ${reason}.`;
+    }
+    case "paneDowngraded": {
+      const { requestedBackend, requestedPlacement, actualBackend, reason } = event.payload;
+      return `${capitalize(who)}'s pane fell back from ${requestedBackend} (${requestedPlacement}) to ${actualBackend}: ${reason}.`;
     }
     default:
       return undefined;

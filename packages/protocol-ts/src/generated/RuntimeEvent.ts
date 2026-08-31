@@ -34,7 +34,25 @@ reason?: Redacted, } } | { "type": "childEvent", "payload": { kind: RuntimeEvent
  * The vendor-assigned pane identifier only -- never terminal
  * contents, never an absolute socket or filesystem path.
  */
-paneRef: string, } } | { "type": "outOfBandInput", "payload": { runId: RunId, backend: DisplayBackend, paneRef: string, } } | { "type": "planProposed", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, plan: PlanSpec, } } | { "type": "planDecided", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, approved: boolean, 
+paneRef: string, } } | { "type": "outOfBandInput", "payload": { runId: RunId, backend: DisplayBackend, paneRef: string, } } | { "type": "paneDowngraded", "payload": { runId: RunId, 
+/**
+ * The backend selection actually resolved to, before creation
+ * failed.
+ */
+requestedBackend: DisplayBackend, 
+/**
+ * The placement that was requested when creation failed.
+ */
+requestedPlacement: DisplayPlacement, 
+/**
+ * The backend actually used instead.
+ */
+actualBackend: DisplayBackend, 
+/**
+ * Why creation failed, redacted. The typed fields above are what
+ * a listener should act on; this is operator-facing detail only.
+ */
+reason: Redacted, } } | { "type": "planProposed", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, plan: PlanSpec, } } | { "type": "planDecided", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, approved: boolean, 
 /**
  * `null` when no rationale was given for the decision.
  */

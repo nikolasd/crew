@@ -361,6 +361,7 @@ async fn resume_registry(
         forced_backend: None,
         adapters,
         timings: fast_timings(),
+        org_security_patterns: Vec::new(),
     }));
     registry.set_resume_support(Arc::new(ResumeSupport {
         db: Arc::clone(db),
@@ -490,6 +491,7 @@ async fn submitting_a_tui_mode_claude_run_reaches_the_tui_path_and_emits_lifecyc
         forced_backend: None,
         adapters,
         timings: fast_timings(),
+        org_security_patterns: Vec::new(),
     }));
 
     let result = registry
@@ -625,6 +627,7 @@ async fn exactly_one_display_pane_detached_is_journaled_for_a_tui_run() {
         forced_backend: None,
         adapters,
         timings: fast_timings(),
+        org_security_patterns: Vec::new(),
     }));
 
     // The placeholder-pane path armed: `run/submit` would have already

@@ -257,7 +257,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         Arc::new(PolicyEvaluator::new((*policy).clone())),
         repo_root.clone(),
         mcp,
-        org_security_patterns,
+        org_security_patterns.clone(),
     ));
     // TUI-mode support (WP13): only supplied when this runtime's own
     // binary path resolved (mirroring `mcp`'s own reasoning exactly --
@@ -279,6 +279,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
             forced_backend: crate::config::protocol_display_backend(crew_config.display.backend),
             adapters: crew_config.adapters.clone(),
             timings: crate::adapter::tui::TuiTimings::default(),
+            org_security_patterns: org_security_patterns.clone(),
         }));
     }
     // The artifact store persists under the state root so a journaled

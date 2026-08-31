@@ -1789,6 +1789,53 @@
           "additionalProperties": false
         },
         {
+          "description": "A resolved backend's pane creation failed; the run fell back to a\ndifferent backend instead.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "paneDowngraded"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "runId": {
+                  "$ref": "#/$defs/RunId"
+                },
+                "requestedBackend": {
+                  "description": "The backend selection actually resolved to, before creation\nfailed.",
+                  "$ref": "#/$defs/DisplayBackend"
+                },
+                "requestedPlacement": {
+                  "description": "The placement that was requested when creation failed.",
+                  "$ref": "#/$defs/DisplayPlacement"
+                },
+                "actualBackend": {
+                  "description": "The backend actually used instead.",
+                  "$ref": "#/$defs/DisplayBackend"
+                },
+                "reason": {
+                  "description": "Why creation failed, redacted. The typed fields above are what\na listener should act on; this is operator-facing detail only.",
+                  "$ref": "#/$defs/Redacted"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "runId",
+                "requestedBackend",
+                "requestedPlacement",
+                "actualBackend",
+                "reason"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
           "description": "A leader proposed a decomposition of a run into subtasks via\n`plan/propose`, pending `plan/decide`.",
           "type": "object",
           "properties": {

@@ -373,6 +373,7 @@ async fn harness() -> Harness {
         PathBuf::from("/opt/crew/bin/crewd"),
         dir.path().to_path_buf(),
         dir.path().to_path_buf(),
+        crate::security::redaction::Redactor::new(),
     ));
     let scripts_dir = dir.path().to_path_buf();
     Harness {

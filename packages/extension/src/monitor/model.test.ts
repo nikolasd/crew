@@ -202,6 +202,46 @@ test("a displayPaneAttached event with an empty pane ref (hidden fallback) omits
   expect(row?.latestActivity).toBe("pane attached: hidden");
 });
 
+test("a paneDowngraded event sets the sticky paneDowngraded field and a latestActivity summary", () => {
+  const state = reduceEvent(
+    EMPTY_MONITOR_STATE,
+    envelope({
+      event: {
+        type: "paneDowngraded",
+        payload: {
+          runId: "run-1",
+          requestedBackend: "herdr",
+          requestedPlacement: "tab",
+          actualBackend: "hidden",
+          reason: "herdr exploded",
+        },
+      },
+    }),
+  );
+  const row = state.rows["run-1"];
+  expect(row?.paneDowngraded).toEqual({ requestedBackend: "herdr", requestedPlacement: "tab", actualBackend: "hidden", reason: "herdr exploded" });
+  expect(row?.latestActivity).toContain("herdr");
+  expect(row?.latestActivity).toContain("hidden");
+});
+
+test("CREW-60: paneDowngraded survives subsequent unrelated events (sticky, like openViolations)", () => {
+  const downgraded = reduceEvent(
+    EMPTY_MONITOR_STATE,
+    envelope({
+      event: {
+        type: "paneDowngraded",
+        payload: { runId: "run-1", requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", reason: "tmux exploded" },
+      },
+    }),
+  );
+  // The exact bug this fixes: a run-state event's own latestActivity used
+  // to be the only durable-ish record, immediately overwriting the prior
+  // one. The sticky field must survive that overwrite.
+  const after = reduceEvent(downgraded, runEvent("run-1", "task-1", "worker-1", "working"));
+  expect(after.rows["run-1"]?.paneDowngraded).toEqual({ requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", reason: "tmux exploded" });
+  expect(after.rows["run-1"]?.latestActivity).toBe("run working");
+});
+
 test("a displayPaneDetached event marks the pane detached but keeps its last-known backend and ref", () => {
   const attached = reduceEvent(
     EMPTY_MONITOR_STATE,
@@ -428,7 +468,7 @@ test("only the sanitized fields the RuntimeEvent union carries ever reach a row 
   // RuntimeEvent::MessageEvent carries no payload field on the wire).
   expect(row?.latestActivity).toBe("messageSent sent");
   expect(JSON.stringify(row, (_key, value) => (typeof value === "bigint" ? value.toString() : value))).not.toContain("payload");
-  expect(Object.keys(row ?? {}).sort()).toEqual(["runId", "taskId", "workerId", "state", "flags", "latestActivity", "pendingApprovalCount", "openViolations", "pane", "firstSeenAt", "lastEventAt", "lastAppliedSequence"].sort());
+  expect(Object.keys(row ?? {}).sort()).toEqual(["runId", "taskId", "workerId", "state", "flags", "latestActivity", "pendingApprovalCount", "openViolations", "pane", "paneDowngraded", "firstSeenAt", "lastEventAt", "lastAppliedSequence"].sort());
 });
 
 // ------------------------------------------------- open violation tracking
