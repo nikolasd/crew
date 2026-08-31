@@ -189,10 +189,12 @@ pub trait DisplayBackendTrait: Send + Sync {
     /// answers with the placement it would naturally create -- the
     /// knowledge stays where the constraint lives, and the default can't
     /// be falsified by a stale caller. The default impl returns
-    /// `SplitRight`, correct for both multiplexer backends (herdr, tmux);
-    /// override where that's wrong (`OsWindowDisplay`, which computes its
-    /// own actual `Tab`/`Window` after the fact regardless -- see its own
-    /// `create_pane`).
+    /// `SplitRight`, correct for both multiplexer backends (herdr, tmux) --
+    /// override it for a backend whose natural placement genuinely
+    /// differs. `OsWindowDisplay` does NOT override this: the value is
+    /// inert for it regardless of what it returns, because `create_pane`
+    /// ignores the requested placement entirely and reports its own
+    /// actual `Tab`/`Window` outcome after the fact.
     fn natural_placement(&self) -> DisplayPlacement {
         DisplayPlacement::SplitRight
     }

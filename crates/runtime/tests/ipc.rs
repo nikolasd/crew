@@ -557,17 +557,23 @@ async fn events_replay_reports_a_legible_error_for_a_journal_that_predates_this_
     }
     {
         let conn = rusqlite::Connection::open(&paths.database).unwrap();
+        // A REAL journal row, not a fabricated unknown type: staff's review
+        // on #87 -- the case this feature exists for is exactly this one,
+        // a valid event carrying a retired inner enum value (`Embedded`,
+        // deleted this same ticket), not an unrecognized top-level `type`.
+        // Whoever debugs an actual "journal predates this binary" error
+        // will be looking at a row shaped like this, not a made-up type
+        // string.
+        let legacy_run_id = crew_protocol::RunId::new();
         conn.execute(
             "INSERT INTO events (timestamp, project_id, run_id, event_json) VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![
                 "2026-01-01T00:00:00Z",
                 paths.project_id.to_string(),
-                Option::<String>::None,
-                // Never actually a real RuntimeEvent variant, past, present,
-                // or future -- the exact shape of the drift doesn't matter,
-                // only that deserialization fails and the error names the
-                // remedy rather than this specific unknown type string.
-                r#"{"type":"__crew_test_journal_predates_this_binary__","payload":{}}"#,
+                legacy_run_id.to_string(),
+                format!(
+                    r#"{{"type":"displayEvent","payload":{{"kind":"displayPaneAttached","runId":"{legacy_run_id}","backend":"hidden","placement":"embedded","paneRef":""}}}}"#
+                ),
             ],
         )
         .unwrap();
