@@ -853,6 +853,48 @@ pub enum RuntimeEvent {
         backend: DisplayBackend,
         pane_ref: String,
     },
+    // CREW-60 (D28): the resolved backend's pane creation failed, so the
+    // run fell back to a hidden pane instead of the one it actually
+    // wanted. This used to be journaled only as a free-text `Diagnostic`
+    // message -- a durable condition on an ephemeral channel (the
+    // monitor's `latestActivity` field, overwritten by the very next
+    // unrelated event) that a listener could act on only by pattern-
+    // matching prose. Typed fields close both gaps: a listener keys off
+    // `actualBackend`/`requestedBackend` directly, and the monitor's
+    // sticky row flag no longer depends on parsing a message meant for a
+    // human.
+    // Always `hidden` today -- the runtime never retries a later
+    // candidate backend on a creation failure, it falls straight back to
+    // the always-available one.
+    /// A resolved backend's pane creation failed; the run fell back to a
+    /// different backend instead.
+    PaneDowngraded {
+        run_id: RunId,
+        /// The backend selection actually resolved to, before creation
+        /// failed.
+        requested_backend: DisplayBackend,
+        // A downgrade can be placement-caused, not just backend-caused:
+        // tmux refuses `Workspace`/`Window` outright (it ignores `Tab`,
+        // but a workspace/window request reaches this same failure path).
+        // Without this field a listener holding only
+        // `requested_backend`/`actual_backend` cannot tell "the backend
+        // wasn't running" from "you asked for a placement that backend
+        // doesn't support" -- two different remedies, and only the
+        // (untyped) `reason` prose would otherwise separate them.
+        /// The placement that was requested when creation failed.
+        requested_placement: DisplayPlacement,
+        /// The backend actually used instead.
+        actual_backend: DisplayBackend,
+        // This is subprocess stderr (tmux/herdr's own error output),
+        // never runtime-authored text -- `pane_ref` on the sibling
+        // `DisplayEvent` above draws the identical line ("never terminal
+        // contents, never an absolute socket or filesystem path") for the
+        // same reason: a multiplexer's ordinary failure text routinely
+        // names its own socket path.
+        /// Why creation failed, redacted. The typed fields above are what
+        /// a listener should act on; this is operator-facing detail only.
+        reason: Redacted,
+    },
     /// A leader proposed a decomposition of a run into subtasks via
     /// `plan/propose`, pending `plan/decide`.
     PlanProposed {

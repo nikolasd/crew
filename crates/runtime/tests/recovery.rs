@@ -920,6 +920,7 @@ async fn resume_registry(
             forced_backend: None,
             adapters,
             timings: fast_timings(),
+            org_security_patterns: Vec::new(),
         }));
     }
     let (events_tx, _rx) = tokio::sync::broadcast::channel(256);

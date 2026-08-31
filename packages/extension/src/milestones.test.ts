@@ -159,6 +159,32 @@ test("worker question / timeout / budget / escalation are milestones", () => {
   ).toBe(true);
 });
 
+test("CREW-60: a paneDowngraded event is always a milestone", () => {
+  const t = tracker();
+  expect(
+    t.isMilestone(
+      envelope({
+        runId: "run-1",
+        event: { type: "paneDowngraded", payload: { runId: "run-1", requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", reason: "tmux exploded" } },
+      }),
+    ),
+  ).toBe(true);
+});
+
+test("CREW-60: paneDowngraded digest names the requested/actual backends and the reason", () => {
+  const digest = formatDigest(
+    envelope({
+      runId: "run-1",
+      event: { type: "paneDowngraded", payload: { runId: "run-1", requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", reason: "tmux exploded" } },
+    }),
+    ROWS,
+  );
+  expect(digest).toBeDefined();
+  expect(digest).toContain("tmux");
+  expect(digest).toContain("hidden");
+  expect(digest).toContain("tmux exploded");
+});
+
 test("noise never fires", () => {
   const t = tracker();
   expect(t.isMilestone(message())).toBe(false);
@@ -282,6 +308,32 @@ test("CREW-51: a replayed milestone never injects a digest (stale-failure guard)
   dispatch(run("run-2", "failed"), { replay: false });
   expect(sent.length).toBe(1);
   expect(sent[0]).toContain("FAILED");
+});
+
+test("CREW-60/CREW-51: a replayed paneDowngraded never injects a digest either", () => {
+  // The generic replay-guard test above only exercises `runEvent`. This
+  // pins it for the newest milestone type specifically: CREW-51's guard
+  // in the bridge is generic over every milestone (it gates on
+  // `meta.replay` after `isMilestone`, not on the event's own type), but
+  // that genericity is exactly what a future "simplify the guard" change
+  // could break for one type without the others' own tests catching it.
+  const { sent, dispatch } = fakeBridge();
+
+  const downgraded = (): EventEnvelope =>
+    envelope({
+      runId: "run-1",
+      event: {
+        type: "paneDowngraded",
+        payload: { runId: "run-1", requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", reason: "tmux exploded" },
+      },
+    });
+
+  dispatch(downgraded(), { replay: true });
+  expect(sent.length).toBe(0);
+
+  dispatch(downgraded(), { replay: false });
+  expect(sent.length).toBe(1);
+  expect(sent[0]).toContain("tmux");
 });
 
 test("CREW-51: a replayed milestone still updates the tracker's one-shot bookkeeping", () => {

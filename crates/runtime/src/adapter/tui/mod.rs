@@ -81,6 +81,14 @@ pub struct TuiSupport {
     /// `permissionMode`/`model`/`sessionDir`/`extraArgs`.
     pub adapters: BTreeMap<String, AdapterConfig>,
     pub timings: TuiTimings,
+    /// The org's compiled redaction patterns (already validated once, at
+    /// startup -- see `lifecycle.rs`'s own fail-closed `Redactor::with_org_rules`
+    /// call). Plain config data, not a built `Redactor`, so each
+    /// `PaneCoordinator` this spawns can build its own instance on demand
+    /// (CREW-60: its `PaneDowngraded.reason` embeds subprocess stderr and
+    /// needs the same full, org-configured redactor every other journal-text
+    /// crossing uses).
+    pub org_security_patterns: Vec<String>,
 }
 
 /// A durable position in a vendor transcript: the byte offset of the
@@ -408,6 +416,7 @@ where
         PathBuf::from("/opt/crew/bin/crewd"),
         dir_path.clone(),
         dir_path.clone(),
+        crate::security::redaction::Redactor::new(),
     ));
 
     // Live mode leaves `session_dir` unset: real vendor CLIs write
