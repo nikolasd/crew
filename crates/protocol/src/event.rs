@@ -682,7 +682,12 @@ pub enum RuntimeEvent {
     // against each other for the same `waitingUser -> working` edge
     // (#76/#77's own comments call the loser's rejection tolerated), and
     // this event must never be journaled for the loser.
-    /// A settled run resumed to `working`, and why.
+    /// A settled run resumed to `working`, and why. Best-effort, not
+    /// guaranteed: it is journaled as a separate commit after the
+    /// transition it describes, so a journal can hold a `waitingUser ->
+    /// working` edge with no matching `runResumed` at all. A consumer must
+    /// read that absence as "cause unknown", never as "this was not a
+    /// resume".
     RunResumed {
         run_id: RunId,
         cause: ResumeCause,
