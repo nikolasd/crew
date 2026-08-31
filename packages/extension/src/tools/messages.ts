@@ -28,11 +28,11 @@ export const CREW_MESSAGE_TOOL_NAME = "crew_message";
 
 export function registerMessageTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["send", "list"]).describe("Which message operation to perform."),
+    op: pi.zod.enum(["send", "list"]).describe("Which message operation to perform: send | list."),
     runId: pi.zod.string().describe("The run this message belongs to (required for both send and list)."),
     senderWorkerId: pi.zod.string().optional().describe("Required for send: the sending worker id."),
     taskId: pi.zod.string().optional().describe("Required for send: the task this message relates to."),
-    kind: pi.zod.enum(MESSAGE_KINDS).optional().describe("Required for send: the coordination message kind."),
+    kind: pi.zod.enum(MESSAGE_KINDS).optional().describe("Required for send: assign | steer | followUp | question | answer | peerMessage | approvalDecision | cancel | shutdown — the coordination message kind."),
     payload: pi.zod.string().optional().describe("Required for send: the message payload."),
     recipientWorkerId: pi.zod.string().optional().describe("Optional recipient worker id for send."),
     replyTo: pi.zod.string().optional().describe("Optional id of a prior message this replies to."),

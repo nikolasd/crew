@@ -30,11 +30,11 @@ interface SubtaskProposal {
 
 export function registerSpawnTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["spawn"]).describe("Spawn a single approved subtask as its own run."),
+    op: pi.zod.enum(["spawn"]).describe("Spawn a single approved subtask as its own run: spawn."),
     taskId: pi.zod.string().describe("The leader task this subtask executes under."),
     planId: pi.zod.string().describe("The plan's run id (plan_id = run_id); the subtask must belong to it."),
     subtaskId: pi.zod.string().describe("The subtask id from the approved plan to spawn."),
-    workspaceMode: pi.zod.enum(["shared", "isolated", "copy"]).optional().describe("Optional workspace mode for the spawned run."),
+    workspaceMode: pi.zod.enum(["shared", "isolated", "copy"]).optional().describe("Optional workspace mode for the spawned run: shared | isolated | copy."),
     priority: pi.zod.number().int().optional().describe("Optional priority for the spawned run."),
   });
 
@@ -102,7 +102,7 @@ export function registerSpawnTool(pi: ExtensionAPI, ctx: OrchestrationToolContex
 
 export function registerSendTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["send"]).describe("Send a steering message to a run."),
+    op: pi.zod.enum(["send"]).describe("Send a steering message to a run: send."),
     runId: pi.zod.string().describe("The run to steer."),
     senderWorkerId: pi.zod.string().optional().describe("The sending worker id."),
     taskId: pi.zod.string().optional().describe("The task this message relates to."),
@@ -137,7 +137,7 @@ export function registerSendTool(pi: ExtensionAPI, ctx: OrchestrationToolContext
 
 export function registerStatusTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["snapshot"]).describe("Snapshot the orchestration state for a task."),
+    op: pi.zod.enum(["snapshot"]).describe("Snapshot the orchestration state for a task: snapshot."),
     taskId: pi.zod.string().optional().describe("Optional task filter; omit for all runs."),
   });
 
@@ -158,7 +158,7 @@ export function registerStatusTool(pi: ExtensionAPI, ctx: OrchestrationToolConte
 
 export function registerTranscriptTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["replay"]).describe("Replay a run's events as normalized digests."),
+    op: pi.zod.enum(["replay"]).describe("Replay a run's events as normalized digests: replay."),
     runId: pi.zod.string().describe("The run whose events to replay."),
     fromSequence: pi.zod.number().int().optional().describe("Optional starting sequence (default 0)."),
     limit: pi.zod.number().int().optional().describe("Optional max number of events to return."),
@@ -191,7 +191,7 @@ export function registerTranscriptTool(pi: ExtensionAPI, ctx: OrchestrationToolC
 
 export function registerStopTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["stop"]).describe("Stop a running worker."),
+    op: pi.zod.enum(["stop"]).describe("Stop a running worker: stop."),
     runId: pi.zod.string().describe("The run to stop."),
     outcome: pi.zod.enum(["done", "abort"]).describe("Both cancel the run immediately -- there is no server-side graceful/soft stop today. 'done' additionally sends a wrap-up follow-up message first; 'abort' does not."),
   });
@@ -229,7 +229,7 @@ export function registerStopTool(pi: ExtensionAPI, ctx: OrchestrationToolContext
 
 export function registerFinishTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["finish"]).describe("Cancel the remaining live runs of a plan."),
+    op: pi.zod.enum(["finish"]).describe("Cancel the remaining live runs of a plan: finish."),
     runIds: pi.zod.array(pi.zod.string()).describe("The run ids to cancel (the subtask runs you spawned from the plan)."),
   });
 

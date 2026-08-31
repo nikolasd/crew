@@ -12,10 +12,10 @@ export const CREW_CHILD_TOOL_NAME = "crew_child";
 
 export function registerChildTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["list", "decide"]).describe("Which child-request operation to perform."),
+    op: pi.zod.enum(["list", "decide"]).describe("Which child-request operation to perform: list | decide."),
     runId: pi.zod.string().optional().describe("Optional filter for list: only return child requests recorded by this run."),
     parentRunId: pi.zod.string().optional().describe("Required for decide: the run whose child request is being decided."),
-    decision: pi.zod.enum(["accept", "deny"]).optional().describe("Required for decide: accept provisions the child run, deny refuses it."),
+    decision: pi.zod.enum(["accept", "deny"]).optional().describe("Required for decide: accept | deny — accept provisions the child run, deny refuses it."),
     childTaskId: pi.zod.string().optional().describe("Required when decision is accept: the task the child run executes."),
     childWorkerId: pi.zod.string().optional().describe("Required when decision is accept: the worker the child run executes as."),
     childRunId: pi.zod.string().optional().describe("Required when decision is accept: the run id to provision for the child."),

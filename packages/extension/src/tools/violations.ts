@@ -16,9 +16,9 @@ export const CREW_VIOLATION_TOOL_NAME = "crew_violation";
 
 export function registerViolationTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["decide", "list"]).describe("Which violation operation to perform."),
+    op: pi.zod.enum(["decide", "list"]).describe("Which violation operation to perform: decide | list."),
     violationId: pi.zod.string().optional().describe("Required for decide: the recorded violation to decide."),
-    resolution: pi.zod.enum(["release", "cancel"]).optional().describe("Required for decide: 'release' resumes the quarantined run (if this was its last unresolved violation), 'cancel' ends the run outright."),
+    resolution: pi.zod.enum(["release", "cancel"]).optional().describe("Required for decide: release | cancel — release resumes the quarantined run (if this was its last unresolved violation), cancel ends the run outright."),
     runId: pi.zod.string().optional().describe("Optional for list: narrow to one run's violations."),
   });
 
