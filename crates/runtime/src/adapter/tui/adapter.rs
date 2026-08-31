@@ -1165,6 +1165,14 @@ async fn emit_tui_event(
         TuiEvent::Raw { entry_type } => {
             tracing::debug!(entry_type, run_id = %run_id, "tui transcript: unrecognized entry");
         }
+        // CREW-47 (D1): the sink's own side channel, never `emit` -- see
+        // `AdapterEventSink::note_real_user_turn`'s doc comment for why
+        // this must not become journaled content.
+        TuiEvent::UserTurnStarted => {
+            if let Err(err) = sink.note_real_user_turn(run_id).await {
+                tracing::warn!(error = %err, run_id = %run_id, "tui adapter failed to signal a real user turn");
+            }
+        }
     }
 }
 

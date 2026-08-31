@@ -246,6 +246,20 @@ impl RunLifecycle {
     /// Returns `false` only when the current state could not be read, so the
     /// caller re-asks on the next event instead of giving up on a transient
     /// database error.
+    ///
+    /// CREW-47 (D1): this used to also un-park a turn-settled `waitingUser`
+    /// on ANY vendor output, on the premise that the vendor producing
+    /// anything meant the leader had steered it. That premise was never
+    /// true: a vendor transcript's bookkeeping entries (session metadata,
+    /// hook summaries, cost/turn-duration records -- none of them a new
+    /// user turn) journal as ordinary evidence too, and each one un-parked
+    /// the run right back out from under a leader who had not, in fact,
+    /// said anything. Resumption is now caused, never inferred here: a
+    /// delivered follow-up resumes the run directly at its own call site
+    /// (`OrchestrationService::message_send`), and a genuine new
+    /// user-authored transcript entry resumes it via
+    /// [`Self::observe_real_user_turn`]. This method no longer touches
+    /// `waitingUser` at all.
     pub(crate) async fn observe_vendor_activity(&self) -> bool {
         let Some(current) = self.current().await else {
             return false;
@@ -255,21 +269,28 @@ impl RunLifecycle {
                 self.walk_to(&state("working")).await;
                 true
             }
-            // A run parked by a finished TURN starts working again the
-            // moment its vendor produces anything: the leader steered it
-            // (ADR-0027 -- a run is a conversation). Gated on the flag so
-            // this only ever un-parks a turn-settled wait; a `waitingUser`
-            // that means "the worker asked a question" (or an approval
-            // wait, or `waitingPeer`/`paused`) is still never clobbered by
-            // vendor output.
-            "waitingUser" if self.turn_settled().await => {
-                self.set_turn_settled(false).await;
-                self.walk_to(&state("working")).await;
-                true
-            }
-            // At-or-past `working` (`waitingPeer`, `paused`, a question
-            // wait) or terminal: vendor output must never clobber those.
+            // At-or-past `working` (`waitingUser`, `waitingPeer`, `paused`)
+            // or terminal: vendor output must never clobber those.
             _ => true,
+        }
+    }
+
+    /// A genuine new user-authored transcript entry (CREW-47 D1): the
+    /// vendor's own transcript recorded a real follow-up, not the
+    /// bookkeeping evidence `observe_vendor_activity` used to (wrongly)
+    /// treat the same way. Narrower than that method ever was: the caller
+    /// is responsible for having already excluded sidechain entries and
+    /// tool-result-only content, so by the time this is called the entry
+    /// really is a new turn a human or leader typed.
+    ///
+    /// Gated on the flag exactly like the deleted arm was, for the same
+    /// reason: a `waitingUser` meaning "the worker asked a question" (or
+    /// an approval wait, or `waitingPeer`/`paused`) must still never be
+    /// clobbered by this.
+    pub(crate) async fn observe_real_user_turn(&self) {
+        if self.turn_settled().await {
+            self.set_turn_settled(false).await;
+            self.walk_to(&state("working")).await;
         }
     }
 
@@ -451,6 +472,21 @@ impl AdapterEventSink for RunLifecycleSink {
                 }
             }
             result
+        })
+    }
+
+    /// CREW-47 (D1): the narrow, caused resumption path. Unlike `emit`'s
+    /// generic catch-all (deleted from `observe_vendor_activity` for this
+    /// exact reason), this only ever fires when the caller has already
+    /// confirmed a real user-authored turn -- so it un-parks unconditionally,
+    /// with no `working_observed` latch to manage: it is not part of the
+    /// ordinary vendor-activity stream this run's other evidence flows
+    /// through, and nothing about a turn boundary should reset it.
+    fn note_real_user_turn(&self, run_id: RunId) -> AdapterFuture<'_, ()> {
+        debug_assert_eq!(run_id, self.lifecycle.run_id);
+        Box::pin(async move {
+            self.lifecycle.observe_real_user_turn().await;
+            Ok(())
         })
     }
 }
@@ -901,7 +937,15 @@ mod tests {
     /// or a snapshot reader would keep seeing "the answer is ready" for a
     /// run that is busy again.
     #[tokio::test]
-    async fn vendor_activity_after_a_turn_end_resumes_work_and_clears_the_flag() {
+    async fn a_trailing_session_meta_entry_never_resumes_a_settled_run() {
+        // CREW-47 (D1): `observe_vendor_activity`'s `waitingUser` arm used
+        // to treat this MessageChunk (or the bookkeeping entries that
+        // actually triggered the bug -- a hook summary, a cost record, a
+        // hidden `SessionMeta`-only line -- all of which reach this sink
+        // the same generic way) as evidence the leader had steered the
+        // run. It never had -- resumption is now caused only by a
+        // delivered follow-up or a real user-authored transcript entry,
+        // neither of which this event is.
         let (_dir, db) = open_db().await;
         let project_id = ProjectId::new();
         let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
@@ -928,8 +972,10 @@ mod tests {
         .await
         .expect("emit");
         assert_eq!(run_state(&db, run_id).await, "waitingUser");
+        assert!(run_flags(&db, project_id, run_id).await.turn_settled);
 
-        // The follow-up turn's first output.
+        // Ordinary vendor evidence -- exactly the shape a trailing
+        // bookkeeping entry produces, never a real new turn.
         sink.emit(AdapterEvent {
             run_id,
             task_id,
@@ -948,13 +994,54 @@ mod tests {
 
         assert_eq!(
             run_state(&db, run_id).await,
-            "working",
-            "a steered run is working again"
+            "waitingUser",
+            "ordinary vendor output must never resume a run on its own"
         );
         assert!(
-            !run_flags(&db, project_id, run_id).await.turn_settled,
-            "the turn-settled marker must be cleared once the run resumes"
+            run_flags(&db, project_id, run_id).await.turn_settled,
+            "the turn-settled marker must survive vendor output that isn't a real new turn"
         );
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// The narrow replacement for the deleted arm above: a real
+    /// user-authored turn -- the ONLY vendor-side evidence CREW-47 (D1)
+    /// still trusts -- resumes a settled run exactly as the old, wrongly
+    /// generic arm used to.
+    #[tokio::test]
+    async fn a_real_user_turn_resumes_a_settled_run() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
+        drive_to_state(&db, project_id, run_id, "working").await;
+        let (tx, _rx) = broadcast::channel(64);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::TurnEnded {
+                outcome: crew_protocol::TurnOutcome::Normal,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+        assert_eq!(run_state(&db, run_id).await, "waitingUser");
+        assert!(run_flags(&db, project_id, run_id).await.turn_settled);
+
+        sink.note_real_user_turn(run_id).await.expect("note");
+
+        assert_eq!(run_state(&db, run_id).await, "working");
+        assert!(!run_flags(&db, project_id, run_id).await.turn_settled);
         db.shutdown().await.expect("shutdown database");
     }
 

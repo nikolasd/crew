@@ -148,6 +148,16 @@ pub enum TuiEvent {
     Raw {
         entry_type: String,
     },
+    /// A genuine new user-authored turn (CREW-47 D1): the format has
+    /// already confirmed the entry is a real user prompt, not a subagent's
+    /// sidechain or a tool-result-only bookkeeping entry. Carries no free
+    /// text -- unlike every other variant here, this is deliberately
+    /// **never journaled** (see [`Self::emits_a_payload`]): it exists only
+    /// to resume a run a finished turn parked
+    /// (`crate::adapter::event_sink::AdapterEventSink::note_real_user_turn`),
+    /// narrower and more honest than inferring that resumption from
+    /// whatever vendor output happens to arrive next.
+    UserTurnStarted,
 }
 
 /// A vendor transcript format: given a raw chunk that starts at
@@ -281,7 +291,9 @@ impl TuiEvent {
             | TuiEvent::ToolActivity { .. }
             | TuiEvent::SessionMeta { .. }
             | TuiEvent::TurnEnded { .. } => true,
-            TuiEvent::Raw { .. } => false,
+            // `UserTurnStarted` deliberately never becomes an
+            // `AdapterEventPayload` -- see its own doc comment.
+            TuiEvent::Raw { .. } | TuiEvent::UserTurnStarted => false,
         }
     }
 }

@@ -2510,6 +2510,74 @@ impl OrchestrationService {
                                 "failed to journal a burst-allowance admission"
                             ),
                         }
+
+                        // CREW-47 (D1): a delivered follow-up IS the leader
+                        // steering the run -- this is what resumes it, not
+                        // an inference from whatever the vendor produces
+                        // next. Walk the run back to `working` and clear
+                        // the flag that described the pause, on the
+                        // runtime's own authority (no `principal_instance_id`),
+                        // the same terms `RunLifecycle`'s edges use.
+                        //
+                        // A race with the vendor-side, narrower resume
+                        // detection (a genuine new user-authored transcript
+                        // entry) landing first is tolerated: the transition
+                        // then rejects as an illegal self-edge
+                        // (`working -> working`), which is exactly the
+                        // no-op this wants -- so a failure here is logged,
+                        // never propagated.
+                        let mut resumed = self
+                            .db
+                            .run_domain_op(Box::new(move |conn| {
+                                DomainRepository::new(conn, project_id)
+                                    .transition_run(
+                                        run_id,
+                                        &RunState::try_from("working")
+                                            .expect("working is a valid RunState"),
+                                        None,
+                                    )
+                                    .map(|c| {
+                                        embed_envelope(
+                                            json!({ "sequence": c.sequence }),
+                                            &c.envelope,
+                                        )
+                                    })
+                            }))
+                            .await;
+                        match resumed {
+                            Ok(ref mut value) => self.broadcast(value),
+                            Err(ref err) => tracing::debug!(
+                                error = %err,
+                                run_id = %run_id,
+                                "follow-up delivery's own resume transition raced (benign -- \
+                                 the run was already working)"
+                            ),
+                        }
+                        let mut cleared = self
+                            .db
+                            .run_domain_op(Box::new(move |conn| {
+                                DomainRepository::new(conn, project_id)
+                                    .set_run_flag(
+                                        run_id,
+                                        crate::domain::RunFlag::TurnSettled,
+                                        false,
+                                    )
+                                    .map(|c| {
+                                        embed_envelope(
+                                            json!({ "sequence": c.sequence }),
+                                            &c.envelope,
+                                        )
+                                    })
+                            }))
+                            .await;
+                        match cleared {
+                            Ok(ref mut value) => self.broadcast(value),
+                            Err(ref err) => tracing::warn!(
+                                error = %err,
+                                run_id = %run_id,
+                                "failed to clear turnSettled after a delivered follow-up"
+                            ),
+                        }
                     }
                     let mut sent = self
                         .db
