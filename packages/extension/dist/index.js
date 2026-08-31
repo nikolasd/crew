@@ -11064,7 +11064,7 @@ class CrewClient {
         const replayed = await this.#send("events/replay", { afterSequence: fromSequence });
         assertValid(validateEventEnvelopeArray, replayed, "events/replay result");
         for (const event of replayed) {
-          onEvent(event);
+          onEvent(event, { replay: true });
         }
         await this.#send("events/subscribe", {});
       } catch (err) {
@@ -11175,7 +11175,7 @@ class CrewClient {
         return;
       }
       for (const subscriber of this.#subscribers) {
-        subscriber(params);
+        subscriber(params, { replay: false });
       }
     }
   }
@@ -13301,8 +13301,9 @@ function formatDigest(e, lookup) {
 function attachMilestoneBridge(pi, monitor) {
   const tracker = new MilestoneTracker;
   const send = pi.sendMessage;
-  return monitor.subscribeEvents((e) => {
-    if (!tracker.isMilestone(e)) {
+  return monitor.subscribeEvents((e, meta) => {
+    const milestone = tracker.isMilestone(e);
+    if (!milestone || meta.replay) {
       return;
     }
     try {
@@ -13788,6 +13789,7 @@ class MonitorController {
   #unsubscribe;
   #onUpdate;
   #eventListeners = new Set;
+  #tail = Promise.resolve();
   getState() {
     return this.#state;
   }
@@ -13799,16 +13801,23 @@ class MonitorController {
   }
   start(client, fromSequence, onUpdate) {
     this.#onUpdate = onUpdate;
-    this.#unsubscribe = client.subscribe(fromSequence, (event) => {
-      this.#state = reduceEvent(this.#state, event);
-      this.#onUpdate?.();
-      if (event.event.type === "runEvent") {
-        this.enrichRun(client, event.event.payload.runId, event.event.payload.workerId);
-      }
-      for (const listener of this.#eventListeners) {
-        listener(event);
-      }
+    this.#unsubscribe = client.subscribe(fromSequence, (event, meta = { replay: false }) => {
+      this.#tail = this.#tail.then(async () => {
+        try {
+          await this.#dispatch(client, event, meta);
+        } catch {}
+      });
     });
+  }
+  async#dispatch(client, event, meta) {
+    this.#state = reduceEvent(this.#state, event);
+    this.#onUpdate?.();
+    if (event.event.type === "runEvent") {
+      await this.enrichRun(client, event.event.payload.runId, event.event.payload.workerId);
+    }
+    for (const listener of this.#eventListeners) {
+      listener(event, meta);
+    }
   }
   async enrichRun(client, runId, workerId) {
     try {

@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { EventEnvelope } from "@nikolasd/crew-protocol";
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { CrewClient } from "../client";
+import type { CrewClient, EventDeliveryMeta } from "../client";
 import { attachMilestoneBridge } from "../milestones";
 import { assertCompatiblePiCodingAgentVersion } from "./compat";
 import { EMPTY_MONITOR_STATE, enrichWorker, enrichWorkspaceMode, hasVisibleRows, setSubmitError, type MonitorState, reduceEvent } from "./model";
@@ -94,7 +94,25 @@ export class MonitorController {
   #onUpdate: (() => void) | undefined;
   /** Extra per-event listeners (e.g. the milestone bridge), fed by the
    *  single live subscription — never a second one. */
-  #eventListeners = new Set<(event: EventEnvelope) => void>();
+  #eventListeners = new Set<(event: EventEnvelope, meta: EventDeliveryMeta) => void>();
+  /**
+   * Chains every `#dispatch` call in delivery order. CREW-51's review:
+   * `#dispatch` awaits `enrichRun`'s RPC for a `runEvent` before its
+   * listener fan-out, and each delivered event used to kick off its own
+   * `#dispatch` independently (`void`-called, fire-and-forgotten) --
+   * so two events delivered back-to-back could have their listener
+   * notifications arrive out of delivery order (two `runEvent`s race on
+   * their own independent `enrichRun` promises; a later non-`runEvent`,
+   * which awaits nothing, always overtakes an earlier `runEvent` still
+   * waiting on its RPC). Worse than a reordered notification: a listener
+   * that reads `getState()` (the milestone bridge's `formatDigest` does)
+   * could see state already advanced past the event it was just handed,
+   * because `reduceEvent` for the next event had no reason to wait either.
+   * Chaining through `#tail` serializes the *entire* dispatch -- reduce,
+   * `onUpdate`, enrich, listener fan-out -- so event N+1 cannot begin until
+   * event N's listeners have already run against event N's own state.
+   */
+  #tail: Promise<void> = Promise.resolve();
 
   /** The current replayable state (read-only view for tests/commands). */
   getState(): MonitorState {
@@ -106,8 +124,18 @@ export class MonitorController {
    * subscription. Returns an unsubscribe function. The milestone bridge uses
    * this so the model is told about milestones without a second subscription
    * being opened.
+   *
+   * Ordering/currency guarantee (CREW-51): `listener` is called once per
+   * delivered envelope, strictly in delivery order -- never overtaken by a
+   * later event's own async work (see `#tail`). `getState()` called
+   * synchronously from inside `listener` reflects state *as of this event*,
+   * not a later one: the next event's `reduceEvent` cannot run until this
+   * event's entire dispatch, including this listener call, has returned.
+   * A listener that itself returns a promise or schedules async work is on
+   * its own past that point -- the guarantee covers only the synchronous
+   * portion of the call.
    */
-  subscribeEvents(listener: (event: EventEnvelope) => void): () => void {
+  subscribeEvents(listener: (event: EventEnvelope, meta: EventDeliveryMeta) => void): () => void {
     this.#eventListeners.add(listener);
     return () => {
       this.#eventListeners.delete(listener);
@@ -119,21 +147,53 @@ export class MonitorController {
    * live notifications arrive (both flow through the same reducer, so
    * there is no separate "replay mode"). Calls `onUpdate` after every
    * applied event so the caller can re-render the widget and persist the
-   * new sequence, then fans the event out to any extra listeners (the
-   * milestone bridge).
+   * new sequence, then fans the event (with its {@link EventDeliveryMeta})
+   * out to any extra listeners (the milestone bridge).
    */
   start(client: CrewClient, fromSequence: number, onUpdate: () => void): void {
     this.#onUpdate = onUpdate;
-    this.#unsubscribe = client.subscribe(fromSequence, (event) => {
-      this.#state = reduceEvent(this.#state, event);
-      this.#onUpdate?.();
-      if (event.event.type === "runEvent") {
-        void this.enrichRun(client, event.event.payload.runId, event.event.payload.workerId);
-      }
-      for (const listener of this.#eventListeners) {
-        listener(event);
-      }
+    this.#unsubscribe = client.subscribe(fromSequence, (event, meta = { replay: false }) => {
+      // Chained through `#tail`, not `void`-called independently: see
+      // `#tail`'s own doc for why serializing dispatch matters here. A
+      // failed dispatch is swallowed at this link, not left to reject
+      // `#tail` -- otherwise one bad event would permanently stop every
+      // later one from ever dispatching again.
+      this.#tail = this.#tail.then(async () => {
+        try {
+          await this.#dispatch(client, event, meta);
+        } catch {
+          // Best-effort: reduceEvent/enrichRun/the listener loop already
+          // guard their own failure modes; this is a last-resort net.
+        }
+      });
     });
+  }
+
+  /**
+   * Applies one delivered envelope and fans it out to `#eventListeners`.
+   * Always called through `#tail` (never directly), so a caller can never
+   * observe two overlapping `#dispatch` calls.
+   *
+   * CREW-51: for a `runEvent`, `enrichRun`'s `worker/get` lookup is
+   * *awaited* here, before the listener loop, rather than fired-and-forgotten
+   * the way it used to be -- previously the milestone bridge's listener ran
+   * synchronously on the same tick `enrichRun` was kicked off, so it always
+   * read the row before the RPC round trip had any chance to land, reporting
+   * "(unknown adapter)" for a run's very first milestone even though the
+   * widget's own later re-render (from `enrichRun`'s own `onUpdate` call)
+   * showed the right adapter moments later. Reducing state and updating the
+   * widget still happen immediately, unchanged -- only the listener fan-out
+   * for a `runEvent` now waits on enrichment first.
+   */
+  async #dispatch(client: CrewClient, event: EventEnvelope, meta: EventDeliveryMeta): Promise<void> {
+    this.#state = reduceEvent(this.#state, event);
+    this.#onUpdate?.();
+    if (event.event.type === "runEvent") {
+      await this.enrichRun(client, event.event.payload.runId, event.event.payload.workerId);
+    }
+    for (const listener of this.#eventListeners) {
+      listener(event, meta);
+    }
   }
 
   /** Hydrates a row's worker profile and active workspace mode from the

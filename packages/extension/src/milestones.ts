@@ -15,6 +15,7 @@
 import type { EventEnvelope, RuntimeEvent } from "@nikolasd/crew-protocol";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
+import type { EventDeliveryMeta } from "./client";
 import type { MonitorController } from "./monitor/controller";
 import type { MonitorRow } from "./monitor/model";
 
@@ -172,6 +173,18 @@ export function formatDigest(e: EventEnvelope, lookup: RunLookup): string | unde
  * thrown digest/injection error must never break the monitor: it is logged
  * and swallowed.
  *
+ * CREW-51 (digest currency guard): `tracker.isMilestone(e)` is called for
+ * *every* envelope regardless of `meta.replay`, so its one-shot bookkeeping
+ * (first `working`, settle episodes) stays correct against the run's full
+ * history -- but a digest is only ever formatted and sent for a *live*
+ * milestone (`meta.replay === false`). Without this, resuming a session (or
+ * any reconnect that replays backlog) would re-tell the leader about
+ * whatever terminal/question/escalation states are sitting in the replayed
+ * history as if they had just happened -- a run that failed hours ago reads
+ * as a fresh failure. `events/replay`'s catch-up array is exactly that
+ * backlog (see `EventDeliveryMeta`); only what arrives afterward, live, is
+ * current enough to act on.
+ *
  * Returns an unsubscribe function that detaches the bridge.
  */
 export function attachMilestoneBridge(pi: ExtensionAPI, monitor: MonitorController): () => void {
@@ -187,8 +200,9 @@ export function attachMilestoneBridge(pi: ExtensionAPI, monitor: MonitorControll
     }
   ).sendMessage;
 
-  return monitor.subscribeEvents((e: EventEnvelope) => {
-    if (!tracker.isMilestone(e)) {
+  return monitor.subscribeEvents((e: EventEnvelope, meta: EventDeliveryMeta) => {
+    const milestone = tracker.isMilestone(e);
+    if (!milestone || meta.replay) {
       return;
     }
     try {

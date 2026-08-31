@@ -811,33 +811,6 @@ async fn run_result_returns_the_answer_after_a_turn_end_without_cancelling() {
     );
 }
 
-/// ADR-0027's fold boundary. The process stays alive after its turn, so a
-/// follow-up turn keeps appending to the same run; the answer the leader
-/// already read must not be silently rewritten by a later one.
-#[tokio::test]
-async fn run_result_reads_up_to_the_first_turn_end_not_a_later_one() {
-    let harness = Harness::start(|c| {
-        c.run_driver = Some(Arc::new(LifecycleSeedingRunDriver::new(vec![
-            final_text("first turn answer"),
-            turn_ended(),
-            final_text("second turn answer"),
-            turn_ended(),
-        ])));
-    })
-    .await;
-    let mut client = omp_client(&harness, "omp-1").await;
-    let run_id = submit_run(&mut client).await;
-
-    let resp = client
-        .call(5, "run/result", json!({ "runId": run_id }))
-        .await;
-    assert!(resp.get("error").is_none(), "{resp:?}");
-    assert_eq!(
-        resp["result"]["resultText"], "first turn answer",
-        "the fold stops at the first turn boundary: {resp:?}"
-    );
-}
-
 /// CREW-49 (D3), ADR-0027 amendment: a turn ending with no visible text
 /// (tool activity only) has no answer to protect, so the fold skips past
 /// it rather than stopping there. Live evidence: a run whose first turn
@@ -875,6 +848,14 @@ async fn run_result_reads_an_answer_that_follows_a_content_free_boundary() {
 /// have passed CI just as well as the actual rule. Four events, two real
 /// boundaries, text before the FIRST one: the fold must stop there and
 /// never see the second turn's different text at all.
+///
+/// Supersedes the now-deleted `run_result_reads_up_to_the_first_turn_end_
+/// not_a_later_one`, which asserted this same property under a name that
+/// became a false claim after CREW-49: the fold no longer stops at the
+/// first turn end outright, only at the first one that carries text -- a
+/// test name is a claim (see docs/engineering-lessons.md), so the stale
+/// name was retired rather than kept alongside a second test of the same
+/// property.
 #[tokio::test]
 async fn run_result_stops_at_the_first_boundary_that_carries_text() {
     let harness = Harness::start(|c| {
