@@ -10,7 +10,7 @@ import type { WorkerId } from "./WorkerId";
  */
 export type ClientPrincipalSummary = { role: ClientRole, instanceId: string, 
 /**
- * The run this connection is scoped to. Absent for every role except
+ * The run this connection is scoped to. `null` for every role except
  * `workerMcp`, whose scope-token binding determines it -- never a
  * value the client can request or override.
  */

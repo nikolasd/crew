@@ -44,7 +44,7 @@ uptimeSeconds: number,
 binarySource: BinarySource, 
 /**
  * The embedded dashboard's live URL when `dashboard.enabled` and the
- * bind succeeded; absent otherwise (disabled, or the bind failed and
+ * bind succeeded; `null` otherwise (disabled, or the bind failed and
  * degraded to no dashboard).
  *
  * The URL includes the dashboard's access token, so it grants whoever

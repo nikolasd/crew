@@ -10,10 +10,10 @@ export type DisplayConfig = {
  */
 backend: DisplayBackend, 
 /**
- * Optional width override (None = auto-detect).
+ * Optional width override; auto-detected when not set.
  */
 width: number | null, 
 /**
- * Optional height override (None = auto-detect).
+ * Optional height override; auto-detected when not set.
  */
 height: number | null, };

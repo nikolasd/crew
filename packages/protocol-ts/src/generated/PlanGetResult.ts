@@ -4,7 +4,7 @@ import type { RunId } from "./RunId";
 
 /**
  * Result of `plan/get`: the most recently proposed plan for a run and its
- * decision, if any. `plan: None` means no plan has been proposed yet;
- * `approved: None` means a plan exists but has not yet been decided.
+ * decision, if any. `plan` is `null` when no plan has been proposed yet;
+ * `approved` is `null` when a plan exists but has not yet been decided.
  */
 export type PlanGetResult = { runId: RunId, plan: PlanSpec | null, approved: boolean | null, };

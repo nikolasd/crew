@@ -26,7 +26,7 @@ observed_event_sequence: number,
  */
 policy_fingerprint: string, 
 /**
- * Present only for a nested-worker violation; absent for any
- * violation with no vendor child, such as a cost ceiling.
+ * Present (non-`null`) only for a nested-worker violation; `null`
+ * for any violation with no vendor child, such as a cost ceiling.
  */
 vendor_child_id: string | null, vendor_parent_ref: string | null, action: string, } } | { "policyViolationDecided": { violation_id: PolicyViolationId, resolution: string, resolved_by: string, } };

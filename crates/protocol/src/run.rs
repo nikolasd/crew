@@ -182,9 +182,10 @@ pub struct RunUsage {
 
 /// Result of `run/result`: a terminal run's final journaled output.
 ///
-/// `result_text: None` means the run journaled no visible final message
-/// (or it was fully redacted) -- distinct from an error. `usage: None`
-/// means the adapter never reported usage (e.g. Copilot under ACP v1).
+/// `resultText` is `null` when the run journaled no visible final message
+/// (or it was fully redacted) -- distinct from an error. `usage` is
+/// `null` when the adapter never reported usage (e.g. Copilot under
+/// ACP v1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]
