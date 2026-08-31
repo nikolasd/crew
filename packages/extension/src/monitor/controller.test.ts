@@ -11,8 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EventEnvelope } from "@nikolasd/crew-protocol";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { CrewClient } from "../client";
-import { registerMonitor } from "./controller";
+import type { CrewClient, EventDeliveryMeta } from "../client";
+import { MonitorController, registerMonitor } from "./controller";
 
 type SessionHandler = (event: unknown, extCtx: ExtensionContext) => Promise<void>;
 
@@ -756,4 +756,70 @@ test("error is cleared on the first run row (CREW-10)", async () => {
   const runWidget = widgetCalls[2]?.[1] as string[];
   // The key test: error should not be in the widget after a run row exists
   expect(runWidget.every((line) => !line.includes("run/submit failed"))).toBe(true);
+});
+
+/** A fake `CrewClient` whose `request()` answers `worker/get`/`run/get` for
+ *  `enrichRun`, with an artificial delay so a listener race would actually
+ *  be observable (a same-tick race would pass even against a same-tick
+ *  fake -- CREW-51's bug needed a real async gap to manifest). */
+function createEnrichingFakeClient(adapter: string): { client: CrewClient; onEvent: (event: EventEnvelope, meta?: EventDeliveryMeta) => Promise<void> | void } {
+  let onEvent: ((event: EventEnvelope, meta?: EventDeliveryMeta) => void) | undefined;
+  const client = {
+    get isClosed() {
+      return false;
+    },
+    subscribe(_fromSequence: number, cb: (event: EventEnvelope, meta?: EventDeliveryMeta) => void) {
+      onEvent = cb;
+      return () => {
+        onEvent = undefined;
+      };
+    },
+    async request(method: string) {
+      // A real RPC round trip always costs at least a tick; without this,
+      // a same-tick fake could never reproduce the race CREW-51 fixes.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      if (method === "worker/get") {
+        return { profileRef: { adapter, model: "some-model" } };
+      }
+      if (method === "run/get") {
+        return { workspace: { mode: "worktree" } };
+      }
+      throw new Error(`unexpected ${method}`);
+    },
+    onClose() {
+      return () => {};
+    },
+  } as unknown as CrewClient;
+  return {
+    client,
+    onEvent: (event, meta) => onEvent?.(event, meta),
+  };
+}
+
+test("CREW-51: a milestone listener sees the enriched adapter, not the unknown-adapter race (milestones.ts:117)", async () => {
+  // Before the fix, `enrichRun`'s `worker/get`/`run/get` lookup was fired
+  // and forgotten *before* the listener loop on the same synchronous tick,
+  // so a run's very first milestone (its first `working` transition) always
+  // read `row.adapter === undefined` -- the RPC round trip cannot possibly
+  // resolve before a synchronous callback returns. Awaiting enrichment
+  // before the listener fan-out closes that race.
+  const { client, onEvent } = createEnrichingFakeClient("claude");
+  const controller = new MonitorController();
+  const seenAdapters: Array<string | undefined> = [];
+  controller.subscribeEvents((event) => {
+    if (event.event.type !== "runEvent") {
+      return;
+    }
+    const row = controller.getState().rows[event.event.payload.runId];
+    seenAdapters.push(row?.adapter);
+  });
+  controller.start(client, 0, () => {});
+
+  onEvent(runEventEnvelope(1));
+  // #dispatch is async (it awaits enrichRun); give its promise a tick to
+  // settle before asserting -- the listener runs at the end of #dispatch,
+  // not synchronously inside the subscribe callback.
+  await new Promise<void>((resolve) => setTimeout(resolve, 10));
+
+  expect(seenAdapters).toEqual(["claude"]);
 });

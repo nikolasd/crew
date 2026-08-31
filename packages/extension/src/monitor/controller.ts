@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { EventEnvelope } from "@nikolasd/crew-protocol";
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { CrewClient } from "../client";
+import type { CrewClient, EventDeliveryMeta } from "../client";
 import { attachMilestoneBridge } from "../milestones";
 import { assertCompatiblePiCodingAgentVersion } from "./compat";
 import { EMPTY_MONITOR_STATE, enrichWorker, enrichWorkspaceMode, hasVisibleRows, setSubmitError, type MonitorState, reduceEvent } from "./model";
@@ -94,7 +94,7 @@ export class MonitorController {
   #onUpdate: (() => void) | undefined;
   /** Extra per-event listeners (e.g. the milestone bridge), fed by the
    *  single live subscription — never a second one. */
-  #eventListeners = new Set<(event: EventEnvelope) => void>();
+  #eventListeners = new Set<(event: EventEnvelope, meta: EventDeliveryMeta) => void>();
 
   /** The current replayable state (read-only view for tests/commands). */
   getState(): MonitorState {
@@ -107,7 +107,7 @@ export class MonitorController {
    * this so the model is told about milestones without a second subscription
    * being opened.
    */
-  subscribeEvents(listener: (event: EventEnvelope) => void): () => void {
+  subscribeEvents(listener: (event: EventEnvelope, meta: EventDeliveryMeta) => void): () => void {
     this.#eventListeners.add(listener);
     return () => {
       this.#eventListeners.delete(listener);
@@ -119,21 +119,38 @@ export class MonitorController {
    * live notifications arrive (both flow through the same reducer, so
    * there is no separate "replay mode"). Calls `onUpdate` after every
    * applied event so the caller can re-render the widget and persist the
-   * new sequence, then fans the event out to any extra listeners (the
-   * milestone bridge).
+   * new sequence, then fans the event (with its {@link EventDeliveryMeta})
+   * out to any extra listeners (the milestone bridge).
    */
   start(client: CrewClient, fromSequence: number, onUpdate: () => void): void {
     this.#onUpdate = onUpdate;
-    this.#unsubscribe = client.subscribe(fromSequence, (event) => {
-      this.#state = reduceEvent(this.#state, event);
-      this.#onUpdate?.();
-      if (event.event.type === "runEvent") {
-        void this.enrichRun(client, event.event.payload.runId, event.event.payload.workerId);
-      }
-      for (const listener of this.#eventListeners) {
-        listener(event);
-      }
+    this.#unsubscribe = client.subscribe(fromSequence, (event, meta = { replay: false }) => {
+      void this.#dispatch(client, event, meta);
     });
+  }
+
+  /**
+   * Applies one delivered envelope and fans it out to `#eventListeners`.
+   * CREW-51: for a `runEvent`, `enrichRun`'s `worker/get` lookup is
+   * *awaited* here, before the listener loop, rather than fired-and-forgotten
+   * the way it used to be -- previously the milestone bridge's listener ran
+   * synchronously on the same tick `enrichRun` was kicked off, so it always
+   * read the row before the RPC round trip had any chance to land, reporting
+   * "(unknown adapter)" for a run's very first milestone even though the
+   * widget's own later re-render (from `enrichRun`'s own `onUpdate` call)
+   * showed the right adapter moments later. Reducing state and updating the
+   * widget still happen immediately, unchanged -- only the listener fan-out
+   * for a `runEvent` now waits on enrichment first.
+   */
+  async #dispatch(client: CrewClient, event: EventEnvelope, meta: EventDeliveryMeta): Promise<void> {
+    this.#state = reduceEvent(this.#state, event);
+    this.#onUpdate?.();
+    if (event.event.type === "runEvent") {
+      await this.enrichRun(client, event.event.payload.runId, event.event.payload.workerId);
+    }
+    for (const listener of this.#eventListeners) {
+      listener(event, meta);
+    }
   }
 
   /** Hydrates a row's worker profile and active workspace mode from the

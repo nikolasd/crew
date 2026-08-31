@@ -71,6 +71,26 @@ const RESULT_VALIDATORS: Record<string, ValidateFunction> = {
 /** Removes a subscription registered with {@link CrewClient.subscribe}. */
 export type Unsubscribe = () => void;
 
+/**
+ * Tells a `subscribe()` listener whether the envelope it just received was
+ * part of the initial catch-up batch (`events/replay`'s array, delivered
+ * before `events/subscribe` is even sent) or arrived live afterward, via a
+ * `crew/event` notification. CREW-51: a listener that reacts to an event
+ * with a side effect meant for "this just happened" (the milestone bridge's
+ * digest injection) must not fire on historical backlog -- a session that
+ * resumes from sequence 0 (or any gap) replays everything since, including
+ * terminal/failure states from long-settled runs, and treating those as
+ * fresh news would tell the leader about a stale failure as if it just
+ * occurred. `replay: true` is the exact and only boundary the client knows
+ * for this -- it is set from the `events/replay` loop below, never derived
+ * from the envelope's own `timestamp` (a legitimate reconnect gap of any
+ * length still replays through the same array and is not stale in the
+ * sense this guards against).
+ */
+export interface EventDeliveryMeta {
+  readonly replay: boolean;
+}
+
 /** Options for constructing a {@link CrewClient}. */
 export interface CrewClientOptions {
   /** Filesystem path of the runtime's Unix domain socket. */
@@ -107,7 +127,7 @@ export class CrewClient {
   #closed = false;
   #closeReason: Error | undefined;
   readonly #pending = new Map<string, PendingRequest>();
-  readonly #subscribers = new Set<(event: EventEnvelope) => void>();
+  readonly #subscribers = new Set<(event: EventEnvelope, meta: EventDeliveryMeta) => void>();
   readonly #closeListeners = new Set<() => void>();
   readonly #ready: Promise<void>;
 
@@ -160,10 +180,12 @@ export class CrewClient {
 
   /**
    * Subscribes to runtime events. Committed events after `fromSequence` are
-   * replayed to `onEvent`, then live events are delivered as they arrive.
-   * Returns a function that cancels the subscription.
+   * replayed to `onEvent` first (each delivered with `{ replay: true }`),
+   * then live events are delivered as they arrive (`{ replay: false }`) --
+   * see {@link EventDeliveryMeta}. Returns a function that cancels the
+   * subscription.
    */
-  subscribe(fromSequence: number, onEvent: (event: EventEnvelope) => void): Unsubscribe {
+  subscribe(fromSequence: number, onEvent: (event: EventEnvelope, meta: EventDeliveryMeta) => void): Unsubscribe {
     this.#subscribers.add(onEvent);
 
     void (async () => {
@@ -171,7 +193,7 @@ export class CrewClient {
         const replayed = await this.#send("events/replay", { afterSequence: fromSequence });
         assertValid<EventEnvelope[]>(validateEventEnvelopeArray, replayed, "events/replay result");
         for (const event of replayed as EventEnvelope[]) {
-          onEvent(event);
+          onEvent(event, { replay: true });
         }
         // The `{ "active": true }` ack is deliberately not validated: it is
         // the subscription trigger, not data, and this path already bypasses
@@ -324,7 +346,7 @@ export class CrewClient {
         return;
       }
       for (const subscriber of this.#subscribers) {
-        subscriber(params as EventEnvelope);
+        subscriber(params as EventEnvelope, { replay: false });
       }
     }
   }

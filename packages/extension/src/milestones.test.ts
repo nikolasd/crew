@@ -219,7 +219,11 @@ test("question digest contains the question text and triage instruction", () => 
   expect(digest).toContain("Answer via crew_send");
 });
 
-test("bridge injects a digest for a milestone and stays silent for noise", () => {
+function fakeBridge(): {
+  sent: string[];
+  dispatch: (e: EventEnvelope, meta?: { replay: boolean }) => void;
+  unsubscribe: () => void;
+} {
   const sent: string[] = [];
   const fakePi = {
     logger: { debug() {}, info() {}, warn() {}, error() {} },
@@ -227,9 +231,9 @@ test("bridge injects a digest for a milestone and stays silent for noise", () =>
       sent.push(message);
     },
   } as unknown as { logger: { [k: string]: (...a: unknown[]) => void }; sendMessage: (m: string) => void };
-  const listeners: Array<(e: EventEnvelope) => void> = [];
+  const listeners: Array<(e: EventEnvelope, meta: { replay: boolean }) => void> = [];
   const controller = {
-    subscribeEvents(cb: (e: EventEnvelope) => void) {
+    subscribeEvents(cb: (e: EventEnvelope, meta: { replay: boolean }) => void) {
       listeners.push(cb);
       return () => {
         const i = listeners.indexOf(cb);
@@ -243,12 +247,17 @@ test("bridge injects a digest for a milestone and stays silent for noise", () =>
     },
   } as unknown as MonitorController;
   const unsubscribe = attachMilestoneBridge(fakePi as never, controller);
-  const dispatch = (e: EventEnvelope): void => {
+  const dispatch = (e: EventEnvelope, meta: { replay: boolean } = { replay: false }): void => {
     for (const l of listeners) {
-      l(e);
+      l(e, meta);
     }
   };
   expect(listeners.length).toBe(1);
+  return { sent, dispatch, unsubscribe };
+}
+
+test("bridge injects a digest for a milestone and stays silent for noise", () => {
+  const { sent, dispatch, unsubscribe } = fakeBridge();
 
   dispatch(run("run-1", "failed"));
   dispatch(message()); // noise: no digest
@@ -258,5 +267,37 @@ test("bridge injects a digest for a milestone and stays silent for noise", () =>
 
   unsubscribe();
   dispatch(run("run-2", "succeeded")); // detached: no further injection
+  expect(sent.length).toBe(1);
+});
+
+test("CREW-51: a replayed milestone never injects a digest (stale-failure guard)", () => {
+  const { sent, dispatch } = fakeBridge();
+
+  // A run that failed long ago, delivered as replay catch-up: no digest --
+  // it would tell the leader about a stale failure as if it just happened.
+  dispatch(run("run-1", "failed"), { replay: true });
+  expect(sent.length).toBe(0);
+
+  // The same shape of event, but genuinely live: digest fires.
+  dispatch(run("run-2", "failed"), { replay: false });
+  expect(sent.length).toBe(1);
+  expect(sent[0]).toContain("FAILED");
+});
+
+test("CREW-51: a replayed milestone still updates the tracker's one-shot bookkeeping", () => {
+  const { sent, dispatch } = fakeBridge();
+
+  // Replayed: run-1's first `working` is real history, so it must count
+  // against the one-shot "first working per run" bookkeeping even though it
+  // produces no digest -- otherwise a later, genuinely live `working` for
+  // the same run would be wrongly treated as "first" and digested again.
+  dispatch(run("run-1", "working"), { replay: true });
+  expect(sent.length).toBe(0);
+
+  dispatch(run("run-1", "working"), { replay: false });
+  expect(sent.length).toBe(0);
+
+  // A different run's first `working`, live, is still a real milestone.
+  dispatch(run("run-2", "working"), { replay: false });
   expect(sent.length).toBe(1);
 });
