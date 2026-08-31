@@ -818,12 +818,12 @@ Register a claude profile/worker/task and submit a short run (as in §6a). Expec
 - The full submit prompt is in the journal, **redacted** (`runPromptEvent`, ADR-0028) — check
   `/crew run <runId>` or an audit export, never expect raw text.
 
-A vendor process that dies with no observable outcome is settled `lost` by the backstop. Note
-there are two legitimate routes to `succeeded` with no turn end — a clean zero exit
-(`terminal_state_for`, ADR-0023), and the leader finishing an unsettled run — so the invariant to
-check is the one above: `succeeded` must never be **inferred from the vendor's turn markers**; a
-run that reaches `succeeded` with neither an exit, nor a finish, nor a journaled turn end is the
-bug.
+A vendor process that dies with no observable outcome is settled `lost` by the backstop. Two
+routes to `succeeded` are legitimate and neither involves the turn: a clean zero exit
+(`terminal_state_for`, ADR-0023) and an explicit leader `finish`. A journaled turn end is **not**
+one of them — the check is that `succeeded` never appears without either a clean exit or a
+finish. A run that settles `succeeded` off the back of a turn end is the bug ADR-0027 exists to
+prevent, whether or not the turn end itself was journaled correctly.
 
 ### 7b. Follow-up steering into the live pane
 
