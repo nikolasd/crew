@@ -3979,6 +3979,10 @@ impl AdapterEventSink for TestSink {
             Ok(events.len() as u64)
         })
     }
+
+    fn note_real_user_turn(&self, _run_id: RunId) -> crew_runtime::adapter::AdapterFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// A `RunDriver` that constructs a real [`SpawnEvidenceAdapter`] (pointed

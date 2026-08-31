@@ -75,6 +75,10 @@ impl AdapterEventSink for RecordingSink {
         drop(guard);
         Box::pin(async move { Ok(sequence) })
     }
+
+    fn note_real_user_turn(&self, _run_id: RunId) -> AdapterFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 async fn wait_until(mut condition: impl FnMut() -> bool, timeout: Duration) -> bool {

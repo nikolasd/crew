@@ -537,6 +537,7 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::adapter::AdapterError;
+    use crate::adapter::event_sink::SettlementSink;
 
     use super::*;
 
@@ -547,6 +548,10 @@ mod tests {
     impl AdapterEventSink for StubSink {
         fn emit(&self, _event: AdapterEvent) -> AdapterFuture<'_, u64> {
             Box::pin(async { Ok(0) })
+        }
+
+        fn note_real_user_turn(&self, _run_id: RunId) -> AdapterFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
         }
     }
 
@@ -564,6 +569,10 @@ mod tests {
                     "journal write failed",
                 ))
             })
+        }
+
+        fn note_real_user_turn(&self, _run_id: RunId) -> AdapterFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
         }
     }
 
@@ -1041,6 +1050,57 @@ mod tests {
         sink.note_real_user_turn(run_id).await.expect("note");
 
         assert_eq!(run_state(&db, run_id).await, "working");
+        assert!(!run_flags(&db, project_id, run_id).await.turn_settled);
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// Staff's review on #76: the test above composes `RunLifecycleSink`
+    /// directly, so deleting `SettlementSink`'s forwarding override would
+    /// leave CI green -- nothing exercises the wrapping order production
+    /// actually uses. This composes exactly that order
+    /// (`SettlementSink::wrap(RunLifecycleSink::wrap(..))`, matching
+    /// `registry.rs`'s two production call sites) through the trait
+    /// object both sinks are hidden behind, so a future stack reorder (or
+    /// a dropped override) breaks this test, not the product.
+    #[tokio::test]
+    async fn a_real_user_turn_resumes_a_settled_run_through_the_production_sink_stack() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
+        drive_to_state(&db, project_id, run_id, "working").await;
+        let (tx, _rx) = broadcast::channel(64);
+        let inner = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
+        let (sink, _settled, _slot_free) = SettlementSink::wrap(inner);
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::TurnEnded {
+                outcome: crew_protocol::TurnOutcome::Normal,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+        assert_eq!(run_state(&db, run_id).await, "waitingUser");
+        assert!(run_flags(&db, project_id, run_id).await.turn_settled);
+
+        sink.note_real_user_turn(run_id).await.expect("note");
+
+        assert_eq!(
+            run_state(&db, run_id).await,
+            "working",
+            "the production sink stack must forward note_real_user_turn all the way to \
+             RunLifecycleSink, not swallow it at SettlementSink"
+        );
         assert!(!run_flags(&db, project_id, run_id).await.turn_settled);
         db.shutdown().await.expect("shutdown database");
     }

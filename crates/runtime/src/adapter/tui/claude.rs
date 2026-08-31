@@ -346,8 +346,16 @@ fn map_entry(value: &Value) -> (Vec<TuiEvent>, Option<String>) {
 /// shaped thing counts" mistake). `message.content` is either a plain
 /// string (unambiguously a real typed prompt -- a tool result is never a
 /// bare string here) or an array of content blocks; in the array form,
-/// this is real only if at least one block is not a `tool_result` --
-/// e.g. text pasted alongside a tool result is still a real instruction.
+/// this is real only if **none** of the blocks are a `tool_result` --
+/// deliberately fail-closed on a mixed array (a `tool_result` alongside a
+/// `text` block), not fail-open. The two wrong answers are not symmetric:
+/// excluding a genuine new instruction leaves the run visibly parked in
+/// `waitingUser`, recoverable by the very next follow-up; including a
+/// tool-result-bearing entry resumes the run silently, mid-turn -- CREW-47
+/// restored in a narrower, easier-to-miss shape. Observed live transcripts
+/// never actually produce a mixed array (an attachment sent alongside a
+/// tool result arrives as its own separate entry), so this asymmetry is
+/// robustness against a shape not yet seen, not a fix for one that was.
 /// An entry with neither shape (no `message.content` at all) has no
 /// positive evidence either way and is conservatively excluded.
 fn is_real_user_turn(value: &Value) -> bool {
@@ -360,9 +368,16 @@ fn is_real_user_turn(value: &Value) -> bool {
     }
     match value.pointer("/message/content") {
         Some(Value::String(_)) => true,
-        Some(Value::Array(blocks)) => blocks
-            .iter()
-            .any(|block| block.get("type").and_then(Value::as_str) != Some("tool_result")),
+        Some(Value::Array(blocks)) => {
+            // `all()` is vacuously true on an empty slice: without this
+            // guard, `content: []` would flip from excluded (the old
+            // fail-open `any()` returns false on empty) to included --
+            // CREW-47 in a corner no real session has produced.
+            !blocks.is_empty()
+                && blocks
+                    .iter()
+                    .all(|block| block.get("type").and_then(Value::as_str) != Some("tool_result"))
+        }
         _ => false,
     }
 }
@@ -776,6 +791,91 @@ mod tests {
         ));
         assert!(matches!(&events[1], TuiEvent::UserTurnStarted));
         assert_eq!(cursor.offset, raw.len() as u64);
+    }
+
+    /// The mandatory exclusion, tested directly rather than only asserted
+    /// in a doc comment (staff's review on #76): if this regresses, every
+    /// tool call's own result delivery resumes a settled run -- CREW-47
+    /// restored in a hot path, not merely an edge case.
+    #[test]
+    fn a_tool_result_user_entry_is_not_a_real_user_turn() {
+        let raw = line(serde_json::json!({
+            "type": "user",
+            "sessionId": "sess-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}],
+            },
+        }));
+        let events: Vec<TuiEvent> = ClaudeTranscriptFormat
+            .parse(&raw, &Cursor::start())
+            .into_iter()
+            .map(|(e, _)| e)
+            .collect();
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(e, TuiEvent::UserTurnStarted)),
+            "a mid-turn tool-result delivery must never signal a real user turn: {events:?}"
+        );
+    }
+
+    /// Fail-closed on a mixed array (staff's review on #76): a
+    /// `tool_result` block alongside a `text` block excludes the whole
+    /// entry, even though the `text` block alone would otherwise qualify.
+    /// The asymmetry is deliberate -- see [`is_real_user_turn`]'s own doc
+    /// comment for why missing a resume is the safer wrong answer here.
+    #[test]
+    fn a_mixed_tool_result_and_text_user_entry_is_not_a_real_user_turn() {
+        let raw = line(serde_json::json!({
+            "type": "user",
+            "sessionId": "sess-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
+                    {"type": "text", "text": "also here's a note"},
+                ],
+            },
+        }));
+        let events: Vec<TuiEvent> = ClaudeTranscriptFormat
+            .parse(&raw, &Cursor::start())
+            .into_iter()
+            .map(|(e, _)| e)
+            .collect();
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(e, TuiEvent::UserTurnStarted)),
+            "a mixed tool_result/text entry must fail closed, not open: {events:?}"
+        );
+    }
+
+    /// The corner the fail-closed flip itself introduced: `all()` is
+    /// vacuously true on an empty slice, so an empty content array would
+    /// have flipped from excluded to included without the explicit
+    /// `is_empty` guard. Not observed in any real session file.
+    #[test]
+    fn an_empty_content_user_entry_is_not_a_real_user_turn() {
+        let raw = line(serde_json::json!({
+            "type": "user",
+            "sessionId": "sess-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": []},
+        }));
+        let events: Vec<TuiEvent> = ClaudeTranscriptFormat
+            .parse(&raw, &Cursor::start())
+            .into_iter()
+            .map(|(e, _)| e)
+            .collect();
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(e, TuiEvent::UserTurnStarted)),
+            "an empty content array must never signal a real user turn: {events:?}"
+        );
     }
 
     // ------------------------------------------------- turn end (CREW-3)

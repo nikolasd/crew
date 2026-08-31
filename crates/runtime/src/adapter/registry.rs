@@ -2084,6 +2084,10 @@ mod settlement_tests {
             fn emit(&self, _event: AdapterEvent) -> crate::adapter::AdapterFuture<'_, u64> {
                 Box::pin(async { Ok(0) })
             }
+
+            fn note_real_user_turn(&self, _run_id: RunId) -> crate::adapter::AdapterFuture<'_, ()> {
+                Box::pin(async { Ok(()) })
+            }
         }
 
         let policy = crate::config::RuntimePolicy {

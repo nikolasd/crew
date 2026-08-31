@@ -645,6 +645,13 @@ impl AdapterEventSink for LiveCollectingSink {
             Ok(events.len() as u64)
         })
     }
+
+    fn note_real_user_turn(
+        &self,
+        _run_id: crew_protocol::RunId,
+    ) -> crate::adapter::AdapterFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 #[cfg(test)]
