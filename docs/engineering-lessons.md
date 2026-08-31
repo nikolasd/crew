@@ -593,8 +593,8 @@ instead of as a broken instrument. The reviewer fell back to reading the PR diff
 and asked for a test that had existed on `main` for weeks; the engineer added a duplicate in good
 faith.
 
-**The lesson:** these are distinct from a measurement that answers the wrong question (see the entry
-above), and they need a different remedy — not a better instrument, but reading the one you have.
+**The lesson:** these are distinct from a measurement that answers the wrong question ("A measurement
+can be wrong in a way that looks like an answer"), and they need a different remedy — not a better instrument, but reading the one you have.
 Two habits close them. **Diff the output against what you already wrote down:** if a tool you built
 to check your work disagrees with your conclusion, that is the entire value of having built it, and
 quoting it approvingly while contradicting it is the opposite of using it. **Treat an
@@ -602,9 +602,12 @@ impossible-shaped result as a failure, not an answer:** no tests in a test file,
 you know contains the string, an empty list where the domain guarantees at least one — each means the
 instrument broke, and a fallback reached for at that moment inherits none of its authority.
 
-**Regression tests:** N/A — process lessons. The concrete residue is the duplicate test dropped from
-the CREW-49 rider before merge, and `an_empty_content_user_entry_is_not_a_real_user_turn`, which
-exists because the same review's other findings were read properly.
+**Regression tests:** N/A — process lessons. The concrete residue is a duplicate test that is on
+`main` right now (`run_result_stops_at_the_first_boundary_that_carries_text` alongside
+`run_result_reads_up_to_the_first_turn_end_not_a_later_one`, both in `tests/run_result.rs`), with its
+removal riding CREW-51 — the review landed before the retraction did. And
+`an_empty_content_user_entry_is_not_a_real_user_turn`, which exists because the same review's other
+findings were read properly.
 
 ### Thresholds calibrated on an idle machine are not thresholds
 
@@ -666,6 +669,16 @@ that sets up a really-tracked run.
 changes, the name is part of what has to change — and a name asserting more than the body proves is the
 same defect as a comment asserting more than the code does, in the place people are least likely to
 check.
+
+A second instance, and a harder one to catch, because nothing failed (CREW-49): the test
+`run_result_reads_up_to_the_first_turn_end_not_a_later_one` was accurate when written. CREW-49 then
+changed the fold to read up to the first turn end **that already carries text**, and the two rules
+happen to agree on that test's own fixture — so it kept passing while its name became a description
+of a rule that no longer exists. A test whose name goes stale under a semantics change announces
+nothing: it does not fail, it does not appear in the diff, and the next reader takes the name as the
+current contract. It is being deleted in CREW-51 in favour of the correctly-named replacement, which
+is the right direction — when a rule changes, audit the names of the tests that still pass, not only
+the ones that break.
 
 ## Health Checks (`doctor`)
 
@@ -989,10 +1002,12 @@ dropped. Both would otherwise sit in the schema looking equally alive.
 repo's own journals may be discarded, which moots obligation 2 *for us, this once*. That ruling is
 about our data, not about the rule — and obligation 3 survives it untouched.
 
-**Regression tests:** specified in CREW-52 as `a_journaled_legacy_embedded_placement_still_replays`
-and `a_journaled_legacy_terminal_backend_still_replays`, plus typed-rejection tests for the
-request-boundary half. Not yet landed at the time of writing; the entry records the rule, not a
-completed fix.
+**Regression tests:** the replay-acceptance tests this rule would normally require
+(`a_journaled_legacy_embedded_placement_still_replays`,
+`a_journaled_legacy_terminal_backend_still_replays`) are **cancelled for this repo** by the
+pre-release ruling above, not pending — obligation 2 does not apply to data we are allowed to
+discard. Obligation 3 survives it: the request-boundary rejection is still owed, and `Embedded` is
+still in the protocol as of this entry. The entry records the rule, not a completed fix.
 
 ---
 
@@ -1086,11 +1101,16 @@ reading later turns and rewriting an answer the leader has already read. Ship on
 original bug returns untouched.
 
 A review of that change asked for the preservation test as though it were missing; it had been on
-`main` for weeks, and the grep behind the claim had failed (see "An instrument you do not read..."
-above). The duplicate was dropped before merge. That mistake is worth recording alongside the
-lesson, because a reviewer demanding a test that already exists is the same question asked badly:
-*which production change would make this test fail?* Asked properly of the existing test, the answer
-is "removing the break" — which is exactly the half the new test does not cover.
+`main` for weeks, and the grep behind the claim had failed (see "An instrument you do not read
+against your own conclusion is not a check"). The requested duplicate was written and merged before
+the retraction caught up, so both now sit on `main` and CREW-51 removes one. Which one is the
+instructive part: the older name asserts the pre-change rule ("up to the first turn end"), so it is
+the one being deleted, and the newer, accurately-named test survives as the preservation guard.
+
+That mistake is worth recording alongside the lesson, because a reviewer demanding a test that
+already exists is the same question asked badly: *which production change would make this test
+fail?* Asked properly of the existing test, the answer is "removing the break" — which is exactly
+the half the new test does not cover.
 
 **The lesson:** for a semantics change, ask that question of each test and compare the answers. If
 two tests would fail on the same production change, you have one test under two names, and the
