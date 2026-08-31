@@ -571,6 +571,7 @@ test("every enum-typed tool parameter's description contains all its accepted va
   });
 
   const issues: string[] = [];
+  let enumFieldsInspected = 0;
 
   for (const [toolName, tool] of tools.entries()) {
     const params = tool.parameters as unknown;
@@ -586,6 +587,7 @@ test("every enum-typed tool parameter's description contains all its accepted va
       const enumDef = unwrapEnumDef(field);
       if (enumDef === undefined) continue; // Not an enum
 
+      enumFieldsInspected += 1;
       const enumValues = Object.values(enumDef.entries) as string[];
       // `.describe()` in this codebase is always called on the outermost
       // wrapper (after `.optional()`, if any), so the description lives on
@@ -601,6 +603,16 @@ test("every enum-typed tool parameter's description contains all its accepted va
       }
     }
   }
+
+  // The three silent `continue`s above (params not an object; no shape; not
+  // an enum per `unwrapEnumDef`) are exactly how this test went vacuous in
+  // the first place -- a future zod change to `_def.shape`, `type: "enum"`,
+  // `entries`, or the wrapper `type` names would re-inert it with zero
+  // signal, since `issues` would just as silently stay empty. A floor
+  // (not an exact pin -- that just invites being bumped to match whatever
+  // broke) catches both total and partial collapse: 29 enum fields were
+  // inspected at the time this was written.
+  expect(enumFieldsInspected).toBeGreaterThanOrEqual(20);
 
   if (issues.length > 0) {
     throw new Error(`Enum description copy-drift detected:\n${issues.join("\n\n")}`);
