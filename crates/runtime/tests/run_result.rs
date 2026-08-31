@@ -838,6 +838,36 @@ async fn run_result_reads_up_to_the_first_turn_end_not_a_later_one() {
     );
 }
 
+/// CREW-49 (D3), ADR-0027 amendment: a turn ending with no visible text
+/// (tool activity only) has no answer to protect, so the fold skips past
+/// it rather than stopping there. Live evidence: a run whose first turn
+/// was pure tool work, with the real answer arriving in a second turn
+/// (reached via CREW-47's resumption paths) -- the old code reported
+/// `resultText: null` for a run that plainly had an answer moments later.
+#[tokio::test]
+async fn run_result_reads_an_answer_that_follows_a_content_free_boundary() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(LifecycleSeedingRunDriver::new(vec![
+            turn_ended(),
+            final_text("the real answer"),
+            turn_ended(),
+        ])));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let run_id = submit_run(&mut client).await;
+
+    let resp = client
+        .call(5, "run/result", json!({ "runId": run_id }))
+        .await;
+    assert!(resp.get("error").is_none(), "{resp:?}");
+    assert_eq!(
+        resp["result"]["resultText"], "the real answer",
+        "a content-free boundary must be skipped, not treated as the fold's stopping point: \
+         {resp:?}"
+    );
+}
+
 /// The gate is the turn boundary, not the state: a run sitting in
 /// `waitingUser` because the worker asked a QUESTION has not finished a
 /// turn, and must still refuse.
