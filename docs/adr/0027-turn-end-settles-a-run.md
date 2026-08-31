@@ -203,3 +203,29 @@ already exists would be a new and worse failure mode.
 * The timeout sweep's "journal only, never change state" property (WP19) is deliberately broken by
   the wave-3 backstop. That was written when a stuck run was still visibly `working`; once a settled
   turn is distinguishable, silence is actionable evidence rather than an unexplained gap.
+
+## Amendment (2026-08-31, CREW-49)
+
+Wave 2's fold boundary ("the first turn-end at or after the run's start") was too literal. Live
+evidence (CREW-48): the vendor emitted `end_turn` twice for one answer, the first entry's content
+entirely a `thinking` block. CREW-48's own content guard on the turn-boundary detector now excludes
+that case outright -- a thinking-only entry is not a boundary at all, so it stops being a problem
+here too. But the guard deliberately still admits a turn that ends having produced only *tool*
+activity (a `tool_use` block, no `text`) as a real boundary, since that turn genuinely did end. This
+case is not the one observed live; it is the one the guard's own design leaves reachable, and this
+fold has to handle it on that basis: a run whose first turn is tool-only, with the actual answer
+written in a second turn (reached via CREW-47's resumption paths), would have `run/result` read the
+first, empty boundary and report `resultText: null` for a run that, moments later, plainly has an
+answer.
+
+The fold boundary is now **the first turn-end that already has some result text accumulated before
+it**, not the first turn-end outright (`query::run_result_events_op`). A content-free boundary is
+skipped past rather than stopped at. This does not weaken the property the original boundary
+protects: skipping an empty turn can never silently rewrite an answer the leader has already read,
+because there was no answer at that boundary to protect in the first place. A boundary that does
+carry text is still exactly where this stops -- a leader wanting a turn beyond that one still has to
+ask for it explicitly, unchanged from wave 2's own guarantee.
+
+The usage fold is unaffected by this change in shape (it already accumulates across every event the
+scan visits, tool-only turns included); the amendment only changes which turn's *text* is reported,
+never how spend is totalled.

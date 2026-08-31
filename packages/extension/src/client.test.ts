@@ -103,6 +103,28 @@ test("runtime/status reports a healthy, running runtime", async () => {
   }
 });
 
+// CREW-50: `crew_transcript` (packages/extension/src/tools/leader.ts) calls
+// `events/replay` through the generic `request()` path (via
+// `callOrchestration`), not through `subscribe()`'s own dedicated array
+// validator. `events/replay`'s real result is a bare array, and
+// `request()`'s fallback for a method absent from `RESULT_VALIDATORS`
+// requires a JSON *object* -- so every real call from the tool failed
+// validation before this fix, a path the leader.test.ts fakes around by
+// mocking `client.request` itself rather than exercising the real client.
+test("events/replay's array result is validated by the generic request() path, not rejected as a non-object (CREW-50)", async () => {
+  const client = new CrewClient({ socketPath });
+  try {
+    await client.initialize(ompInitParams(repoDir, 1024 * 1024));
+    const replayed = await client.request("events/replay", { afterSequence: 0 });
+    expect(Array.isArray(replayed)).toBe(true);
+    const events = replayed as Array<{ sequence: number; event: { type: string } }>;
+    expect(events.length).toBeGreaterThan(0);
+    expect(events[0].event.type).toBe("runtimeStarted");
+  } finally {
+    client.close();
+  }
+});
+
 test("subscribe replays the durable RuntimeStarted event", async () => {
   const client = new CrewClient({ socketPath });
   try {

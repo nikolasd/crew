@@ -774,6 +774,12 @@ pub fn run_events_op(run_id: RunId, limit: u32) -> DomainClosure {
 /// every other reporting adapter journals cumulative totals (last wins).
 /// Returns `{"resultText": ..., "usage": ...}`; the caller merges the
 /// run-row fields it already holds.
+///
+/// Stops at the first turn boundary that already has result text
+/// accumulated before it (CREW-49, ADR-0027 amendment), not the first
+/// boundary outright: a turn ending with only tool activity has no answer
+/// to protect, so scanning past it can never rewrite one the leader has
+/// already read.
 pub fn run_result_events_op(run_id: RunId) -> DomainClosure {
     Box::new(move |conn| {
         let adapter: Option<String> = conn
@@ -807,11 +813,17 @@ pub fn run_result_events_op(run_id: RunId) -> DomainClosure {
         let mut final_text: Option<String> = None;
         let mut chunk_text: Option<String> = None;
         let mut usage: Option<(u64, u64, Option<f64>)> = None;
-        // ADR-0027's fold boundary: the residue is read up to and
-        // including the FIRST turn boundary. The vendor process stays
-        // alive after its turn, so a later turn would otherwise keep
-        // appending to this same run and silently rewrite an answer the
-        // leader has already read. A leader wanting a later turn asks for
+        // ADR-0027's fold boundary, refined by CREW-49 (D3, amendment
+        // below): the residue is read up to and including the first turn
+        // boundary that already has some result text accumulated before
+        // it, not the first boundary outright. A turn that ends having
+        // produced only tool activity (CREW-48's own content guard still
+        // counts that as a real boundary) has no answer to protect --
+        // skipping past it can never silently rewrite one the leader has
+        // already read, since there was nothing to read yet. The vendor
+        // process stays alive after its turn, so a LATER turn that
+        // already has an answer is still never skipped past: a leader
+        // wanting a turn beyond the one this residue settles on asks for
         // it explicitly.
         let mut turn_ended = false;
 
@@ -850,13 +862,25 @@ pub fn run_result_events_op(run_id: RunId) -> DomainClosure {
                 }
                 Some("adapterTurnEvent") => {
                     turn_ended = true;
-                    break;
+                    if final_text.is_some() || chunk_text.is_some() {
+                        break;
+                    }
+                    // A content-free boundary (tool activity only, no
+                    // visible text): keep scanning for the next one.
                 }
                 _ => {}
             }
         }
 
         Ok(json!({
+            // CREW-49: this now means "some boundary was seen" -- it is
+            // set on the FIRST one, content-free or not, never cleared,
+            // and no longer implies `resultText` came from a settled
+            // turn (a content-free first boundary leaves `resultText`
+            // null while this is still `true`). The safety property
+            // (`run/result` never callable before a real settle) lives
+            // entirely in the caller's `state == "waitingUser"` conjunct
+            // (orchestration.rs's `run_result`), not in this flag alone.
             "turnEnded": turn_ended,
             "resultText": final_text.or(chunk_text),
             "usage": usage.map(|(input, output, cost)| json!({

@@ -11000,7 +11000,8 @@ var RESULT_VALIDATORS = {
   "run/result": validateRunResultResult,
   "retention/clean": validateRetentionCleanResult,
   "pane/reopen": validatePaneReopenResult,
-  "message/list": validateMessageListResult
+  "message/list": validateMessageListResult,
+  "events/replay": validateEventEnvelopeArray
 };
 
 class JsonRpcRemoteError extends Error {
