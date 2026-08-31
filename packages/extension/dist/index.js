@@ -8735,6 +8735,52 @@ contents, never an absolute socket or filesystem path.`,
           additionalProperties: false
         },
         {
+          description: `A resolved backend's pane creation failed; the run fell back to a
+different backend instead.`,
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "paneDowngraded"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                requestedBackend: {
+                  description: `The backend selection actually resolved to, before creation
+failed.`,
+                  $ref: "#/$defs/DisplayBackend"
+                },
+                actualBackend: {
+                  description: "The backend actually used instead.",
+                  $ref: "#/$defs/DisplayBackend"
+                },
+                reason: {
+                  description: `Why creation failed. Operator-facing text, not itself
+structured -- the typed fields above are what a listener
+should act on.`,
+                  type: "string"
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "requestedBackend",
+                "actualBackend",
+                "reason"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
           description: "A leader proposed a decomposition of a run into subtasks via\n`plan/propose`, pending `plan/decide`.",
           type: "object",
           properties: {
@@ -13255,6 +13301,7 @@ class MilestoneTracker {
       case "workerTimeout":
       case "budgetExceeded":
       case "escalationRaised":
+      case "paneDowngraded":
         return true;
       default:
         return false;
@@ -13306,6 +13353,10 @@ function formatDigest(e, lookup) {
     case "escalationRaised": {
       const reason = event.payload.reason;
       return `Escalation raised on ${who}: ${reason}.`;
+    }
+    case "paneDowngraded": {
+      const { requestedBackend, actualBackend, reason } = event.payload;
+      return `${capitalize(who)}'s pane fell back from ${requestedBackend} to ${actualBackend}: ${reason}.`;
     }
     default:
       return;
@@ -13436,6 +13487,7 @@ function reduceEvent(state, envelope) {
     pendingApprovalCount: patch.pendingApprovalCountDelta !== undefined ? Math.max(0, base.pendingApprovalCount + patch.pendingApprovalCountDelta) : base.pendingApprovalCount,
     openViolations: applyViolationPatch(base.openViolations, patch),
     pane: patch.pane ?? base.pane,
+    paneDowngraded: patch.paneDowngraded ?? base.paneDowngraded,
     lastEventAt: envelope.timestamp,
     lastAppliedSequence: envelope.sequence
   };
@@ -13599,6 +13651,14 @@ function eventPatch(envelope) {
         runId: event.payload.runId,
         latestActivity: attached ? `pane attached: ${backend}${paneRef !== "" ? ` (${paneRef})` : ""}` : `pane detached: ${backend}`,
         pane: { backend, placement, paneRef, attached }
+      };
+    }
+    case "paneDowngraded": {
+      const { requestedBackend, actualBackend, reason } = event.payload;
+      return {
+        runId: event.payload.runId,
+        latestActivity: `pane downgraded: ${requestedBackend} \u2192 ${actualBackend} (${reason})`,
+        paneDowngraded: { requestedBackend, actualBackend, reason }
       };
     }
     case "workspaceEvent": {
