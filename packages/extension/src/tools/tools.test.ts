@@ -541,3 +541,44 @@ test("crew_approval fails closed when humanRequired and no UI is available", asy
   const details = result.details as { reason: string };
   expect(details.reason).toBe("humanRequiredWithoutUi");
 });
+
+// Copy-drift test: verify enum descriptions contain all their values
+test("every enum-typed tool parameter's description contains all its accepted values", () => {
+  const { api, tools } = createFakeApi();
+  registerOrchestrationTools(api, {
+    getClient: async () => {
+      throw new Error("not used in this test");
+    },
+  });
+
+  const issues: string[] = [];
+
+  for (const [toolName, tool] of tools.entries()) {
+    const params = tool.parameters as unknown;
+    if (!params || typeof params !== "object") continue;
+
+    // We need to traverse the Zod schema to find enum fields and their descriptions.
+    // The parameters object is a Zod schema, so we check its shape property.
+    const shape = (params as any)._def?.shape;
+    if (!shape) continue;
+
+    for (const [fieldName, fieldSchema] of Object.entries(shape)) {
+      const field = fieldSchema as any;
+      if (!field?._def?.values) continue; // Not an enum
+
+      const enumValues = field._def.values as string[];
+      const description = field._def?.description || "";
+
+      // Check that the description contains all enum values
+      for (const value of enumValues) {
+        if (!description.includes(value)) {
+          issues.push(`${toolName}.${fieldName}: description missing value "${value}"\n  Description: "${description}"\n  Expected values: ${enumValues.join(", ")}`);
+        }
+      }
+    }
+  }
+
+  if (issues.length > 0) {
+    throw new Error(`Enum description copy-drift detected:\n${issues.join("\n\n")}`);
+  }
+});
