@@ -1100,6 +1100,16 @@ it just as well. Ship only the first and someone may later delete the break enti
 reading later turns and rewriting an answer the leader has already read. Ship only the second and the
 original bug returns untouched.
 
+**If you are writing about this failure, get the evidence right — two people have already got it
+wrong.** The case observed live was a *thinking-only* `end_turn` entry, and CREW-48's content guard
+now excludes that outright, so CREW-48 alone fixes the session that started this. CREW-49 exists for
+the *tool-use-only* boundary, which the guard deliberately still admits: reachable by design, never
+observed. The two were transposed once in the ADR itself and then again, hours after the correction,
+in an unrelated document by a different author working from the same evidence. That recurrence is why
+this paragraph exists: the authority is ADR-0027's CREW-49 amendment, which states which case is
+observed and which is inferred — read it before describing this failure, and do not reconstruct it
+from a commit message or from here.
+
 A review of that change asked for the preservation test as though it were missing; it had been on
 `main` for weeks, and the grep behind the claim had failed (see "An instrument you do not read
 against your own conclusion is not a check"). The requested duplicate was written and merged before
