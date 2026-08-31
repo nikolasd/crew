@@ -110,6 +110,19 @@ function createFakeClient(): FakeClient {
   return fake;
 }
 
+/**
+ * Waits for `MonitorController`'s serialized `#tail` dispatch chain to
+ * drain (CREW-51 review). `fake.onEvent?.(...)` only *schedules* a
+ * `runEvent`'s dispatch now -- reduceEvent/onUpdate no longer run
+ * synchronously on the same tick, because the whole dispatch (including
+ * the `enrichRun` await) is chained through `#tail` to keep listeners in
+ * delivery order against state-as-of-their-own-event. Tests that assert on
+ * `widgetCalls` right after firing an event need this in between.
+ */
+async function flushDispatch(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 10));
+}
+
 function fakeTheme(): unknown {
   return {
     boxRound: {
@@ -193,6 +206,7 @@ test("the widget updates from empty-state to run rows (CREW-10)", async () => {
   expect(Array.isArray(widgetCalls[0]?.[1])).toBe(true);
 
   fake.onEvent?.(runEventEnvelope(1));
+  await flushDispatch();
 
   expect(widgetCalls.length).toBe(2);
   // After run arrives: widget shows the run row
@@ -271,19 +285,25 @@ test("bare /crew still renders the monitor box", async () => {
 
 /** A working runEvent envelope, shaped like the runtime's (mirrors model.test.ts). */
 function runEventEnvelope(sequence: number): EventEnvelope {
+  return runEventEnvelopeFor(sequence, "run-1", "worker-1");
+}
+
+/** Same shape as {@link runEventEnvelope}, with a configurable run/worker id
+ *  -- needed to fire two distinct runs' events back-to-back. */
+function runEventEnvelopeFor(sequence: number, runId: string, workerId: string): EventEnvelope {
   return {
     sequence,
     timestamp: "2026-01-01T00:00:00Z",
     projectId: "018f0000-0000-7000-8000-000000000000",
     taskId: "task-1",
     workerId: null,
-    runId: "run-1",
+    runId,
     parentWorkerId: null,
     source: "runtime",
     vendorEventRef: null,
     event: {
       type: "runEvent",
-      payload: { kind: "runWorking", runId: "run-1", taskId: "task-1", workerId: "worker-1", state: "working" },
+      payload: { kind: "runWorking", runId, taskId: "task-1", workerId, state: "working" },
     },
   };
 }
@@ -750,6 +770,7 @@ test("error is cleared on the first run row (CREW-10)", async () => {
 
   // Now a run event arrives
   fake.onEvent?.(runEventEnvelope(1));
+  await flushDispatch();
 
   expect(widgetCalls.length).toBe(3);
   // Widget should update after the run event
@@ -762,7 +783,7 @@ test("error is cleared on the first run row (CREW-10)", async () => {
  *  `enrichRun`, with an artificial delay so a listener race would actually
  *  be observable (a same-tick race would pass even against a same-tick
  *  fake -- CREW-51's bug needed a real async gap to manifest). */
-function createEnrichingFakeClient(adapter: string): { client: CrewClient; onEvent: (event: EventEnvelope, meta?: EventDeliveryMeta) => Promise<void> | void } {
+function createEnrichingFakeClient(adapter: string, delayMsByWorkerId: Record<string, number> = {}): { client: CrewClient; onEvent: (event: EventEnvelope, meta?: EventDeliveryMeta) => Promise<void> | void } {
   let onEvent: ((event: EventEnvelope, meta?: EventDeliveryMeta) => void) | undefined;
   const client = {
     get isClosed() {
@@ -774,10 +795,14 @@ function createEnrichingFakeClient(adapter: string): { client: CrewClient; onEve
         onEvent = undefined;
       };
     },
-    async request(method: string) {
+    async request(method: string, params?: { workerId?: string }) {
       // A real RPC round trip always costs at least a tick; without this,
-      // a same-tick fake could never reproduce the race CREW-51 fixes.
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      // a same-tick fake could never reproduce the race CREW-51 fixes. A
+      // per-worker delay lets a test make one run's enrichment slower than
+      // another's, to prove ordering survives that race rather than just
+      // happening to pass under a uniform delay.
+      const delay = (params?.workerId !== undefined ? delayMsByWorkerId[params.workerId] : undefined) ?? 0;
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
       if (method === "worker/get") {
         return { profileRef: { adapter, model: "some-model" } };
       }
@@ -822,4 +847,44 @@ test("CREW-51: a milestone listener sees the enriched adapter, not the unknown-a
   await new Promise<void>((resolve) => setTimeout(resolve, 10));
 
   expect(seenAdapters).toEqual(["claude"]);
+});
+
+test("CREW-51 review: dispatch is serialized, so a slower-enriching event never lets a faster one overtake it", async () => {
+  // Staff's finding on #84: before serializing, two runEvents delivered
+  // back-to-back each kicked off their own independent `enrichRun` and
+  // raced on it -- a later event with a FASTER enrichment lookup could have
+  // its listener notification (and its reduceEvent) land before an earlier
+  // event still waiting on its own, slower RPC. run-1 is made deliberately
+  // slower than run-2 here specifically to prove ordering survives that
+  // race rather than merely happening to hold under a uniform delay.
+  const { client, onEvent } = createEnrichingFakeClient("claude", {
+    "worker-1": 30,
+    "worker-2": 0,
+  });
+  const controller = new MonitorController();
+  const seenOrder: string[] = [];
+  const otherRunVisibleWhenSeen: Array<string | undefined> = [];
+  controller.subscribeEvents((event) => {
+    if (event.event.type !== "runEvent") {
+      return;
+    }
+    const runId = event.event.payload.runId;
+    seenOrder.push(runId);
+    // The currency half of the guarantee: while run-1's (slower) listener
+    // call is in flight, run-2's reduceEvent must not have run yet either --
+    // getState() here must reflect state as of *this* event only.
+    const otherRunId = runId === "run-1" ? "run-2" : "run-1";
+    otherRunVisibleWhenSeen.push(controller.getState().rows[otherRunId]?.state);
+  });
+  controller.start(client, 0, () => {});
+
+  onEvent(runEventEnvelopeFor(1, "run-1", "worker-1"));
+  onEvent(runEventEnvelopeFor(2, "run-2", "worker-2"));
+
+  await new Promise<void>((resolve) => setTimeout(resolve, 60));
+
+  expect(seenOrder).toEqual(["run-1", "run-2"]);
+  // When run-1 was seen, run-2 didn't exist yet; when run-2 was seen,
+  // run-1 (already fully dispatched by then) is visible.
+  expect(otherRunVisibleWhenSeen).toEqual([undefined, "working"]);
 });
