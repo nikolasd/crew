@@ -9,6 +9,7 @@ import type { DisplayPlacement } from "./DisplayPlacement";
 import type { MessageId } from "./MessageId";
 import type { PlanSpec } from "./PlanSpec";
 import type { Redacted } from "./Redacted";
+import type { ResumeCause } from "./ResumeCause";
 import type { RunFlags } from "./RunFlags";
 import type { RunId } from "./RunId";
 import type { RuntimeEventKind } from "./RuntimeEventKind";
@@ -23,7 +24,7 @@ import type { WorkspaceEvent } from "./WorkspaceEvent";
  * values, so raw thinking/secret content can never reach the durable log
  * through this type.
  */
-export type RuntimeEvent = { "type": "runtimeStarted" } | { "type": "runtimeStopping" } | { "type": "diagnostic", "payload": { level: DiagnosticLevel, code: string, message: string, } } | { "type": "taskEvent", "payload": { kind: RuntimeEventKind, taskId: TaskId, ownerClientInstanceId: string, revision: number, } } | { "type": "workerEvent", "payload": { kind: RuntimeEventKind, workerId: WorkerId, profileId: string, } } | { "type": "runEvent", "payload": { kind: RuntimeEventKind, runId: RunId, taskId: TaskId, workerId: WorkerId, state: string, } } | { "type": "runFlagsEvent", "payload": { runId: RunId, flags: RunFlags, } } | { "type": "runPromptEvent", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, prompt: Redacted, } } | { "type": "messageEvent", "payload": { kind: RuntimeEventKind, messageId: MessageId, runId: RunId, taskId: TaskId, deliveryState: string, } } | { "type": "approvalEvent", "payload": { kind: RuntimeEventKind, approvalId: ApprovalId, runId: RunId, taskId: TaskId, action: string, decidedBy: DecidedBy | null, 
+export type RuntimeEvent = { "type": "runtimeStarted" } | { "type": "runtimeStopping" } | { "type": "diagnostic", "payload": { level: DiagnosticLevel, code: string, message: string, } } | { "type": "taskEvent", "payload": { kind: RuntimeEventKind, taskId: TaskId, ownerClientInstanceId: string, revision: number, } } | { "type": "workerEvent", "payload": { kind: RuntimeEventKind, workerId: WorkerId, profileId: string, } } | { "type": "runEvent", "payload": { kind: RuntimeEventKind, runId: RunId, taskId: TaskId, workerId: WorkerId, state: string, } } | { "type": "runFlagsEvent", "payload": { runId: RunId, flags: RunFlags, } } | { "type": "runResumed", "payload": { runId: RunId, cause: ResumeCause, } } | { "type": "runPromptEvent", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, prompt: Redacted, } } | { "type": "messageEvent", "payload": { kind: RuntimeEventKind, messageId: MessageId, runId: RunId, taskId: TaskId, deliveryState: string, } } | { "type": "approvalEvent", "payload": { kind: RuntimeEventKind, approvalId: ApprovalId, runId: RunId, taskId: TaskId, action: string, decidedBy: DecidedBy | null, 
 /**
  * The decision's rationale, when one was supplied. Absent on
  * `approvalDecided` events written before this field existed.

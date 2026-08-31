@@ -2722,6 +2722,89 @@ async fn a_delivered_follow_up_resumes_a_settled_run() {
     );
 }
 
+/// CREW-58/D30: the resume above (#76/#77) was already caused, not
+/// inferred -- this is the evidence a `waitingUser -> working` edge
+/// previously carried none of. Same setup as the test above, replaying
+/// the journal afterward to find the typed cause.
+#[tokio::test]
+async fn a_delivered_follow_up_resume_journals_its_cause() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+
+    let task = client
+        .call(
+            2,
+            "task/upsert",
+            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
+        )
+        .await;
+    let task_id = task["result"]["taskId"].as_str().unwrap().to_string();
+    let worker = client
+        .call(
+            3,
+            "worker/create",
+            json!({ "fingerprint": "sha256:f", "adapter": "fake", "model": "m" }),
+        )
+        .await;
+    let worker_id = worker["result"]["workerId"].as_str().unwrap().to_string();
+    let submit = client
+        .call(
+            4,
+            "run/submit",
+            json!({ "taskId": task_id, "workerId": worker_id }),
+        )
+        .await;
+    let run_id = submit["result"]["runId"].as_str().unwrap().to_string();
+
+    assert!(
+        wait_for_state(&mut client, 5, &run_id, "waitingUser").await,
+        "the seeded turn boundary must park the run first"
+    );
+
+    let send = client
+        .call(
+            7,
+            "message/send",
+            json!({
+                "runId": run_id,
+                "senderWorkerId": worker_id,
+                "taskId": task_id,
+                "kind": "question",
+                "payload": "continue please"
+            }),
+        )
+        .await;
+    assert!(send.get("error").is_none(), "message/send failed: {send:?}");
+    assert!(
+        wait_for_state(&mut client, 8, &run_id, "working").await,
+        "a delivered follow-up must resume the run directly -- CREW-47 (D1)"
+    );
+
+    let replayed = client
+        .call(9, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    let events = replayed["result"]
+        .as_array()
+        .expect("events/replay result is an array");
+    let resumed_events: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["event"]["type"] == "runResumed" && e["runId"] == run_id)
+        .collect();
+    assert_eq!(
+        resumed_events.len(),
+        1,
+        "exactly one runResumed event must be journaled for this run: {events:?}"
+    );
+    assert_eq!(
+        resumed_events[0]["event"]["payload"]["cause"],
+        "followUpMessage"
+    );
+}
+
 // --------------------------------------------------------------- sequence
 
 #[tokio::test]

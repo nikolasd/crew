@@ -337,6 +337,21 @@ pub enum TimeoutKind {
     Total,
 }
 
+/// Why a settled run resumed to `working` (CREW-58/D30). The two causes
+/// map exactly to `runResumed`'s two journaling call sites, which race
+/// each other for the same edge -- see that event's own doc comment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ResumeCause {
+    /// The leader delivered a follow-up message (`message/send`) while
+    /// the run was parked, waiting on a settled turn.
+    FollowUpMessage,
+    /// The vendor's own transcript recorded a genuine new user-authored
+    /// turn (CREW-47's `is_real_user_turn`), not bookkeeping evidence.
+    RealUserTurn,
+}
+
 /// One subtask within a `PlanSpec`, as proposed by `plan/propose`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -655,6 +670,22 @@ pub enum RuntimeEvent {
     RunFlagsEvent {
         run_id: RunId,
         flags: RunFlags,
+    },
+    // CREW-58 (D30): the #76/#77 work (CREW-47/48) made resumption caused,
+    // not inferred, but left the cause itself traceable only via message
+    // rows or the vendor transcript -- a `waitingUser -> working` edge
+    // carried no evidence of its own about why. This is that evidence,
+    // journaled ONLY when the edge that actually landed was genuinely a
+    // resume (the runtime confirms the pre-transition state was
+    // `waitingUser` before journaling this, at both of its two call
+    // sites) -- both a delivered follow-up and a real user turn race
+    // against each other for the same `waitingUser -> working` edge
+    // (#76/#77's own comments call the loser's rejection tolerated), and
+    // this event must never be journaled for the loser.
+    /// A settled run resumed to `working`, and why.
+    RunResumed {
+        run_id: RunId,
+        cause: ResumeCause,
     },
     // ADR-0028 (durable run intent). `prompt` has already crossed the
     // ADR-0006 boundary: the submitting service classifies it `Visible` and

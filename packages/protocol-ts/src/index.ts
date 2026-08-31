@@ -66,6 +66,7 @@ export type * from "./generated/Redacted";
 export type * from "./generated/ReleaseRequest";
 export type * from "./generated/RepositoryIdentity";
 export type * from "./generated/RequestId";
+export type * from "./generated/ResumeCause";
 export type * from "./generated/RetentionCleanResult";
 export type * from "./generated/RunFlags";
 export type * from "./generated/RunId";
