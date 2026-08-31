@@ -1,9 +1,94 @@
 //! Display registry integration tests.
 
-use crew_protocol::{DisplayBackend, DisplayStatus};
+use crew_protocol::{DisplayBackend, DisplayPlacement, DisplayPreference, DisplayStatus};
 use crew_runtime::display::{
     DisplayBackendTrait, DisplayFuture, DisplayRegistry, PaneHandle, PaneRequest,
 };
+
+/// A backend whose natural placement (CREW-52, D27/D3) is deliberately NOT
+/// the trait default (`SplitRight`), so a test can tell "the resolved
+/// backend's own override ran" apart from "the default happened to match".
+struct NaturalSplitDownBackend;
+
+impl DisplayBackendTrait for NaturalSplitDownBackend {
+    fn backend_name(&self) -> &str {
+        "tmux"
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn activate(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+    fn status(&self) -> DisplayStatus {
+        DisplayStatus::new(DisplayBackend::Tmux, true, true)
+    }
+    fn create_pane(&self, _req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
+        no_pane_support()
+    }
+    fn close_pane(&self, _handle: &PaneHandle) -> DisplayFuture<'_, ()> {
+        no_pane_support()
+    }
+    fn natural_placement(&self) -> DisplayPlacement {
+        DisplayPlacement::SplitDown
+    }
+}
+
+#[test]
+fn resolve_uses_the_selected_backends_natural_placement_when_the_caller_specifies_none() {
+    let mut registry = DisplayRegistry::new();
+    registry.register(Box::new(NaturalSplitDownBackend));
+
+    let selection = registry.resolve(&DisplayPreference {
+        ordered: vec![],
+        placement: None,
+        launch_program: None,
+    });
+
+    assert_eq!(selection.selected, Some(DisplayBackend::Tmux));
+    assert_eq!(
+        selection.placement,
+        DisplayPlacement::SplitDown,
+        "an absent caller placement must resolve to the selected backend's own natural form, \
+         not the trait's default"
+    );
+}
+
+#[test]
+fn resolve_honors_an_explicit_caller_placement_over_the_backends_natural_form() {
+    let mut registry = DisplayRegistry::new();
+    registry.register(Box::new(NaturalSplitDownBackend));
+
+    let selection = registry.resolve(&DisplayPreference {
+        ordered: vec![],
+        placement: Some(DisplayPlacement::Tab),
+        launch_program: None,
+    });
+
+    assert_eq!(
+        selection.placement,
+        DisplayPlacement::Tab,
+        "an explicit caller placement must never be overridden by the backend's natural form"
+    );
+}
+
+#[test]
+fn resolve_falls_back_to_split_right_when_no_backend_was_selected_at_all() {
+    // Headless: every candidate unavailable, `selected: None`. The
+    // placement value is moot (no pane exists to place), but resolve()
+    // must not panic looking up a natural_placement() on a backend that
+    // was never found.
+    let registry = DisplayRegistry::new();
+
+    let selection = registry.resolve(&DisplayPreference {
+        ordered: vec![],
+        placement: None,
+        launch_program: None,
+    });
+
+    assert_eq!(selection.selected, None);
+    assert_eq!(selection.placement, DisplayPlacement::SplitRight);
+}
 
 /// Every fake backend below shares the same "no pane support" stub --
 /// none of these registry-focused tests exercise pane creation (see

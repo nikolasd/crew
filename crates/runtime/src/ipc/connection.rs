@@ -386,6 +386,11 @@ async fn dispatch(
                 // see `RuntimeStatus::dashboard_url`'s doc comment for the
                 // tradeoff and why this is deliberate, not an oversight.
                 dashboard_url: shared.dashboard_url.get().cloned(),
+                // D25: printed by `/crew health` so a two-daemon mixup is
+                // visible at a glance instead of costing an operator real
+                // debugging time down the wrong database.
+                state_root: shared.state_dir.display().to_string(),
+                socket_path: shared.socket_path.display().to_string(),
             };
             let value = serde_json::to_value(&status)
                 .expect("RuntimeStatus is a plain, serializable wire type");
@@ -763,8 +768,23 @@ async fn replay(shared: &Arc<Shared>, after: u64) -> Result<Value, String> {
 
     let mut envelopes = Vec::with_capacity(rows.len());
     for row in rows {
-        let event: RuntimeEvent = serde_json::from_str(&row.event_json)
-            .map_err(|err| format!("stored event is not a valid RuntimeEvent: {err}"))?;
+        // CREW-52: a bare serde error here ("unknown variant `embedded`")
+        // is technically accurate and useless to whoever hits it -- the
+        // remedy (this plugin has no external users yet, so old-journal
+        // compatibility was never a goal; see `DisplayPlacement`'s own
+        // doc) is to clear the journal, not to guess what the error means.
+        // Never narrowed to the specific deleted-variant case: ANY
+        // deserialization failure here means the journal predates this
+        // binary's protocol, for whatever reason, and the remedy is the
+        // same regardless of which field or variant changed.
+        let event: RuntimeEvent = serde_json::from_str(&row.event_json).map_err(|err| {
+            format!(
+                "journal predates crew {}; clear the state directory ({}) and restart -- \
+                 stored event failed to deserialize: {err}",
+                env!("CARGO_PKG_VERSION"),
+                shared.state_dir.display(),
+            )
+        })?;
         envelopes.push(EventEnvelope {
             sequence: row.sequence,
             timestamp: row.timestamp,

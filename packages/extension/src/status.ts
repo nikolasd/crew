@@ -182,6 +182,13 @@ function formatStatus(status: RuntimeStatus): string {
     `Schema version: ${status.schemaVersion}`,
     `Uptime: ${status.uptimeSeconds}s`,
     `Binary source: ${status.binarySource}`,
+    // D25: a two-daemon mixup (two `crewd` processes, each against its own
+    // state root, neither aware of the other) cost an operator real
+    // debugging time with no way to see which database a running daemon
+    // was actually reading/writing -- these two lines make that visible
+    // at a glance instead of requiring a process/log dig.
+    `State root: ${status.stateRoot}`,
+    `Socket: ${status.socketPath}`,
   ];
   // CREW-35: the full URL, including its access token, is included here
   // deliberately -- the maintainer chose one-click discoverability over

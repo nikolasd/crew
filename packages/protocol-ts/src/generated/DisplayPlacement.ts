@@ -3,5 +3,11 @@
 /**
  * Where a display backend places a pane relative to the caller's own
  * terminal. Changes presentation only; never run ownership.
+ *
+ * No "embedded" (no separate pane) variant exists here: that choice is no
+ * longer representable as a placement request at all -- every backend now
+ * resolves its own natural placement when the caller's preference doesn't
+ * specify one, and choosing to have no pane at all is a backend choice
+ * (`hidden`), not a placement.
  */
-export type DisplayPlacement = "embedded" | "splitRight" | "splitDown" | "tab" | "workspace" | "window";
+export type DisplayPlacement = "splitRight" | "splitDown" | "tab" | "workspace" | "window";

@@ -182,6 +182,21 @@ pub trait DisplayBackendTrait: Send + Sync {
     /// registry actually holds.
     fn create_pane(&self, req: PaneRequest) -> DisplayFuture<'_, PaneHandle>;
 
+    /// This backend's own placement when a caller's [`DisplayPreference`]
+    /// doesn't specify one (CREW-52, D27/D3). Replaces the deleted
+    /// `DisplayPlacement::Embedded` default: rather than a server-hardcoded
+    /// value every backend was equally (mis)fit for, each backend now
+    /// answers with the placement it would naturally create -- the
+    /// knowledge stays where the constraint lives, and the default can't
+    /// be falsified by a stale caller. The default impl returns
+    /// `SplitRight`, correct for both multiplexer backends (herdr, tmux);
+    /// override where that's wrong (`OsWindowDisplay`, which computes its
+    /// own actual `Tab`/`Window` after the fact regardless -- see its own
+    /// `create_pane`).
+    fn natural_placement(&self) -> DisplayPlacement {
+        DisplayPlacement::SplitRight
+    }
+
     /// Closes a pane this backend created (`handle.pane_ref`, exactly as
     /// returned by [`Self::create_pane`]). Implementations refuse to
     /// close a `pane_ref` they never created.
@@ -271,9 +286,21 @@ impl DisplayRegistry {
             }
         }
 
+        // CREW-52 (D27/D3): an explicit caller placement is honored as-is;
+        // an absent one resolves to the SELECTED backend's own natural
+        // form. `selected: None` (headless, every candidate unavailable)
+        // has no pane to place at all, so the placement value is moot --
+        // `SplitRight` is as good as anything else there.
+        let placement = preference.placement.unwrap_or_else(|| {
+            selected
+                .and_then(|backend| self.find(backend))
+                .map(|b| b.natural_placement())
+                .unwrap_or(DisplayPlacement::SplitRight)
+        });
+
         DisplaySelection {
             selected,
-            placement: preference.placement,
+            placement,
             attempts,
             launch_program: preference.launch_program,
         }

@@ -1002,7 +1002,10 @@ impl OrchestrationService {
             })?
             .unwrap_or(crew_protocol::DisplayPreference {
                 ordered: Vec::new(),
-                placement: crew_protocol::DisplayPlacement::Embedded,
+                // CREW-52 (D27/D3): absent placement, not a hardcoded
+                // `Embedded` (deleted) -- the resolved backend picks its
+                // own natural form (`DisplayRegistry::resolve`).
+                placement: None,
                 launch_program: None,
             });
         let display = Some(self.display.resolve(&display_preference));
@@ -1244,7 +1247,10 @@ impl OrchestrationService {
             })?
             .unwrap_or(crew_protocol::DisplayPreference {
                 ordered: Vec::new(),
-                placement: crew_protocol::DisplayPlacement::Embedded,
+                // CREW-52 (D27/D3): absent placement, not a hardcoded
+                // `Embedded` (deleted) -- the resolved backend picks its
+                // own natural form (`DisplayRegistry::resolve`).
+                placement: None,
                 launch_program: None,
             });
         let display = Some(self.display.resolve(&display_preference));
