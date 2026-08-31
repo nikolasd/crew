@@ -283,9 +283,14 @@ mod tests {
     /// begin with. That judgment call -- read the field's actual serde
     /// attributes and decide which wording is true -- still has to be
     /// made by a person for every new `Option` field's doc, the same way
-    /// it was made for all thirteen fields in this class so far. This
-    /// test only stops the specific, already-recurred mistake of writing
-    /// the Rust name instead of either wire word.
+    /// it was made for every field in this class so far. This test only
+    /// stops the specific, already-recurred mistake of writing the Rust
+    /// name instead of either wire word. One unavoidable false positive:
+    /// a sentence-initial "None of the backends were available." is
+    /// correct English and still trips this -- the test can't tell that
+    /// apart from the Rust-ism, so the fix there is to reword the
+    /// sentence (e.g. "No backend was available"), not to pick null vs.
+    /// absent.
     #[test]
     fn shipped_descriptions_never_say_the_rust_ism_none() {
         let schema_bytes = render_schema().expect("schema renders");
