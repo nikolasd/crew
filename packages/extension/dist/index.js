@@ -8754,21 +8754,25 @@ different backend instead.`,
 failed.`,
                   $ref: "#/$defs/DisplayBackend"
                 },
+                requestedPlacement: {
+                  description: "The placement that was requested when creation failed.",
+                  $ref: "#/$defs/DisplayPlacement"
+                },
                 actualBackend: {
                   description: "The backend actually used instead.",
                   $ref: "#/$defs/DisplayBackend"
                 },
                 reason: {
-                  description: `Why creation failed. Operator-facing text, not itself
-structured -- the typed fields above are what a listener
-should act on.`,
-                  type: "string"
+                  description: `Why creation failed, redacted. The typed fields above are what
+a listener should act on; this is operator-facing detail only.`,
+                  $ref: "#/$defs/Redacted"
                 }
               },
               additionalProperties: false,
               required: [
                 "runId",
                 "requestedBackend",
+                "requestedPlacement",
                 "actualBackend",
                 "reason"
               ]
@@ -13355,8 +13359,8 @@ function formatDigest(e, lookup) {
       return `Escalation raised on ${who}: ${reason}.`;
     }
     case "paneDowngraded": {
-      const { requestedBackend, actualBackend, reason } = event.payload;
-      return `${capitalize(who)}'s pane fell back from ${requestedBackend} to ${actualBackend}: ${reason}.`;
+      const { requestedBackend, requestedPlacement, actualBackend, reason } = event.payload;
+      return `${capitalize(who)}'s pane fell back from ${requestedBackend} (${requestedPlacement}) to ${actualBackend}: ${reason}.`;
     }
     default:
       return;
@@ -13654,11 +13658,11 @@ function eventPatch(envelope) {
       };
     }
     case "paneDowngraded": {
-      const { requestedBackend, actualBackend, reason } = event.payload;
+      const { requestedBackend, requestedPlacement, actualBackend, reason } = event.payload;
       return {
         runId: event.payload.runId,
-        latestActivity: `pane downgraded: ${requestedBackend} \u2192 ${actualBackend} (${reason})`,
-        paneDowngraded: { requestedBackend, actualBackend, reason }
+        latestActivity: `pane downgraded: ${requestedBackend}/${requestedPlacement} \u2192 ${actualBackend} (${reason})`,
+        paneDowngraded: { requestedBackend, requestedPlacement, actualBackend, reason }
       };
     }
     case "workspaceEvent": {
