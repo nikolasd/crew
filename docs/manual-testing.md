@@ -124,7 +124,7 @@ local build, `OMP_CREW_BINARY` isn't set, or isn't pointing where you think.
 gates without spawning anything — run it before any section below when you just want to know "did
 I break something obvious," without paying for a daemon spawn or a model call.
 
-**Match the section to what you touched** — you don't need to run all six every time:
+**Match the section to what you touched** — you don't need to run every section every time:
 
 | You touched | Run |
 |---|---|
@@ -134,6 +134,9 @@ I break something obvious," without paying for a daemon spawn or a model call.
 | Adapter code (claude/codex/copilot/omp-rpc) | §4b first (free); §4c only if the change could affect real vendor-CLI behavior |
 | Workspace lease/apply/isolation | §5 |
 | `run/result` / redaction / read-back | §6 |
+| Run completion, turn-end settlement, follow-ups, the subagent guard | §7 |
+| Dashboard or `/crew health` surface | §8 |
+| Monitor resilience to daemon death | §2a |
 
 ## 1. The daemon through OMP (no model call, no extension CLI needed)
 
@@ -158,7 +161,14 @@ Active runs: 0
 Schema version: 1
 Uptime: 0s
 Binary source: override
+Dashboard: http://127.0.0.1:<port>/?token=<token>
 ```
+
+The `Dashboard:` line appears whenever the dashboard is enabled, and deliberately prints the full
+URL **including its access token** — one-click discoverability was chosen over hiding the token
+(see the comment above `formatStatus` in `packages/extension/src/status.ts` and
+`RuntimeStatus.dashboardUrl`'s own doc). Don't "fix" it; do treat transcripts containing it as
+carrying a bearer credential. §8 tests the dashboard itself.
 
 Run it again — same command, same repo:
 
@@ -235,6 +245,15 @@ renders "No Crew runs yet."
 the widget on every event. The controller handles `session_start` (connect, then show the widget
 only if the journal has runs — a run-free session stays hidden until the first run event, and a
 dead daemon stays silent) and `session_shutdown` (unsubscribe).
+
+### 2a. Daemon death and widget healing (no model call)
+
+With an interactive session open and at least one run row visible (the queued run from §3a
+works), kill the daemon out from under it: `pkill -f "crewd serve"`. Then take any crew action in
+the still-open session (`/crew health` is enough). Expect the daemon to be respawned by
+connect-or-spawn and the widget's subscription to **heal and keep updating without restarting
+omp**. Through 0.6.0 the subscription died with the daemon and stayed dead until a full omp
+restart; a widget that freezes while a fresh `crewd` is demonstrably up is that regression.
 
 ### Direct CLI monitor (alternative to extension)
 
@@ -331,8 +350,11 @@ already had open — no reconnect, no re-typed `/crew`, no polling.
 
 Only the trailing "latest activity" field changes here; the run's own `state` stays `queued`
 throughout, because this scenario never starts an adapter. A real `crew_run` against a
-configured worker profile walks `queued -> starting -> working` and terminalizes on process exit
-(`crates/runtime/src/adapter/run_lifecycle.rs`).
+configured worker profile walks `queued -> starting -> working`; when the worker's **turn** ends,
+the run moves to `waitingUser` and is handed back to the leader — a run is a conversation the
+leader closes (ADR-0027). It terminalizes through `crew_run` op `finish` (or `cancel`), and a
+vendor process that dies with no observable outcome is settled `lost` by the backstop — never
+`succeeded` (`crates/runtime/src/adapter/run_lifecycle.rs`; §7 exercises this live).
 
 ### 3c. Replay after a full restart
 
@@ -365,6 +387,23 @@ cargo test -p crew-runtime --test approval
 ```
 
 which drives `ApprovalService` directly, the same way this walkthrough can't.
+
+### 3e. Adapter model selection and persistence (no model call)
+
+`crew_profile` registered with an adapter but **no model** triggers ask-on-first-use in an
+interactive session: the extension asks which model to use, persists the answer to the
+repository's `.omp/crew.json`, and later registrations are silent. The deterministic negative
+check is free: register a profile whose explicit model **conflicts** with the stored one and
+expect the exact typed refusal —
+
+```
+model already configured as <stored> for adapter <adapter> -- crew_profile never overwrites a
+stored model; edit the repository's .omp/crew.json directly to change it (/crew config path
+locates it).
+```
+
+A conflict is refused, never silently overwritten and never silently dropped
+(`packages/extension/src/tools/profiles.ts`).
 
 ### Clean up
 
@@ -573,6 +612,12 @@ Attach to the run's pane via the active display backend (e.g. `tmux attach -t <p
 - Terminal B shows one `OutOfBandInput` event per pane-write burst, carrying only `backend` + `pane_ref` — **no keystroke text**.
 - The run's `needsReconciliation` flips true (visible via `/crew` after a `crew_reconcile`, or `crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl` and grep for the flag).
 
+**Attach-socket liveness (CREWATTACH1):** when testing `/crew reopen` or pane persistence, the
+attach socket must send `CREWATTACH1\n` as its very first bytes; a probe that doesn't see the
+marker within 250ms marks the pane stale and returns `-32602` instead of attaching to a
+fork-inherited dead socket. See
+[cli-reference.md § Attach Socket Liveness](cli-reference.md#attach-socket-liveness-crewattach1-marker).
+
 #### 4f.1 TUI live conformance harness
 
 `crewd conformance --live --mode tui` walks the scenario set against the real interactive vendor CLIs on a PTY (`tui` is the only accepted `--mode` value and its default — the headless control plane this also used to reach is retired, `--mode headless` is a typed rejection now, crew-v2 gap-closure WP-C). `--adapter` takes `all` or one of `claude`, `codex`, `copilot`, `ompRpc`; `--output <path>` writes the JSON report.
@@ -706,14 +751,14 @@ answer and chain it into a second run. Work in a scratch repository:
 mkdir -p /tmp/crew-result-smoke && cd /tmp/crew-result-smoke && git init -q && git commit -q --allow-empty -m init
 ```
 
-> **Known limitation (verified live 2026-08-21, Claude Code 2.1.238):** the Claude adapter keeps
-> the vendor CLI process alive after its final answer (stdin stays open for follow-up steering),
-> and run completion is keyed solely on process exit — so a live Claude run never reaches
-> `succeeded` on its own, and both scenarios below, as written, hang at the "poll until terminal"
-> step after making their billed call. Until the grace-window completion fix lands (see the
-> multiagent-cooperation spec's decision log), settle the run with `crew_run { op: "cancel" }`
-> once the answer has arrived; `op: "result"` then returns the journaled `resultText` and `usage`
-> with `state: "cancelled"` — that read-back path is proven working.
+> **Resolved (ADR-0027, 2026-08 fix wave):** through 0.6.0, completion was keyed solely on
+> process exit — and since the adapter deliberately keeps the vendor CLI alive after its final
+> answer, a live run never finished on its own and this section required a manual `cancel`.
+> Completion is now settled by the worker's **turn end**: the run moves to `waitingUser` with the
+> pane still open, `op: "result"` is readable right there (a settled turn qualifies, terminal not
+> required), and the leader closes the run with `op: "finish"`. A live run still sitting in
+> `working` after its answer has visibly arrived is a regression of the turn-end guard, not the
+> old limitation.
 
 ### 6a. One run, one answer
 
@@ -723,12 +768,13 @@ omp --extension "$EXT" --print \
    startupOptions {"claude":{}}, source "manual-test"), crew_worker to create a worker from
    that profileId, crew_task to upsert a task, and crew_run to submit a run with prompt
    "Reply with exactly the word pomegranate and nothing else". Poll crew_run op "get" until
-   the state is terminal, then call crew_run op "result" and report resultText and usage
-   plainly.'
+   the state is waitingUser or terminal, then call crew_run op "result", report resultText and
+   usage plainly, and close the run with op "finish".'
 ```
 
 Expect: `resultText` containing exactly `pomegranate`; `usage.inputTokens` and
-`usage.outputTokens` both > 0; `state: "succeeded"`. Calling `op: "result"` while the run is
+`usage.outputTokens` both > 0; state `waitingUser` at read time, `succeeded` after the finish.
+Calling `op: "result"` while the run is
 still `working` is refused with `run <id> is not finished (state: working)` — that refusal is
 correct behavior, not a bug: a partial answer is never returned.
 
@@ -738,8 +784,8 @@ correct behavior, not a bug: a partial answer is never returned.
 omp --extension "$EXT" --print \
   'Call crew_run op "result" for runId "<runId from 6a>". Then submit a second run on the
    same worker and task whose prompt embeds that resultText: "The previous worker said:
-   <resultText>. Reply with the fruit it named, uppercased." Poll it to terminal, read its
-   result, and report it plainly.'
+   <resultText>. Reply with the fruit it named, uppercased." Poll it to waitingUser, read its
+   result, finish it, and report the result plainly.'
 ```
 
 Expect the second run's `resultText` to contain `POMEGRANATE`.
@@ -748,6 +794,79 @@ Expect the second run's `resultText` to contain `POMEGRANATE`.
 boundary → `run/result` fold → Ajv-validated result → the model composing the next prompt from
 it. This is the chaining primitive every multi-worker synthesis flow builds on. Clean up as in
 §3's "Clean up".
+
+## 7. Run completion semantics, live (ADR-0027 — needs a real model call)
+
+Through 0.6.0, run completion was keyed on process exit — and since TUI adapters deliberately keep
+the vendor CLI alive after its final answer, a live run could never finish on its own (the first
+live test failed exactly here). ADR-0027 replaced that with **turn-end settlement**: a worker's
+finished turn hands the run back to the leader as `waitingUser`, and the run is a conversation the
+leader closes. Fixture mode (§4b) proves the parsing; only these checks prove the live behavior.
+Work in a scratch repository as in §3/§6.
+
+### 7a. A finished turn settles the run; the pane stays open
+
+Register a claude profile/worker/task and submit a short run (as in §6a). Expect, in order:
+
+- The pane attaches in your host (tmux → split, herdr → pane, plain terminal → a tab of that same
+  terminal app) — `pane attached: <backend>` in `/crew`.
+- The run walks `queued -> starting -> working`.
+- When the answer lands, the run moves to **`waitingUser` with the vendor CLI still running** —
+  nothing exits, and nothing needs to.
+- `crew_run` op `finish` (optional outcome `succeeded` | `failed`, default `succeeded` — the
+  leader states the outcome, it is never inferred from the vendor's turn markers) terminalizes it.
+- The full submit prompt is in the journal, **redacted** (`runPromptEvent`, ADR-0028) — check
+  `/crew run <runId>` or an audit export, never expect raw text.
+
+A vendor process that dies with no observable outcome is settled `lost` by the backstop — a run
+that shows `succeeded` without a journaled turn end is a bug, not a pass.
+
+### 7b. Follow-up steering into the live pane
+
+On the `waitingUser` run from 7a (before finishing it), send a `crew_message` to its worker.
+Expect the payload to be delivered into the live pane as a follow-up turn
+(`RunDriver::send_follow_up`; delivery is two-phase — text once stdin is wired, Enter only after
+output silence), the run to return to `working`, and a re-settle to `waitingUser` when that turn
+ends.
+
+### 7c. A subagent's turn never settles the parent (isSidechain)
+
+Submit a run whose prompt forces subagents, e.g. *"Use your Task tool to dispatch two parallel
+subagents, each summarizing a different file; then combine their answers yourself."* Expect:
+
+- The run **stays `working`** through every subagent's turn end — a session-file entry with
+  `isSidechain` is a subagent's turn and must never settle the parent run
+  (`crates/runtime/src/adapter/tui/claude.rs`; unit-proved by
+  `a_sidechain_entry_never_ends_the_parent_runs_turn`, but only a live claude session dispatching
+  real subagents proves the guard against real session files).
+- `adapterNestedWorkerObserved` appears in the run's activity.
+- Exactly one settlement, on the parent's own turn end. A `waitingUser` mid-dispatch is the guard
+  failing, and a finding.
+
+### 7d. Large prompts arrive whole
+
+Submit a run whose prompt is well over 8 KB with the instruction at the very **end** (e.g. "reply
+with the final word of this prompt"). Expect the answer to prove the tail arrived, and the journal
+to carry the full redacted text. Through 0.6.0 a multi-KB prompt was silently truncated — one
+atomic PTY write; delivery is now two-phase with an idle-gated Enter
+(`crates/runtime/src/adapter/tui/adapter.rs`).
+
+Timeout facts, when they occur, are decided with `crew_run` op `timeoutAck`
+(decision `extend` | `nudge` | `abort`); forcing one live requires waiting out the timeout sweep,
+so it's not part of the standard pass.
+
+## 8. The dashboard (no model call)
+
+`/crew health` prints the dashboard's full tokenized URL when the dashboard is enabled (§1).
+Checks:
+
+- Open the printed URL: the page loads and renders (an empty state with no runs).
+- Remove the `token` query parameter and reload: **refused**, not a degraded page — the token
+  really gates (CREW-12).
+- With runs present (§3a's queued run needs no model call), runs appear with their states; after
+  any §7 run, usage and cost figures populate from `adapterUsageReported` events. The journaled
+  prompt is *not* shown on the dashboard today (that column is future work) — read it via
+  `/crew run <runId>` or an audit export instead.
 
 ## Reading the widget line
 
@@ -798,7 +917,3 @@ there with the exact cause. If a step in this document produces something not de
 there, that's either a real regression or a gap in this document — both are worth fixing; open an
 issue or extend this file, the same way the `run/submit` error-shape gap above was found by
 running the walkthrough for real and getting confused by it.
-
-## Pane Liveness Checks
-
-When testing `/crew attach` or pane persistence workflows, verify the CREWATTACH1 liveness marker is being sent correctly: the attach socket must send `CREWATTACH1\n` as its first bytes. A probe that doesn't see the marker within 250ms will mark the pane as stale and return -32602 (Invalid params). This guards against fork-inherited stale sockets being mistaken for live panes. See [cli-reference.md § Attach Socket Liveness](cli-reference.md#attach-socket-liveness-crewattach1-marker).
