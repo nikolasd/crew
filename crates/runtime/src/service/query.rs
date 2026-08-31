@@ -873,6 +873,14 @@ pub fn run_result_events_op(run_id: RunId) -> DomainClosure {
         }
 
         Ok(json!({
+            // CREW-49: this now means "some boundary was seen" -- it is
+            // set on the FIRST one, content-free or not, never cleared,
+            // and no longer implies `resultText` came from a settled
+            // turn (a content-free first boundary leaves `resultText`
+            // null while this is still `true`). The safety property
+            // (`run/result` never callable before a real settle) lives
+            // entirely in the caller's `state == "waitingUser"` conjunct
+            // (orchestration.rs's `run_result`), not in this flag alone.
             "turnEnded": turn_ended,
             "resultText": final_text.or(chunk_text),
             "usage": usage.map(|(input, output, cost)| json!({
