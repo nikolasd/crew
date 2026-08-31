@@ -289,9 +289,17 @@ fn map_entry(value: &Value) -> (Vec<TuiEvent>, Option<String>) {
         // itself already injected (and, for `send()`, already journaled
         // separately by the adapter shell before writing to the pty);
         // for a resumed session it is prior conversation this adapter
-        // did not just cause -- neither belongs on this tail. Extracting
-        // `sessionId` above (the one thing a user entry usefully carries
-        // for this adapter) already happened.
+        // did not just cause -- neither belongs on this tail as CONTENT.
+        // Extracting `sessionId` above (the one thing every user entry
+        // usefully carries for this adapter) already happened.
+        //
+        // CREW-47 (D1): a real one -- see `is_real_user_turn` -- still
+        // pushes `UserTurnStarted`, deliberately never journaled content,
+        // to resume a run a finished turn parked. Firing on this run's own
+        // very first turn (the fresh-start case above) is harmless: the
+        // run is not turn-settled yet, so `observe_real_user_turn` is a
+        // no-op there.
+        "user" if is_real_user_turn(value) => events.push(TuiEvent::UserTurnStarted),
         "user" => {}
         "assistant" => {
             if let Some(content) = value.pointer("/message/content").and_then(Value::as_array) {
@@ -317,6 +325,48 @@ fn map_entry(value: &Value) -> (Vec<TuiEvent>, Option<String>) {
     (events, entry_id)
 }
 
+/// Whether this `"user"`-typed entry is a real, new user-authored turn
+/// (CREW-47 D1) -- the evidence that resumes a run a finished turn parked
+/// -- as opposed to a subagent's sidechain or a mid-turn tool-result
+/// delivery, both of which are `"user"`-typed too but carry no new
+/// instruction from anyone.
+///
+/// `isSidechain` excludes a subagent's own turn, mirroring
+/// [`turn_outcome`]'s identical guard and for the identical reason: a
+/// subagent's activity must never be read as evidence about the run that
+/// spawned it. Absent (rather than explicitly `false`) is treated as not
+/// a sidechain, the same convention `turn_outcome` uses.
+///
+/// The `tool_result` exclusion is mandatory, not incidental: a `"user"`
+/// entry delivering a tool's result back to the vendor mid-turn is the
+/// single most common `"user"`-typed entry in a real transcript, and it
+/// carries no new instruction at all -- treating it as a resumption cause
+/// is exactly the bug this ticket exists to fix (the bookkeeping entries
+/// that used to un-park a run were a symptom of the same "any `user`-
+/// shaped thing counts" mistake). `message.content` is either a plain
+/// string (unambiguously a real typed prompt -- a tool result is never a
+/// bare string here) or an array of content blocks; in the array form,
+/// this is real only if at least one block is not a `tool_result` --
+/// e.g. text pasted alongside a tool result is still a real instruction.
+/// An entry with neither shape (no `message.content` at all) has no
+/// positive evidence either way and is conservatively excluded.
+fn is_real_user_turn(value: &Value) -> bool {
+    if value
+        .get("isSidechain")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    match value.pointer("/message/content") {
+        Some(Value::String(_)) => true,
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .any(|block| block.get("type").and_then(Value::as_str) != Some("tool_result")),
+        _ => false,
+    }
+}
+
 /// How this assistant entry ends the run's own turn, or `None` if it
 /// does not end it.
 ///
@@ -338,10 +388,23 @@ fn map_entry(value: &Value) -> (Vec<TuiEvent>, Option<String>) {
 /// entry carries `stop_reason: "stop_sequence"` and the CLI returns to its
 /// prompt, so the turn really is over; suppressing the boundary here would
 /// hang the run forever in exactly the case the leader most needs to hear
-/// about. The error text itself is surfaced as ordinary assistant content.
+/// about. The error text itself is surfaced as ordinary assistant content,
+/// so it always clears the content guard below on its own.
 /// Recording the turn as *failed* rather than merely ended needs a terminal
 /// edge, which ADR-0027 wave 2 deliberately does not introduce -- it is
 /// wave 3's `run/finish`.
+///
+/// CREW-48 (D2): a thinking-only `end_turn` is not a boundary either.
+/// Observed live: the vendor emitted `end_turn` twice for one answer -- an
+/// entry whose content was entirely a `thinking` block, immediately
+/// followed by the real entry carrying the answer's `text`, both stamped
+/// `end_turn`. Treating the first as the boundary journals `TurnEnded`
+/// (parking the run) before the answer it is supposedly ending even
+/// exists. Requires the same positive evidence [`map_assistant_content`]
+/// itself surfaces -- a `text` or `tool_use` block -- not merely the
+/// stop reason; an entry with neither is a shape this guard was not
+/// written to recognize as a boundary, matching the stop-reason check's
+/// own "not guessed either way" posture above.
 fn turn_outcome(value: &Value) -> Option<TurnOutcome> {
     if value
         .get("isSidechain")
@@ -356,6 +419,20 @@ fn turn_outcome(value: &Value) -> Option<TurnOutcome> {
             .and_then(Value::as_str),
         Some("end_turn" | "stop_sequence")
     ) {
+        return None;
+    }
+    let has_boundary_content = value
+        .pointer("/message/content")
+        .and_then(Value::as_array)
+        .is_some_and(|blocks| {
+            blocks.iter().any(|block| {
+                matches!(
+                    block.get("type").and_then(Value::as_str),
+                    Some("text" | "tool_use")
+                )
+            })
+        });
+    if !has_boundary_content {
         return None;
     }
     if value
@@ -676,7 +753,7 @@ mod tests {
     }
 
     #[test]
-    fn user_entry_extracts_only_the_session_id() {
+    fn user_entry_extracts_the_session_id_and_never_carries_text() {
         let raw = line(serde_json::json!({
             "type": "user",
             "sessionId": "sess-1",
@@ -689,11 +766,15 @@ mod tests {
             .last()
             .map(|(_, c)| c.clone())
             .unwrap_or_else(Cursor::start);
-        assert_eq!(events.len(), 1);
+        // A real user turn (a plain string prompt) now also signals
+        // `UserTurnStarted` (CREW-47 D1) -- but it carries no data of its
+        // own, so "hi" never appears in either event.
+        assert_eq!(events.len(), 2);
         assert!(matches!(
             &events[0],
             TuiEvent::SessionMeta { vendor_session_id } if vendor_session_id == "sess-1"
         ));
+        assert!(matches!(&events[1], TuiEvent::UserTurnStarted));
         assert_eq!(cursor.offset, raw.len() as u64);
     }
 
@@ -746,6 +827,44 @@ mod tests {
             !ended_turn(&assistant_entry("tool_use", false, false)),
             "a turn that is about to call a tool is still running"
         );
+    }
+
+    /// CREW-48 (D2): observed live -- the vendor emitted `end_turn` twice
+    /// for one answer, the first entry's content entirely a `thinking`
+    /// block. Treating that first entry as the boundary would park the run
+    /// before the answer it is supposedly ending even exists.
+    #[test]
+    fn a_thinking_only_end_turn_entry_is_not_a_turn_boundary() {
+        let thinking_only = line(serde_json::json!({
+            "type": "assistant",
+            "sessionId": "sess-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "isSidechain": false,
+            "isApiErrorMessage": false,
+            "message": {
+                "stop_reason": "end_turn",
+                "content": [{"type": "thinking", "thinking": "let me consider this"}],
+            },
+        }));
+        assert!(
+            !ended_turn(&thinking_only),
+            "a thinking-only end_turn must not park the run"
+        );
+        assert!(
+            events_of(&thinking_only)
+                .iter()
+                .all(|e| !matches!(e, TuiEvent::AssistantText { .. })),
+            "a thinking block must still never surface as text either"
+        );
+    }
+
+    /// The real entry immediately following a thinking-only one (same
+    /// fixture shape the live evidence recorded) still ends the turn
+    /// normally -- the content guard excludes only the entry that has
+    /// nothing but thinking, not every entry near one.
+    #[test]
+    fn the_real_answer_after_a_thinking_only_entry_still_ends_the_turn() {
+        assert!(ended_turn(&assistant_entry("end_turn", false, false)));
     }
 
     #[test]

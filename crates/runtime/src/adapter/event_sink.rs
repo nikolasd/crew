@@ -148,6 +148,24 @@ pub enum AdapterEventPayload {
 /// `emit` resolves to the durably committed runtime sequence number.
 pub trait AdapterEventSink: Send + Sync {
     fn emit(&self, event: AdapterEvent) -> AdapterFuture<'_, u64>;
+
+    /// A genuine new user-authored transcript entry (CREW-47 D1) --
+    /// evidence for a TUI adapter to resume a run a finished turn parked,
+    /// on the same terms a delivered follow-up does
+    /// (`OrchestrationService::message_send`'s own resume), not something
+    /// inferred from ordinary vendor output the way `emit` observes
+    /// activity for every other payload.
+    ///
+    /// Deliberately never journaled: this is a lifecycle signal, not
+    /// content, so it carries no payload and produces no `RuntimeEvent`.
+    /// The default is a no-op -- only [`super::run_lifecycle::RunLifecycleSink`]
+    /// gives it a real implementation; every other sink (the production
+    /// journaling sink, the settlement wrapper, test fakes) has nothing to
+    /// do with this signal.
+    fn note_real_user_turn(&self, run_id: RunId) -> AdapterFuture<'_, ()> {
+        let _ = run_id;
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// The production [`AdapterEventSink`]: sanitizes, journals (correlated to
@@ -643,6 +661,16 @@ impl AdapterEventSink for SettlementSink {
             }
             result
         })
+    }
+
+    /// Forwarded, not observed: this sink only watches `emit`'s payloads
+    /// (`ProcessExited`/`TurnEnded`) for settlement, and a real user turn
+    /// is neither. Without this override the trait's default no-op would
+    /// silently swallow the signal here, in production's own wrapping
+    /// order (`SettlementSink::wrap(RunLifecycleSink::wrap(..))`), before
+    /// it ever reached the one sink that acts on it.
+    fn note_real_user_turn(&self, run_id: RunId) -> AdapterFuture<'_, ()> {
+        self.inner.note_real_user_turn(run_id)
     }
 }
 

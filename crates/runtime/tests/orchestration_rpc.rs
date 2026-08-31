@@ -2646,6 +2646,82 @@ async fn message_send_on_successful_delivery_advances_delivery_state_to_sent() {
     );
 }
 
+/// CREW-47 (D1): a delivered follow-up IS the leader steering the run --
+/// `message_send`'s own success arm resumes it directly, not by waiting
+/// for whatever the vendor produces next. Uses `SettlingRunDriver` (its
+/// full definition and doc comment are below, in the run/finish section)
+/// to park the run in a genuinely turn-settled `waitingUser` first, the
+/// same way `run_finish_settles_a_settled_turn...` does.
+#[tokio::test]
+async fn a_delivered_follow_up_resumes_a_settled_run() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+
+    let task = client
+        .call(
+            2,
+            "task/upsert",
+            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
+        )
+        .await;
+    let task_id = task["result"]["taskId"].as_str().unwrap().to_string();
+    let worker = client
+        .call(
+            3,
+            "worker/create",
+            json!({ "fingerprint": "sha256:f", "adapter": "fake", "model": "m" }),
+        )
+        .await;
+    let worker_id = worker["result"]["workerId"].as_str().unwrap().to_string();
+    let submit = client
+        .call(
+            4,
+            "run/submit",
+            json!({ "taskId": task_id, "workerId": worker_id }),
+        )
+        .await;
+    let run_id = submit["result"]["runId"].as_str().unwrap().to_string();
+
+    assert!(
+        wait_for_state(&mut client, 5, &run_id, "waitingUser").await,
+        "the seeded turn boundary must park the run first"
+    );
+    let parked = client.call(6, "run/get", json!({ "runId": run_id })).await;
+    assert_eq!(
+        parked["result"]["flags"]["turnSettled"], true,
+        "the park must be a genuine turn-settled wait, not some other kind: {parked:?}"
+    );
+
+    let send = client
+        .call(
+            7,
+            "message/send",
+            json!({
+                "runId": run_id,
+                "senderWorkerId": worker_id,
+                "taskId": task_id,
+                "kind": "question",
+                "payload": "continue please"
+            }),
+        )
+        .await;
+    assert!(send.get("error").is_none(), "message/send failed: {send:?}");
+
+    assert!(
+        wait_for_state(&mut client, 8, &run_id, "working").await,
+        "a delivered follow-up must resume the run directly -- CREW-47 (D1)"
+    );
+    let resumed = client.call(9, "run/get", json!({ "runId": run_id })).await;
+    assert_eq!(
+        resumed["result"]["flags"]["turnSettled"], false,
+        "the turn-settled marker must not outlive the pause it describes: {resumed:?}"
+    );
+}
+
 // --------------------------------------------------------------- sequence
 
 #[tokio::test]
