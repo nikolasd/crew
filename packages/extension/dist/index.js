@@ -7830,7 +7830,7 @@ through this type.`,
           additionalProperties: false
         },
         {
-          description: "A settled run resumed to `working`, and why.",
+          description: 'A settled run resumed to `working`, and why. Best-effort, not\nguaranteed: it is journaled as a separate commit after the\ntransition it describes, so a journal can hold a `waitingUser ->\nworking` edge with no matching `runResumed` at all. A consumer must\nread that absence as "cause unknown", never as "this was not a\nresume".',
           type: "object",
           properties: {
             type: {
