@@ -11252,9 +11252,9 @@ var package_default = {
   scripts: {
     build: "bun build src/index.ts --outdir dist --target bun --external @oh-my-pi/pi-coding-agent"
   },
-  peerDependencies: { "@oh-my-pi/pi-coding-agent": ">=17.0.7 <18" },
+  peerDependencies: { "@oh-my-pi/pi-coding-agent": ">=17.0.7 <19" },
   devDependencies: {
-    "@oh-my-pi/pi-coding-agent": ">=17.0.7 <18",
+    "@oh-my-pi/pi-coding-agent": ">=17.0.7 <19",
     "@nikolasd/crew-protocol": "workspace:*",
     "@types/bun": "1.3.14",
     ajv: "8.17.1",

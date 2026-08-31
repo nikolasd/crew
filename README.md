@@ -71,11 +71,11 @@ bun run setup               # installs JS deps + builds the crewd runtime
 bun run check               # schema drift check + build + all tests
 ```
 
-To exercise the extension against your local changes before opening a PR, load it from its source path directly:
+To exercise the extension against your local changes before opening a PR, load it from its package directory:
 
 ```bash
 OMP_CREW_BINARY="$PWD/target/debug/crewd" \
-  omp --extension ./packages/extension/src/index.ts
+  omp --extension ./packages/extension
 ```
 
 Ask the model to use `crew_task`, `crew_worker`, and `crew_run`, then open `/crew` to watch runs live. See [docs/user-guide.md](docs/user-guide.md) for the full tool reference and [docs/manual-testing.md](docs/manual-testing.md) for the full walkthrough. For running `crewd` directly instead of through OMP, see [docs/cli-reference.md](docs/cli-reference.md).

@@ -85,7 +85,7 @@ bun run typecheck                       # TypeScript compiler gate (own CI job)
 
 # Manual testing with local changes
 OMP_CREW_BINARY="$PWD/target/debug/crewd" \
-  omp --extension ./packages/extension/src/index.ts
+  omp --extension ./packages/extension
 
 # Run crewd directly
 crewd serve --repo /path/to/repo [--config /path/to/crew.json]...

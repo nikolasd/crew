@@ -61,7 +61,7 @@ CREW_LIVE_CLAUDE=1 cargo test --test conformance          # live, needs vendor c
 
 # Manual exercise against local changes (no publish needed)
 OMP_CREW_BINARY="$PWD/target/debug/crewd" \
-  omp --extension ./packages/extension/src/index.ts
+  omp --extension ./packages/extension
 
 # crewd CLI directly
 crewd serve --repo /path/to/repo [--config /path/to/crew.json]...
