@@ -35,17 +35,14 @@ may hit GitHub's unauthenticated rate limit (60 requests/hour); with one, it's 5
 **Skills and rules load automatically — no extra manifest entry needed.** `packages/extension/`
 ships `skills/` (four skills, §3) and `rules/` (`crew-delegation-guard.md`) as plain sibling
 directories next to `dist/`, and `packages/extension/package.json` declares only `omp.extensions`
-— nothing skill- or rule-specific. That's sufficient: OMP's `omp-plugins` provider (priority 90)
-discovers `skills/` and `rules/*.{md,mdc}` by directory convention for any extension package it
-loads, whether that's via `extensions:`/`--extension`/`-e` or an installed plugin under
-`~/.omp/plugins/node_modules` (where a marketplace install like this one is symlinked — see
-`docs/marketplace.md`). Source: `oh-my-pi` docs
-[`docs/skills.md`](https://github.com/can1357/oh-my-pi/blob/main/docs/skills.md) ("`omp-plugins`
-(priority 90) — `skills/` bundled next to extension packages loaded through `extensions:`,
-`--extension`/`-e`, or installed plugins under `~/.omp/plugins/node_modules`") and
-[`docs/rulebook-matching-pipeline.md`](https://github.com/can1357/oh-my-pi/blob/main/docs/rulebook-matching-pipeline.md)
-("`omp-plugins` (priority `90`) — `rules/*.{md,mdc}` inside configured extension package roots").
-No `package.json` change is required.
+— nothing skill- or rule-specific. OMP's `omp-plugins` provider (priority 90) discovers
+`skills/` and `rules/*.{md,mdc}` by directory convention, but only when a package root is
+established — either via marketplace install (symlinked under `~/.omp/plugins/node_modules`, see
+`docs/marketplace.md`) or when you point `--extension` to the **package directory** (e.g.
+`omp --extension ./packages/extension`, not a FILE path). Source: `oh-my-pi` docs
+[`docs/skills.md`](https://github.com/can1357/oh-my-pi/blob/main/docs/skills.md) and
+[`docs/rulebook-matching-pipeline.md`](https://github.com/can1357/oh-my-pi/blob/main/docs/rulebook-matching-pipeline.md).
+For development and troubleshooting that requires all six provider categories (skills, rules, commands, prompts, hooks, tools), use a package directory. A FILE path silently drops the provider ecosystem entirely.
 
 ## 2. Confirm it works
 

@@ -91,12 +91,7 @@ Two things get rebuilt independently — the `crewd` binary and the extension bu
 exercising the *old* build of either one. Before trusting any result in this document, make sure
 you're exercising the build you just made.
 
-**The extension side has two speeds.** Point `--extension` directly at
-`packages/extension/src/index.ts` for fast iteration — Bun runs TypeScript directly, so an edit
-takes effect on the next `omp` invocation with no build step. Only switch to `bun run build` +
-`packages/extension/dist/index.js` (what every example below uses) when you want to test the exact
-bundle that ships — `dist/index.js` is a separate build output and silently lags your source if you
-edit `src/` and forget to rebuild it.
+**The extension side has two speeds.** For fast iteration that keeps skills, use `omp --extension ./packages/extension` + `bun run build` — you get live source feedback immediately without losing delegation-guard rules or any other functionality. Do NOT point `--extension` directly at `packages/extension/src/index.ts` (even though it does run TypeScript directly); that silently drops all skills, rules, and other package-provided tools because a FILE path establishes no package root. The tradeoff (live edit cycle, but no provider ecosystem) is rarely worth the loss.
 
 **The daemon side does not restart itself.** `crewd` runs detached, and OMP connects-or-spawns
 (ADR-0008, §1 below) — if a daemon started from your *previous* build of `crewd` is still alive, a
@@ -146,7 +141,7 @@ lowest layer you can actually exercise end-to-end.
 
 ```bash
 export OMP_CREW_BINARY="$PWD/target/debug/crewd"
-EXT="$PWD/packages/extension/dist/index.js"
+EXT="$PWD/packages/extension"
 
 omp --extension "$EXT" --print "/crew health"
 ```
@@ -598,7 +593,7 @@ Manual check (observing the journal needs no model call; only *starting* the run
 
 ```bash
 export OMP_CREW_BINARY="$PWD/target/debug/crewd"
-EXT="$PWD/packages/extension/dist/index.js"
+EXT="$PWD/packages/extension"
 
 # Terminal A: start a daemon + a TUI run against one of the four adapters,
 # then leave it open. See user-guide.md for the exact run tool.
