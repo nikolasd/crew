@@ -12320,10 +12320,10 @@ async function findPendingApproval(client, approvalId) {
 }
 function registerApprovalTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["list", "decide"]).describe("Which approval operation to perform."),
+    op: pi.zod.enum(["list", "decide"]).describe("Which approval operation to perform: list | decide."),
     runId: pi.zod.string().optional().describe("Optional run id filter for list."),
     approvalId: pi.zod.string().optional().describe("Required for decide: the approval request id."),
-    decision: pi.zod.enum(["approve", "deny"]).optional().describe("Required for decide: approve or deny."),
+    decision: pi.zod.enum(["approve", "deny"]).optional().describe("Required for decide: approve | deny."),
     reason: pi.zod.string().optional().describe("Required for decide: the reason for this decision.")
   });
   pi.registerTool({
@@ -12383,8 +12383,8 @@ var ARTIFACT_KINDS = ["patch", "commitList", "conflictReport", "workspaceManifes
 var CREW_ARTIFACT_TOOL_NAME = "crew_artifact";
 function registerArtifactTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["list", "fetch"]).describe("Which artifact operation to perform."),
-    kind: pi.zod.enum(ARTIFACT_KINDS).optional().describe("Optional filter for list: only return artifacts of this kind. Omit to list every kind."),
+    op: pi.zod.enum(["list", "fetch"]).describe("Which artifact operation to perform: list | fetch."),
+    kind: pi.zod.enum(ARTIFACT_KINDS).optional().describe("Optional filter for list: patch | commitList | conflictReport | workspaceManifest \u2014 only return artifacts of this kind. Omit to list every kind."),
     taskId: pi.zod.string().optional().describe("Optional for list: narrow to artifacts from a specific task. Defaults to all tasks owned by the current session."),
     artifactId: pi.zod.string().optional().describe("Required for fetch: the artifact id to read."),
     offset: pi.zod.number().int().optional().describe("Optional for fetch: byte offset to start from. Defaults to 0."),
@@ -12416,10 +12416,10 @@ function registerArtifactTool(pi, ctx) {
 var CREW_CHILD_TOOL_NAME = "crew_child";
 function registerChildTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["list", "decide"]).describe("Which child-request operation to perform."),
+    op: pi.zod.enum(["list", "decide"]).describe("Which child-request operation to perform: list | decide."),
     runId: pi.zod.string().optional().describe("Optional filter for list: only return child requests recorded by this run."),
     parentRunId: pi.zod.string().optional().describe("Required for decide: the run whose child request is being decided."),
-    decision: pi.zod.enum(["accept", "deny"]).optional().describe("Required for decide: accept provisions the child run, deny refuses it."),
+    decision: pi.zod.enum(["accept", "deny"]).optional().describe("Required for decide: accept | deny \u2014 accept provisions the child run, deny refuses it."),
     childTaskId: pi.zod.string().optional().describe("Required when decision is accept: the task the child run executes."),
     childWorkerId: pi.zod.string().optional().describe("Required when decision is accept: the worker the child run executes as."),
     childRunId: pi.zod.string().optional().describe("Required when decision is accept: the run id to provision for the child."),
@@ -12459,11 +12459,11 @@ var CREW_STOP_TOOL_NAME = "crew_stop";
 var CREW_FINISH_TOOL_NAME = "crew_finish";
 function registerSpawnTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["spawn"]).describe("Spawn a single approved subtask as its own run."),
+    op: pi.zod.enum(["spawn"]).describe("Spawn a single approved subtask as its own run (accepts only `spawn`)."),
     taskId: pi.zod.string().describe("The leader task this subtask executes under."),
     planId: pi.zod.string().describe("The plan's run id (plan_id = run_id); the subtask must belong to it."),
     subtaskId: pi.zod.string().describe("The subtask id from the approved plan to spawn."),
-    workspaceMode: pi.zod.enum(["shared", "isolated", "copy"]).optional().describe("Optional workspace mode for the spawned run."),
+    workspaceMode: pi.zod.enum(["shared", "isolated", "copy"]).optional().describe("Optional workspace mode for the spawned run: shared | isolated | copy."),
     priority: pi.zod.number().int().optional().describe("Optional priority for the spawned run.")
   });
   pi.registerTool({
@@ -12526,7 +12526,7 @@ function registerSpawnTool(pi, ctx) {
 }
 function registerSendTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["send"]).describe("Send a steering message to a run."),
+    op: pi.zod.enum(["send"]).describe("Send a steering message to a run (accepts only `send`)."),
     runId: pi.zod.string().describe("The run to steer."),
     senderWorkerId: pi.zod.string().optional().describe("The sending worker id."),
     taskId: pi.zod.string().optional().describe("The task this message relates to."),
@@ -12557,7 +12557,7 @@ function registerSendTool(pi, ctx) {
 }
 function registerStatusTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["snapshot"]).describe("Snapshot the orchestration state for a task."),
+    op: pi.zod.enum(["snapshot"]).describe("Snapshot the orchestration state for a task (accepts only `snapshot`)."),
     taskId: pi.zod.string().optional().describe("Optional task filter; omit for all runs.")
   });
   pi.registerTool({
@@ -12574,7 +12574,7 @@ function registerStatusTool(pi, ctx) {
 }
 function registerTranscriptTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["replay"]).describe("Replay a run's events as normalized digests."),
+    op: pi.zod.enum(["replay"]).describe("Replay a run's events as normalized digests (accepts only `replay`)."),
     runId: pi.zod.string().describe("The run whose events to replay."),
     fromSequence: pi.zod.number().int().optional().describe("Optional starting sequence (default 0)."),
     limit: pi.zod.number().int().optional().describe("Optional max number of events to return.")
@@ -12601,7 +12601,7 @@ function registerTranscriptTool(pi, ctx) {
 }
 function registerStopTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["stop"]).describe("Stop a running worker."),
+    op: pi.zod.enum(["stop"]).describe("Stop a running worker (accepts only `stop`)."),
     runId: pi.zod.string().describe("The run to stop."),
     outcome: pi.zod.enum(["done", "abort"]).describe("Both cancel the run immediately -- there is no server-side graceful/soft stop today. 'done' additionally sends a wrap-up follow-up message first; 'abort' does not.")
   });
@@ -12627,7 +12627,7 @@ function registerStopTool(pi, ctx) {
 }
 function registerFinishTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["finish"]).describe("Cancel the remaining live runs of a plan."),
+    op: pi.zod.enum(["finish"]).describe("Cancel the remaining live runs of a plan (accepts only `finish`)."),
     runIds: pi.zod.array(pi.zod.string()).describe("The run ids to cancel (the subtask runs you spawned from the plan).")
   });
   pi.registerTool({
@@ -12669,11 +12669,11 @@ var MESSAGE_KINDS = ["assign", "steer", "followUp", "question", "answer", "peerM
 var CREW_MESSAGE_TOOL_NAME = "crew_message";
 function registerMessageTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["send", "list"]).describe("Which message operation to perform."),
+    op: pi.zod.enum(["send", "list"]).describe("Which message operation to perform: send | list."),
     runId: pi.zod.string().describe("The run this message belongs to (required for both send and list)."),
     senderWorkerId: pi.zod.string().optional().describe("Required for send: the sending worker id."),
     taskId: pi.zod.string().optional().describe("Required for send: the task this message relates to."),
-    kind: pi.zod.enum(MESSAGE_KINDS).optional().describe("Required for send: the coordination message kind."),
+    kind: pi.zod.enum(MESSAGE_KINDS).optional().describe("Required for send: assign | steer | followUp | question | answer | peerMessage | approvalDecision | cancel | shutdown \u2014 the coordination message kind."),
     payload: pi.zod.string().optional().describe("Required for send: the message payload."),
     recipientWorkerId: pi.zod.string().optional().describe("Optional recipient worker id for send."),
     replyTo: pi.zod.string().optional().describe("Optional id of a prior message this replies to.")
@@ -12732,7 +12732,7 @@ function needsHumanGate(mode, subtasks) {
 }
 function registerPlanTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["propose", "get"]).describe("Which plan operation to perform."),
+    op: pi.zod.enum(["propose", "get"]).describe("Which plan operation to perform: propose | get."),
     runId: pi.zod.string().describe("The run this plan is proposed for or read from (required for both ops)."),
     taskText: pi.zod.string().optional().describe("Required for propose: the leader's task description."),
     subtasks: pi.zod.array(pi.zod.object({
@@ -12935,16 +12935,16 @@ function registerReconcileTool(pi, ctx) {
 var CREW_RUN_TOOL_NAME = "crew_run";
 function registerRunTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["submit", "list", "get", "retry", "cancel", "result", "timeoutAck", "finish"]).describe("Which run operation to perform."),
+    op: pi.zod.enum(["submit", "list", "get", "retry", "cancel", "result", "timeoutAck", "finish"]).describe("Which run operation to perform: submit | list | get | retry | cancel | result | timeoutAck | finish."),
     prompt: pi.zod.string().optional().describe("Required for submit and retry: the instruction the worker executes. Crew stores no task text, so the task's description must be passed here."),
     taskId: pi.zod.string().optional().describe("Required for submit: the task to execute. Optional filter for list."),
     workerId: pi.zod.string().optional().describe("Required for submit and retry: the worker to execute with."),
-    workspaceMode: pi.zod.enum(["shared", "isolated", "copy"]).optional().describe("Optional workspace mode for submit and retry: 'shared' (the repository itself, the default), 'isolated' (a per-run git worktree), or 'copy' (a per-run copy of the repository)."),
+    workspaceMode: pi.zod.enum(["shared", "isolated", "copy"]).optional().describe("Optional workspace mode for submit and retry: shared | isolated | copy \u2014 shared (repository itself, default), isolated (per-run git worktree), copy (per-run copy)."),
     priority: pi.zod.number().int().optional().describe("Optional priority for submit."),
     runId: pi.zod.string().optional().describe("Required for get, cancel, result, timeoutAck, and finish: the run id."),
     priorRunId: pi.zod.string().optional().describe("Required for retry: the terminal run id to retry."),
     decision: pi.zod.enum(["extend", "nudge", "abort"]).optional().describe("Required for timeoutAck: how to respond to a WorkerTimeout fact. 'extend' re-arms both liveness deadlines with a fresh window. 'nudge' is a server-side no-op -- follow up with crew_send (op: 'send') to actually nudge the worker. 'abort' cancels the run (same effect as op: 'cancel'). 'extend' can be refused (code -32602, 'no tracked timeout to extend') if the run settled between the timeout being journaled and this call arriving -- an expected, benign race (you acted correctly, just slightly late), not a fault: do not retry or escalate it, just move on (read the run's state with op: 'get' if unsure)."),
-    outcome: pi.zod.enum(["succeeded", "failed"]).optional().describe("Optional for finish (default 'succeeded'): the leader's judgment of how the run went. Never inferred from the vendor's own turn markers -- only the leader can judge whether the task actually succeeded.")
+    outcome: pi.zod.enum(["succeeded", "failed"]).optional().describe("Optional for finish (default 'succeeded'): succeeded | failed \u2014 the leader's judgment of how the run went. Never inferred from the vendor's own turn markers -- only the leader can judge whether the task actually succeeded.")
   });
   pi.registerTool({
     name: CREW_RUN_TOOL_NAME,
@@ -13006,7 +13006,7 @@ var CREW_TASK_TOOL_NAME = "crew_task";
 var INITIAL_TASK_REVISION = 0;
 function registerTaskTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["upsert", "get"]).describe("Which task operation to perform."),
+    op: pi.zod.enum(["upsert", "get"]).describe("Which task operation to perform: upsert | get."),
     taskId: pi.zod.string().optional().describe("Optional for upsert: reuse an existing task ID (for resume); auto-generated if omitted. Required for get.")
   });
   pi.registerTool({
@@ -13051,9 +13051,9 @@ function registerTaskTool(pi, ctx) {
 var CREW_VIOLATION_TOOL_NAME = "crew_violation";
 function registerViolationTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["decide", "list"]).describe("Which violation operation to perform."),
+    op: pi.zod.enum(["decide", "list"]).describe("Which violation operation to perform: decide | list."),
     violationId: pi.zod.string().optional().describe("Required for decide: the recorded violation to decide."),
-    resolution: pi.zod.enum(["release", "cancel"]).optional().describe("Required for decide: 'release' resumes the quarantined run (if this was its last unresolved violation), 'cancel' ends the run outright."),
+    resolution: pi.zod.enum(["release", "cancel"]).optional().describe("Required for decide: release | cancel \u2014 release resumes the quarantined run (if this was its last unresolved violation), cancel ends the run outright."),
     runId: pi.zod.string().optional().describe("Optional for list: narrow to one run's violations.")
   });
   pi.registerTool({
@@ -13081,7 +13081,7 @@ function registerViolationTool(pi, ctx) {
 var CREW_WORKER_TOOL_NAME = "crew_worker";
 function registerWorkerTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["create", "list", "get"]).describe("Which worker operation to perform."),
+    op: pi.zod.enum(["create", "list", "get"]).describe("Which worker operation to perform: create | list | get."),
     fingerprint: pi.zod.string().optional().describe("Legacy create field. Rejected (PROFILE_REQUIRED) for reserved adapters (claude, codex, copilot, ompRpc) -- use profileId instead."),
     adapter: pi.zod.string().optional().describe("Legacy create field. Rejected (PROFILE_REQUIRED) for reserved adapters -- use profileId instead."),
     model: pi.zod.string().optional().describe("Legacy create field. Rejected (PROFILE_REQUIRED) for reserved adapters -- use profileId instead."),
@@ -13124,12 +13124,12 @@ var APPLY_STRATEGIES = ["applyPatch", "cherryPick"];
 var CREW_WORKSPACE_TOOL_NAME = "crew_workspace";
 function registerWorkspaceTool(pi, ctx) {
   const params = pi.zod.object({
-    op: pi.zod.enum(["acquire", "get", "release", "inspect", "apply"]).describe("Which workspace operation to perform."),
+    op: pi.zod.enum(["acquire", "get", "release", "inspect", "apply"]).describe("Which workspace operation to perform: acquire | get | release | inspect | apply."),
     runId: pi.zod.string().optional().describe("Required for acquire: the run this workspace lease belongs to."),
-    mode: pi.zod.enum(LEASE_MODES).optional().describe("Required for acquire: readOnly allows sharing with other readers, write requires isolation."),
-    requestedIsolation: pi.zod.enum(ISOLATION_KINDS).optional().describe("Optional for acquire: the isolation strategy to materialize. Defaults to shared. Use gitWorktree or copy when a peer agent will work on the same task concurrently."),
+    mode: pi.zod.enum(LEASE_MODES).optional().describe("Required for acquire: readOnly | write \u2014 readOnly allows sharing with other readers, write requires isolation."),
+    requestedIsolation: pi.zod.enum(ISOLATION_KINDS).optional().describe("Optional for acquire: shared | gitWorktree | copy \u2014 the isolation strategy to materialize. Defaults to shared. Use gitWorktree or copy when a peer agent will work on the same task concurrently."),
     leaseId: pi.zod.string().optional().describe("Required for get, release, inspect, and apply: the lease id."),
-    strategy: pi.zod.enum(APPLY_STRATEGIES).optional().describe("Required for apply: applyPatch applies a patch artifact, cherryPick replays commits."),
+    strategy: pi.zod.enum(APPLY_STRATEGIES).optional().describe("Required for apply: applyPatch | cherryPick \u2014 applyPatch applies a patch artifact, cherryPick replays commits."),
     artifactId: pi.zod.string().optional().describe("Required for apply: the artifact to apply (from crew_artifact { op: 'list' })."),
     expectedTargetRevision: pi.zod.string().optional().describe("Required for apply: the revision the workspace must currently be at. A mismatch is refused as STALE_REVISION rather than applied to the wrong base."),
     approvalCorrelationId: pi.zod.string().optional().describe("Optional for apply: correlates this application with an approval decision.")

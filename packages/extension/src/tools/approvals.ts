@@ -44,10 +44,10 @@ async function findPendingApproval(client: { request(method: string, params?: un
 
 export function registerApprovalTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["list", "decide"]).describe("Which approval operation to perform."),
+    op: pi.zod.enum(["list", "decide"]).describe("Which approval operation to perform: list | decide."),
     runId: pi.zod.string().optional().describe("Optional run id filter for list."),
     approvalId: pi.zod.string().optional().describe("Required for decide: the approval request id."),
-    decision: pi.zod.enum(["approve", "deny"]).optional().describe("Required for decide: approve or deny."),
+    decision: pi.zod.enum(["approve", "deny"]).optional().describe("Required for decide: approve | deny."),
     reason: pi.zod.string().optional().describe("Required for decide: the reason for this decision."),
   });
 

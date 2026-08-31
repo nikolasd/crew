@@ -21,7 +21,7 @@ const INITIAL_TASK_REVISION = 0;
 
 export function registerTaskTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["upsert", "get"]).describe("Which task operation to perform."),
+    op: pi.zod.enum(["upsert", "get"]).describe("Which task operation to perform: upsert | get."),
     taskId: pi.zod.string().optional().describe("Optional for upsert: reuse an existing task ID (for resume); auto-generated if omitted. Required for get."),
   });
 

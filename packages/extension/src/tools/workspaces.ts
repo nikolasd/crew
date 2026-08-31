@@ -35,12 +35,12 @@ export const CREW_WORKSPACE_TOOL_NAME = "crew_workspace";
 
 export function registerWorkspaceTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["acquire", "get", "release", "inspect", "apply"]).describe("Which workspace operation to perform."),
+    op: pi.zod.enum(["acquire", "get", "release", "inspect", "apply"]).describe("Which workspace operation to perform: acquire | get | release | inspect | apply."),
     runId: pi.zod.string().optional().describe("Required for acquire: the run this workspace lease belongs to."),
-    mode: pi.zod.enum(LEASE_MODES).optional().describe("Required for acquire: readOnly allows sharing with other readers, write requires isolation."),
-    requestedIsolation: pi.zod.enum(ISOLATION_KINDS).optional().describe("Optional for acquire: the isolation strategy to materialize. Defaults to shared. Use gitWorktree or copy when a peer agent will work on the same task concurrently."),
+    mode: pi.zod.enum(LEASE_MODES).optional().describe("Required for acquire: readOnly | write — readOnly allows sharing with other readers, write requires isolation."),
+    requestedIsolation: pi.zod.enum(ISOLATION_KINDS).optional().describe("Optional for acquire: shared | gitWorktree | copy — the isolation strategy to materialize. Defaults to shared. Use gitWorktree or copy when a peer agent will work on the same task concurrently."),
     leaseId: pi.zod.string().optional().describe("Required for get, release, inspect, and apply: the lease id."),
-    strategy: pi.zod.enum(APPLY_STRATEGIES).optional().describe("Required for apply: applyPatch applies a patch artifact, cherryPick replays commits."),
+    strategy: pi.zod.enum(APPLY_STRATEGIES).optional().describe("Required for apply: applyPatch | cherryPick — applyPatch applies a patch artifact, cherryPick replays commits."),
     artifactId: pi.zod.string().optional().describe("Required for apply: the artifact to apply (from crew_artifact { op: 'list' })."),
     expectedTargetRevision: pi.zod.string().optional().describe("Required for apply: the revision the workspace must currently be at. A mismatch is refused as STALE_REVISION rather than applied to the wrong base."),
     approvalCorrelationId: pi.zod.string().optional().describe("Optional for apply: correlates this application with an approval decision."),

@@ -15,11 +15,11 @@ export const CREW_RUN_TOOL_NAME = "crew_run";
 
 export function registerRunTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["submit", "list", "get", "retry", "cancel", "result", "timeoutAck", "finish"]).describe("Which run operation to perform."),
+    op: pi.zod.enum(["submit", "list", "get", "retry", "cancel", "result", "timeoutAck", "finish"]).describe("Which run operation to perform: submit | list | get | retry | cancel | result | timeoutAck | finish."),
     prompt: pi.zod.string().optional().describe("Required for submit and retry: the instruction the worker executes. Crew stores no task text, so the task's description must be passed here."),
     taskId: pi.zod.string().optional().describe("Required for submit: the task to execute. Optional filter for list."),
     workerId: pi.zod.string().optional().describe("Required for submit and retry: the worker to execute with."),
-    workspaceMode: pi.zod.enum(["shared", "isolated", "copy"]).optional().describe("Optional workspace mode for submit and retry: 'shared' (the repository itself, the default), 'isolated' (a per-run git worktree), or 'copy' (a per-run copy of the repository)."),
+    workspaceMode: pi.zod.enum(["shared", "isolated", "copy"]).optional().describe("Optional workspace mode for submit and retry: shared | isolated | copy — shared (repository itself, default), isolated (per-run git worktree), copy (per-run copy)."),
     priority: pi.zod.number().int().optional().describe("Optional priority for submit."),
     runId: pi.zod.string().optional().describe("Required for get, cancel, result, timeoutAck, and finish: the run id."),
     priorRunId: pi.zod.string().optional().describe("Required for retry: the terminal run id to retry."),
@@ -29,7 +29,7 @@ export function registerRunTool(pi: ExtensionAPI, ctx: OrchestrationToolContext)
       .describe(
         "Required for timeoutAck: how to respond to a WorkerTimeout fact. 'extend' re-arms both liveness deadlines with a fresh window. 'nudge' is a server-side no-op -- follow up with crew_send (op: 'send') to actually nudge the worker. 'abort' cancels the run (same effect as op: 'cancel'). 'extend' can be refused (code -32602, 'no tracked timeout to extend') if the run settled between the timeout being journaled and this call arriving -- an expected, benign race (you acted correctly, just slightly late), not a fault: do not retry or escalate it, just move on (read the run's state with op: 'get' if unsure).",
       ),
-    outcome: pi.zod.enum(["succeeded", "failed"]).optional().describe("Optional for finish (default 'succeeded'): the leader's judgment of how the run went. Never inferred from the vendor's own turn markers -- only the leader can judge whether the task actually succeeded."),
+    outcome: pi.zod.enum(["succeeded", "failed"]).optional().describe("Optional for finish (default 'succeeded'): succeeded | failed — the leader's judgment of how the run went. Never inferred from the vendor's own turn markers -- only the leader can judge whether the task actually succeeded."),
   });
 
   pi.registerTool({

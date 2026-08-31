@@ -62,7 +62,7 @@ function needsHumanGate(mode: ApprovalMode, subtasks: SubtaskProposal[]): boolea
 
 export function registerPlanTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["propose", "get"]).describe("Which plan operation to perform."),
+    op: pi.zod.enum(["propose", "get"]).describe("Which plan operation to perform: propose | get."),
     runId: pi.zod.string().describe("The run this plan is proposed for or read from (required for both ops)."),
     taskText: pi.zod.string().optional().describe("Required for propose: the leader's task description."),
     subtasks: pi.zod

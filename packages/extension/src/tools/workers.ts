@@ -11,7 +11,7 @@ export const CREW_WORKER_TOOL_NAME = "crew_worker";
 
 export function registerWorkerTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["create", "list", "get"]).describe("Which worker operation to perform."),
+    op: pi.zod.enum(["create", "list", "get"]).describe("Which worker operation to perform: create | list | get."),
     fingerprint: pi.zod.string().optional().describe("Legacy create field. Rejected (PROFILE_REQUIRED) for reserved adapters (claude, codex, copilot, ompRpc) -- use profileId instead."),
     adapter: pi.zod.string().optional().describe("Legacy create field. Rejected (PROFILE_REQUIRED) for reserved adapters -- use profileId instead."),
     model: pi.zod.string().optional().describe("Legacy create field. Rejected (PROFILE_REQUIRED) for reserved adapters -- use profileId instead."),

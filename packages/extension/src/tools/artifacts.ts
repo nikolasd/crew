@@ -23,8 +23,8 @@ export const CREW_ARTIFACT_TOOL_NAME = "crew_artifact";
 
 export function registerArtifactTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
-    op: pi.zod.enum(["list", "fetch"]).describe("Which artifact operation to perform."),
-    kind: pi.zod.enum(ARTIFACT_KINDS).optional().describe("Optional filter for list: only return artifacts of this kind. Omit to list every kind."),
+    op: pi.zod.enum(["list", "fetch"]).describe("Which artifact operation to perform: list | fetch."),
+    kind: pi.zod.enum(ARTIFACT_KINDS).optional().describe("Optional filter for list: patch | commitList | conflictReport | workspaceManifest — only return artifacts of this kind. Omit to list every kind."),
     taskId: pi.zod.string().optional().describe("Optional for list: narrow to artifacts from a specific task. Defaults to all tasks owned by the current session."),
     artifactId: pi.zod.string().optional().describe("Required for fetch: the artifact id to read."),
     offset: pi.zod.number().int().optional().describe("Optional for fetch: byte offset to start from. Defaults to 0."),
