@@ -267,4 +267,49 @@ mod tests {
              {unresolvable:#?}"
         );
     }
+
+    /// Regression guard for the null-vs-absent fold-in: a shipped
+    /// description must never say the Rust-ism "None" (either
+    /// `` `field: None` `` prose or a bare "None means ..." sentence) --
+    /// the wire has no such value, only `null` (a value the field takes)
+    /// or omission (a key the field doesn't have), and which one applies
+    /// depends on `#[serde(skip_serializing_if)]` and whether the field is
+    /// read or written by its consumer. Both wordings were wrong at least
+    /// once each (see the fold-in's own commit history), so this only
+    /// prevents the *word* from regressing.
+    ///
+    /// What this does NOT check: it cannot tell a correct "null" from a
+    /// correct "absent", or catch a wrong one that never says "None" to
+    /// begin with. That judgment call -- read the field's actual serde
+    /// attributes and decide which wording is true -- still has to be
+    /// made by a person for every new `Option` field's doc, the same way
+    /// it was made for all thirteen fields in this class so far. This
+    /// test only stops the specific, already-recurred mistake of writing
+    /// the Rust name instead of either wire word.
+    #[test]
+    fn shipped_descriptions_never_say_the_rust_ism_none() {
+        let schema_bytes = render_schema().expect("schema renders");
+        let schema: serde_json::Value =
+            serde_json::from_slice(&schema_bytes).expect("schema parses as JSON");
+
+        let mut descriptions = Vec::new();
+        collect_descriptions(&schema, &mut descriptions);
+
+        let offenders: Vec<&str> = descriptions
+            .into_iter()
+            .filter(|desc| {
+                desc.split(|c: char| !c.is_ascii_alphanumeric())
+                    .any(|word| word == "None")
+            })
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "shipped description(s) say the Rust-ism \"None\" -- say `null` if the field is \
+             read by its consumer (result/event) and has no skip_serializing_if, or \"absent\"/\
+             \"omitted\" if the field is written by its consumer (request/config) or does have \
+             skip_serializing_if. Verify the field's actual serde attributes before choosing --\
+             don't assume from a sibling field of the same name: {offenders:#?}"
+        );
+    }
 }
