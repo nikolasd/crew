@@ -542,6 +542,25 @@ test("crew_approval fails closed when humanRequired and no UI is available", asy
   expect(details.reason).toBe("humanRequiredWithoutUi");
 });
 
+/**
+ * Unwraps zod/v4's optional/nullable/default wrappers to find an underlying
+ * enum schema's `_def`, or `undefined` if `field` isn't (possibly wrapped)
+ * an enum. zod/v4's own shape differs from v3's: a bare `z.enum(...)` has
+ * `_def.type === "enum"` and `_def.entries` (a `{value: value}` dict, not
+ * v3's `_def.values` array), and `.optional()`/`.nullable()`/`.default()`
+ * each wrap the inner schema under `_def.innerType` rather than merging its
+ * `_def` -- a check against `_def.values` (the v3 shape) matches nothing at
+ * all here, wrapped or not, which is exactly why this test used to pass
+ * unconditionally: it silently found zero enum fields on every tool.
+ */
+function unwrapEnumDef(field: any): { entries: Record<string, string> } | undefined {
+  let current = field;
+  while (current?._def?.type === "optional" || current?._def?.type === "nullable" || current?._def?.type === "default") {
+    current = current._def.innerType;
+  }
+  return current?._def?.type === "enum" ? current._def : undefined;
+}
+
 // Copy-drift test: verify enum descriptions contain all their values
 test("every enum-typed tool parameter's description contains all its accepted values", () => {
   const { api, tools } = createFakeApi();
@@ -552,6 +571,7 @@ test("every enum-typed tool parameter's description contains all its accepted va
   });
 
   const issues: string[] = [];
+  let enumFieldsInspected = 0;
 
   for (const [toolName, tool] of tools.entries()) {
     const params = tool.parameters as unknown;
@@ -564,10 +584,16 @@ test("every enum-typed tool parameter's description contains all its accepted va
 
     for (const [fieldName, fieldSchema] of Object.entries(shape)) {
       const field = fieldSchema as any;
-      if (!field?._def?.values) continue; // Not an enum
+      const enumDef = unwrapEnumDef(field);
+      if (enumDef === undefined) continue; // Not an enum
 
-      const enumValues = field._def.values as string[];
-      const description = field._def?.description || "";
+      enumFieldsInspected += 1;
+      const enumValues = Object.values(enumDef.entries) as string[];
+      // `.describe()` in this codebase is always called on the outermost
+      // wrapper (after `.optional()`, if any), so the description lives on
+      // `field.description` -- never `field._def.description`, which zod/v4
+      // never populates.
+      const description = (field as { description?: string }).description ?? "";
 
       // Check that the description contains all enum values
       for (const value of enumValues) {
@@ -577,6 +603,16 @@ test("every enum-typed tool parameter's description contains all its accepted va
       }
     }
   }
+
+  // The three silent `continue`s above (params not an object; no shape; not
+  // an enum per `unwrapEnumDef`) are exactly how this test went vacuous in
+  // the first place -- a future zod change to `_def.shape`, `type: "enum"`,
+  // `entries`, or the wrapper `type` names would re-inert it with zero
+  // signal, since `issues` would just as silently stay empty. A floor
+  // (not an exact pin -- that just invites being bumped to match whatever
+  // broke) catches both total and partial collapse: 29 enum fields were
+  // inspected at the time this was written.
+  expect(enumFieldsInspected).toBeGreaterThanOrEqual(20);
 
   if (issues.length > 0) {
     throw new Error(`Enum description copy-drift detected:\n${issues.join("\n\n")}`);
