@@ -360,6 +360,35 @@ impl<'c> DomainRepository<'c> {
         )
     }
 
+    /// Journals a resolved backend's pane creation failure and the
+    /// fallback backend used instead (CREW-60/D28). Typed fields, not the
+    /// generic `Diagnostic` channel: a listener (the monitor's sticky
+    /// row flag) needs `actual_backend`/`requested_backend` directly,
+    /// never a free-text message meant for a human.
+    ///
+    /// # Errors
+    /// Returns [`DomainError`] if the append fails.
+    pub fn record_pane_downgraded(
+        &mut self,
+        run_id: crew_protocol::RunId,
+        requested_backend: crew_protocol::DisplayBackend,
+        actual_backend: crew_protocol::DisplayBackend,
+        reason: String,
+    ) -> Result<Committed, DomainError> {
+        self.append_and_apply(
+            &RuntimeEvent::PaneDowngraded {
+                run_id,
+                requested_backend,
+                actual_backend,
+                reason,
+            },
+            None,
+            None,
+            Some(run_id),
+            |_| Ok(()),
+        )
+    }
+
     /// Appends an event and runs `apply` against the same transaction,
     /// committing both atomically. Returns the assigned sequence number.
     fn append_and_apply<F>(

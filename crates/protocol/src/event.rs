@@ -853,6 +853,33 @@ pub enum RuntimeEvent {
         backend: DisplayBackend,
         pane_ref: String,
     },
+    // CREW-60 (D28): the resolved backend's pane creation failed, so the
+    // run fell back to a hidden pane instead of the one it actually
+    // wanted. This used to be journaled only as a free-text `Diagnostic`
+    // message -- a durable condition on an ephemeral channel (the
+    // monitor's `latestActivity` field, overwritten by the very next
+    // unrelated event) that a listener could act on only by pattern-
+    // matching prose. Typed fields close both gaps: a listener keys off
+    // `actualBackend`/`requestedBackend` directly, and the monitor's
+    // sticky row flag no longer depends on parsing a message meant for a
+    // human.
+    // Always `hidden` today -- the runtime never retries a later
+    // candidate backend on a creation failure, it falls straight back to
+    // the always-available one.
+    /// A resolved backend's pane creation failed; the run fell back to a
+    /// different backend instead.
+    PaneDowngraded {
+        run_id: RunId,
+        /// The backend selection actually resolved to, before creation
+        /// failed.
+        requested_backend: DisplayBackend,
+        /// The backend actually used instead.
+        actual_backend: DisplayBackend,
+        /// Why creation failed. Operator-facing text, not itself
+        /// structured -- the typed fields above are what a listener
+        /// should act on.
+        reason: String,
+    },
     /// A leader proposed a decomposition of a run into subtasks via
     /// `plan/propose`, pending `plan/decide`.
     PlanProposed {

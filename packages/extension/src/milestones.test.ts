@@ -159,6 +159,32 @@ test("worker question / timeout / budget / escalation are milestones", () => {
   ).toBe(true);
 });
 
+test("CREW-60: a paneDowngraded event is always a milestone", () => {
+  const t = tracker();
+  expect(
+    t.isMilestone(
+      envelope({
+        runId: "run-1",
+        event: { type: "paneDowngraded", payload: { runId: "run-1", requestedBackend: "tmux", actualBackend: "hidden", reason: "tmux exploded" } },
+      }),
+    ),
+  ).toBe(true);
+});
+
+test("CREW-60: paneDowngraded digest names the requested/actual backends and the reason", () => {
+  const digest = formatDigest(
+    envelope({
+      runId: "run-1",
+      event: { type: "paneDowngraded", payload: { runId: "run-1", requestedBackend: "tmux", actualBackend: "hidden", reason: "tmux exploded" } },
+    }),
+    ROWS,
+  );
+  expect(digest).toBeDefined();
+  expect(digest).toContain("tmux");
+  expect(digest).toContain("hidden");
+  expect(digest).toContain("tmux exploded");
+});
+
 test("noise never fires", () => {
   const t = tracker();
   expect(t.isMilestone(message())).toBe(false);

@@ -241,8 +241,10 @@ impl PaneCoordinator {
             Err(err) => {
                 // No real pane exists, so the reservation must not be held.
                 self.release_pane(req.run_id);
-                self.journal_diagnostic(
+                self.journal_pane_downgraded(
                     req.run_id,
+                    backend,
+                    DisplayBackend::Hidden,
                     format!("pane creation on {backend} failed, falling back to hidden: {err}"),
                 )
                 .await;
@@ -494,6 +496,28 @@ impl PaneCoordinator {
             .await;
         self.commit_and_broadcast(committed, "DisplayPaneDetached")
             .await;
+    }
+
+    /// CREW-60/D28: journals a pane-creation-failure fallback with typed
+    /// fields, replacing the generic `Diagnostic` this used to be --
+    /// see [`crate::domain::DomainRepository::record_pane_downgraded`].
+    async fn journal_pane_downgraded(
+        &self,
+        run_id: RunId,
+        requested_backend: DisplayBackend,
+        actual_backend: DisplayBackend,
+        reason: String,
+    ) {
+        let project_id = self.project_id;
+        let committed = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                let mut repo = DomainRepository::new(conn, project_id);
+                repo.record_pane_downgraded(run_id, requested_backend, actual_backend, reason)
+                    .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+            }))
+            .await;
+        self.commit_and_broadcast(committed, "PaneDowngraded").await;
     }
 
     async fn journal_diagnostic(&self, run_id: RunId, message: String) {
@@ -765,7 +789,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_create_pane_failure_journals_a_diagnostic_and_falls_back_to_hidden() {
+    async fn a_create_pane_failure_journals_a_typed_pane_downgraded_event_and_falls_back_to_hidden()
+    {
+        // CREW-60/D28: this used to journal a free-text `Diagnostic` --
+        // the exact "durable condition on an ephemeral channel" bug the
+        // design note named. A listener now gets typed fields instead of
+        // a message meant for a human to read.
         let (db, _dir) = harness().await;
         let (events_tx, mut events_rx) = broadcast::channel(16);
         let mut registry = DisplayRegistry::new();
@@ -776,19 +805,34 @@ mod tests {
             DisplayConfig::default(),
         )));
         let coordinator = coordinator(registry, Arc::clone(&db), events_tx);
+        let request = attach_request(None);
+        let expected_run_id = request.run_id;
 
-        let outcome = coordinator.attach(attach_request(None)).await;
+        let outcome = coordinator.attach(request).await;
 
         assert_eq!(outcome.backend, DisplayBackend::Hidden);
         assert_eq!(outcome.pane_ref, "");
 
-        // Diagnostic, then the Hidden DisplayPaneAttached -- both
+        // PaneDowngraded, then the Hidden DisplayPaneAttached -- both
         // broadcast, in that order.
-        let diagnostic = events_rx.try_recv().expect("diagnostic must broadcast");
-        assert!(matches!(
-            diagnostic.event,
-            crew_protocol::RuntimeEvent::Diagnostic { .. }
-        ));
+        let downgraded = events_rx.try_recv().expect("PaneDowngraded must broadcast");
+        match downgraded.event {
+            crew_protocol::RuntimeEvent::PaneDowngraded {
+                run_id,
+                requested_backend,
+                actual_backend,
+                reason,
+            } => {
+                assert_eq!(run_id, expected_run_id);
+                assert_eq!(requested_backend, DisplayBackend::Herdr);
+                assert_eq!(actual_backend, DisplayBackend::Hidden);
+                assert!(
+                    reason.contains("herdr exploded"),
+                    "reason must carry the underlying create_pane error: {reason:?}"
+                );
+            }
+            other => panic!("expected PaneDowngraded, got {other:?}"),
+        }
         let attached = events_rx.try_recv().expect("hidden attach must broadcast");
         assert!(is_display_event(
             &attached.event,

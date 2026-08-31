@@ -1758,6 +1758,48 @@
           "additionalProperties": false
         },
         {
+          "description": "A resolved backend's pane creation failed; the run fell back to a\ndifferent backend instead.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "paneDowngraded"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "runId": {
+                  "$ref": "#/$defs/RunId"
+                },
+                "requestedBackend": {
+                  "description": "The backend selection actually resolved to, before creation\nfailed.",
+                  "$ref": "#/$defs/DisplayBackend"
+                },
+                "actualBackend": {
+                  "description": "The backend actually used instead.",
+                  "$ref": "#/$defs/DisplayBackend"
+                },
+                "reason": {
+                  "description": "Why creation failed. Operator-facing text, not itself\nstructured -- the typed fields above are what a listener\nshould act on.",
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "runId",
+                "requestedBackend",
+                "actualBackend",
+                "reason"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
           "description": "A leader proposed a decomposition of a run into subtasks via\n`plan/propose`, pending `plan/decide`.",
           "type": "object",
           "properties": {

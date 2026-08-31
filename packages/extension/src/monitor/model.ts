@@ -74,6 +74,12 @@ export interface MonitorRow {
    *  ref rather than clearing them, so a detail view can still say what
    *  was there. */
   readonly pane?: MonitorPane;
+  /** Sticky once set (CREW-60/D28), like `openViolations`: a resolved
+   *  backend's pane creation failed and this run fell back to a
+   *  different one. Never cleared by an unrelated patch -- the ephemeral
+   *  `latestActivity` field held this before and was overwritten by the
+   *  very next event, which was the whole bug this exists to fix. */
+  readonly paneDowngraded?: { readonly requestedBackend: string; readonly actualBackend: string; readonly reason: string };
   readonly firstSeenAt: string;
   readonly lastEventAt: string;
   /** The highest event sequence applied to this row; guards against a
@@ -154,6 +160,7 @@ export function reduceEvent(state: MonitorState, envelope: EventEnvelope): Monit
     pendingApprovalCount: patch.pendingApprovalCountDelta !== undefined ? Math.max(0, base.pendingApprovalCount + patch.pendingApprovalCountDelta) : base.pendingApprovalCount,
     openViolations: applyViolationPatch(base.openViolations, patch),
     pane: patch.pane ?? base.pane,
+    paneDowngraded: patch.paneDowngraded ?? base.paneDowngraded,
     lastEventAt: envelope.timestamp,
     lastAppliedSequence: envelope.sequence,
   };
@@ -213,6 +220,7 @@ interface EventPatch {
   /** A decided violation to remove from the open set. */
   readonly removeViolationId?: string;
   readonly pane?: MonitorPane;
+  readonly paneDowngraded?: { readonly requestedBackend: string; readonly actualBackend: string; readonly reason: string };
 }
 
 function applyViolationPatch(open: Readonly<Record<string, string>>, patch: EventPatch): Readonly<Record<string, string>> {
@@ -365,6 +373,14 @@ function eventPatch(envelope: EventEnvelope): EventPatch | undefined {
         runId: event.payload.runId,
         latestActivity: attached ? `pane attached: ${backend}${paneRef !== "" ? ` (${paneRef})` : ""}` : `pane detached: ${backend}`,
         pane: { backend, placement, paneRef, attached },
+      };
+    }
+    case "paneDowngraded": {
+      const { requestedBackend, actualBackend, reason } = event.payload;
+      return {
+        runId: event.payload.runId,
+        latestActivity: `pane downgraded: ${requestedBackend} → ${actualBackend} (${reason})`,
+        paneDowngraded: { requestedBackend, actualBackend, reason },
       };
     }
     case "workspaceEvent": {
