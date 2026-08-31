@@ -368,9 +368,16 @@ fn is_real_user_turn(value: &Value) -> bool {
     }
     match value.pointer("/message/content") {
         Some(Value::String(_)) => true,
-        Some(Value::Array(blocks)) => blocks
-            .iter()
-            .all(|block| block.get("type").and_then(Value::as_str) != Some("tool_result")),
+        Some(Value::Array(blocks)) => {
+            // `all()` is vacuously true on an empty slice: without this
+            // guard, `content: []` would flip from excluded (the old
+            // fail-open `any()` returns false on empty) to included --
+            // CREW-47 in a corner no real session has produced.
+            !blocks.is_empty()
+                && blocks
+                    .iter()
+                    .all(|block| block.get("type").and_then(Value::as_str) != Some("tool_result"))
+        }
         _ => false,
     }
 }
@@ -843,6 +850,31 @@ mod tests {
                 .iter()
                 .all(|e| !matches!(e, TuiEvent::UserTurnStarted)),
             "a mixed tool_result/text entry must fail closed, not open: {events:?}"
+        );
+    }
+
+    /// The corner the fail-closed flip itself introduced: `all()` is
+    /// vacuously true on an empty slice, so an empty content array would
+    /// have flipped from excluded to included without the explicit
+    /// `is_empty` guard. Not observed in any real session file.
+    #[test]
+    fn an_empty_content_user_entry_is_not_a_real_user_turn() {
+        let raw = line(serde_json::json!({
+            "type": "user",
+            "sessionId": "sess-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": []},
+        }));
+        let events: Vec<TuiEvent> = ClaudeTranscriptFormat
+            .parse(&raw, &Cursor::start())
+            .into_iter()
+            .map(|(e, _)| e)
+            .collect();
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(e, TuiEvent::UserTurnStarted)),
+            "an empty content array must never signal a real user turn: {events:?}"
         );
     }
 
