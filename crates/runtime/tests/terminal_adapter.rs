@@ -247,6 +247,13 @@ async fn terminal_adapter_cancel_settles_the_run_with_a_synthetic_exit() {
             self.events.lock().push(event);
             Box::pin(async { Ok(0) })
         }
+
+        fn note_real_user_turn(
+            &self,
+            _run_id: RunId,
+        ) -> crew_runtime::adapter::AdapterFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
     }
 
     let mut mock = MockCommandRunner::new();
@@ -295,5 +302,9 @@ struct NullSink;
 impl AdapterEventSink for NullSink {
     fn emit(&self, _event: AdapterEvent) -> crew_runtime::adapter::AdapterFuture<'_, u64> {
         Box::pin(async { Ok(0) })
+    }
+
+    fn note_real_user_turn(&self, _run_id: RunId) -> crew_runtime::adapter::AdapterFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
     }
 }

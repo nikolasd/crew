@@ -158,14 +158,17 @@ pub trait AdapterEventSink: Send + Sync {
     ///
     /// Deliberately never journaled: this is a lifecycle signal, not
     /// content, so it carries no payload and produces no `RuntimeEvent`.
-    /// The default is a no-op -- only [`super::run_lifecycle::RunLifecycleSink`]
-    /// gives it a real implementation; every other sink (the production
-    /// journaling sink, the settlement wrapper, test fakes) has nothing to
-    /// do with this signal.
-    fn note_real_user_turn(&self, run_id: RunId) -> AdapterFuture<'_, ()> {
-        let _ = run_id;
-        Box::pin(async { Ok(()) })
-    }
+    ///
+    /// No default implementation, on purpose: only
+    /// [`super::run_lifecycle::RunLifecycleSink`] gives this a real body,
+    /// but every other sink still has to say so explicitly, one line each.
+    /// A silently-inherited no-op is exactly how `SettlementSink` almost
+    /// swallowed this signal in production's own wrapping order
+    /// (`SettlementSink::wrap(RunLifecycleSink::wrap(..))`) before anyone
+    /// noticed -- the same "state which claim applies" principle
+    /// [`crew_protocol::Redacted`] enforces for caller-carrying text,
+    /// applied here to sink composition instead.
+    fn note_real_user_turn(&self, run_id: RunId) -> AdapterFuture<'_, ()>;
 }
 
 /// The production [`AdapterEventSink`]: sanitizes, journals (correlated to
@@ -574,6 +577,27 @@ impl AdapterEventSink for DomainAdapterEventSink {
             Ok(sequence)
         })
     }
+
+    /// A deliberate no-op, and a durability decision, not a formality: this
+    /// is the journaling leaf, and it is *not* asked to journal anything
+    /// for this signal (see the trait method's own doc comment for why).
+    /// The practical cost is real -- the `waitingUser -> working` edge this
+    /// causes (in `RunLifecycleSink`, downstream of this sink in the
+    /// production chain) has no journaled cause of its own. During the
+    /// live E2E that found CREW-47, the reversal was visible in the
+    /// sequence (adjacent seq 75/76) but nothing in the journal said why
+    /// it happened -- exactly this gap. The cause is still recoverable
+    /// today, indirectly: the message row `message_send` created (if
+    /// resumption came from a follow-up) or the vendor's own transcript
+    /// (if it came from a real user turn) -- but not from the run's own
+    /// event stream. Journaling the cause directly is a proposed follow-up
+    /// (flagged to the maintainer), not solved here: it would need its own
+    /// `RuntimeEvent`/`AdapterEventPayload` variant, a `crates/protocol`
+    /// change outside what CREW-47/48 should absorb.
+    fn note_real_user_turn(&self, run_id: RunId) -> AdapterFuture<'_, ()> {
+        let _ = run_id;
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// Wraps a run's [`AdapterEventSink`] and reports terminal settlement
@@ -668,7 +692,9 @@ impl AdapterEventSink for SettlementSink {
     /// is neither. Without this override the trait's default no-op would
     /// silently swallow the signal here, in production's own wrapping
     /// order (`SettlementSink::wrap(RunLifecycleSink::wrap(..))`), before
-    /// it ever reached the one sink that acts on it.
+    /// it ever reached the one sink that acts on it. Guarded by
+    /// `a_real_user_turn_resumes_a_settled_run_through_the_production_sink_stack`
+    /// in `run_lifecycle.rs`, which composes exactly this wrapping order.
     fn note_real_user_turn(&self, run_id: RunId) -> AdapterFuture<'_, ()> {
         self.inner.note_real_user_turn(run_id)
     }
@@ -683,6 +709,10 @@ mod settlement_sink_tests {
     impl AdapterEventSink for StubSink {
         fn emit(&self, _event: AdapterEvent) -> AdapterFuture<'_, u64> {
             Box::pin(async { Ok(0) })
+        }
+
+        fn note_real_user_turn(&self, _run_id: RunId) -> AdapterFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
         }
     }
 
