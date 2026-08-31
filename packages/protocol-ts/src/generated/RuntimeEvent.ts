@@ -40,15 +40,18 @@ paneRef: string, } } | { "type": "outOfBandInput", "payload": { runId: RunId, ba
  */
 requestedBackend: DisplayBackend, 
 /**
+ * The placement that was requested when creation failed.
+ */
+requestedPlacement: DisplayPlacement, 
+/**
  * The backend actually used instead.
  */
 actualBackend: DisplayBackend, 
 /**
- * Why creation failed. Operator-facing text, not itself
- * structured -- the typed fields above are what a listener
- * should act on.
+ * Why creation failed, redacted. The typed fields above are what
+ * a listener should act on; this is operator-facing detail only.
  */
-reason: string, } } | { "type": "planProposed", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, plan: PlanSpec, } } | { "type": "planDecided", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, approved: boolean, 
+reason: Redacted, } } | { "type": "planProposed", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, plan: PlanSpec, } } | { "type": "planDecided", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, approved: boolean, 
 /**
  * `null` when no rationale was given for the decision.
  */

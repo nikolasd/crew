@@ -211,6 +211,7 @@ test("a paneDowngraded event sets the sticky paneDowngraded field and a latestAc
         payload: {
           runId: "run-1",
           requestedBackend: "herdr",
+          requestedPlacement: "tab",
           actualBackend: "hidden",
           reason: "herdr exploded",
         },
@@ -218,7 +219,7 @@ test("a paneDowngraded event sets the sticky paneDowngraded field and a latestAc
     }),
   );
   const row = state.rows["run-1"];
-  expect(row?.paneDowngraded).toEqual({ requestedBackend: "herdr", actualBackend: "hidden", reason: "herdr exploded" });
+  expect(row?.paneDowngraded).toEqual({ requestedBackend: "herdr", requestedPlacement: "tab", actualBackend: "hidden", reason: "herdr exploded" });
   expect(row?.latestActivity).toContain("herdr");
   expect(row?.latestActivity).toContain("hidden");
 });
@@ -229,7 +230,7 @@ test("CREW-60: paneDowngraded survives subsequent unrelated events (sticky, like
     envelope({
       event: {
         type: "paneDowngraded",
-        payload: { runId: "run-1", requestedBackend: "tmux", actualBackend: "hidden", reason: "tmux exploded" },
+        payload: { runId: "run-1", requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", reason: "tmux exploded" },
       },
     }),
   );
@@ -237,7 +238,7 @@ test("CREW-60: paneDowngraded survives subsequent unrelated events (sticky, like
   // to be the only durable-ish record, immediately overwriting the prior
   // one. The sticky field must survive that overwrite.
   const after = reduceEvent(downgraded, runEvent("run-1", "task-1", "worker-1", "working"));
-  expect(after.rows["run-1"]?.paneDowngraded).toEqual({ requestedBackend: "tmux", actualBackend: "hidden", reason: "tmux exploded" });
+  expect(after.rows["run-1"]?.paneDowngraded).toEqual({ requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", reason: "tmux exploded" });
   expect(after.rows["run-1"]?.latestActivity).toBe("run working");
 });
 

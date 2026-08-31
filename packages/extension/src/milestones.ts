@@ -160,8 +160,8 @@ export function formatDigest(e: EventEnvelope, lookup: RunLookup): string | unde
       return `Escalation raised on ${who}: ${reason}.`;
     }
     case "paneDowngraded": {
-      const { requestedBackend, actualBackend, reason } = event.payload;
-      return `${capitalize(who)}'s pane fell back from ${requestedBackend} to ${actualBackend}: ${reason}.`;
+      const { requestedBackend, requestedPlacement, actualBackend, reason } = event.payload;
+      return `${capitalize(who)}'s pane fell back from ${requestedBackend} (${requestedPlacement}) to ${actualBackend}: ${reason}.`;
     }
     default:
       return undefined;

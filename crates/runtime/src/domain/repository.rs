@@ -372,13 +372,15 @@ impl<'c> DomainRepository<'c> {
         &mut self,
         run_id: crew_protocol::RunId,
         requested_backend: crew_protocol::DisplayBackend,
+        requested_placement: crew_protocol::DisplayPlacement,
         actual_backend: crew_protocol::DisplayBackend,
-        reason: String,
+        reason: crew_protocol::Redacted,
     ) -> Result<Committed, DomainError> {
         self.append_and_apply(
             &RuntimeEvent::PaneDowngraded {
                 run_id,
                 requested_backend,
+                requested_placement,
                 actual_backend,
                 reason,
             },

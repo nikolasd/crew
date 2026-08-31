@@ -260,6 +260,7 @@ async fn harness_with_pane_delay(create_pane_delay: Duration) -> Harness {
         PathBuf::from("/opt/crew/crewd"),
         dir.path().to_path_buf(),
         dir.path().to_path_buf(),
+        crew_runtime::security::redaction::Redactor::new(),
     ));
 
     Harness {

@@ -1428,6 +1428,12 @@ fn build_tui_adapter<V: TuiVendor>(
             "omp" => default_omp_tui_config(),
             _ => default_claude_tui_config(),
         });
+    // CREW-60: same patterns already validated once at startup
+    // (`lifecycle.rs`'s fail-closed `Redactor::with_org_rules` call) --
+    // a compile error building this second instance from the same
+    // config can only be a bug.
+    let redactor = crate::security::redaction::Redactor::with_org_rules(&tui.org_security_patterns)
+        .expect("org_security_patterns already validated at startup");
     let pane_coordinator = Arc::new(PaneCoordinator::new(
         Arc::clone(&tui.display_registry),
         db,
@@ -1436,6 +1442,7 @@ fn build_tui_adapter<V: TuiVendor>(
         tui.crewd_path.clone(),
         tui.state_dir.clone(),
         repo_root.to_path_buf(),
+        redactor,
     ));
     let placement = display
         .as_ref()
@@ -1888,6 +1895,7 @@ mod build_adapter_tests {
             forced_backend: None,
             adapters,
             timings: crate::adapter::tui::TuiTimings::default(),
+            org_security_patterns: Vec::new(),
         });
         let registry = AdapterRegistry::new(
             Arc::new(FixtureAuthorization { allow: true }),
@@ -1952,6 +1960,7 @@ mod build_adapter_tests {
             forced_backend: None,
             adapters: BTreeMap::new(),
             timings: crate::adapter::tui::TuiTimings::default(),
+            org_security_patterns: Vec::new(),
         })
     }
 }

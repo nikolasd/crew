@@ -114,6 +114,12 @@ pub struct PaneCoordinator {
     /// detach cannot double-decrement.
     live_panes: Arc<Mutex<HashSet<RunId>>>,
     max_live_panes: usize,
+    // CREW-60 review: `PaneDowngraded.reason` embeds subprocess stderr
+    // (tmux/herdr's own error text), never runtime-authored -- the same
+    // full, configured redactor (built-in rules plus compiled
+    // `security.patterns`) every other journal-text crossing uses, never
+    // a built-ins-only instance.
+    redactor: crate::security::redaction::Redactor,
 }
 
 impl PaneCoordinator {
@@ -127,6 +133,7 @@ impl PaneCoordinator {
         crewd_path: PathBuf,
         state_dir: PathBuf,
         repository: PathBuf,
+        redactor: crate::security::redaction::Redactor,
     ) -> Self {
         Self {
             registry,
@@ -138,6 +145,7 @@ impl PaneCoordinator {
             repository,
             live_panes: Arc::new(Mutex::new(HashSet::new())),
             max_live_panes: DEFAULT_MAX_LIVE_PANES,
+            redactor,
         }
     }
 
@@ -244,6 +252,7 @@ impl PaneCoordinator {
                 self.journal_pane_downgraded(
                     req.run_id,
                     backend,
+                    req.placement,
                     DisplayBackend::Hidden,
                     format!("pane creation on {backend} failed, falling back to hidden: {err}"),
                 )
@@ -505,16 +514,42 @@ impl PaneCoordinator {
         &self,
         run_id: RunId,
         requested_backend: DisplayBackend,
+        requested_placement: DisplayPlacement,
         actual_backend: DisplayBackend,
         reason: String,
     ) {
+        // `reason` is subprocess stderr (tmux/herdr's own error text), not
+        // runtime-authored -- `assert_runtime_authored` would be a false
+        // claim here. `sanitize_fragment` on a `Visible` fragment only
+        // returns `None` for `Thinking`/`Secret` classes, so this is
+        // unreachable for a `Visible` fragment; fail loud rather than
+        // silently drop the reason if that ever changes.
+        let reason = match self.redactor.sanitize_fragment(&crew_protocol::Classified {
+            class: crew_protocol::ContentClass::Visible,
+            value: reason,
+        }) {
+            Some(sanitized) => crew_protocol::Redacted::from_sanitized(sanitized),
+            None => {
+                tracing::warn!(
+                    run_id = %run_id,
+                    "a Visible fragment always sanitizes to Some; journaling PaneDowngraded with an empty reason"
+                );
+                crew_protocol::Redacted::from_sanitized(String::new())
+            }
+        };
         let project_id = self.project_id;
         let committed = self
             .db
             .run_domain_op(Box::new(move |conn| {
                 let mut repo = DomainRepository::new(conn, project_id);
-                repo.record_pane_downgraded(run_id, requested_backend, actual_backend, reason)
-                    .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                repo.record_pane_downgraded(
+                    run_id,
+                    requested_backend,
+                    requested_placement,
+                    actual_backend,
+                    reason,
+                )
+                .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
             }))
             .await;
         self.commit_and_broadcast(committed, "PaneDowngraded").await;
@@ -672,6 +707,7 @@ mod tests {
             PathBuf::from("/opt/crew/crewd"),
             PathBuf::from("/state"),
             PathBuf::from("/repo"),
+            crate::security::redaction::Redactor::new(),
         )
     }
 
@@ -820,14 +856,16 @@ mod tests {
             crew_protocol::RuntimeEvent::PaneDowngraded {
                 run_id,
                 requested_backend,
+                requested_placement,
                 actual_backend,
                 reason,
             } => {
                 assert_eq!(run_id, expected_run_id);
                 assert_eq!(requested_backend, DisplayBackend::Herdr);
+                assert_eq!(requested_placement, DisplayPlacement::SplitRight);
                 assert_eq!(actual_backend, DisplayBackend::Hidden);
                 assert!(
-                    reason.contains("herdr exploded"),
+                    reason.as_str().contains("herdr exploded"),
                     "reason must carry the underlying create_pane error: {reason:?}"
                 );
             }
@@ -838,6 +876,45 @@ mod tests {
             &attached.event,
             crew_protocol::RuntimeEventKind::DisplayPaneAttached
         ));
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    #[tokio::test]
+    async fn a_create_pane_failures_secret_shaped_stderr_is_actually_redacted_before_journaling() {
+        // Staff's review on #88: `PaneDowngraded.reason` embeds subprocess
+        // stderr -- tmux/herdr's own error text, never runtime-authored --
+        // and a `Redacted` type alone only proves *some* sanitization
+        // happened, not that it actually masked anything. This drives a
+        // real secret-shaped substring through the real `create_pane`
+        // failure path and asserts the JOURNALED reason has it masked,
+        // not just that the field's type claims sanitization occurred.
+        let (db, _dir) = harness().await;
+        let (events_tx, mut events_rx) = broadcast::channel(16);
+        let mut registry = DisplayRegistry::new();
+        registry.register(Box::new(
+            FakeBackend::new("herdr", DisplayBackend::Herdr, true).failing(
+                "tmux exited with error: sk-ant-api03-thisisafaketokenthatlooksrealbutisnot",
+            ),
+        ));
+        registry.register(Box::new(super::super::HiddenDisplay::new(
+            DisplayConfig::default(),
+        )));
+        let coordinator = coordinator(registry, Arc::clone(&db), events_tx);
+
+        let _ = coordinator.attach(attach_request(None)).await;
+
+        let downgraded = events_rx.try_recv().expect("PaneDowngraded must broadcast");
+        match downgraded.event {
+            crew_protocol::RuntimeEvent::PaneDowngraded { reason, .. } => {
+                assert!(
+                    !reason.as_str().contains("sk-ant-api03-"),
+                    "the journaled reason must never carry an unredacted API-key-shaped \
+                     substring: {reason:?}"
+                );
+            }
+            other => panic!("expected PaneDowngraded, got {other:?}"),
+        }
 
         db.shutdown().await.expect("shutdown database");
     }

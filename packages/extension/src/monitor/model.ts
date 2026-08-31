@@ -79,7 +79,7 @@ export interface MonitorRow {
    *  different one. Never cleared by an unrelated patch -- the ephemeral
    *  `latestActivity` field held this before and was overwritten by the
    *  very next event, which was the whole bug this exists to fix. */
-  readonly paneDowngraded?: { readonly requestedBackend: string; readonly actualBackend: string; readonly reason: string };
+  readonly paneDowngraded?: { readonly requestedBackend: string; readonly requestedPlacement: string; readonly actualBackend: string; readonly reason: string };
   readonly firstSeenAt: string;
   readonly lastEventAt: string;
   /** The highest event sequence applied to this row; guards against a
@@ -220,7 +220,7 @@ interface EventPatch {
   /** A decided violation to remove from the open set. */
   readonly removeViolationId?: string;
   readonly pane?: MonitorPane;
-  readonly paneDowngraded?: { readonly requestedBackend: string; readonly actualBackend: string; readonly reason: string };
+  readonly paneDowngraded?: { readonly requestedBackend: string; readonly requestedPlacement: string; readonly actualBackend: string; readonly reason: string };
 }
 
 function applyViolationPatch(open: Readonly<Record<string, string>>, patch: EventPatch): Readonly<Record<string, string>> {
@@ -376,11 +376,11 @@ function eventPatch(envelope: EventEnvelope): EventPatch | undefined {
       };
     }
     case "paneDowngraded": {
-      const { requestedBackend, actualBackend, reason } = event.payload;
+      const { requestedBackend, requestedPlacement, actualBackend, reason } = event.payload;
       return {
         runId: event.payload.runId,
-        latestActivity: `pane downgraded: ${requestedBackend} → ${actualBackend} (${reason})`,
-        paneDowngraded: { requestedBackend, actualBackend, reason },
+        latestActivity: `pane downgraded: ${requestedBackend}/${requestedPlacement} → ${actualBackend} (${reason})`,
+        paneDowngraded: { requestedBackend, requestedPlacement, actualBackend, reason },
       };
     }
     case "workspaceEvent": {

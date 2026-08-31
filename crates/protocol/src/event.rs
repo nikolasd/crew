@@ -873,12 +873,27 @@ pub enum RuntimeEvent {
         /// The backend selection actually resolved to, before creation
         /// failed.
         requested_backend: DisplayBackend,
+        // A downgrade can be placement-caused, not just backend-caused:
+        // tmux refuses `Workspace`/`Window` outright (it ignores `Tab`,
+        // but a workspace/window request reaches this same failure path).
+        // Without this field a listener holding only
+        // `requested_backend`/`actual_backend` cannot tell "the backend
+        // wasn't running" from "you asked for a placement that backend
+        // doesn't support" -- two different remedies, and only the
+        // (untyped) `reason` prose would otherwise separate them.
+        /// The placement that was requested when creation failed.
+        requested_placement: DisplayPlacement,
         /// The backend actually used instead.
         actual_backend: DisplayBackend,
-        /// Why creation failed. Operator-facing text, not itself
-        /// structured -- the typed fields above are what a listener
-        /// should act on.
-        reason: String,
+        // This is subprocess stderr (tmux/herdr's own error output),
+        // never runtime-authored text -- `pane_ref` on the sibling
+        // `DisplayEvent` above draws the identical line ("never terminal
+        // contents, never an absolute socket or filesystem path") for the
+        // same reason: a multiplexer's ordinary failure text routinely
+        // names its own socket path.
+        /// Why creation failed, redacted. The typed fields above are what
+        /// a listener should act on; this is operator-facing detail only.
+        reason: Redacted,
     },
     /// A leader proposed a decomposition of a run into subtasks via
     /// `plan/propose`, pending `plan/decide`.

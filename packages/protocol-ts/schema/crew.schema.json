@@ -1775,19 +1775,24 @@
                   "description": "The backend selection actually resolved to, before creation\nfailed.",
                   "$ref": "#/$defs/DisplayBackend"
                 },
+                "requestedPlacement": {
+                  "description": "The placement that was requested when creation failed.",
+                  "$ref": "#/$defs/DisplayPlacement"
+                },
                 "actualBackend": {
                   "description": "The backend actually used instead.",
                   "$ref": "#/$defs/DisplayBackend"
                 },
                 "reason": {
-                  "description": "Why creation failed. Operator-facing text, not itself\nstructured -- the typed fields above are what a listener\nshould act on.",
-                  "type": "string"
+                  "description": "Why creation failed, redacted. The typed fields above are what\na listener should act on; this is operator-facing detail only.",
+                  "$ref": "#/$defs/Redacted"
                 }
               },
               "additionalProperties": false,
               "required": [
                 "runId",
                 "requestedBackend",
+                "requestedPlacement",
                 "actualBackend",
                 "reason"
               ]
