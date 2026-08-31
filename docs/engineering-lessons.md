@@ -66,6 +66,39 @@ A durable mutation must broadcast the same event it just committed, in the same 
 
 ## Run Lifecycle
 
+### A state edge driven by evidence must identify the cause, not merely correlate with it
+
+**Location:** `crates/runtime/src/adapter/run_lifecycle.rs`'s `observe_vendor_activity` (CREW-47)
+
+**The bug:** a run parked at `waitingUser` by a finished turn was resumed to `working` by *any*
+journaled non-exit event, on the premise that "the vendor produced something, so the leader must have
+steered it". The premise is false: the vendor also writes post-turn bookkeeping. In the failing
+session the resume was triggered by Claude's own `system` entry of subtype `turn_duration` — the
+record of how long the turn took — and by `bridge-session`, `cost-state` and `last-prompt` entries,
+each of which carries a `sessionId` and therefore produced a `SessionMeta` event, i.e. **the runtime
+re-identifying its own session file resumed the run**. Settle, reverse, settle, reverse, then a
+five-minute inactivity timeout. The run row tracked every edge faithfully; the state was faithfully
+wrong.
+
+The instructive part is the latch. `observe_turn_ended` deliberately reopened the
+`working_observed` latch so the next event would be re-evaluated — added to fix the opposite bug, a
+real follow-up turn stranding the run in `waitingUser` forever. Both failures are the same ambiguity
+resolved in opposite directions: leave the latch set and genuine steering is ignored; reopen it and
+bookkeeping resurrects the run. No latch tuning fixes either, because the signal cannot tell them
+apart.
+
+**The lesson:** when a state edge is driven by journaled evidence, the evidence has to identify the
+*cause*, not co-occur with it. If two different causes produce identical observations, no threshold,
+latch or ordering change will separate them — the fix is either a signal that distinguishes them
+(here: a real user-turn entry, non-sidechain and not a `tool_result`) or an edge caused explicitly by
+the actor that already knows (here: the service that delivered the follow-up clears the flag itself,
+because it does not need to deduce what it just did). Reach for "caused" before "inferred": the
+runtime usually knows something it is otherwise trying to detect.
+
+**Regression tests:** `a_trailing_session_meta_entry_never_resumes_a_settled_run`,
+`a_delivered_follow_up_resumes_a_settled_run`,
+`a_real_user_turn_resumes_a_settled_run_through_the_production_sink_stack`.
+
 ### A documented state machine with no production writer is inert
 
 **Location:** `crates/runtime/src/adapter/registry.rs`, `crates/runtime/src/adapter/run_lifecycle.rs` (see [ADR-0023](adr/0023-run-state-edges-from-adapter-evidence.md))
@@ -408,6 +441,17 @@ just written, grading its own homework; it always reported unchanged. In both ca
 would have confirmed the promise and running it would not. Assert on observed behavior — a spawn
 count, the previously-committed bytes — never on the code path you believe you took.
 
+A third instance, same shape (CREW-50): `crew_transcript` called `events/replay` through the client's
+generic `request()` path, whose fallback for a method with no registered validator demands a JSON
+*object* — and `events/replay` returns a bare array, so every real call failed validation. The tool's
+own test suite could not see it, because `leader.test.ts` fakes `client.request` itself: the test
+mocked the very component whose behaviour was wrong. **A test that mocks the class under test cannot
+observe that class's bug.** The fix's own test calls a real client over a real socket, and the
+positive counterpart is worth naming too — the class was then closed by enumerating every method's
+return shape (`worker_list_op` -> `{"workers": ..}`, and zero `Ok(json!([..]))` or `Ok(Value::Null)`
+anywhere in the service layer), which established that `events/replay` was the only non-object result
+rather than the only one anyone had noticed.
+
 ### A type checker is a gate only if it is run to failure
 **Location:** `bun run typecheck`, CI `typecheck` job
 
@@ -512,12 +556,55 @@ slightly different from the one asked:
 - **`grep -c "Redactor\|sanitize" <one file>` answers "does this file redact", not "is this write
   redacted".** It was correct twice, which is what made it trusted the third time — when the write had
   a second entry point in a file nobody had grepped.
+- **A JSON walker that reads `enum[0]` reports a 23-value branch as one value.** Collecting a schema's
+  wire values with `(branch.get("enum") or [None])[0]` read `RuntimeEventKind`'s 40 values as 18, and
+  the missing 22 included the exact name under investigation — reported as a dangling reference when it
+  was live. Union every `const` and every `enum` element recursively, and never per-branch.
+- **A membership check on a *type* cannot answer a question about a *diff*.** Verifying that
+  `Classified` was untouched by testing whether the type is a `$defs` key never asked whether the diff
+  touched *mentions* of the name, so it could not distinguish the shipped description (converted,
+  correctly) from the `Debug`-impl mention (kept, correctly) — and confidently reported the opposite of
+  the artifact. Check the diff, not the inventory.
 
 **The lesson:** the first measurement you reach for is usually the one that cannot distinguish the two
 cases you care about. A local rebuild cannot tell "the bundle is stale" from "I am on the wrong
 platform"; both produce a large diff. Before trusting a check, ask what *else* would produce this
 same output. And when a cheap check contradicts an expensive one, the cheap one is the suspect — the
 contradiction is the signal, not the noise to be explained away.
+
+### An instrument you do not read against your own conclusion is not a check
+
+**Locations:** an `Option`-field/`skip_serializing_if` audit script (CREW-46/47 review); a `grep` for
+test functions in `crates/runtime/tests/run_result.rs` (CREW-49 rider review)
+
+**The bug:** two failures of the same shape, neither of them a bug in the instrument.
+
+A scan built to find shipped descriptions that say "absent" while the field serializes as `null`
+printed `BAD event.rs reason` among seven flags. That output was then quoted to a colleague as
+evidence of the scan's quality — "discriminating, not noisy, it correctly separates the two
+same-named `reason` fields" — while the same review's hand-written keep-list said one of those two
+fields needed no fix. The tool was right, its output was on screen, and it was never diffed against
+the conclusion it contradicted. The keep-list shipped and a colleague caught it two reviews later.
+
+Separately, a review claimed a property had no regression test. The grep behind that claim returned
+only helper functions from a file of twenty tests, because the pattern matched `fn` at the wrong
+indentation. **Zero tests in a test file is an impossible result** — and it was accepted as an answer
+instead of as a broken instrument. The reviewer fell back to reading the PR diff, saw one new test,
+and asked for a test that had existed on `main` for weeks; the engineer added a duplicate in good
+faith.
+
+**The lesson:** these are distinct from a measurement that answers the wrong question (see the entry
+above), and they need a different remedy — not a better instrument, but reading the one you have.
+Two habits close them. **Diff the output against what you already wrote down:** if a tool you built
+to check your work disagrees with your conclusion, that is the entire value of having built it, and
+quoting it approvingly while contradicting it is the opposite of using it. **Treat an
+impossible-shaped result as a failure, not an answer:** no tests in a test file, no matches in a file
+you know contains the string, an empty list where the domain guarantees at least one — each means the
+instrument broke, and a fallback reached for at that moment inherits none of its authority.
+
+**Regression tests:** N/A — process lessons. The concrete residue is the duplicate test dropped from
+the CREW-49 rider before merge, and `an_empty_content_user_entry_is_not_a_real_user_turn`, which
+exists because the same review's other findings were read properly.
 
 ### Thresholds calibrated on an idle machine are not thresholds
 
@@ -541,6 +628,29 @@ the threshold is *for* — if it exists to catch a hang, it can be generous; if 
 gate's runtime, it has to be enforced somewhere that a single stalled iteration cannot skip. And
 `RUST_TEST_THREADS=1` does not save you: it serialises tests within a binary and does nothing about
 other processes on the box.
+
+### `any` and `all` disagree on the empty set, and the flip that looks stricter is the one that opens
+
+**Location:** `crates/runtime/src/adapter/tui/claude.rs`'s `is_real_user_turn` (CREW-47 rider)
+
+**The bug:** a predicate deciding whether a vendor transcript entry is a real user turn — and
+therefore whether it may resume a run parked at a finished turn — tested
+`blocks.iter().any(|b| b.type != "tool_result")`. Review argued that was fail-open for mixed content
+(a `tool_result` alongside any other block counted as a real turn) and that `all` fails closed, in a
+guard whose whole purpose is preventing a false resume. The flip was correct for every non-empty
+input and inverted the empty one: `[].iter().any(..)` is `false`, `[].iter().all(..)` is **`true`**.
+So a `content: []` entry went from "not a user turn" to "resume the run" — the exact failure the
+ticket existed to close, restored in a corner, by the change made to harden it.
+
+**The lesson:** `any` and `all` are not stricter-and-weaker; they are stricter-and-weaker *on
+non-empty input* and exactly opposite on the empty set, where `any` is `false` and `all` is
+vacuously `true`. Every flip between them changes the empty-set answer, and the reasoning that
+motivates the flip — "we want the stricter predicate" — is precisely what conceals it, because it is
+reasoning about the non-empty case. When flipping, state the empty case out loud and test it: the
+guard here needed `!blocks.is_empty() && blocks.iter().all(..)`, three extra words that no amount of
+thinking about mixed content would have produced.
+
+**Regression test:** `an_empty_content_user_entry_is_not_a_real_user_turn`.
 
 ### A test's name is a claim, and it is the claim people trust
 
@@ -838,6 +948,91 @@ name, say). Present in one and absent in the other is proof; a byte diff is not.
 
 ---
 
+## Protocol Evolution
+
+### Retiring a journaled wire value is three rules, not one
+
+**Location:** `crates/protocol/src/display.rs` — `DisplayBackend::Terminal` (WP9) and
+`DisplayPlacement::Embedded` (CREW-52)
+
+**The bug:** WP9 retired the `Terminal` display backend by deleting the enum variant. Nothing else.
+`DisplayBackend` is journaled, so any event log carrying `backend: "terminal"` stops deserializing —
+`events/replay`, crash recovery and `audit export` all fail on it. Nobody noticed because no local
+journal predates WP9; the exposure is entirely other people's data.
+
+CREW-52 was then about to do it again to `DisplayPlacement::Embedded`, whose removal was approved on
+the strength of a good argument (no backend implements it — herdr and tmux refuse it, osWindow ignores
+it, `hidden` has no pane to place). `placement` is journaled too, and `"embedded"` was present in the
+maintainer's own default-root journal, not merely in a test fixture.
+
+Deleting it is not merely risky, it is **incoherent with two of this repo's stated invariants**:
+replayed events must pass the extension's Ajv validation (invariant 2), so the value must remain in
+the JSON Schema; and Rust types are canonical (invariant 1), so a value that must remain in the schema
+must remain in the Rust enum. "Just delete it" cannot be reconciled with either.
+
+**The lesson:** retiring a value that has ever been journaled is three obligations, and doing one of
+them is how you get a latent replay failure in somebody else's repository.
+
+1. **Stop producing it** — remove every construction site.
+2. **Keep accepting it on replay, forever** — the append-only journal cannot be rewritten, so the
+   deserializer owes old rows a definition for as long as they exist.
+3. **Reject it as input** — otherwise the retirement is half-done: the default stops using it while
+   any client can still request it, and a schema that must keep listing it advertises it as live.
+   This asymmetry (accept on read-back, refuse as a request parameter) is not expressible in the enum
+   itself; it is a rule at the request boundary and will not exist unless someone writes it.
+
+And say **which kind of dead** it is, because the schema cannot: `Embedded` was always meaningless
+(no implementing backend ever existed), while `Terminal` was a real, working backend deliberately
+dropped. Both would otherwise sit in the schema looking equally alive.
+
+**Our exception, stated so the rule is not misread:** the maintainer ruled pre-release that this
+repo's own journals may be discarded, which moots obligation 2 *for us, this once*. That ruling is
+about our data, not about the rule — and obligation 3 survives it untouched.
+
+**Regression tests:** specified in CREW-52 as `a_journaled_legacy_embedded_placement_still_replays`
+and `a_journaled_legacy_terminal_backend_still_replays`, plus typed-rejection tests for the
+request-boundary half. Not yet landed at the time of writing; the entry records the rule, not a
+completed fix.
+
+---
+
+## Composition and Defaults
+
+### A default trait-method body is permission to say nothing, and in a wrapper chain silence is wrong
+
+**Location:** `crates/runtime/src/adapter/event_sink.rs`'s `AdapterEventSink::note_real_user_turn`
+(CREW-47, and its rider)
+
+**The bug:** a new out-of-band signal was added to the sink trait with a default no-op body, so
+existing implementors would keep compiling. Production wraps them:
+`SettlementSink::wrap(RunLifecycleSink::wrap(..))`. `SettlementSink` therefore sits between the
+adapter that raises the signal and the only sink that acts on it — and without an explicit forwarding
+override it would have inherited the default no-op and swallowed the signal silently. The fix worked
+in unit tests because they compose `RunLifecycleSink` directly, bypassing the exact layer where the
+hazard lives. It was found by tracing the real composition order by hand, not by any test; and the
+one-line forwarding override was itself untested and deletable with green CI until a review asked for
+a test that composes the production order.
+
+**The lesson:** a defaulted trait method is a decision an author is allowed not to make, and in a
+decorator chain the default answer — do nothing, forward nothing — is the wrong one. Removing the
+default body converts a silent runtime no-op into a compile error: every implementor must state
+whether it forwards, acts, or deliberately drops, and a reviewer can see which. This is the same
+principle as `crew_protocol::Redacted`'s two claim-named constructors, applied to composition instead
+of to text: the failure mode being eliminated is *silence*, not error.
+
+Two details worth carrying. Ceremony is acceptable *here* — where ADR-0006 rejected it for the
+redaction write path — because there is no narrower place to put the obligation (the risk is
+structural to wrapping, not to any field), and because the compiler cannot skip ceremony it enforces.
+And when the default was removed, the compiler enumerated implementors that a careful manual scan had
+missed, including integration-test sinks nobody had counted — a hand-built inventory of a trait's
+implementors is exactly the kind of list that misses entries, and the compiler does not have that
+failure mode.
+
+**Regression test:** `a_real_user_turn_resumes_a_settled_run_through_the_production_sink_stack`,
+which composes the real production order rather than the inner sink alone.
+
+---
+
 ## Test Suite Integrity
 
 ### A mechanical type-level fix can compile clean while leaving a test's evidence invalid
@@ -873,6 +1068,37 @@ production code path a test can pin. The corrected test itself
 `a_skipped_scenario_leaves_its_gated_capability_declared` are what the fix left behind.
 
 ---
+
+### A semantics change needs two tests: one that distinguishes, one that preserves
+
+**Location:** `crates/runtime/tests/run_result.rs` —
+`run_result_reads_an_answer_that_follows_a_content_free_boundary` and
+`run_result_reads_up_to_the_first_turn_end_not_a_later_one` (CREW-49)
+
+**The bug:** CREW-49 changed `run/result`'s fold boundary from "the first turn-end" to "the first
+turn-end that already has result text accumulated before it". Two tests cover it and neither is
+sufficient alone, which is the point. The new test — text arriving after a content-free boundary is
+still returned — **distinguishes** the new behaviour from the old: it fails on the pre-change code.
+The older test — text A, boundary, text B, boundary, expect A — **preserves** the property the
+change promised not to weaken, and an unconditional `break` (the pre-change implementation) satisfies
+it just as well. Ship only the first and someone may later delete the break entirely, silently
+reading later turns and rewriting an answer the leader has already read. Ship only the second and the
+original bug returns untouched.
+
+A review of that change asked for the preservation test as though it were missing; it had been on
+`main` for weeks, and the grep behind the claim had failed (see "An instrument you do not read..."
+above). The duplicate was dropped before merge. That mistake is worth recording alongside the
+lesson, because a reviewer demanding a test that already exists is the same question asked badly:
+*which production change would make this test fail?* Asked properly of the existing test, the answer
+is "removing the break" — which is exactly the half the new test does not cover.
+
+**The lesson:** for a semantics change, ask that question of each test and compare the answers. If
+two tests would fail on the same production change, you have one test under two names, and the
+suite looks larger than it is. If some plausible change would break neither, the pair is incomplete.
+This is the `compile_fail`/positive doctest discipline applied to behaviour instead of
+compilation — the negative alone is weak evidence, and so is the positive.
+
+**Regression tests:** the pair itself.
 
 ### Changing a doc comment's sigil is a test-suite edit when that comment holds a code fence
 
