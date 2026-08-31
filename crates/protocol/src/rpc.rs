@@ -187,6 +187,18 @@ pub struct RuntimeStatus {
     /// The URL includes the dashboard's access token, so it grants whoever
     /// holds it access to the dashboard: treat it as a secret.
     pub dashboard_url: Option<String>,
+    // D25: a two-daemon mixup (two `crewd` processes, each against its own
+    // state root, neither aware of the other) cost an operator real
+    // debugging time with no way to see which database a running daemon
+    // was actually reading/writing. These two fields exist so `/crew
+    // health` can print them directly instead of the operator having to
+    // infer them from process arguments or logs.
+    /// The state root this runtime resolved -- the directory holding this
+    /// project's `runtime.db` and socket. Absolute, so two daemons pointed
+    /// at different roots are distinguishable at a glance.
+    pub state_root: String,
+    /// The Unix domain socket path this runtime is actually listening on.
+    pub socket_path: String,
 }
 
 /// Result of a successful `initialize` request.

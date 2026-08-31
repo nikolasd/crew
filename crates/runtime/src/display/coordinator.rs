@@ -179,9 +179,14 @@ impl PaneCoordinator {
     /// `Hidden` (an empty `pane_ref`) instead of propagating the error.
     pub async fn attach(&self, req: PaneAttachRequest) -> PaneAttachOutcome {
         let candidates = ordered_candidates(req.forced_backend);
+        // `req.placement` is already a concrete, previously-resolved value
+        // (see `crate::adapter::registry`'s own earlier `resolve()` call) --
+        // wrapping it in `Some` here just carries it through unchanged;
+        // `resolve()` only falls back to a backend's `natural_placement()`
+        // for a caller that never specified one in the first place.
         let selection = self.registry.resolve(&crew_protocol::DisplayPreference {
             ordered: candidates,
-            placement: req.placement,
+            placement: Some(req.placement),
             launch_program: req.launch_program,
         });
 
@@ -257,7 +262,8 @@ impl PaneCoordinator {
     ) -> Result<PaneAttachOutcome, crate::domain::DomainError> {
         let selection = self.registry.resolve(&crew_protocol::DisplayPreference {
             ordered: ordered_candidates(req.forced_backend),
-            placement: req.placement,
+            // See the identical comment in `Self::attach`.
+            placement: Some(req.placement),
             launch_program: req.launch_program,
         });
         let Some(backend) = selection.selected else {

@@ -187,14 +187,18 @@ test("a displayPaneAttached event with an empty pane ref (hidden fallback) omits
           kind: "displayPaneAttached",
           runId: "run-1",
           backend: "hidden",
-          placement: "embedded",
+          // CREW-52: no "embedded" placement exists any more -- a hidden
+          // backend has no pane to place at all, so the value here is
+          // moot; any valid placement demonstrates the same (empty
+          // pane ref) behavior this test is actually about.
+          placement: "splitRight",
           paneRef: "",
         },
       },
     }),
   );
   const row = state.rows["run-1"];
-  expect(row?.pane).toEqual({ backend: "hidden", placement: "embedded", paneRef: "", attached: true });
+  expect(row?.pane).toEqual({ backend: "hidden", placement: "splitRight", paneRef: "", attached: true });
   expect(row?.latestActivity).toBe("pane attached: hidden");
 });
 

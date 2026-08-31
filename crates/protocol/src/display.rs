@@ -63,14 +63,29 @@ impl std::str::FromStr for DisplayBackend {
     }
 }
 
+// CREW-52 (D27 final ruling): `Embedded` is DELETED, not deprecated in
+// place -- the plugin has no external users yet, so old-journal replay
+// compatibility is a non-goal (the maintainer falsified the invariants
+// argument for keeping it as a product fact). This is a BREAKING CHANGE: a
+// journal written before this change that contains `placement: "embedded"`
+// will fail to deserialize on replay/recovery; the documented remedy is to
+// clear the state directory's SQLite database (see the friendly error this
+// produces in `ipc/connection.rs`'s `replay()`, and the compatibility docs).
+// The retired `DisplayBackend::Terminal`'s own, similarly-shaped
+// backward-compatibility hazard was investigated and deliberately NOT
+// bundled into this change -- that finding is closed as accepted-pre-release.
 /// Where a display backend places a pane relative to the caller's own
 /// terminal. Changes presentation only; never run ownership.
+///
+/// No "embedded" (no separate pane) variant exists here: that choice is no
+/// longer representable as a placement request at all -- every backend now
+/// resolves its own natural placement when the caller's preference doesn't
+/// specify one, and choosing to have no pane at all is a backend choice
+/// (`hidden`), not a placement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum DisplayPlacement {
-    /// Rendered inside the caller's own OMP session, no separate pane.
-    Embedded,
     /// A new pane split to the right of the current one.
     SplitRight,
     /// A new pane split below the current one.
@@ -146,8 +161,17 @@ impl DisplayStatus {
 pub struct DisplayPreference {
     /// Backends to try, most-preferred first. Empty means "any available".
     pub ordered: Vec<DisplayBackend>,
-    /// Where to put the pane once a backend is chosen.
-    pub placement: DisplayPlacement,
+    // CREW-52 (D27/D3): absent means "no explicit placement" -- the chosen
+    // backend resolves its own natural form (e.g. herdr/tmux create a pane;
+    // osWindow opens a tab or window) rather than a caller-supplied or
+    // server-hardcoded default. This replaces the deleted `Embedded`
+    // variant, which meant "no pane at all" -- that choice is no longer
+    // representable as a placement; picking `hidden` as the backend itself
+    // is how a caller opts out of a pane entirely.
+    /// Where to put the pane once a backend is chosen. Absent lets the
+    /// chosen backend pick its own natural placement.
+    #[serde(default)]
+    pub placement: Option<DisplayPlacement>,
     // CREW-9. Used only by `OsWindowDisplay`, to target the right terminal
     // application instead of always assuming Terminal.app. tmux/herdr are
     // self-detecting (they query whatever server already exists,

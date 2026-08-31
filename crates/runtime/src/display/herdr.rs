@@ -187,12 +187,6 @@ impl HerdrDisplay {
         if !status.compatible {
             return Err(status.remediation());
         }
-        if req.placement == DisplayPlacement::Embedded {
-            return Err(
-                "DisplayPlacement::Embedded creates no separate pane; Herdr has nothing to split"
-                    .to_string(),
-            );
-        }
         if req.placement == DisplayPlacement::Window {
             return Err(
                 "DisplayPlacement::Window is OsWindowDisplay's own actual-outcome placement, \
@@ -210,7 +204,7 @@ impl HerdrDisplay {
             DisplayPlacement::SplitDown | DisplayPlacement::Tab | DisplayPlacement::Workspace => {
                 "down"
             }
-            DisplayPlacement::Embedded | DisplayPlacement::Window => {
+            DisplayPlacement::Window => {
                 unreachable!("handled above")
             }
         };
@@ -236,7 +230,7 @@ impl HerdrDisplay {
                     )?;
                 }
                 DisplayPlacement::SplitRight | DisplayPlacement::SplitDown => {}
-                DisplayPlacement::Embedded | DisplayPlacement::Window => {
+                DisplayPlacement::Window => {
                     unreachable!("handled above")
                 }
             }

@@ -108,22 +108,15 @@ impl TmuxDisplay {
     ///
     /// # Errors
     /// Returns a `capability_unsupported`-shaped message for
-    /// `DisplayPlacement::Workspace` (tmux has no workspace concept) and
-    /// `DisplayPlacement::Embedded` (nothing to split); a message
-    /// naming "no active tmux session" if [`Self::inside_a_real_session`]
-    /// fails (this call never starts one); or a message if the
-    /// split/window/title command itself fails.
+    /// `DisplayPlacement::Workspace` (tmux has no workspace concept); a
+    /// message naming "no active tmux session" if
+    /// [`Self::inside_a_real_session`] fails (this call never starts one);
+    /// or a message if the split/window/title command itself fails.
     fn create_pane_sync(&self, req: &PaneRequest) -> Result<String, String> {
         if req.placement == DisplayPlacement::Workspace {
             return Err(
                 "capability_unsupported: tmux has no workspace concept; use Tab, SplitRight, or \
                  SplitDown"
-                    .to_string(),
-            );
-        }
-        if req.placement == DisplayPlacement::Embedded {
-            return Err(
-                "DisplayPlacement::Embedded creates no separate pane; tmux has nothing to split"
                     .to_string(),
             );
         }
@@ -144,7 +137,7 @@ impl TmuxDisplay {
         let subcommand = match req.placement {
             DisplayPlacement::Tab => "new-window",
             DisplayPlacement::SplitRight | DisplayPlacement::SplitDown => "split-window",
-            DisplayPlacement::Embedded | DisplayPlacement::Workspace | DisplayPlacement::Window => {
+            DisplayPlacement::Workspace | DisplayPlacement::Window => {
                 unreachable!("handled above")
             }
         };
@@ -152,10 +145,7 @@ impl TmuxDisplay {
         match req.placement {
             DisplayPlacement::SplitRight => argv.push("-h".to_string()),
             DisplayPlacement::SplitDown => argv.push("-v".to_string()),
-            DisplayPlacement::Tab
-            | DisplayPlacement::Embedded
-            | DisplayPlacement::Workspace
-            | DisplayPlacement::Window => {}
+            DisplayPlacement::Tab | DisplayPlacement::Workspace | DisplayPlacement::Window => {}
         }
         argv.push("-P".to_string());
         argv.push("-F".to_string());

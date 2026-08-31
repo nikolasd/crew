@@ -96,14 +96,22 @@ export function launchProgramHint(env: Readonly<Record<string, string | undefine
  * The `displayPreference` fragment to spread into a `run/submit`/
  * `run/retry` params object, or `{}` when there is no recognized hint --
  * this is deliberately the *whole* key, not just `launchProgram` alone,
- * because `DisplayPreference.placement`/`ordered` are required fields on
- * the wire: sending a bare `{launchProgram}` without them would be
- * rejected as malformed. `ordered: []`/`placement: "embedded"` are
- * exactly the daemon's own defaults when `displayPreference` is absent
- * entirely, so this changes nothing about resolution besides adding the
- * hint.
+ * because `DisplayPreference.ordered` is a required field on the wire:
+ * sending a bare `{launchProgram}` without it would be rejected as
+ * malformed. `ordered: []` matches the daemon's own default (any
+ * available backend) when `displayPreference` is absent entirely.
+ *
+ * CREW-52: `placement` is deliberately NOT included here at all, never a
+ * hardcoded value. It used to be `"embedded"`, independently hardcoded on
+ * both sides of the wire and asserted (by a comment, not a test) to match
+ * the daemon's own default -- exactly the class of doc-claim defect this
+ * wave has been closing all week. `placement` is now optional on the
+ * wire (`#[serde(default)]`): omitting it here means the resolved
+ * backend picks its own natural placement (`DisplayRegistry::resolve`),
+ * single-sourced on the protocol side where the extension cannot
+ * contradict it, rather than two copies that only agreed by comment.
  */
-export function displayPreferenceFragment(env: Readonly<Record<string, string | undefined>> = process.env): { displayPreference?: { ordered: []; placement: "embedded"; launchProgram: LaunchProgramHint } } {
+export function displayPreferenceFragment(env: Readonly<Record<string, string | undefined>> = process.env): { displayPreference?: { ordered: []; launchProgram: LaunchProgramHint } } {
   const hint = launchProgramHint(env);
-  return hint === undefined ? {} : { displayPreference: { ordered: [], placement: "embedded", launchProgram: hint } };
+  return hint === undefined ? {} : { displayPreference: { ordered: [], launchProgram: hint } };
 }

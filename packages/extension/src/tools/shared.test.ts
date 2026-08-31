@@ -41,6 +41,8 @@ test("displayPreferenceFragment is empty when there is no recognized hint", () =
 
 test("displayPreferenceFragment carries the hint alongside the daemon's own no-preference defaults", () => {
   expect(displayPreferenceFragment({ TERM_PROGRAM: "iTerm.app" })).toEqual({
-    displayPreference: { ordered: [], placement: "embedded", launchProgram: "iTerm2" },
+    // CREW-52: no `placement` key at all -- omitted, not hardcoded, so the
+    // resolved backend picks its own natural placement server-side.
+    displayPreference: { ordered: [], launchProgram: "iTerm2" },
   });
 });

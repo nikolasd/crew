@@ -50,4 +50,14 @@ binarySource: BinarySource,
  * The URL includes the dashboard's access token, so it grants whoever
  * holds it access to the dashboard: treat it as a secret.
  */
-dashboardUrl: string | null, };
+dashboardUrl: string | null, 
+/**
+ * The state root this runtime resolved -- the directory holding this
+ * project's `runtime.db` and socket. Absolute, so two daemons pointed
+ * at different roots are distinguishable at a glance.
+ */
+stateRoot: string, 
+/**
+ * The Unix domain socket path this runtime is actually listening on.
+ */
+socketPath: string, };

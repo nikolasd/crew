@@ -956,7 +956,7 @@ async fn run_submit_makes_no_display_claim_even_when_a_backend_resolves() {
             json!({
                 "taskId": task_id,
                 "workerId": worker_id,
-                "displayPreference": { "ordered": ["hidden"], "placement": "embedded" },
+                "displayPreference": { "ordered": ["hidden"] },
             }),
         )
         .await;
@@ -1033,7 +1033,7 @@ async fn run_submit_makes_no_display_claim_for_a_tui_owned_run_either() {
             json!({
                 "taskId": task_id,
                 "workerId": worker_id,
-                "displayPreference": { "ordered": ["hidden"], "placement": "embedded" },
+                "displayPreference": { "ordered": ["hidden"] },
             }),
         )
         .await;

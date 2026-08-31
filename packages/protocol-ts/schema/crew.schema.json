@@ -2859,13 +2859,8 @@
       ]
     },
     "DisplayPlacement": {
-      "description": "Where a display backend places a pane relative to the caller's own\nterminal. Changes presentation only; never run ownership.",
+      "description": "Where a display backend places a pane relative to the caller's own\nterminal. Changes presentation only; never run ownership.\n\nNo \"embedded\" (no separate pane) variant exists here: that choice is no\nlonger representable as a placement request at all -- every backend now\nresolves its own natural placement when the caller's preference doesn't\nspecify one, and choosing to have no pane at all is a backend choice\n(`hidden`), not a placement.",
       "oneOf": [
-        {
-          "description": "Rendered inside the caller's own OMP session, no separate pane.",
-          "type": "string",
-          "const": "embedded"
-        },
         {
           "description": "A new pane split to the right of the current one.",
           "type": "string",
@@ -3208,6 +3203,14 @@
             "string",
             "null"
           ]
+        },
+        "stateRoot": {
+          "description": "The state root this runtime resolved -- the directory holding this\nproject's `runtime.db` and socket. Absolute, so two daemons pointed\nat different roots are distinguishable at a glance.",
+          "type": "string"
+        },
+        "socketPath": {
+          "description": "The Unix domain socket path this runtime is actually listening on.",
+          "type": "string"
         }
       },
       "additionalProperties": false,
@@ -3219,7 +3222,9 @@
         "schemaVersion",
         "protocolHealthy",
         "uptimeSeconds",
-        "binarySource"
+        "binarySource",
+        "stateRoot",
+        "socketPath"
       ]
     },
     "BinarySource": {

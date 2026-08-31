@@ -529,6 +529,116 @@ async fn events_replay_returns_committed_events_after_sequence() {
     assert_eq!(events[0]["event"]["type"], "runtimeStarted");
 }
 
+/// CREW-52: a journal row that fails to deserialize (a deleted variant like
+/// `DisplayPlacement::Embedded`, or any other protocol drift) must produce
+/// a legible error naming the remedy, not a bare serde message. Seeds a
+/// malformed row directly via a raw connection to the same database file
+/// (bypassing `DatabaseHandle::append_event`'s typed API, the only way to
+/// get an invalid row in at all), closing that connection before the real
+/// server-owned `DatabaseHandle` opens its own -- this repo's single-actor
+/// invariant means only one of them may hold the connection at a time.
+#[tokio::test]
+async fn events_replay_reports_a_legible_error_for_a_journal_that_predates_this_binary() {
+    let state = tempfile::Builder::new()
+        .prefix("bat-s-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let repo = tempfile::Builder::new()
+        .prefix("bat-r-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    std::fs::create_dir(repo.path().join(".git")).unwrap();
+    let paths = RuntimePaths::resolve(state.path(), repo.path()).unwrap();
+
+    // Create + migrate, then release the connection before seeding directly.
+    {
+        let db = DatabaseHandle::start(paths.database.clone()).await.unwrap();
+        db.shutdown().await.unwrap();
+    }
+    {
+        let conn = rusqlite::Connection::open(&paths.database).unwrap();
+        // A REAL journal row, not a fabricated unknown type: staff's review
+        // on #87 -- the case this feature exists for is exactly this one,
+        // a valid event carrying a retired inner enum value (`Embedded`,
+        // deleted this same ticket), not an unrecognized top-level `type`.
+        // Whoever debugs an actual "journal predates this binary" error
+        // will be looking at a row shaped like this, not a made-up type
+        // string.
+        let legacy_run_id = crew_protocol::RunId::new();
+        conn.execute(
+            "INSERT INTO events (timestamp, project_id, run_id, event_json) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                "2026-01-01T00:00:00Z",
+                paths.project_id.to_string(),
+                legacy_run_id.to_string(),
+                format!(
+                    r#"{{"type":"displayEvent","payload":{{"kind":"displayPaneAttached","runId":"{legacy_run_id}","backend":"hidden","placement":"embedded","paneRef":""}}}}"#
+                ),
+            ],
+        )
+        .unwrap();
+    }
+    let db = Arc::new(DatabaseHandle::start(paths.database.clone()).await.unwrap());
+
+    let server = Server::bind(
+        paths.socket.clone(),
+        db,
+        paths.project_id,
+        ServerConfig {
+            credential_reader: matching_reader(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let socket = server.socket_path().to_path_buf();
+    let (shutdown, shutdown_rx) = oneshot::channel();
+    let join = tokio::spawn(async move {
+        let _ = server
+            .serve(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await;
+    });
+    let owned_dir = std::fs::canonicalize(repo.path()).unwrap();
+
+    let mut client = Client::connect(&socket).await;
+    client
+        .send(&omp_init(
+            owned_dir.to_str().unwrap(),
+            1024 * 1024,
+            (1, 0),
+            (1, 0),
+        ))
+        .await;
+    let _ = client.recv().await.unwrap();
+
+    client
+        .send(&request(2, "events/replay", json!({ "afterSequence": 0 })))
+        .await;
+    let response = client.recv().await.unwrap();
+
+    let message = response["error"]["message"]
+        .as_str()
+        .expect("events/replay must refuse an undeserializable journal row with an error");
+    assert!(
+        message.contains("journal predates crew"),
+        "must name the remedy, not just the serde error: {message:?}"
+    );
+    assert!(
+        message.contains(&state.path().to_string_lossy().to_string())
+            || message.contains(paths.socket.parent().unwrap().to_str().unwrap()),
+        "must name the actual state directory to clear: {message:?}"
+    );
+    assert!(
+        message.contains(env!("CARGO_PKG_VERSION")),
+        "must name the binary's own version: {message:?}"
+    );
+
+    let _ = shutdown.send(());
+    join.abort();
+}
+
 // -------------------------------------------------------------- req 7
 
 #[tokio::test]

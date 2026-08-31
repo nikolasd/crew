@@ -9874,13 +9874,14 @@ deliberate "no pane" choice rather than a degraded rendering.`,
     },
     DisplayPlacement: {
       description: `Where a display backend places a pane relative to the caller's own
-terminal. Changes presentation only; never run ownership.`,
+terminal. Changes presentation only; never run ownership.
+
+No "embedded" (no separate pane) variant exists here: that choice is no
+longer representable as a placement request at all -- every backend now
+resolves its own natural placement when the caller's preference doesn't
+specify one, and choosing to have no pane at all is a backend choice
+(\`hidden\`), not a placement.`,
       oneOf: [
-        {
-          description: "Rendered inside the caller's own OMP session, no separate pane.",
-          type: "string",
-          const: "embedded"
-        },
         {
           description: "A new pane split to the right of the current one.",
           type: "string",
@@ -10234,6 +10235,14 @@ holds it access to the dashboard: treat it as a secret.`,
             "string",
             "null"
           ]
+        },
+        stateRoot: {
+          description: "The state root this runtime resolved -- the directory holding this\nproject's `runtime.db` and socket. Absolute, so two daemons pointed\nat different roots are distinguishable at a glance.",
+          type: "string"
+        },
+        socketPath: {
+          description: "The Unix domain socket path this runtime is actually listening on.",
+          type: "string"
         }
       },
       additionalProperties: false,
@@ -10245,7 +10254,9 @@ holds it access to the dashboard: treat it as a secret.`,
         "schemaVersion",
         "protocolHealthy",
         "uptimeSeconds",
-        "binarySource"
+        "binarySource",
+        "stateRoot",
+        "socketPath"
       ]
     },
     BinarySource: {
@@ -11848,7 +11859,9 @@ function formatStatus(status) {
     `Active runs: ${status.activeRuns}`,
     `Schema version: ${status.schemaVersion}`,
     `Uptime: ${status.uptimeSeconds}s`,
-    `Binary source: ${status.binarySource}`
+    `Binary source: ${status.binarySource}`,
+    `State root: ${status.stateRoot}`,
+    `Socket: ${status.socketPath}`
   ];
   if (status.dashboardUrl !== null) {
     lines.push(`Dashboard: ${status.dashboardUrl}`);
@@ -12292,7 +12305,7 @@ function launchProgramHint(env = process.env) {
 }
 function displayPreferenceFragment(env = process.env) {
   const hint = launchProgramHint(env);
-  return hint === undefined ? {} : { displayPreference: { ordered: [], placement: "embedded", launchProgram: hint } };
+  return hint === undefined ? {} : { displayPreference: { ordered: [], launchProgram: hint } };
 }
 
 // src/tools/approvals.ts

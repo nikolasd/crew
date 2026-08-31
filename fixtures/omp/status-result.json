@@ -6,5 +6,7 @@
   "schemaVersion": 1,
   "protocolHealthy": true,
   "uptimeSeconds": 42,
-  "binarySource": "override"
+  "binarySource": "override",
+  "stateRoot": "/home/user/.local/state/crew/018f1435-2e2b-7c1a-9d4b-6a1e2f3c4d5b",
+  "socketPath": "/home/user/.local/state/crew/018f1435-2e2b-7c1a-9d4b-6a1e2f3c4d5b/runtime.sock"
 }

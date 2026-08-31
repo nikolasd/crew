@@ -46,6 +46,17 @@ pub(crate) struct Shared {
     /// `events_tx`). `None` until (and unless) a dashboard bind succeeds;
     /// read by `runtime/status` (CREW-35).
     pub(crate) dashboard_url: std::sync::OnceLock<String>,
+    /// The directory the socket and SQLite journal both live in (siblings
+    /// under `RuntimePaths::resolve`'s own root) -- named in the remedy for
+    /// a journal that fails to deserialize on replay (CREW-52), and in
+    /// `runtime/status`'s `state_root` (D25).
+    pub(crate) state_dir: PathBuf,
+    /// The Unix domain socket path this server is actually bound to.
+    /// `runtime/status`'s `socket_path` (D25): a two-daemon mixup (two
+    /// `crewd` processes against different state roots, neither aware of
+    /// the other) previously had no way to see which one a client was
+    /// actually talking to.
+    pub(crate) socket_path: PathBuf,
 }
 
 impl Shared {
@@ -274,6 +285,11 @@ impl Server {
             coordination,
             violation: Arc::clone(&violation_service),
             dashboard_url: std::sync::OnceLock::new(),
+            state_dir: socket
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| socket.clone()),
+            socket_path: socket.clone(),
         });
 
         Ok(Self {
