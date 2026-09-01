@@ -647,14 +647,18 @@ Observed per-vendor outcomes (this release):
 
 #### 4f.2 Pane creation failures and downgrading (no model call needed)
 
-When a requested display backend or placement is not available, the runtime attempts to downgrade to the `hidden` backend instead of failing the run. This downgrade is journaled as a `PaneDowngraded` event carrying:
-- `requested_backend` and `requested_placement`: what the run asked for
-- `actual_backend`: the backend that was used instead (always `hidden` on downgrade)
+When a requested display backend or placement is not available, the runtime attempts to downgrade to the `hidden` backend instead of failing the run. This downgrade is journaled as a `paneDowngraded` event (note camelCase in the wire format) carrying:
+- `requestedBackend` and `requestedPlacement`: what the run asked for
+- `actualBackend`: the backend that was used instead (always `hidden` on downgrade)
 - `reason`: a redacted error message explaining why creation failed
 
-To observe this behavior, attempt to attach a run with a backend/placement combination the current environment doesn't support (e.g., request `Workspace` placement on tmux, or run in an environment with no active display server). The run should proceed with `hidden` backend, and the journal should contain one `PaneDowngraded` event.
+To observe this behavior, attempt to attach a run with a backend/placement combination the current environment doesn't support (e.g., request `Workspace` placement on tmux, or run in an environment with no active display server). The run should proceed with `hidden` backend, and the journal should contain one `paneDowngraded` event.
 
-Verify via `crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl` and grep for `PaneDowngraded`.
+Verify via `crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl` and grep for `paneDowngraded`:
+
+```bash
+grep paneDowngraded /tmp/audit.jsonl
+```
 
 **What this verifies:** display backend selection is resilient — when a pane cannot be created at the requested backend, the runtime logs the failure and falls back gracefully instead of failing the run.
 
@@ -845,18 +849,18 @@ on adapters without it — a typed refusal there is correct behavior, not a find
 (`crates/runtime/src/adapter/registry.rs`).
 
 When the run resumes (either from an explicit follow-up message or from a genuine user-authored
-turn in the vendor's transcript), a `RunResumed` event is journaled with a `cause` field
-distinguishing the two paths:
-- `cause: "FollowUpMessage"` — the leader sent an explicit follow-up via `crew_message`
-- `cause: "RealUserTurn"` — the vendor's transcript contained a genuine new user-authored entry
+turn in the vendor's transcript), a `runResumed` event is journaled with a `cause` field
+distinguishing the two paths (note camelCase in wire format):
+- `cause: "followUpMessage"` — the leader sent an explicit follow-up via `crew_message`
+- `cause: "realUserTurn"` — the vendor's transcript contained a genuine new user-authored entry
   (type `"user"`, not a sidechain), not bookkeeping or metadata
 
 Verify the event appears in the audit export:
 ```bash
-crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl && grep RunResumed /tmp/audit.jsonl
+crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl && grep runResumed /tmp/audit.jsonl
 ```
 
-Expect one `RunResumed` entry with the appropriate `cause`. This event documents what triggered
+Expect one `runResumed` entry with the appropriate `cause`. This event documents what triggered
 resumption, so consumers (dashboards, tools, audit trails) can distinguish between user-directed
 follow-ups and resumptions triggered by new transcript content.
 
