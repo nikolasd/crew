@@ -127,18 +127,16 @@ hop the legal-edge table forces and never overwriting a terminal state.
 **Regression tests:** `crates/runtime/src/adapter/run_lifecycle.rs`'s 9 unit tests
 (`process_started_moves_a_queued_run_to_starting` through
 `vendor_output_never_reopens_working_on_a_run_that_started_waiting`) are unaffected. The
-end-to-end proofs against real processes named here at the time this lesson was written --
-`crates/runtime/tests/run_lifecycle.rs`'s `a_real_worker_process_walks_its_run_from_queued_into_working`
-and `a_real_worker_process_exit_settles_its_run`, `crates/runtime/src/adapter/claude/mod.rs`'s
-`run_state_tests` module, and `crates/runtime/tests/copilot_adapter.rs`'s
-`a_supervised_process_exit_is_reported_with_its_real_status` -- all drove a real process through
-the *headless* control plane, which crew-v2 gap-closure WP-C retired. `claude/mod.rs` and
-`copilot_adapter.rs` are deleted outright; `run_lifecycle.rs`'s two proofs kept their coverage by
-switching from the deleted `OmpRpcAdapter` to `support::spawn_evidence_adapter::SpawnEvidenceAdapter`
-(`tests/support/spawn_evidence_adapter.rs`) -- a small, protocol-agnostic, test-only `Adapter` that
-spawns a real OS process and forwards only its spawn/exit evidence, built specifically to keep this
-lesson's "a real process, not just a test-fake" property true once the headless control plane it
-had borrowed for that purpose was gone. This lesson's regression coverage is intact.
+end-to-end proofs against real processes named here at the time this lesson was written drove a
+real process through the *headless* control plane, which crew-v2 gap-closure WP-C retired. The
+headless-specific test files (`crates/runtime/src/adapter/claude/mod.rs`'s `run_state_tests`,
+`crates/runtime/tests/copilot_adapter.rs`) are deleted outright. However, regression coverage
+persists: `crates/runtime/tests/run_lifecycle.rs`'s `a_real_worker_process_walks_its_run_from_queued_into_working`
+and `a_real_worker_process_exit_settles_its_run` tests kept their "real process, not test-fake"
+property by switching from the deleted `OmpRpcAdapter` to `support::spawn_evidence_adapter::SpawnEvidenceAdapter`
+(`tests/support/spawn_evidence_adapter.rs`) — a small, protocol-agnostic, test-only `Adapter`
+built specifically to keep the lesson's property true once the headless control plane it had borrowed
+for that purpose was gone. This lesson's regression coverage is intact.
 
 ---
 
@@ -1002,12 +1000,7 @@ dropped. Both would otherwise sit in the schema looking equally alive.
 repo's own journals may be discarded, which moots obligation 2 *for us, this once*. That ruling is
 about our data, not about the rule — and obligation 3 survives it untouched.
 
-**Regression tests:** the replay-acceptance tests this rule would normally require
-(`a_journaled_legacy_embedded_placement_still_replays`,
-`a_journaled_legacy_terminal_backend_still_replays`) are **cancelled for this repo** by the
-pre-release ruling above, not pending — obligation 2 does not apply to data we are allowed to
-discard. Obligation 3 survives it: the request-boundary rejection is still owed, and `Embedded` is
-still in the protocol as of this entry. The entry records the rule, not a completed fix.
+**Regression tests:** the replay-acceptance tests this rule would normally require are deleted. In PR #87, `DisplayPlacement::Embedded` was removed from both the Rust enum and the protocol schema, and both associated replay tests were deleted along with it. This deletion is justified by the pre-release ruling above (obligation 2 does not apply), and by the fact that no backend ever implemented `Embedded` — it was always a dead enum variant. Obligation 3 (request-boundary rejection) was not needed since there is no value to reject. The entry records the rule itself, which remains valid for future retirements of values that *were* genuinely used.
 
 ---
 
