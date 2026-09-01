@@ -10036,7 +10036,8 @@ new window.`,
           type: "string"
         },
         description: {
-          type: "string"
+          description: "The instruction this subtask executes, redacted.",
+          $ref: "#/$defs/Redacted"
         },
         adapter: {
           description: "The adapter wire name (e.g. `claude`, `codex`) this subtask is\nintended to run under.",
