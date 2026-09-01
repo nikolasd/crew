@@ -2870,21 +2870,34 @@ impl OrchestrationService {
                 principal.instance_id
             )));
         }
-        let task_text = str_field(params, "taskText")?;
-        let plan: PlanSpec = serde_json::from_value(
+        // CREW-61: `task_text` is stored verbatim in `plans.task_text` --
+        // never returned over the wire (`PlanGetResult` has no such
+        // field), but still durable and exportable, so it crosses the
+        // same boundary as `description` below before it is stored.
+        let task_text = self.redact_caller_text(str_field(params, "taskText")?)?;
+        let mut plan: PlanSpec = serde_json::from_value(
             params
                 .get("plan")
                 .cloned()
                 .ok_or_else(|| ServiceError::invalid_params("plan is required"))?,
         )
         .map_err(|e| ServiceError::invalid_params(format!("plan is invalid: {e}")))?;
+        // CREW-61: `description` deserializes as `Redacted` (it accepts a
+        // bare wire string by design -- stored events must round-trip),
+        // but that is not sanitization: a caller's raw JSON reaches this
+        // handler unredacted. Route each subtask's description through
+        // the same boundary a run's `prompt` already crosses.
+        for subtask in &mut plan.subtasks {
+            subtask.description =
+                self.redact_caller_text(subtask.description.as_str().to_string())?;
+        }
 
         let project_id = self.project_id;
         let mut result = self
             .db
             .run_domain_op(Box::new(move |conn| {
                 let mut repo = DomainRepository::new(conn, project_id);
-                repo.propose_plan(run_id, &owner, &task_text, &plan)
+                repo.propose_plan(run_id, &owner, task_text.as_str(), &plan)
                     .map(|c| {
                         embed_envelope(
                             json!({ "runId": run_id.to_string(), "sequence": c.sequence }),
