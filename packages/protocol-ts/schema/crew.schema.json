@@ -2796,6 +2796,7 @@
           "additionalProperties": false
         },
         {
+          "description": "Why teardown failed, redacted.",
           "type": "object",
           "properties": {
             "type": {
@@ -2809,7 +2810,7 @@
                   "type": "string"
                 },
                 "error": {
-                  "type": "string"
+                  "$ref": "#/$defs/Redacted"
                 }
               },
               "additionalProperties": false,

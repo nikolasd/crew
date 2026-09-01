@@ -248,3 +248,74 @@ fn lease_release_proceeds_past_a_stale_socket_left_by_a_crash() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// CREW-61: `crewd lease release`'s own teardown-failure path
+/// (`cli.rs`'s `CleanupFailed` construction, distinct from the three
+/// `OrchestrationService` sites `orchestration_rpc.rs` covers) is the
+/// fourth site whose `error` field was made `Redacted`. This drives a
+/// real `git worktree remove` failure through the compiled binary (an
+/// activated `gitWorktree` lease whose path exists on disk but was never
+/// a registered worktree, named with a secret-shaped substring git's own
+/// stderr echoes back) and asserts the JOURNALED `error` has it masked.
+#[test]
+fn lease_release_redacts_a_secret_shaped_git_worktree_teardown_failure() {
+    let state_dir = tempfile::Builder::new()
+        .prefix("bat-lease-cli-")
+        .tempdir_in("/tmp")
+        .expect("create state dir");
+    let repo = state_dir.path().join("repo");
+    std::fs::create_dir_all(&repo).expect("create repo dir");
+    let git = Command::new("git")
+        .current_dir(&repo)
+        .args(["init"])
+        .output()
+        .expect("git init");
+    assert!(git.status.success());
+
+    let paths = RuntimePaths::resolve(state_dir.path(), &repo).expect("resolve runtime paths");
+    std::fs::create_dir_all(&paths.root).expect("create runtime root");
+    let leases = LeaseService::open(paths.project_id, &paths.root.join("workspace-leases.db"))
+        .expect("open lease service");
+    let run_id = RunId::new();
+    let created = leases
+        .acquire(run_id, LeaseMode::Write, Some(IsolationKind::GitWorktree))
+        .expect("acquire lease");
+    // Exists on disk (cli.rs's teardown gate checks `.exists()`) but was
+    // never registered as a worktree via `git worktree add` -- `git
+    // worktree remove` fails on it and echoes the path in its stderr.
+    let bogus_worktree = state_dir
+        .path()
+        .join("sk-ant-api03-thisisafaketokenthatlooksrealbutisnot");
+    std::fs::create_dir_all(&bogus_worktree).expect("create bogus worktree dir");
+    leases
+        .activate(
+            created.lease_id.clone(),
+            bogus_worktree.display().to_string(),
+        )
+        .expect("activate lease");
+
+    let output = release_cmd(state_dir.path(), &repo, &created.lease_id)
+        .arg("--yes")
+        .output()
+        .expect("run crewd lease release --yes");
+    assert!(
+        output.status.success(),
+        "release must still succeed; teardown failure is an operator problem: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let conn = rusqlite::Connection::open(&paths.database).expect("open runtime db");
+    let event_json: String = conn
+        .query_row(
+            "SELECT event_json FROM events WHERE run_id = ?1 AND event_json LIKE '%cleanupFailed%'",
+            rusqlite::params![run_id.to_string()],
+            |row| row.get(0),
+        )
+        .expect("query the journaled cleanupFailed event");
+    assert!(
+        !event_json.contains("sk-ant-api03-"),
+        "the journaled cleanup error must never carry an unredacted API-key-shaped substring: \
+         {event_json}"
+    );
+}

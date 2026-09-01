@@ -12,8 +12,8 @@
 use crew_protocol::{
     ApplyRequest, ApplyResult, ApplyStrategy, Artifact, ArtifactFetchRequest, ArtifactFetchResult,
     ArtifactId, ArtifactKind, ArtifactListRequest, ArtifactListResult, InspectRequest,
-    InspectResult, IsolationKind, LeaseMode, LeaseRequest, ProjectId, ReleaseRequest, RunId,
-    WorkspaceEvent, WorkspaceInfo, WorkspaceLease, WorkspaceState,
+    InspectResult, IsolationKind, LeaseMode, LeaseRequest, ProjectId, Redacted, ReleaseRequest,
+    RunId, WorkspaceEvent, WorkspaceInfo, WorkspaceLease, WorkspaceState,
 };
 use serde_json::json;
 
@@ -411,7 +411,7 @@ fn workspace_event_lease_released() {
 fn workspace_event_cleanup_failed() {
     let event = WorkspaceEvent::CleanupFailed {
         lease_id: "ws-001".to_string(),
-        error: "path not owned by lease".to_string(),
+        error: Redacted::from_sanitized("path not owned by lease".to_string()),
     };
     let val = serialise(&event);
     assert_eq!(
@@ -596,7 +596,7 @@ fn workspace_event_round_trips() {
         },
         WorkspaceEvent::CleanupFailed {
             lease_id: "ws-001".to_string(),
-            error: "cleanup error".to_string(),
+            error: Redacted::from_sanitized("cleanup error".to_string()),
         },
     ];
     for event in events {
