@@ -587,7 +587,7 @@ verified descendant of the same live vendor process may reconnect).
 
 ### 4f. TUI pane attach + out-of-band input (journal check needs no model call)
 
-All four adapters (claude, codex, copilot, omp-rpc) default to **TUI mode**: each worker runs as the real vendor CLI spawned on a PTY inside a pane owned by a display backend (herdr / tmux / terminal). A viewer (or the harness) can type into that pane. Every burst of keystrokes written to a pane is journaled as a `RuntimeEvent::OutOfBandInput { backend, pane_ref }` — the keystrokes themselves are never recorded, only that input happened and on which pane — and the run's `needsReconciliation` flag is set. This is the redaction-boundary guarantee for interactive control: a human steering a live run leaves an auditable trace without leaking typed content.
+All four adapters (claude, codex, copilot, omp-rpc) default to **TUI mode**: each worker runs as the real vendor CLI spawned on a PTY inside a pane owned by a display backend (herdr / tmux / terminal). A viewer (or the harness) can type into that pane. Every burst of keystrokes written to a pane is journaled as a `RuntimeEvent::OutOfBandInput { backend, pane_ref }` (Rust type notation; see below for wire format) — the keystrokes themselves are never recorded, only that input happened and on which pane — and the run's `needsReconciliation` flag is set. This is the redaction-boundary guarantee for interactive control: a human steering a live run leaves an auditable trace without leaking typed content.
 
 Manual check (observing the journal needs no model call; only *starting* the run does):
 
