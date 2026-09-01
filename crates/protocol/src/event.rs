@@ -1831,6 +1831,28 @@ mod redaction_enumeration {
              add it to NON_REDACTED_STRING_FIELDS with the reason it is safe to make durable. If \
              you cannot write that reason truthfully, change the field."
         );
+
+        // The reverse direction: an entry naming a field that no longer
+        // exists. The risk is not the dead entry, it is what it BECOMES --
+        // a pre-authorization sitting in the list with a plausible reason
+        // attached, waiting for some later field to collide with its name
+        // (a renamed variant, a field moved between carriers, a new
+        // `reason` where an old `reason` used to live) and be waved
+        // through on a sentence written about something else. That is this
+        // module's own failure mode arriving through the allowlist instead
+        // of through the type system, which is the one path the walk does
+        // not cover.
+        let orphaned: Vec<&str> = NON_REDACTED_STRING_FIELDS
+            .iter()
+            .map(|(f, _)| *f)
+            .filter(|f| !found.iter().any(|g| g == f))
+            .collect();
+        assert!(
+            orphaned.is_empty(),
+            "NON_REDACTED_STRING_FIELDS names field(s) that no longer exist: {orphaned:#?}\n\n\
+             Remove them. An entry that outlives its field is a standing approval for whatever \
+             next takes that name, justified by a reason written about something else."
+        );
     }
 
     /// Positive control: the guard must actually fail on an unjustified
