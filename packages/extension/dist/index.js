@@ -7662,7 +7662,9 @@ through this type.`,
                   type: "string"
                 },
                 message: {
-                  type: "string"
+                  description: `Operator-facing detail. Already redacted: secret-shaped
+substrings are masked before this becomes durable.`,
+                  $ref: "#/$defs/Redacted"
                 }
               },
               additionalProperties: false,
@@ -9150,6 +9152,14 @@ a listener should act on; this is operator-facing detail only.`,
         "error"
       ]
     },
+    Redacted: {
+      description: `Text that has crossed Crew's redaction boundary: secret-shaped
+substrings in it are masked before it is stored or sent, so what a
+consumer reads here is the masked text, never the original.
+
+Carried on the wire as an ordinary JSON string.`,
+      type: "string"
+    },
     RuntimeEventKind: {
       description: `The semantic kind of an orchestration event stored in the durable journal.
 
@@ -9299,7 +9309,7 @@ ceiling exceeded, nested worker denied, or adapter not authorized).`,
                   type: "string"
                 },
                 reason: {
-                  type: "string"
+                  $ref: "#/$defs/Redacted"
                 },
                 is_nested: {
                   type: "boolean"
@@ -9392,7 +9402,7 @@ specific merge of org/repo/user/per-run layers.`,
                   type: "string"
                 },
                 resolved_by: {
-                  type: "string"
+                  $ref: "#/$defs/Redacted"
                 }
               },
               required: [
@@ -9472,14 +9482,6 @@ existed; treat absence as \`false\`.`,
           const: "realUserTurn"
         }
       ]
-    },
-    Redacted: {
-      description: `Text that has crossed Crew's redaction boundary: secret-shaped
-substrings in it are masked before it is stored or sent, so what a
-consumer reads here is the masked text, never the original.
-
-Carried on the wire as an ordinary JSON string.`,
-      type: "string"
     },
     MessageId: {
       description: "Identifies a single message within a run's transcript.",
@@ -9810,7 +9812,7 @@ what makes it distinguishable.`,
           additionalProperties: false
         },
         {
-          description: "Why teardown failed, redacted.",
+          description: "Why teardown failed -- the directory is leaked and needs manual\nremoval. Redacted, so the text may be masked; join `leaseId`\nagainst the run's `leaseAcquired` event for the directory itself,\nwhich is not.",
           type: "object",
           properties: {
             type: {
