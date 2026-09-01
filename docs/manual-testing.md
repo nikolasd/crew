@@ -645,6 +645,19 @@ Observed per-vendor outcomes (this release):
   but no assistant reply means billing, not the adapter.
 - `session_resume` — **skipped**: a single-process resume is not a daemon restart; genuine restart recovery is proven by the separate serve→stop→serve end-to-end smoke, not this report.
 
+#### 4f.2 Pane creation failures and downgrading (no model call needed)
+
+When a requested display backend or placement is not available, the runtime attempts to downgrade to the `hidden` backend instead of failing the run. This downgrade is journaled as a `PaneDowngraded` event carrying:
+- `requested_backend` and `requested_placement`: what the run asked for
+- `actual_backend`: the backend that was used instead (always `hidden` on downgrade)
+- `reason`: a redacted error message explaining why creation failed
+
+To observe this behavior, attempt to attach a run with a backend/placement combination the current environment doesn't support (e.g., request `Workspace` placement on tmux, or run in an environment with no active display server). The run should proceed with `hidden` backend, and the journal should contain one `PaneDowngraded` event.
+
+Verify via `crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl` and grep for `PaneDowngraded`.
+
+**What this verifies:** display backend selection is resilient — when a pane cannot be created at the requested backend, the runtime logs the failure and falls back gracefully instead of failing the run.
+
 ## 5. Cross-agent workspace isolation (requires a real adapter)
 
 This section verifies that two parallel runs execute in separate git worktrees, each with its own
