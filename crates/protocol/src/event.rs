@@ -162,8 +162,19 @@ pub struct Classified<T> {
 // (states, ids, lease refs), so gating the whole path would put ceremony
 // on the safe majority to protect a handful of fields, and ceremony on
 // safe cases is what gets skipped. Putting the obligation on the field
-// instead means a new caller-carrying field is a compile error until
-// its author decides how it gets sanitized.
+// instead means a field DECLARED `Redacted` is a compile error until its
+// author decides how it gets sanitized.
+//
+// CREW-61 corrects what this paragraph used to claim. It said "a new
+// caller-carrying field is a compile error until its author decides how it
+// gets sanitized", which is false and was load-bearing for the wrong
+// belief: the obligation only binds fields whose author already declared
+// them `Redacted`. A new field typed `String` is asked nothing at all --
+// which is exactly how `PaneDowngraded.reason` journaled raw subprocess
+// stderr a week after this type shipped. An obligation you must opt into
+// is not an obligation. What closes that gap is not this type but the
+// enumeration in `redaction_enumeration` below, which fails the build for
+// any reachable `String` field without a stated reason.
 //
 // # The property, as an executable pair
 //
@@ -579,7 +590,12 @@ pub enum RuntimeEventKind {
         adapter: String,
         model: String,
         violation_kind: String,
-        reason: String,
+        // CREW-61: `Redacted`, and it cost nothing -- this variant has
+        // zero construction sites in the runtime, so closing it now is
+        // free, whereas allowlisting it would have meant writing "safe
+        // because nobody builds it", which stops being true the moment
+        // somebody does.
+        reason: Redacted,
         is_nested: bool,
     },
     // `Run` (crates/protocol/src/run.rs) carries this as `flags:
@@ -619,7 +635,13 @@ pub enum RuntimeEventKind {
     PolicyViolationDecided {
         violation_id: PolicyViolationId,
         resolution: String,
-        resolved_by: String,
+        // CREW-61: `Redacted`. This is a client-supplied
+        // `principal_instance_id` and nothing validates its shape at this
+        // type, so the honest allowlist reason would have been "safe
+        // because we assume the client sends an identifier" -- an
+        // assumption, not a reason. The rule is that a field whose safety
+        // cannot be stated truthfully changes instead.
+        resolved_by: Redacted,
     },
 }
 
@@ -647,7 +669,16 @@ pub enum RuntimeEvent {
     Diagnostic {
         level: DiagnosticLevel,
         code: String,
-        message: String,
+        // CREW-61: `Redacted`, not `String`. Two of this event's producers
+        // interpolate third-party error text -- `follow_up_delivery_failed`
+        // embeds the adapter's own error, and `resume_failed` embeds the
+        // registry's -- and an adapter failure routinely names a transcript
+        // or socket path. Typed `String` it carried no obligation and
+        // nobody was asked; that is the same gap CREW-60's
+        // `PaneDowngraded.reason` fell through.
+        /// Operator-facing detail. Already redacted: secret-shaped
+        /// substrings are masked before this becomes durable.
+        message: Redacted,
     },
     /// A task was created or updated via `task/upsert`.
     TaskEvent {
@@ -1061,7 +1092,7 @@ mod tests {
         let event = RuntimeEvent::Diagnostic {
             level: DiagnosticLevel::Warning,
             code: "fixture".into(),
-            message: "example".into(),
+            message: Redacted::assert_runtime_authored("example"),
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(
@@ -1107,11 +1138,11 @@ mod tests {
         let event = RuntimeEvent::Diagnostic {
             level: DiagnosticLevel::Info,
             code: "x".into(),
-            message: "sanitized".into(),
+            message: Redacted::assert_runtime_authored("sanitized"),
         };
         match event {
             RuntimeEvent::Diagnostic { message, .. } => {
-                let _: String = message;
+                let _: Redacted = message;
             }
             _ => panic!("expected diagnostic"),
         }
@@ -1298,6 +1329,598 @@ mod tests {
                 let _: Option<Redacted> = question;
             }
             _ => panic!("expected WorkerQuestion"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CREW-61: the redaction obligation, enforced at DECLARATION
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod redaction_enumeration {
+    //! `Redacted` puts the redaction obligation on the field -- but a field
+    //! only carries it if its author *declared* it `Redacted`. A new
+    //! `String` field is asked nothing. That is how `PaneDowngraded.reason`
+    //! journaled raw subprocess stderr (CREW-60) a week after `Redacted`
+    //! shipped: nobody walked around the guard, the guard was never
+    //! invoked, because invoking it IS the declaration.
+    //!
+    //! **An obligation you must opt into is not an obligation.** So this
+    //! enumerates the declarations instead. Every `String` /
+    //! `Option<String>` field reachable from [`RuntimeEvent`] must be
+    //! either `Redacted` or listed in [`NON_REDACTED_STRING_FIELDS`] with a
+    //! stated reason, and a new one fails the build until its author writes
+    //! down why it is safe to make durable.
+    //!
+    //! # The walk is transitive, and fails closed
+    //!
+    //! `RuntimeEvent` is not flat: `RuntimeEventKind`, `WorkspaceEvent` and
+    //! `PlanSpec`/`SubtaskSpec` are nested carriers, and a first version of
+    //! this guard walked only the top-level fields -- it would have passed
+    //! while blind to `CleanupFailed.error` and `SubtaskSpec.description`,
+    //! both live. A guard that reports success while missing fields is
+    //! worse than no guard, because it retires the question.
+    //!
+    //! So the walk descends into every type it meets and refuses to guess:
+    //! a field type that is neither a primitive, nor `String`, nor a type
+    //! declared in this crate is an ERROR, not a skip. There is deliberately
+    //! no curated list of "safe" types to fall out of date -- newtypes like
+    //! `RunId` are descended into and simply yield no named fields.
+    //!
+    //! # Scope, stated precisely
+    //!
+    //! This covers what reaches the `events` table, which is everything
+    //! `RuntimeEvent` carries. It is NOT a guarantee about "the durable
+    //! journal": `plans` and `policy_violations` are separate durable tables
+    //! with their own TEXT columns that no guard enumerates.
+    //!
+    //! # Why source-reading
+    //!
+    //! `Redacted` is `#[serde(transparent)]` with `#[ts(type = "string")]`,
+    //! so it is indistinguishable from `String` in `crew.schema.json`. The
+    //! declaration is the only place the difference exists. Source-reading
+    //! is normally fragile; it is acceptable here because the subject is one
+    //! syntactic form in a handful of rustfmt-formatted files, and because
+    //! the parser asserts it found a plausible amount rather than trusting
+    //! a silent zero.
+
+    /// Fields deliberately left as plain `String`, each with the reason it
+    /// is safe to make durable.
+    ///
+    /// The reason is the mechanism, not decoration. If you cannot write a
+    /// true sentence saying why caller or vendor text cannot reach a field,
+    /// **the field changes, not this list** -- that rule is why
+    /// `PolicyViolation.reason` and `PolicyViolationDecided.resolved_by`
+    /// became `Redacted` rather than gaining entries here.
+    const NON_REDACTED_STRING_FIELDS: &[(&str, &str)] = &[
+        (
+            "RuntimeEvent::Diagnostic.code",
+            "A machine-assigned code from a fixed vocabulary, chosen by the runtime.",
+        ),
+        (
+            "RuntimeEvent::TaskEvent.owner_client_instance_id",
+            "An OMP-assigned client instance id.",
+        ),
+        (
+            "RuntimeEvent::WorkerEvent.profile_id",
+            "A crew-assigned profile id.",
+        ),
+        (
+            "RuntimeEvent::RunEvent.state",
+            "A run-state literal from the protocol's own table.",
+        ),
+        (
+            "RuntimeEvent::MessageEvent.delivery_state",
+            "A delivery-state literal from the protocol's own table.",
+        ),
+        (
+            "RuntimeEvent::ApprovalEvent.action",
+            "A machine-assigned action from a fixed vocabulary.",
+        ),
+        (
+            "RuntimeEvent::ReconcileEvent.old_owner_client_instance_id",
+            "An OMP-assigned client instance id.",
+        ),
+        (
+            "RuntimeEvent::ReconcileEvent.new_owner_client_instance_id",
+            "An OMP-assigned client instance id.",
+        ),
+        (
+            "RuntimeEvent::AdapterProcessEvent.signal",
+            "A signal name (`SIGTERM`), observed by the supervisor.",
+        ),
+        (
+            "RuntimeEvent::AdapterVendorSessionEvent.vendor_session_id",
+            "A vendor-assigned session identifier, never session content.",
+        ),
+        (
+            "RuntimeEvent::AdapterMessageEvent.role",
+            "`user` or `assistant` -- a fixed vocabulary, never the message text.",
+        ),
+        (
+            "RuntimeEvent::AdapterToolEvent.tool_call_id",
+            "A vendor-assigned tool-call identifier.",
+        ),
+        (
+            "RuntimeEvent::AdapterToolEvent.name",
+            "The tool's name, never its arguments or output.",
+        ),
+        (
+            "RuntimeEvent::AdapterArtifactEvent.artifact_kind",
+            "A kind literal from a fixed vocabulary.",
+        ),
+        (
+            "RuntimeEvent::WorkspaceEvent.lease_id",
+            "A crew-assigned lease identifier.",
+        ),
+        (
+            "RuntimeEvent::AdapterNestedWorkerEvent.vendor_child_id",
+            "A vendor-assigned identifier.",
+        ),
+        (
+            "RuntimeEvent::AdapterNestedWorkerEvent.vendor_parent_ref",
+            "A vendor-assigned identifier.",
+        ),
+        (
+            "RuntimeEvent::DisplayEvent.pane_ref",
+            "The vendor-assigned pane identifier only; the field's own doc forbids terminal contents and absolute paths.",
+        ),
+        (
+            "RuntimeEvent::OutOfBandInput.pane_ref",
+            "The vendor-assigned pane identifier only, on the same terms as `DisplayEvent.pane_ref`.",
+        ),
+        (
+            "RuntimeEvent::EscalationRaised.reason",
+            "A plain, machine-assigned code, never raw worker content -- as the field's own doc states; the worker's text travels in the sibling `question: Option<Redacted>`.",
+        ),
+        (
+            "RuntimeEventKind::PolicyViolation.profile_id",
+            "A crew-assigned profile id.",
+        ),
+        (
+            "RuntimeEventKind::PolicyViolation.adapter",
+            "An adapter name from crew's own fixed set (`claude`, `codex`, `copilot`, `ompRpc`).",
+        ),
+        (
+            "RuntimeEventKind::PolicyViolation.model",
+            "A vendor model identifier, chosen from the adapter's own namespace.",
+        ),
+        (
+            "RuntimeEventKind::PolicyViolation.violation_kind",
+            "A machine-assigned violation kind from a fixed vocabulary.",
+        ),
+        (
+            "RuntimeEventKind::PolicyViolationRecorded.code",
+            "A machine-assigned code from a fixed vocabulary, chosen by the runtime.",
+        ),
+        (
+            "RuntimeEventKind::PolicyViolationRecorded.policy_fingerprint",
+            "A SHA-256 hex digest of the resolved policy.",
+        ),
+        (
+            "RuntimeEventKind::PolicyViolationRecorded.vendor_child_id",
+            "A vendor-assigned identifier.",
+        ),
+        (
+            "RuntimeEventKind::PolicyViolationRecorded.vendor_parent_ref",
+            "A vendor-assigned identifier.",
+        ),
+        (
+            "RuntimeEventKind::PolicyViolationRecorded.action",
+            "A machine-assigned action from a fixed vocabulary.",
+        ),
+        (
+            "RuntimeEventKind::PolicyViolationDecided.resolution",
+            "`release` or `cancel` -- a fixed vocabulary.",
+        ),
+        (
+            "WorkspaceEvent::LeaseRequested.lease_id",
+            "A crew-assigned lease identifier.",
+        ),
+        (
+            "WorkspaceEvent::LeaseAcquired.lease_id",
+            "A crew-assigned lease identifier.",
+        ),
+        (
+            "WorkspaceEvent::LeaseAcquired.path",
+            "DELIBERATE, and deliberately unlike `pane_ref`: this path is the SUBJECT of the event, not incidental to it. A lease record without the path it leased records nothing, so redacting it would empty the event rather than protect anything. The username-in-path exposure is accepted: the daemon is repository-scoped, its state root already encodes that path, and `run/get` returns `workspacePath` by design -- nothing is revealed here that the API does not already hand out. Do not \"fix\" the inconsistency with `pane_ref`: a cleanup in either direction is a regression.",
+        ),
+        (
+            "WorkspaceEvent::LeaseAcquired.base_revision",
+            "A git revision (hex sha), never file contents.",
+        ),
+        (
+            "WorkspaceEvent::WorkspaceDirty.lease_id",
+            "A crew-assigned lease identifier.",
+        ),
+        (
+            "WorkspaceEvent::WorkspaceInspected.lease_id",
+            "A crew-assigned lease identifier.",
+        ),
+        (
+            "WorkspaceEvent::ApplyStarted.lease_id",
+            "A crew-assigned lease identifier.",
+        ),
+        (
+            "WorkspaceEvent::ApplyStarted.expected_target_revision",
+            "A git revision (hex sha), never file contents.",
+        ),
+        (
+            "WorkspaceEvent::ApplyCompleted.lease_id",
+            "A crew-assigned lease identifier.",
+        ),
+        (
+            "WorkspaceEvent::ApplyCompleted.target_revision_after",
+            "A git revision (hex sha), never file contents.",
+        ),
+        (
+            "WorkspaceEvent::LeaseReleased.lease_id",
+            "A crew-assigned lease identifier.",
+        ),
+        (
+            "WorkspaceEvent::CleanupFailed.lease_id",
+            "A crew-assigned lease identifier.",
+        ),
+        (
+            "WorkspaceEvent::ArtifactPublished.lease_id",
+            "A crew-assigned lease identifier.",
+        ),
+        (
+            "WorkspaceEvent::ArtifactPublished.kind",
+            "A kind literal from a fixed vocabulary.",
+        ),
+        (
+            "WorkspaceEvent::ApplyConflict.lease_id",
+            "A crew-assigned lease identifier.",
+        ),
+        (
+            "WorkspaceEvent::ApplyConflict.expected_target_revision",
+            "A git revision (hex sha), never file contents.",
+        ),
+        (
+            "SubtaskSpec.id",
+            "A caller-assigned subtask identifier, scoped to its plan.",
+        ),
+        (
+            "SubtaskSpec.adapter",
+            "An adapter name from crew's own fixed set (`claude`, `codex`, `copilot`, `ompRpc`).",
+        ),
+    ];
+
+    /// Every protocol source the walk may resolve a type in.
+    /// Every protocol source, so the walk can resolve any type declared
+    /// in this crate. Anything it still cannot resolve is genuinely
+    /// external and fails the walk rather than being skipped.
+    const SOURCES: &[&str] = &[
+        include_str!("approval.rs"),
+        include_str!("artifact.rs"),
+        include_str!("coordination.rs"),
+        include_str!("display.rs"),
+        include_str!("event.rs"),
+        include_str!("ids.rs"),
+        include_str!("message.rs"),
+        include_str!("method.rs"),
+        include_str!("plan.rs"),
+        include_str!("retention.rs"),
+        include_str!("rpc.rs"),
+        include_str!("run.rs"),
+        include_str!("schema.rs"),
+        include_str!("task.rs"),
+        include_str!("version.rs"),
+        include_str!("violation.rs"),
+        include_str!("worker.rs"),
+        include_str!("workspace.rs"),
+    ];
+
+    /// A `String`-typed field found on the reachable surface, as
+    /// `Carrier::Variant.field` (enums) or `Carrier.field` (structs).
+    fn string_fields_reachable_from_runtime_event() -> Result<Vec<String>, String> {
+        walk("RuntimeEvent", SOURCES, 3)
+    }
+
+    /// The walk itself, over an explicit source set and root so its
+    /// fail-closed branch can be driven directly by a test rather than
+    /// inferred from its preconditions.
+    fn walk(root: &str, sources: &[&str], min_carriers: usize) -> Result<Vec<String>, String> {
+        let mut queue = vec![root.to_string()];
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut found = Vec::new();
+        let mut carriers = 0usize;
+
+        while let Some(ty) = queue.pop() {
+            if !seen.insert(ty.clone()) {
+                continue;
+            }
+            let Some((kind, body)) = declaration(&ty, sources) else {
+                continue; // a type with no declaration here has no fields to walk
+            };
+            carriers += 1;
+            let mut variant = String::new();
+            for line in body {
+                if kind == "enum"
+                    && let Some(name) = variant_header(&line)
+                {
+                    variant = name;
+                    continue;
+                }
+                let indent = if kind == "enum" { 8 } else { 4 };
+                let Some((field, decl_ty)) = field_decl(&line, indent) else {
+                    continue;
+                };
+                let inner = strip_wrappers(&decl_ty);
+                if inner == "String" {
+                    found.push(if variant.is_empty() {
+                        format!("{ty}.{field}")
+                    } else {
+                        format!("{ty}::{variant}.{field}")
+                    });
+                } else if inner == "Redacted" {
+                    // The sanctioned wrapper: the obligation is discharged.
+                } else if is_primitive(&inner) {
+                    // nothing to carry
+                } else if is_uuid_id(&inner) {
+                    // A `uuid_id!`-generated newtype over `Uuid`: no named
+                    // fields, no free text. Read from the macro's own
+                    // invocation list so a new id type needs no maintenance
+                    // here.
+                } else if let Some(wrapped) = newtype_inner(&inner, sources) {
+                    // A tuple struct has no named fields, so it is terminal --
+                    // unless it wraps a `String`, which would be a
+                    // free-text carrier hiding behind a newtype. `Redacted`
+                    // is the one sanctioned case and is handled above.
+                    if wrapped == "String" {
+                        return Err(format!(
+                            "`{ty}.{field}` is typed `{inner}`, a newtype over `String` -- a \
+                             free-text carrier the allowlist cannot see. Use `Redacted`, or give \
+                             `{inner}` a named field so this walk can reason about it."
+                        ));
+                    }
+                } else if declaration(&inner, sources).is_some() {
+                    queue.push(inner);
+                } else {
+                    return Err(format!(
+                        "unresolvable field type `{inner}` on `{ty}.{field}` -- the walk cannot \
+                         prove it carries no free text. Add its source to SOURCES, or if it is a \
+                         primitive, to `is_primitive`."
+                    ));
+                }
+            }
+        }
+
+        // A silent zero must never read as success.
+        if carriers < min_carriers {
+            return Err(format!(
+                "walked only {carriers} declared types from {root} -- the parser has \
+                 stopped matching this crate's layout, so its silence means nothing"
+            ));
+        }
+        Ok(found)
+    }
+
+    fn declaration(name: &str, sources: &[&str]) -> Option<(&'static str, Vec<String>)> {
+        for source in sources {
+            let lines: Vec<&str> = source.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                for kind in ["enum", "struct"] {
+                    let prefix = format!("pub {kind} {name}");
+                    if line.starts_with(&prefix)
+                        && line.ends_with('{')
+                        && line[prefix.len()..].starts_with([' ', '<', '('])
+                    {
+                        let end = lines[i + 1..].iter().position(|l| *l == "}")? + i + 1;
+                        return Some((
+                            if kind == "enum" { "enum" } else { "struct" },
+                            lines[i + 1..end].iter().map(|l| (*l).to_string()).collect(),
+                        ));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn variant_header(line: &str) -> Option<String> {
+        let rest = line.strip_prefix("    ")?;
+        if !rest.starts_with(|c: char| c.is_ascii_uppercase()) {
+            return None;
+        }
+        Some(
+            rest.trim_end_matches(" {")
+                .trim_end_matches(',')
+                .to_string(),
+        )
+    }
+
+    fn field_decl(line: &str, indent: usize) -> Option<(String, String)> {
+        let rest = line.strip_prefix(&" ".repeat(indent))?;
+        if rest.starts_with(' ') {
+            return None;
+        }
+        let rest = rest.strip_prefix("pub ").unwrap_or(rest);
+        let (name, ty) = rest.split_once(": ")?;
+        if !name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit())
+        {
+            return None;
+        }
+        Some((name.to_string(), ty.trim_end_matches(',').to_string()))
+    }
+
+    fn strip_wrappers(ty: &str) -> String {
+        let mut current = ty.trim().to_string();
+        loop {
+            let stripped = ["Option<", "Vec<", "Box<"].iter().find_map(|w| {
+                current
+                    .strip_prefix(*w)
+                    .and_then(|r| r.strip_suffix('>'))
+                    .map(str::to_string)
+            });
+            match stripped {
+                Some(next) => current = next,
+                None => return current,
+            }
+        }
+    }
+
+    /// The wrapped type of a tuple struct (`pub struct RunId(Uuid);` ->
+    /// `Uuid`), or `None` if `name` is not declared as one here. Tuple
+    /// structs have no named fields, so the walk treats them as terminal --
+    /// but it must still recognise them as DECLARED, or fail-closed would
+    /// fire on every id type in the protocol.
+    /// Whether `name` is one of `ids.rs`'s `uuid_id!`-generated newtypes.
+    /// Parsed from the invocation list rather than hardcoded, so adding an
+    /// id type does not silently break the walk or require a second edit.
+    fn is_uuid_id(name: &str) -> bool {
+        let ids = include_str!("ids.rs");
+        ids.split("uuid_id!(").skip(1).any(|invocation| {
+            invocation
+                .split(')')
+                .next()
+                .is_some_and(|args| args.lines().any(|l| l.trim() == name))
+        })
+    }
+
+    fn newtype_inner(name: &str, sources: &[&str]) -> Option<String> {
+        for source in sources {
+            for line in source.lines() {
+                let prefix = format!("pub struct {name}(");
+                if let Some(rest) = line.strip_prefix(&prefix) {
+                    return Some(
+                        rest.trim_end_matches(';')
+                            .trim_end_matches(')')
+                            .trim()
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        None
+    }
+
+    fn is_primitive(ty: &str) -> bool {
+        matches!(ty, "bool" | "char" | "f32" | "f64")
+            || ty.starts_with('u') && ty[1..].parse::<u8>().is_ok()
+            || ty.starts_with('i') && ty[1..].parse::<u8>().is_ok()
+    }
+
+    /// The guard.
+    #[test]
+    fn every_reachable_string_field_is_redacted_or_allowlisted() {
+        let found = string_fields_reachable_from_runtime_event().expect("the walk must complete");
+        assert!(
+            found.len() > 20,
+            "found only {} String fields -- the parser is broken, not the surface clean",
+            found.len()
+        );
+        let allowed: std::collections::HashSet<&str> =
+            NON_REDACTED_STRING_FIELDS.iter().map(|(f, _)| *f).collect();
+        let unjustified: Vec<&String> = found
+            .iter()
+            .filter(|f| !allowed.contains(f.as_str()))
+            .collect();
+        assert!(
+            unjustified.is_empty(),
+            "field(s) reachable from RuntimeEvent are declared `String` with no stated reason: \
+             {unjustified:#?}\n\nA journaled `String` field carries no redaction obligation -- \
+             nothing asks its author anything, which is how CREW-60's `PaneDowngraded.reason` \
+             journaled raw subprocess stderr. Either declare it `Redacted` (built via \
+             `Redactor::sanitize_fragment` + `Redacted::from_sanitized`, or \
+             `Redacted::assert_runtime_authored` when no caller or vendor text can reach it), or \
+             add it to NON_REDACTED_STRING_FIELDS with the reason it is safe to make durable. If \
+             you cannot write that reason truthfully, change the field."
+        );
+
+        // The reverse direction: an entry naming a field that no longer
+        // exists. The risk is not the dead entry, it is what it BECOMES --
+        // a pre-authorization sitting in the list with a plausible reason
+        // attached, waiting for some later field to collide with its name
+        // (a renamed variant, a field moved between carriers, a new
+        // `reason` where an old `reason` used to live) and be waved
+        // through on a sentence written about something else. That is this
+        // module's own failure mode arriving through the allowlist instead
+        // of through the type system, which is the one path the walk does
+        // not cover.
+        let orphaned: Vec<&str> = NON_REDACTED_STRING_FIELDS
+            .iter()
+            .map(|(f, _)| *f)
+            .filter(|f| !found.iter().any(|g| g == f))
+            .collect();
+        assert!(
+            orphaned.is_empty(),
+            "NON_REDACTED_STRING_FIELDS names field(s) that no longer exist: {orphaned:#?}\n\n\
+             Remove them. An entry that outlives its field is a standing approval for whatever \
+             next takes that name, justified by a reason written about something else."
+        );
+    }
+
+    /// Positive control: the guard must actually fail on an unjustified
+    /// field. A guard nobody proved can fail is the likeliest thing to be
+    /// inert -- which is the failure this guard itself exists to prevent,
+    /// one level up.
+    #[test]
+    fn the_allowlist_check_rejects_an_unjustified_field() {
+        let allowed: std::collections::HashSet<&str> =
+            NON_REDACTED_STRING_FIELDS.iter().map(|(f, _)| *f).collect();
+        assert!(
+            !allowed.contains("RuntimeEvent::Invented.smuggled"),
+            "the positive control's field must not be allowlisted, or it proves nothing"
+        );
+        let found = ["RuntimeEvent::Invented.smuggled".to_string()];
+        let unjustified: Vec<&String> = found
+            .iter()
+            .filter(|f| !allowed.contains(f.as_str()))
+            .collect();
+        assert_eq!(
+            unjustified.len(),
+            1,
+            "an unlisted String field must be reported"
+        );
+    }
+
+    /// The walk REFUSES a type it cannot resolve rather than skipping it.
+    /// This is the ticket's own thesis, so it is driven through the walk
+    /// itself: an earlier version asserted only the two predicates that
+    /// *lead* to the error branch, which meant changing `return Err(..)` to
+    /// `continue` left it green while its name went on claiming the
+    /// opposite -- the same shape as a `String` field carrying an
+    /// obligation nobody asks about. Mutation-verified in both directions.
+    #[test]
+    fn an_unresolvable_field_type_is_an_error_not_a_skip() {
+        let source = "pub struct Root {\n    pub a: FillerOne,\n}\n\
+                      pub struct FillerOne {\n    pub b: FillerTwo,\n}\n\
+                      pub struct FillerTwo {\n    pub c: NotDeclaredAnywhere,\n}\n";
+        let err = walk("Root", &[source], 3).expect_err("an unresolvable type must fail the walk");
+        assert!(
+            err.contains("NotDeclaredAnywhere"),
+            "the error must name the type it could not resolve: {err}"
+        );
+    }
+
+    /// The carrier floor is load-bearing too: a walk that matches almost
+    /// nothing must not read as a clean surface.
+    #[test]
+    fn a_walk_that_finds_almost_nothing_is_an_error_not_a_pass() {
+        let source = "pub struct Root {\n    pub a: bool,\n}\n";
+        let err = walk("Root", &[source], 3).expect_err("too few carriers must fail the walk");
+        assert!(err.contains("walked only 1"), "{err}");
+    }
+
+    /// The walk reaches the nested carriers, not just RuntimeEvent's own
+    /// fields -- the exact blindness the first version of this guard had.
+    #[test]
+    fn the_walk_descends_into_nested_carriers() {
+        let found = string_fields_reachable_from_runtime_event().expect("walk");
+        for expected in [
+            "WorkspaceEvent::LeaseAcquired.path",
+            "RuntimeEventKind::PolicyViolationRecorded.code",
+            "SubtaskSpec.id",
+        ] {
+            assert!(
+                found.iter().any(|f| f == expected),
+                "the walk must reach {expected}; found {found:#?}"
+            );
         }
     }
 }

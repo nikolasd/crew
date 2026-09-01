@@ -196,6 +196,11 @@ pub struct RecoveryCoordinator {
     /// The resume-first seam. `None` keeps the pre-WP15 behavior exactly;
     /// `Some` makes every non-terminal run a resume candidate first.
     resume: Option<ResumeSeam>,
+    /// CREW-61: `resume_failed` journals the resume attempt's own error, and
+    /// that error comes from the adapter registry -- third-party text that
+    /// can name a transcript path. Built-ins-only in the test constructors;
+    /// production passes the org-configured instance from `lifecycle.rs`.
+    redactor: std::sync::Arc<crate::security::redaction::Redactor>,
 }
 
 impl RecoveryCoordinator {
@@ -208,6 +213,7 @@ impl RecoveryCoordinator {
             project_id,
             config,
             resume: None,
+            redactor: std::sync::Arc::new(crate::security::redaction::Redactor::new()),
         }
     }
 
@@ -229,6 +235,7 @@ impl RecoveryCoordinator {
         config: RecoveryConfig,
         registry: Arc<AdapterRegistry>,
         events_tx: tokio::sync::broadcast::Sender<EventEnvelope>,
+        redactor: Arc<crate::security::redaction::Redactor>,
     ) -> Self {
         Self {
             db,
@@ -238,6 +245,7 @@ impl RecoveryCoordinator {
                 registry,
                 events_tx,
             }),
+            redactor,
         }
     }
     /// Creates a [`RecoveryCoordinator`] with default configuration.
@@ -569,10 +577,11 @@ impl RecoveryCoordinator {
             .journal_resume_event(
                 stuck.run_id,
                 "resume_attempted",
-                format!(
+                // Only a run-state literal is interpolated.
+                crew_protocol::Redacted::assert_runtime_authored(format!(
                     "startup recovery is attempting to resume this {} run on its prior vendor session",
                     stuck.current_state
-                ),
+                )),
             )
             .await
         {
@@ -599,7 +608,9 @@ impl RecoveryCoordinator {
         {
             Ok(()) => {
                 let error = match self.journal_resume_event(stuck.run_id, "resume_succeeded",
-                    "startup recovery resumed this run on its prior vendor session; it continues in its prior state".to_string(),
+                    crew_protocol::Redacted::assert_runtime_authored(
+                        "startup recovery resumed this run on its prior vendor session; it continues in its prior state",
+                    ),
                 ).await {
                     Ok(()) => None,
                     Err(err) => Some(format!("resumed, but journaling resume_succeeded failed: {err}")),
@@ -625,7 +636,7 @@ impl RecoveryCoordinator {
     /// conservative default and is left untouched rather than terminalized.
     async fn resume_failed_fallback(&self, stuck: &StuckRun, reason: String) -> RecoveredRun {
         if let Err(err) = self
-            .journal_resume_event(stuck.run_id, "resume_failed", reason.clone())
+            .journal_resume_event(stuck.run_id, "resume_failed", self.redact(reason.clone()))
             .await
         {
             return failed_entry(
@@ -802,11 +813,32 @@ impl RecoveryCoordinator {
     /// or `resume_failed`) through the domain repository and broadcasts the
     /// very envelope it committed -- the same commit-and-broadcast-equal rule
     /// every other domain mutation follows.
+    /// CREW-61: `message` is `Redacted`, so each caller states where its
+    /// text came from -- `resume_attempted`/`resume_succeeded` are
+    /// runtime-authored sentences, `resume_failed` carries the registry's
+    /// own error and goes through the redactor.
+    /// Routes third-party text through the configured redactor. Falls back
+    /// to a fixed sentence rather than to the raw text: a redactor that
+    /// cannot sanitize must never be a reason to journal the original.
+    fn redact(&self, text: String) -> crew_protocol::Redacted {
+        self.redactor
+            .sanitize_fragment(&crew_protocol::Classified {
+                class: crew_protocol::ContentClass::Visible,
+                value: text,
+            })
+            .map(crew_protocol::Redacted::from_sanitized)
+            .unwrap_or_else(|| {
+                crew_protocol::Redacted::assert_runtime_authored(
+                    "resume failed; detail withheld because it could not be sanitized",
+                )
+            })
+    }
+
     async fn journal_resume_event(
         &self,
         run_id: RunId,
         code: &str,
-        message: String,
+        message: crew_protocol::Redacted,
     ) -> Result<(), RecoveryError> {
         let Some(seam) = &self.resume else {
             return Ok(());

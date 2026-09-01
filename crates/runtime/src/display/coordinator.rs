@@ -219,11 +219,13 @@ impl PaneCoordinator {
         if backend != DisplayBackend::Hidden && !self.reserve_pane(req.run_id) {
             self.journal_diagnostic(
                 req.run_id,
-                format!(
+                // The only interpolation is a configured integer, so no
+                // caller or vendor text can reach this sentence.
+                crew_protocol::Redacted::assert_runtime_authored(format!(
                     "live pane cap of {} reached, attaching hidden instead; close a finished \
                      worker's pane to free one",
                     self.max_live_panes
-                ),
+                )),
             )
             .await;
             return self.attach_hidden(req.run_id, req.placement).await;
@@ -555,7 +557,9 @@ impl PaneCoordinator {
         self.commit_and_broadcast(committed, "PaneDowngraded").await;
     }
 
-    async fn journal_diagnostic(&self, run_id: RunId, message: String) {
+    /// CREW-61: takes `Redacted`, not `String`, so each caller states where
+    /// its text came from rather than this helper deciding for all of them.
+    async fn journal_diagnostic(&self, run_id: RunId, message: crew_protocol::Redacted) {
         let project_id = self.project_id;
         let committed = self
             .db
@@ -911,6 +915,17 @@ mod tests {
                     !reason.as_str().contains("sk-ant-api03-"),
                     "the journaled reason must never carry an unredacted API-key-shaped \
                      substring: {reason:?}"
+                );
+                // CREW-61 (from #88's review): absence of the secret is
+                // satisfied just as well by an EMPTY reason -- including via
+                // the `None` branch that yields `from_sanitized(String::new())`.
+                // Asserting the surrounding message survived turns "no secret"
+                // into "masked selectively", which is what the comment above
+                // actually claims.
+                assert!(
+                    reason.as_str().contains("tmux exited with error"),
+                    "the redactor must mask the key and KEEP the message, not blank the \
+                     field: {reason:?}"
                 );
             }
             other => panic!("expected PaneDowngraded, got {other:?}"),
