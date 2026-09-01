@@ -361,7 +361,12 @@ pub struct SubtaskSpec {
     /// distinct from a `TaskId`, since a proposed subtask is not yet a
     /// registered task until (and unless) the plan is approved.
     pub id: String,
-    pub description: String,
+    // CREW-61: the leader's own instruction for what this subtask
+    // executes -- the same shape as a run's `prompt` (`RunPromptEvent`,
+    // ADR-0028), which already crosses the redaction boundary. This is
+    // the one place that class of text reached the journal unguarded.
+    /// The instruction this subtask executes, redacted.
+    pub description: Redacted,
     /// The adapter wire name (e.g. `claude`, `codex`) this subtask is
     /// intended to run under.
     pub adapter: String,
@@ -1126,7 +1131,7 @@ mod tests {
             plan: PlanSpec {
                 subtasks: vec![SubtaskSpec {
                     id: "sub-1".into(),
-                    description: "write the tests".into(),
+                    description: Redacted::from_sanitized("write the tests".to_string()),
                     adapter: "claude".into(),
                     writes: true,
                     turn_budget: Some(10),

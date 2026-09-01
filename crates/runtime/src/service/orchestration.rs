@@ -2847,13 +2847,22 @@ impl OrchestrationService {
             )));
         }
         let task_text = str_field(params, "taskText")?;
-        let plan: PlanSpec = serde_json::from_value(
+        let mut plan: PlanSpec = serde_json::from_value(
             params
                 .get("plan")
                 .cloned()
                 .ok_or_else(|| ServiceError::invalid_params("plan is required"))?,
         )
         .map_err(|e| ServiceError::invalid_params(format!("plan is invalid: {e}")))?;
+        // CREW-61: `description` deserializes as `Redacted` (it accepts a
+        // bare wire string by design -- stored events must round-trip),
+        // but that is not sanitization: a caller's raw JSON reaches this
+        // handler unredacted. Route each subtask's description through
+        // the same boundary a run's `prompt` already crosses.
+        for subtask in &mut plan.subtasks {
+            subtask.description =
+                self.redact_caller_text(subtask.description.as_str().to_string())?;
+        }
 
         let project_id = self.project_id;
         let mut result = self
