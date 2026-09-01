@@ -290,7 +290,100 @@ impl RunLifecycle {
     pub(crate) async fn observe_real_user_turn(&self) {
         if self.turn_settled().await {
             self.set_turn_settled(false).await;
-            self.walk_to(&state("working")).await;
+            // CREW-58: bypasses `walk_to`/`commit` deliberately -- a resume
+            // is always exactly one hop (`waitingUser -> working`, legal
+            // per `RunState::can_transition_to`), and this needs the
+            // transition's own success/failure `Result` to decide whether
+            // to journal a resume cause, which `walk_to` (built for a
+            // multi-hop walk, shared with `observe_vendor_activity`/
+            // `observe_process_started`, and returning `()`) throws away.
+            // A future change to `walk_to` should be considered here too,
+            // since this path no longer goes through it.
+            self.commit_real_user_turn_resume().await;
+        }
+    }
+
+    /// The single-hop transition + conditional resume-cause journal behind
+    /// [`Self::observe_real_user_turn`]. Reads the pre-transition state in
+    /// the SAME `run_domain_op` closure as the transition attempt (same
+    /// actor turn, so no other closure can interleave between the two) --
+    /// only a genuine `waitingUser -> working` edge is a resume caused by a
+    /// real user turn; `RunResumed` must never be journaled for
+    /// `starting -> working` or any other edge into `working`, nor for the
+    /// race this call can lose against a delivered follow-up's own resume
+    /// (`OrchestrationService::message_send`) -- see `RunResumed`'s own
+    /// doc comment.
+    async fn commit_real_user_turn_resume(&self) {
+        let project_id = self.project_id;
+        let run_id = self.run_id;
+        let mut result = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                let mut repo = DomainRepository::new(conn, project_id);
+                let was_waiting_user = repo
+                    .current_run_state(run_id)
+                    .is_ok_and(|current| current == state("waitingUser"));
+                repo.transition_run(run_id, &state("working"), None)
+                    .map(|committed| {
+                        embed_envelope(
+                            json!({ "sequence": committed.sequence, "wasWaitingUser": was_waiting_user }),
+                            &committed.envelope,
+                        )
+                    })
+            }))
+            .await;
+        let resumed_from_waiting_user = match &mut result {
+            Ok(value) => {
+                let was_waiting_user = value
+                    .get("wasWaitingUser")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                if let Some(envelope) = take_envelope(value) {
+                    let _ = self.events_tx.send(envelope);
+                }
+                was_waiting_user
+            }
+            Err(err) => {
+                tracing::debug!(
+                    error = %err,
+                    run_id = %self.run_id,
+                    "a real user turn's own resume transition raced (benign -- the run was \
+                     already working)"
+                );
+                false
+            }
+        };
+        if !resumed_from_waiting_user {
+            return;
+        }
+        // A separate, subsequent commit+broadcast (CREW-58), matching every
+        // other lifecycle edge in this file: best-effort, since the
+        // transition above is already durable and a failure recording
+        // *why* costs the audit trail, never correctness.
+        let mut cause_recorded = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                DomainRepository::new(conn, project_id)
+                    .record_run_resumed(run_id, crew_protocol::ResumeCause::RealUserTurn)
+                    .map(|committed| {
+                        embed_envelope(
+                            json!({ "sequence": committed.sequence }),
+                            &committed.envelope,
+                        )
+                    })
+            }))
+            .await;
+        match &mut cause_recorded {
+            Ok(value) => {
+                if let Some(envelope) = take_envelope(value) {
+                    let _ = self.events_tx.send(envelope);
+                }
+            }
+            Err(err) => tracing::warn!(
+                error = %err,
+                run_id = %self.run_id,
+                "failed to journal a real user turn's resume cause"
+            ),
         }
     }
 
@@ -652,6 +745,7 @@ mod tests {
         let path: &[&str] = match target {
             "working" => &["starting", "working"],
             "waitingUser" => &["starting", "working", "waitingUser"],
+            "paused" => &["starting", "working", "paused"],
             "cancelled" => &["cancelled"],
             other => panic!("no drive path defined for {other}"),
         };
@@ -1051,6 +1145,171 @@ mod tests {
 
         assert_eq!(run_state(&db, run_id).await, "working");
         assert!(!run_flags(&db, project_id, run_id).await.turn_settled);
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    #[tokio::test]
+    async fn a_real_user_turn_resume_journals_its_cause() {
+        // CREW-58/D30: the resume itself was already caused, not inferred
+        // (CREW-47/48) -- this is the evidence a `waitingUser -> working`
+        // edge previously carried none of: why it resumed.
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
+        drive_to_state(&db, project_id, run_id, "working").await;
+        let (tx, mut rx) = broadcast::channel(64);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::TurnEnded {
+                outcome: crew_protocol::TurnOutcome::Normal,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+        // Drain the TurnEnded-caused events before the resume, so only the
+        // resume's own broadcasts remain to inspect below.
+        while rx.try_recv().is_ok() {}
+
+        sink.note_real_user_turn(run_id).await.expect("note");
+
+        let mut saw_resumed_with_cause = false;
+        while let Ok(envelope) = rx.try_recv() {
+            if let crew_protocol::RuntimeEvent::RunResumed {
+                run_id: resumed_run_id,
+                cause,
+            } = envelope.event
+            {
+                assert_eq!(resumed_run_id, run_id);
+                assert_eq!(cause, crew_protocol::ResumeCause::RealUserTurn);
+                saw_resumed_with_cause = true;
+            }
+        }
+        assert!(
+            saw_resumed_with_cause,
+            "a genuine waitingUser -> working resume must journal its cause"
+        );
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    #[tokio::test]
+    async fn starting_to_working_never_journals_a_resume_cause() {
+        // CREW-58: a run's very first `working` transition (queued ->
+        // starting -> working, via ordinary vendor activity) is legal into
+        // `working` exactly like a real resume, but it is not a resume --
+        // there was never a settled turn to resume FROM. `RunResumed` must
+        // never fire here; journaling it would be a fabricated audit
+        // record on the run's very first state transition.
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
+        let (tx, mut rx) = broadcast::channel(64);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::VendorSessionEstablished {
+                vendor_session_id: "vs-1".to_string(),
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+        assert_eq!(run_state(&db, run_id).await, "working");
+
+        while let Ok(envelope) = rx.try_recv() {
+            assert!(
+                !matches!(
+                    envelope.event,
+                    crew_protocol::RuntimeEvent::RunResumed { .. }
+                ),
+                "queued -> starting -> working must never journal a resume cause: {:?}",
+                envelope.event
+            );
+        }
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    #[tokio::test]
+    async fn a_real_user_turn_from_a_non_waiting_user_state_never_journals_a_resume_cause() {
+        // CREW-58: the test above only proves `observe_vendor_activity`'s
+        // OWN path never journals a resume cause -- it never reaches the
+        // new gate at all, so it can't prove the gate itself is
+        // load-bearing (confirmed directly: this test failed exactly as
+        // expected when the gate was mutated out, while the test above
+        // stayed green throughout). This one actually exercises
+        // `observe_real_user_turn`'s own from-state check: gating on
+        // `transition_run`'s success alone is not enough, because
+        // `working -> paused -> working` is ALSO a legal edge into
+        // `working`, distinct from a genuine `waitingUser -> working`
+        // resume. If `turnSettled` were ever true while the run sat in
+        // `paused` (not this file's normal lifecycle, but not ruled out by
+        // `observe_real_user_turn`'s own gate either), journaling
+        // `RunResumed` for that edge would be a fabricated audit record on
+        // a run that was never actually parked waiting on its own settled
+        // turn. Drives the run to `paused` directly (a legal edge), forces
+        // `turnSettled` true to isolate exactly this case, and asserts the
+        // transition succeeds (proving `paused -> working` really is
+        // legal) while `RunResumed` still never fires.
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (_task_id, _worker_id, run_id) = seed_run(&db, project_id).await;
+        drive_to_state(&db, project_id, run_id, "paused").await;
+        db.run_domain_op(Box::new(move |conn| {
+            DomainRepository::new(conn, project_id)
+                .set_run_flag(run_id, crate::domain::RunFlag::TurnSettled, true)
+                .map(|_| serde_json::json!({}))
+        }))
+        .await
+        .expect("force turnSettled for the test");
+
+        let (tx, mut rx) = broadcast::channel(64);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
+
+        sink.note_real_user_turn(run_id).await.expect("note");
+
+        assert_eq!(
+            run_state(&db, run_id).await,
+            "working",
+            "paused -> working must still be a legal edge"
+        );
+        while let Ok(envelope) = rx.try_recv() {
+            assert!(
+                !matches!(
+                    envelope.event,
+                    crew_protocol::RuntimeEvent::RunResumed { .. }
+                ),
+                "a paused -> working edge must never journal a resume cause: {:?}",
+                envelope.event
+            );
+        }
         db.shutdown().await.expect("shutdown database");
     }
 

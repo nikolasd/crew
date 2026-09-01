@@ -2532,32 +2532,92 @@ impl OrchestrationService {
                         // (`working -> working`), which is exactly the
                         // no-op this wants -- so a failure here is logged,
                         // never propagated.
+                        // CREW-58: read the pre-transition state and attempt
+                        // the transition in the SAME closure (same actor
+                        // turn, so no other closure can interleave between
+                        // the two -- see `current_run_state`'s own doc).
+                        // `was_waiting_user` rides alongside `sequence` in
+                        // the returned value (not a second embedded
+                        // envelope -- `embed_envelope`/`take_envelope` carry
+                        // exactly one) so the caller below knows whether
+                        // this specific call landed a genuine
+                        // `waitingUser -> working` edge, as opposed to
+                        // `starting -> working` or any other edge
+                        // `check_transition` also allows into `working`.
                         let mut resumed = self
                             .db
                             .run_domain_op(Box::new(move |conn| {
-                                DomainRepository::new(conn, project_id)
-                                    .transition_run(
-                                        run_id,
-                                        &RunState::try_from("working")
-                                            .expect("working is a valid RunState"),
-                                        None,
+                                let mut repo = DomainRepository::new(conn, project_id);
+                                let was_waiting_user = repo.current_run_state(run_id).is_ok_and(
+                                    |state| {
+                                        state
+                                            == RunState::try_from("waitingUser")
+                                                .expect("waitingUser is a valid RunState")
+                                    },
+                                );
+                                repo.transition_run(
+                                    run_id,
+                                    &RunState::try_from("working")
+                                        .expect("working is a valid RunState"),
+                                    None,
+                                )
+                                .map(|c| {
+                                    embed_envelope(
+                                        json!({ "sequence": c.sequence, "wasWaitingUser": was_waiting_user }),
+                                        &c.envelope,
                                     )
-                                    .map(|c| {
-                                        embed_envelope(
-                                            json!({ "sequence": c.sequence }),
-                                            &c.envelope,
-                                        )
-                                    })
+                                })
                             }))
                             .await;
+                        let mut resumed_from_waiting_user = false;
                         match resumed {
-                            Ok(ref mut value) => self.broadcast(value),
+                            Ok(ref mut value) => {
+                                resumed_from_waiting_user = value
+                                    .get("wasWaitingUser")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(false);
+                                self.broadcast(value);
+                            }
                             Err(ref err) => tracing::debug!(
                                 error = %err,
                                 run_id = %run_id,
                                 "follow-up delivery's own resume transition raced (benign -- \
                                  the run was already working)"
                             ),
+                        }
+                        // A separate, subsequent commit+broadcast (CREW-58),
+                        // matching this whole block's own established
+                        // pattern (burst-diagnostic / resume-transition /
+                        // flag-clear are already three independent calls,
+                        // each tolerating the others' failure). Best-effort:
+                        // the transition above is already durable; a
+                        // failure recording *why* costs the audit trail,
+                        // never correctness.
+                        if resumed_from_waiting_user {
+                            let mut cause_recorded = self
+                                .db
+                                .run_domain_op(Box::new(move |conn| {
+                                    DomainRepository::new(conn, project_id)
+                                        .record_run_resumed(
+                                            run_id,
+                                            crew_protocol::ResumeCause::FollowUpMessage,
+                                        )
+                                        .map(|c| {
+                                            embed_envelope(
+                                                json!({ "sequence": c.sequence }),
+                                                &c.envelope,
+                                            )
+                                        })
+                                }))
+                                .await;
+                            match cause_recorded {
+                                Ok(ref mut value) => self.broadcast(value),
+                                Err(ref err) => tracing::warn!(
+                                    error = %err,
+                                    run_id = %run_id,
+                                    "failed to journal a follow-up message's resume cause"
+                                ),
+                            }
                         }
                         let mut cleared = self
                             .db

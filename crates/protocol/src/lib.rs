@@ -40,7 +40,7 @@ pub use display::{
 pub use event::RunFlags;
 pub use event::{
     AnsweredBy, Classified, ContentClass, DiagnosticLevel, EventEnvelope, EventSource, PlanSpec,
-    Redacted, RuntimeEvent, RuntimeEventKind, SubtaskSpec, TimeoutKind, Timestamp,
+    Redacted, ResumeCause, RuntimeEvent, RuntimeEventKind, SubtaskSpec, TimeoutKind, Timestamp,
     TimestampParseError, TurnOutcome,
 };
 pub use ids::{

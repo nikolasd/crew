@@ -391,6 +391,64 @@ impl<'c> DomainRepository<'c> {
         )
     }
 
+    /// Reads a run's current stored state, fresh, on this same connection.
+    /// The one intended caller is a `RunResumed`-journaling call site
+    /// (CREW-58): read this immediately before attempting the transition
+    /// to `working`, in the SAME `run_domain_op` closure -- the daemon's
+    /// single-actor-owns-the-connection design means no other closure can
+    /// interleave between this read and that attempt, so the two are
+    /// exactly as atomic as `transition_run`'s own internal check.
+    ///
+    /// # Errors
+    /// Returns [`DomainError::NotFound`] if the run does not exist, or a
+    /// stored state string that is not a known [`RunState`].
+    pub fn current_run_state(&self, run_id: crew_protocol::RunId) -> Result<RunState, DomainError> {
+        let stored: String = self
+            .conn
+            .query_row(
+                "SELECT state FROM runs WHERE run_id = ?1",
+                [run_id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(|_| DomainError::NotFound {
+                kind: "run",
+                id: run_id.to_string(),
+            })?;
+        RunState::try_from(stored.as_str()).map_err(|_| DomainError::NotFound {
+            kind: "run-state",
+            id: stored,
+        })
+    }
+
+    /// Journals why a settled run resumed to `working` (CREW-58/D30).
+    ///
+    /// The caller is responsible for calling this ONLY when its own
+    /// `transition_run` call to `working` actually landed the edge, and
+    /// only when that edge's origin was genuinely `waitingUser` -- never
+    /// unconditionally on "the transition attempt didn't error". Both of
+    /// `RunResumed`'s two call sites race each other for the same edge
+    /// (see that event's own doc comment), and other legal edges into
+    /// `working` exist (`starting -> working`, `paused -> working`) that
+    /// are not a resume at all. Journaling this event for either case
+    /// would be a fabricated audit record: a `RunResumed` entry claiming a
+    /// pause that never happened.
+    ///
+    /// # Errors
+    /// Returns [`DomainError`] if the append fails.
+    pub fn record_run_resumed(
+        &mut self,
+        run_id: crew_protocol::RunId,
+        cause: crew_protocol::ResumeCause,
+    ) -> Result<Committed, DomainError> {
+        self.append_and_apply(
+            &RuntimeEvent::RunResumed { run_id, cause },
+            None,
+            None,
+            Some(run_id),
+            |_| Ok(()),
+        )
+    }
+
     /// Appends an event and runs `apply` against the same transaction,
     /// committing both atomically. Returns the assigned sequence number.
     fn append_and_apply<F>(

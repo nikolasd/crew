@@ -7830,6 +7830,37 @@ through this type.`,
           additionalProperties: false
         },
         {
+          description: 'A settled run resumed to `working`, and why. Best-effort, not\nguaranteed: it is journaled as a separate commit after the\ntransition it describes, so a journal can hold a `waitingUser ->\nworking` edge with no matching `runResumed` at all. A consumer must\nread that absence as "cause unknown", never as "this was not a\nresume".',
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "runResumed"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                cause: {
+                  $ref: "#/$defs/ResumeCause"
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "cause"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
           description: `The prompt a run was submitted with, so every consumer of a run's
 journal can read the question its transcript answers. Already
 redacted: secret-shaped substrings are masked.
@@ -9425,6 +9456,21 @@ existed; treat absence as \`false\`.`,
         "policyQuarantined",
         "workspaceDirty",
         "childrenActive"
+      ]
+    },
+    ResumeCause: {
+      description: "Why a settled run resumed to `working` (CREW-58/D30). The two causes\nmap exactly to `runResumed`'s two journaling call sites, which race\neach other for the same edge -- see that event's own doc comment.",
+      oneOf: [
+        {
+          description: "The leader delivered a follow-up message (`message/send`) while\nthe run was parked, waiting on a settled turn.",
+          type: "string",
+          const: "followUpMessage"
+        },
+        {
+          description: "The vendor's own transcript recorded a genuine new user-authored\nturn (CREW-47's `is_real_user_turn`), not bookkeeping evidence.",
+          type: "string",
+          const: "realUserTurn"
+        }
       ]
     },
     Redacted: {
