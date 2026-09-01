@@ -1611,7 +1611,14 @@ mod redaction_enumeration {
     /// A `String`-typed field found on the reachable surface, as
     /// `Carrier::Variant.field` (enums) or `Carrier.field` (structs).
     fn string_fields_reachable_from_runtime_event() -> Result<Vec<String>, String> {
-        let mut queue = vec!["RuntimeEvent".to_string()];
+        walk("RuntimeEvent", SOURCES, 3)
+    }
+
+    /// The walk itself, over an explicit source set and root so its
+    /// fail-closed branch can be driven directly by a test rather than
+    /// inferred from its preconditions.
+    fn walk(root: &str, sources: &[&str], min_carriers: usize) -> Result<Vec<String>, String> {
+        let mut queue = vec![root.to_string()];
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut found = Vec::new();
         let mut carriers = 0usize;
@@ -1620,7 +1627,7 @@ mod redaction_enumeration {
             if !seen.insert(ty.clone()) {
                 continue;
             }
-            let Some((kind, body)) = declaration(&ty) else {
+            let Some((kind, body)) = declaration(&ty, sources) else {
                 continue; // a type with no declaration here has no fields to walk
             };
             carriers += 1;
@@ -1652,7 +1659,7 @@ mod redaction_enumeration {
                     // fields, no free text. Read from the macro's own
                     // invocation list so a new id type needs no maintenance
                     // here.
-                } else if let Some(wrapped) = newtype_inner(&inner) {
+                } else if let Some(wrapped) = newtype_inner(&inner, sources) {
                     // A tuple struct has no named fields, so it is terminal --
                     // unless it wraps a `String`, which would be a
                     // free-text carrier hiding behind a newtype. `Redacted`
@@ -1664,7 +1671,7 @@ mod redaction_enumeration {
                              `{inner}` a named field so this walk can reason about it."
                         ));
                     }
-                } else if declaration(&inner).is_some() {
+                } else if declaration(&inner, sources).is_some() {
                     queue.push(inner);
                 } else {
                     return Err(format!(
@@ -1677,17 +1684,17 @@ mod redaction_enumeration {
         }
 
         // A silent zero must never read as success.
-        if carriers < 3 {
+        if carriers < min_carriers {
             return Err(format!(
-                "walked only {carriers} declared types from RuntimeEvent -- the parser has \
+                "walked only {carriers} declared types from {root} -- the parser has \
                  stopped matching this crate's layout, so its silence means nothing"
             ));
         }
         Ok(found)
     }
 
-    fn declaration(name: &str) -> Option<(&'static str, Vec<String>)> {
-        for source in SOURCES {
+    fn declaration(name: &str, sources: &[&str]) -> Option<(&'static str, Vec<String>)> {
+        for source in sources {
             let lines: Vec<&str> = source.lines().collect();
             for (i, line) in lines.iter().enumerate() {
                 for kind in ["enum", "struct"] {
@@ -1770,8 +1777,8 @@ mod redaction_enumeration {
         })
     }
 
-    fn newtype_inner(name: &str) -> Option<String> {
-        for source in SOURCES {
+    fn newtype_inner(name: &str, sources: &[&str]) -> Option<String> {
+        for source in sources {
             for line in source.lines() {
                 let prefix = format!("pub struct {name}(");
                 if let Some(rest) = line.strip_prefix(&prefix) {
@@ -1845,13 +1852,32 @@ mod redaction_enumeration {
         );
     }
 
-    /// The walk refuses a type it cannot resolve rather than skipping it --
-    /// the property that stops a newly-added nested carrier from being
-    /// silently invisible.
+    /// The walk REFUSES a type it cannot resolve rather than skipping it.
+    /// This is the ticket's own thesis, so it is driven through the walk
+    /// itself: an earlier version asserted only the two predicates that
+    /// *lead* to the error branch, which meant changing `return Err(..)` to
+    /// `continue` left it green while its name went on claiming the
+    /// opposite -- the same shape as a `String` field carrying an
+    /// obligation nobody asks about. Mutation-verified in both directions.
     #[test]
     fn an_unresolvable_field_type_is_an_error_not_a_skip() {
-        assert!(declaration("NotATypeInThisCrate").is_none());
-        assert!(!is_primitive("NotATypeInThisCrate"));
+        let source = "pub struct Root {\n    pub a: FillerOne,\n}\n\
+                      pub struct FillerOne {\n    pub b: FillerTwo,\n}\n\
+                      pub struct FillerTwo {\n    pub c: NotDeclaredAnywhere,\n}\n";
+        let err = walk("Root", &[source], 3).expect_err("an unresolvable type must fail the walk");
+        assert!(
+            err.contains("NotDeclaredAnywhere"),
+            "the error must name the type it could not resolve: {err}"
+        );
+    }
+
+    /// The carrier floor is load-bearing too: a walk that matches almost
+    /// nothing must not read as a clean surface.
+    #[test]
+    fn a_walk_that_finds_almost_nothing_is_an_error_not_a_pass() {
+        let source = "pub struct Root {\n    pub a: bool,\n}\n";
+        let err = walk("Root", &[source], 3).expect_err("too few carriers must fail the walk");
+        assert!(err.contains("walked only 1"), "{err}");
     }
 
     /// The walk reaches the nested carriers, not just RuntimeEvent's own
