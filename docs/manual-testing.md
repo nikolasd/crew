@@ -844,6 +844,22 @@ the adapter's interrupt-then-compose capability and is **refused with `capabilit
 on adapters without it — a typed refusal there is correct behavior, not a finding
 (`crates/runtime/src/adapter/registry.rs`).
 
+When the run resumes (either from an explicit follow-up message or from a genuine user-authored
+turn in the vendor's transcript), a `RunResumed` event is journaled with a `cause` field
+distinguishing the two paths:
+- `cause: "FollowUpMessage"` — the leader sent an explicit follow-up via `crew_message`
+- `cause: "RealUserTurn"` — the vendor's transcript contained a genuine new user-authored entry
+  (type `"user"`, not a sidechain), not bookkeeping or metadata
+
+Verify the event appears in the audit export:
+```bash
+crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl && grep RunResumed /tmp/audit.jsonl
+```
+
+Expect one `RunResumed` entry with the appropriate `cause`. This event documents what triggered
+resumption, so consumers (dashboards, tools, audit trails) can distinguish between user-directed
+follow-ups and resumptions triggered by new transcript content.
+
 ### 7c. A subagent's turn never settles the parent (isSidechain)
 
 Submit a run whose prompt forces subagents, e.g. *"Use your Task tool to dispatch two parallel
