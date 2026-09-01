@@ -2797,7 +2797,7 @@
           "additionalProperties": false
         },
         {
-          "description": "Why teardown failed, redacted.",
+          "description": "Why teardown failed -- the directory is leaked and needs manual\nremoval. Redacted, so the text may be masked; join `leaseId`\nagainst the run's `leaseAcquired` event for the directory itself,\nwhich is not.",
           "type": "object",
           "properties": {
             "type": {

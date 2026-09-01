@@ -239,7 +239,19 @@ pub enum WorkspaceEvent {
     // output, never runtime-authored -- and, like `PaneDowngraded.reason`
     // (CREW-60/#88), routinely echoes back the very path it failed to
     // remove. `Redacted` closes the same leak class for this field.
-    /// Why teardown failed, redacted.
+    //
+    // The redaction is only tolerable because the LOCATION is recorded
+    // separately and unredacted on `LeaseAcquired.path`, which is
+    // allowlisted precisely because a path is that event's subject rather
+    // than incidental to it. The two decisions are coupled: this field can
+    // afford to be masked defensively because it is no longer the only
+    // carrier of where the leaked directory is. If `LeaseAcquired.path`
+    // ever became redacted, a masked `error` would leave an operator with
+    // no way to find the worktree at all.
+    /// Why teardown failed -- the directory is leaked and needs manual
+    /// removal. Redacted, so the text may be masked; join `leaseId`
+    /// against the run's `leaseAcquired` event for the directory itself,
+    /// which is not.
     CleanupFailed {
         lease_id: String,
         error: Redacted,
