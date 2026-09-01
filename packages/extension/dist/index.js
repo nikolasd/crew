@@ -9810,6 +9810,7 @@ what makes it distinguishable.`,
           additionalProperties: false
         },
         {
+          description: "Why teardown failed, redacted.",
           type: "object",
           properties: {
             type: {
@@ -9823,7 +9824,7 @@ what makes it distinguishable.`,
                   type: "string"
                 },
                 error: {
-                  type: "string"
+                  $ref: "#/$defs/Redacted"
                 }
               },
               additionalProperties: false,
