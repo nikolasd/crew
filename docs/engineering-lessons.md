@@ -1000,7 +1000,7 @@ dropped. Both would otherwise sit in the schema looking equally alive.
 repo's own journals may be discarded, which moots obligation 2 *for us, this once*. That ruling is
 about our data, not about the rule — and obligation 3 survives it untouched.
 
-**Regression tests:** the replay-acceptance tests this rule would normally require are deleted. In PR #87, `DisplayPlacement::Embedded` was removed from both the Rust enum and the protocol schema, and both associated replay tests were deleted along with it. This deletion is justified by the pre-release ruling above (obligation 2 does not apply), and by the fact that no backend ever implemented `Embedded` — it was always a dead enum variant. Obligation 3 (request-boundary rejection) was not needed since there is no value to reject. The entry records the rule itself, which remains valid for future retirements of values that *were* genuinely used.
+**Regression tests:** the replay-acceptance tests this rule would normally require are deleted. In PR #87, `DisplayPlacement::Embedded` was removed from both the Rust enum and the protocol schema, and both associated replay tests were deleted along with it. This deletion is justified by the pre-release ruling above (obligation 2 does not apply), and by the fact that no backend ever implemented `Embedded` — it was always a dead enum variant with no user-facing request path. Obligation 3 (request-boundary rejection) does not apply: serde rejects unknown enum variants by default, so any request carrying `"embedded"` would fail at deserialization with a typed error before reaching business logic. The entry records the rule itself, which remains valid for future retirements of values that *were* genuinely used and user-facing.
 
 ---
 
