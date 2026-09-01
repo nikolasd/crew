@@ -604,7 +604,7 @@ crewd monitor --repo "$PWD" --state-dir "$HOME/.omp/crew" | grep -i OutOfBandInp
 ```
 
 Attach to the run's pane via the active display backend (e.g. `tmux attach -t <pane-ref>` for tmux, or the herdr/terminal viewer), type a few characters, and confirm:
-- Terminal B shows one `OutOfBandInput` event per pane-write burst, carrying only `backend` + `pane_ref` — **no keystroke text**.
+- Terminal B shows one `outOfBandInput` event per pane-write burst, carrying only `backend` + `paneRef` — **no keystroke text**.
 - The run's `needsReconciliation` flips true (visible via `/crew` after a `crew_reconcile`, or `crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl` and grep for the flag).
 
 **Attach-socket liveness (CREWATTACH1):** when testing `/crew reopen` or pane persistence, the
