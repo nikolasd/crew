@@ -265,7 +265,10 @@ impl Redactor {
                 RuntimeEvent::Diagnostic {
                     level,
                     code,
-                    message,
+                    // Every fragment above went through `redact_visible_text`
+                    // on this very line's `map`, so `from_sanitized` is the
+                    // honest claim here -- this IS the redactor.
+                    message: crew_protocol::Redacted::from_sanitized(message),
                 }
             }
         };
@@ -430,7 +433,7 @@ mod tests {
 
         match serde_json::from_str::<RuntimeEvent>(persisted.event_json()) {
             Ok(RuntimeEvent::Diagnostic { message, .. }) => {
-                assert_eq!(message, "hello world");
+                assert_eq!(message.as_str(), "hello world");
             }
             other => panic!("expected Diagnostic, got {:?}", other),
         }
@@ -443,7 +446,7 @@ mod tests {
 
         match serde_json::from_str::<RuntimeEvent>(persisted.event_json()) {
             Ok(RuntimeEvent::Diagnostic { message, .. }) => {
-                assert_eq!(message, "");
+                assert_eq!(message.as_str(), "");
             }
             other => panic!("expected Diagnostic, got {:?}", other),
         }
@@ -456,7 +459,7 @@ mod tests {
 
         match serde_json::from_str::<RuntimeEvent>(persisted.event_json()) {
             Ok(RuntimeEvent::Diagnostic { message, .. }) => {
-                assert_eq!(message, "");
+                assert_eq!(message.as_str(), "");
             }
             other => panic!("expected Diagnostic, got {:?}", other),
         }
@@ -471,8 +474,8 @@ mod tests {
 
         match serde_json::from_str::<RuntimeEvent>(persisted.event_json()) {
             Ok(RuntimeEvent::Diagnostic { message, .. }) => {
-                assert!(message.contains("[REDACTED:api_key]"));
-                assert!(!message.contains("sk-ABCDEFGHIJKLMNOPQRSTUVWX"));
+                assert!(message.as_str().contains("[REDACTED:api_key]"));
+                assert!(!message.as_str().contains("sk-ABCDEFGHIJKLMNOPQRSTUVWX"));
             }
             other => panic!("expected Diagnostic, got {:?}", other),
         }
@@ -487,8 +490,12 @@ mod tests {
 
         match serde_json::from_str::<RuntimeEvent>(persisted.event_json()) {
             Ok(RuntimeEvent::Diagnostic { message, .. }) => {
-                assert!(message.contains("[REDACTED:api_key]"));
-                assert!(!message.contains("sk-ant-api03-FAKEKEY-for-tests_0123456789-abcdefghij"));
+                assert!(message.as_str().contains("[REDACTED:api_key]"));
+                assert!(
+                    !message
+                        .as_str()
+                        .contains("sk-ant-api03-FAKEKEY-for-tests_0123456789-abcdefghij")
+                );
             }
             other => panic!("expected Diagnostic, got {:?}", other),
         }
@@ -503,8 +510,12 @@ mod tests {
 
         match serde_json::from_str::<RuntimeEvent>(persisted.event_json()) {
             Ok(RuntimeEvent::Diagnostic { message, .. }) => {
-                assert!(message.contains("[REDACTED:api_key]"));
-                assert!(!message.contains("sk-proj-FAKEKEY-for-tests_0123456789-abcdefghij"));
+                assert!(message.as_str().contains("[REDACTED:api_key]"));
+                assert!(
+                    !message
+                        .as_str()
+                        .contains("sk-proj-FAKEKEY-for-tests_0123456789-abcdefghij")
+                );
             }
             other => panic!("expected Diagnostic, got {:?}", other),
         }
@@ -523,7 +534,7 @@ mod tests {
 
         match serde_json::from_str::<RuntimeEvent>(persisted.event_json()) {
             Ok(RuntimeEvent::Diagnostic { message, .. }) => {
-                assert_eq!(message, prose);
+                assert_eq!(message.as_str(), prose);
             }
             other => panic!("expected Diagnostic, got {:?}", other),
         }
@@ -541,7 +552,7 @@ mod tests {
 
         match serde_json::from_str::<RuntimeEvent>(persisted.event_json()) {
             Ok(RuntimeEvent::Diagnostic { message, .. }) => {
-                assert_eq!(message, prose);
+                assert_eq!(message.as_str(), prose);
             }
             other => panic!("expected Diagnostic, got {:?}", other),
         }
@@ -566,15 +577,21 @@ mod tests {
             let persisted = redactor.sanitize(event(vec![visible(&text)]));
             match serde_json::from_str::<RuntimeEvent>(persisted.event_json()) {
                 Ok(RuntimeEvent::Diagnostic { message, .. }) => {
-                    assert!(!message.contains(first), "first key survived in {message}");
                     assert!(
-                        !message.contains(second),
-                        "second key survived in {message}"
+                        !message.as_str().contains(first),
+                        "first key survived in {}",
+                        message.as_str()
+                    );
+                    assert!(
+                        !message.as_str().contains(second),
+                        "second key survived in {}",
+                        message.as_str()
                     );
                     assert_eq!(
-                        message.matches("[REDACTED:api_key]").count(),
+                        message.as_str().matches("[REDACTED:api_key]").count(),
                         2,
-                        "both keys must be redacted separately in {message}"
+                        "both keys must be redacted separately in {}",
+                        message.as_str()
                     );
                 }
                 other => panic!("expected Diagnostic, got {:?}", other),
@@ -687,8 +704,8 @@ mod tests {
 
         match serde_json::from_str::<RuntimeEvent>(persisted.event_json()) {
             Ok(RuntimeEvent::Diagnostic { message, .. }) => {
-                assert!(message.contains("[REDACTED:org_pattern_0]"));
-                assert!(!message.contains("CUSTOM_SECRET_ABCDEFGHIJKLMNOP"));
+                assert!(message.as_str().contains("[REDACTED:org_pattern_0]"));
+                assert!(!message.as_str().contains("CUSTOM_SECRET_ABCDEFGHIJKLMNOP"));
             }
             other => panic!("expected Diagnostic, got {:?}", other),
         }

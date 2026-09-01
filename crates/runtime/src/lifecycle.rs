@@ -191,12 +191,18 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     // exactly the text the org asked never to be written, and would do so
     // behind a warning nobody reads. Refusing to start is recoverable
     // (fix the pattern); a leaked secret in an append-only journal is not.
-    let redactor = Redactor::with_org_rules(&policy.org_security_patterns).map_err(|e| {
-        ServeError::ConfigError(format!(
-            "org security patterns failed to compile ({e}); refusing to start rather than \
+    // CREW-61: `Arc` so the recovery coordinator shares this ORG-CONFIGURED
+    // instance rather than building a built-ins-only one of its own -- a
+    // fallback there would silently drop every org pattern in exactly the
+    // deployments that configured them.
+    let redactor = std::sync::Arc::new(
+        Redactor::with_org_rules(&policy.org_security_patterns).map_err(|e| {
+            ServeError::ConfigError(format!(
+                "org security patterns failed to compile ({e}); refusing to start rather than \
              journaling text the org's redaction rules were meant to remove"
-        ))
-    })?;
+            ))
+        })?,
+    );
 
     let started = redactor.sanitize(RawRuntimeEvent {
         timestamp: crew_protocol::Timestamp::now(),
@@ -395,6 +401,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         crate::recovery::RecoveryConfig::default(),
         Arc::clone(&registry),
         server.events_sender(),
+        std::sync::Arc::clone(&redactor),
     );
     match recovery.recover().await {
         Ok(result) if !result.recovered_runs.is_empty() => {

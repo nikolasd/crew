@@ -637,6 +637,7 @@ async fn a_pre_mode_field_and_an_explicit_headless_journal_both_terminalize_with
             RecoveryConfig::default(),
             registry,
             events_tx,
+            std::sync::Arc::new(crew_runtime::security::redaction::Redactor::new()),
         );
 
         let result = coordinator.recover().await.expect("sweep");
@@ -1005,6 +1006,7 @@ fn resume_coordinator(scenario: &ResumableScenario) -> RecoveryCoordinator {
         RecoveryConfig::default(),
         Arc::clone(&scenario.registry),
         scenario.events_tx.clone(),
+        Arc::new(crew_runtime::security::redaction::Redactor::new()),
     )
 }
 

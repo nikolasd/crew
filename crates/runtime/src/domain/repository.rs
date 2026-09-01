@@ -1430,12 +1430,18 @@ impl<'c> DomainRepository<'c> {
         run_id: RunId,
         level: crew_protocol::DiagnosticLevel,
         code: impl Into<String>,
-        message: impl Into<String>,
+        // CREW-61: `Redacted`, deliberately not `impl Into<String>`. Taking
+        // a bare string here would absorb the decision on every caller's
+        // behalf -- the compiler would be satisfied and no producer would
+        // ever be asked whether its message carries third-party text. Two
+        // of them do. The obligation belongs at the call site, where the
+        // author knows where the text came from.
+        message: crew_protocol::Redacted,
     ) -> Result<Committed, DomainError> {
         let event = RuntimeEvent::Diagnostic {
             level,
             code: code.into(),
-            message: message.into(),
+            message,
         };
         self.append_and_apply(&event, None, None, Some(run_id), |_tx| Ok(()))
     }
@@ -2619,8 +2625,15 @@ impl<'c> DomainRepository<'c> {
                 violation_id,
                 resolution: resolution.to_string(),
                 // The resolver is by definition the authorized principal:
-                // the guarded write below refuses anyone else.
-                resolved_by: principal_instance_id.to_string(),
+                // the guarded write below refuses anyone else. CREW-61
+                // types this `Redacted`; the claim made here is
+                // runtime-authored because the value that lands is the one
+                // the guarded write just authorized, not free text a caller
+                // chose -- if that guard ever loosens, this claim becomes
+                // false and must move to the redactor.
+                resolved_by: crew_protocol::Redacted::assert_runtime_authored(
+                    principal_instance_id,
+                ),
             },
             run_id,
             task_id,

@@ -699,7 +699,8 @@
                   "type": "string"
                 },
                 "message": {
-                  "type": "string"
+                  "description": "Operator-facing detail. Already redacted: secret-shaped\nsubstrings are masked before this becomes durable.",
+                  "$ref": "#/$defs/Redacted"
                 }
               },
               "additionalProperties": false,
@@ -2170,6 +2171,10 @@
         "error"
       ]
     },
+    "Redacted": {
+      "description": "Text that has crossed Crew's redaction boundary: secret-shaped\nsubstrings in it are masked before it is stored or sent, so what a\nconsumer reads here is the masked text, never the original.\n\nCarried on the wire as an ordinary JSON string.",
+      "type": "string"
+    },
     "RuntimeEventKind": {
       "description": "The semantic kind of an orchestration event stored in the durable journal.\n\nEvery record creation, lifecycle transition, flag change, message delivery\nchange, and approval request/decision produces one of these variants.",
       "oneOf": [
@@ -2306,7 +2311,7 @@
                   "type": "string"
                 },
                 "reason": {
-                  "type": "string"
+                  "$ref": "#/$defs/Redacted"
                 },
                 "is_nested": {
                   "type": "boolean"
@@ -2396,7 +2401,7 @@
                   "type": "string"
                 },
                 "resolved_by": {
-                  "type": "string"
+                  "$ref": "#/$defs/Redacted"
                 }
               },
               "required": [
@@ -2469,10 +2474,6 @@
           "const": "realUserTurn"
         }
       ]
-    },
-    "Redacted": {
-      "description": "Text that has crossed Crew's redaction boundary: secret-shaped\nsubstrings in it are masked before it is stored or sent, so what a\nconsumer reads here is the masked text, never the original.\n\nCarried on the wire as an ordinary JSON string.",
-      "type": "string"
     },
     "MessageId": {
       "description": "Identifies a single message within a run's transcript.",

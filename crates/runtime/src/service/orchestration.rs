@@ -2496,9 +2496,13 @@ impl OrchestrationService {
                                         run_id,
                                         crew_protocol::DiagnosticLevel::Info,
                                         "turn_admitted_over_ceiling",
-                                        "follow-up turn admitted on this run's burst allowance, \
-                                         outside the concurrency ceiling"
-                                            .to_string(),
+                                        // A fixed sentence with nothing
+                                        // interpolated: no caller or vendor
+                                        // text can reach it.
+                                        crew_protocol::Redacted::assert_runtime_authored(
+                                            "follow-up turn admitted on this run's burst \
+                                             allowance, outside the concurrency ceiling",
+                                        ),
                                     )
                                     .map(|c| {
                                         embed_envelope(
@@ -2659,6 +2663,17 @@ impl OrchestrationService {
                     self.broadcast(&mut sent);
                 }
                 Err(err) => {
+                    // CREW-61: `err` is the ADAPTER's own error text, and an
+                    // adapter failure routinely names a transcript or socket
+                    // path. Redacted here, before the closure, because
+                    // `self.redactor` cannot cross the `move` boundary.
+                    let message = self
+                        .redact_caller_text(format!("run {run_id}: {err}"))
+                        .unwrap_or_else(|_| {
+                            crew_protocol::Redacted::assert_runtime_authored(format!(
+                                "run {run_id}: follow-up delivery failed"
+                            ))
+                        });
                     let mut diagnostic = self
                         .db
                         .run_domain_op(Box::new(move |conn| {
@@ -2667,7 +2682,7 @@ impl OrchestrationService {
                                 run_id,
                                 crew_protocol::DiagnosticLevel::Warning,
                                 "follow_up_delivery_failed",
-                                format!("run {run_id}: {err}"),
+                                message,
                             )
                             .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
                         }))
