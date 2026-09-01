@@ -646,7 +646,31 @@ async fn run_lease_release(
     let project_id = paths.project_id;
     let run_id = info.run_id;
     let event_lease_id = lease_id.clone();
-    let cleanup_error = teardown_error.clone();
+    // `teardown_error` is git/filesystem error text (see the `map_err`
+    // calls above), never runtime-authored -- routed through the
+    // redactor before it can reach the journal, same as CREW-60's
+    // `PaneDowngraded.reason`. `sanitize_fragment` on a `Visible`
+    // fragment only returns `None` for `Thinking`/`Secret` classes, so
+    // this is unreachable here -- matching the three `redact_caller_text`
+    // call sites in orchestration.rs, this fails loud rather than
+    // silently journaling `CleanupFailed { error: "" }`: an empty string
+    // would collapse "the failure detail was redacted away" into "nothing
+    // is wrong", the exact distinction
+    // `worker_question_none_means_fully_redacted_not_empty` exists to
+    // keep apart.
+    let cleanup_error = match teardown_error.clone() {
+        Some(error) => match redactor.sanitize_fragment(&crew_protocol::Classified {
+            class: crew_protocol::ContentClass::Visible,
+            value: error,
+        }) {
+            Some(sanitized) => Some(crew_protocol::Redacted::from_sanitized(sanitized)),
+            None => {
+                let _ = db.shutdown().await;
+                return fail(&"a Visible fragment always sanitizes to Some");
+            }
+        },
+        None => None,
+    };
     let journaled = db
         .run_domain_op(Box::new(move |conn| {
             let mut repo = DomainRepository::new(conn, project_id);

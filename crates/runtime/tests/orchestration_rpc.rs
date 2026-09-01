@@ -5385,6 +5385,91 @@ async fn workspace_release_by_the_owning_instance_succeeds() {
     );
 }
 
+/// CREW-61: `WorkspaceEvent::CleanupFailed.error` used to carry raw
+/// teardown-failure text -- the same shape as the #88/CREW-60 leak
+/// (`PaneDowngraded.reason`), just for `git`/filesystem errors instead of
+/// a multiplexer's stderr. This drives a REAL `git worktree remove`
+/// failure (by corrupting the lease's stored path between acquire and
+/// release, so the removal target is not an actual registered worktree)
+/// whose stderr echoes the literal path back, and asserts the JOURNALED
+/// `error` has the secret-shaped substring in that path masked -- not
+/// just that the field's type claims sanitization occurred.
+#[tokio::test]
+async fn a_git_worktree_teardown_failures_secret_shaped_path_is_actually_redacted_before_journaling()
+ {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    init_real_git_repo(&harness.owned_dir);
+    let mut owner = omp_client(&harness, "omp-1").await;
+    let (_task_id, _worker_id, run_id) = submit_run_with_driver(&mut owner, "omp-1").await;
+
+    let acquire = owner
+        .call(
+            5,
+            "workspace/acquire",
+            json!({ "runId": run_id, "mode": "readOnly", "requestedIsolation": "gitWorktree" }),
+        )
+        .await;
+    assert!(
+        acquire.get("error").is_none(),
+        "acquiring a real gitWorktree lease failed: {acquire:?}"
+    );
+    let lease_id = acquire["result"]["leaseId"].as_str().unwrap().to_string();
+
+    // Corrupt the stored path to one that is never a registered worktree,
+    // with a secret-shaped substring git will echo back into its failure
+    // stderr ("fatal: '<path>' is not a working tree" or similar).
+    let lease_db = harness.socket.parent().unwrap().join("workspace-leases.db");
+    let bogus_path = harness
+        .owned_dir
+        .join("sk-ant-api03-thisisafaketokenthatlooksrealbutisnot")
+        .to_str()
+        .unwrap()
+        .to_string();
+    {
+        let conn = rusqlite::Connection::open(&lease_db).unwrap();
+        conn.execute(
+            "UPDATE workspace_leases SET path = ?1 WHERE lease_id = ?2",
+            rusqlite::params![bogus_path, lease_id],
+        )
+        .unwrap();
+    }
+
+    let release = owner
+        .call(6, "workspace/release", json!({ "leaseId": lease_id }))
+        .await;
+    assert!(
+        release.get("error").is_none(),
+        "release must still succeed; teardown failure is an operator problem, not a caller \
+         error: {release:?}"
+    );
+
+    let replay = owner
+        .call(7, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    let cleanup_failed = replay["result"]
+        .as_array()
+        .expect("events/replay returns an array")
+        .iter()
+        .map(|e| &e["event"])
+        .find(|e| {
+            e["type"] == "workspaceEvent"
+                && e["payload"]["runId"] == run_id
+                && e["payload"]["kind"]["type"] == "cleanupFailed"
+        })
+        .unwrap_or_else(|| panic!("cleanupFailed must be journaled: {replay:?}"));
+    let error = cleanup_failed["payload"]["kind"]["payload"]["error"]
+        .as_str()
+        .expect("error is a string");
+    assert!(
+        !error.contains("sk-ant-api03-"),
+        "the journaled cleanup error must never carry an unredacted API-key-shaped \
+         substring: {error:?}"
+    );
+}
+
 /// RED: `workspace_inspect` (`dispatch` calls
 /// `self.workspace_inspect(params).await` with no `principal`) never
 /// checks that the caller owns the lease's run. A second, unrelated

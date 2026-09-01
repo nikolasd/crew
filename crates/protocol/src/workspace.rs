@@ -4,6 +4,7 @@
 //! workspace lifecycle events that drive the durable journal and display
 //! subscriptions.
 
+use crate::event::Redacted;
 use crate::ids::{ArtifactId, ProjectId, RunId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -234,9 +235,14 @@ pub enum WorkspaceEvent {
         lease_id: String,
         run_id: RunId,
     },
+    // CREW-61: `error` is teardown-failure text -- `git`/filesystem error
+    // output, never runtime-authored -- and, like `PaneDowngraded.reason`
+    // (CREW-60/#88), routinely echoes back the very path it failed to
+    // remove. `Redacted` closes the same leak class for this field.
+    /// Why teardown failed, redacted.
     CleanupFailed {
         lease_id: String,
-        error: String,
+        error: Redacted,
     },
     /// An artifact was published for a workspace (inspect or apply produced one).
     ArtifactPublished {
