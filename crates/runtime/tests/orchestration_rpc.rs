@@ -3094,6 +3094,57 @@ async fn plan_proposes_secret_shaped_subtask_description_is_actually_redacted_be
     );
 }
 
+/// CREW-61: `taskText` (`plan_propose`'s other free-text input, stored
+/// verbatim in the `plans.task_text` column -- never returned over the
+/// wire by any RPC result, so this is an internal-storage sanitization
+/// change, not a protocol type change) crosses the same handler with no
+/// sanitization. Proves the STORED value has a secret-shaped substring
+/// masked, not just that the handler's other free-text field does.
+#[tokio::test]
+async fn plan_proposes_secret_shaped_task_text_is_actually_redacted_before_storage() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(FakeRunDriver));
+    })
+    .await;
+    let mut client = omp_client(&harness, "omp-1").await;
+    let (_task_id, _worker_id, run_id) = submit_run_with_driver(&mut client, "omp-1").await;
+
+    let plan = json!({
+        "subtasks": [ { "id": "s1", "description": "d", "adapter": "claude", "writes": false } ]
+    });
+    let propose = client
+        .call(
+            2,
+            "plan/propose",
+            json!({
+                "runId": run_id,
+                "ownerClientInstanceId": "omp-1",
+                "taskText": "build with sk-ant-api03-thisisafaketokenthatlooksrealbutisnot",
+                "plan": plan
+            }),
+        )
+        .await;
+    assert!(
+        propose.get("error").is_none(),
+        "plan/propose failed: {propose:?}"
+    );
+
+    let db_path = harness.socket.parent().unwrap().join("runtime.db");
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let task_text: String = conn
+        .query_row(
+            "SELECT task_text FROM plans WHERE run_id = ?1",
+            rusqlite::params![run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        !task_text.contains("sk-ant-api03-"),
+        "the stored task_text must never carry an unredacted API-key-shaped substring: \
+         {task_text:?}"
+    );
+}
+
 #[tokio::test]
 async fn plan_decide_approves_once_then_refuses_repeat() {
     let harness = Harness::start(|c| {

@@ -2846,7 +2846,11 @@ impl OrchestrationService {
                 principal.instance_id
             )));
         }
-        let task_text = str_field(params, "taskText")?;
+        // CREW-61: `task_text` is stored verbatim in `plans.task_text` --
+        // never returned over the wire (`PlanGetResult` has no such
+        // field), but still durable and exportable, so it crosses the
+        // same boundary as `description` below before it is stored.
+        let task_text = self.redact_caller_text(str_field(params, "taskText")?)?;
         let mut plan: PlanSpec = serde_json::from_value(
             params
                 .get("plan")
@@ -2869,7 +2873,7 @@ impl OrchestrationService {
             .db
             .run_domain_op(Box::new(move |conn| {
                 let mut repo = DomainRepository::new(conn, project_id);
-                repo.propose_plan(run_id, &owner, &task_text, &plan)
+                repo.propose_plan(run_id, &owner, task_text.as_str(), &plan)
                     .map(|c| {
                         embed_envelope(
                             json!({ "runId": run_id.to_string(), "sequence": c.sequence }),
