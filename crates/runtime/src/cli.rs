@@ -646,7 +646,19 @@ async fn run_lease_release(
     let project_id = paths.project_id;
     let run_id = info.run_id;
     let event_lease_id = lease_id.clone();
-    let cleanup_error = teardown_error.clone();
+    // `teardown_error` is git/filesystem error text (see the `map_err`
+    // calls above), never runtime-authored -- routed through the
+    // redactor before it can reach the journal, same as CREW-60's
+    // `PaneDowngraded.reason`.
+    let cleanup_error = teardown_error.clone().map(|error| {
+        redactor
+            .sanitize_fragment(&crew_protocol::Classified {
+                class: crew_protocol::ContentClass::Visible,
+                value: error,
+            })
+            .map(crew_protocol::Redacted::from_sanitized)
+            .unwrap_or_else(|| crew_protocol::Redacted::from_sanitized(String::new()))
+    });
     let journaled = db
         .run_domain_op(Box::new(move |conn| {
             let mut repo = DomainRepository::new(conn, project_id);

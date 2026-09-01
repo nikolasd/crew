@@ -1658,10 +1658,14 @@ impl OrchestrationService {
                 .await
             }
             AbandonOutcome::ReleasedWithCleanupFailure { message } => {
+                // `message` is teardown-failure text (git/filesystem
+                // error output), never runtime-authored -- same shape as
+                // CREW-60's `PaneDowngraded.reason` (CREW-61).
+                let error = self.redact_caller_text(message)?;
                 self.emit_workspace_event(
                     crew_protocol::WorkspaceEvent::CleanupFailed {
                         lease_id: lease.lease_id.clone(),
-                        error: message,
+                        error,
                     },
                     run_id,
                     lease.lease_id.clone(),
@@ -1678,10 +1682,11 @@ impl OrchestrationService {
                 .await
             }
             AbandonOutcome::ReleaseFailed { message } => {
+                let error = self.redact_caller_text(message)?;
                 self.emit_workspace_event(
                     crew_protocol::WorkspaceEvent::CleanupFailed {
                         lease_id: lease.lease_id.clone(),
-                        error: message,
+                        error,
                     },
                     run_id,
                     lease.lease_id.clone(),
@@ -1984,10 +1989,14 @@ impl OrchestrationService {
             let _ = self
                 .lease_service
                 .mark_cleanup_failed(request.lease_id.clone());
+            // `err.message` is teardown-failure text (git/filesystem
+            // error output), never runtime-authored -- same shape as
+            // CREW-60's `PaneDowngraded.reason` (CREW-61).
+            let error = self.redact_caller_text(err.message.clone())?;
             self.emit_workspace_event(
                 crew_protocol::WorkspaceEvent::CleanupFailed {
                     lease_id: request.lease_id.clone(),
-                    error: err.message.clone(),
+                    error,
                 },
                 lease.run_id,
                 request.lease_id.clone(),
