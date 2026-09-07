@@ -8,12 +8,20 @@
 import type { AgentToolResult, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
 import { CrewClient, JsonRpcRemoteError } from "../client";
+import type { Adapter, Catalogue } from "../models";
 
 /** Resolves the cached (or newly connected) runtime client for `cwd`. */
 export interface OrchestrationToolContext {
   getClient(extCtx: ExtensionContext): Promise<CrewClient>;
   /** Optional callback to report a run/submit failure to the monitor. */
   reportSubmitFailure?: (message: string) => void;
+  /**
+   * Reads omp's model catalogue (CREW-53). Optional, defaulting to the real
+   * `readCatalogue`: it exists as a seam so tests do not spawn `omp` as a
+   * subprocess, and so a future extension-facing model API can replace the
+   * shell-out in one place.
+   */
+  readModelCatalogue?: (adapter: Adapter) => Promise<Catalogue>;
 }
 
 /** The stable, structured shape of a mapped JSON-RPC tool error. */

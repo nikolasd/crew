@@ -4,10 +4,11 @@
 // `exec` -- it persists a new profile row the runtime will trust for every
 // future worker created against it.
 
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { homedir } from "node:os";
 
 import { CrewConfigError, persistConfiguredModel, resolveConfiguredModel } from "../crew-config";
+import { decideModel, isCataloguedAdapter, readCatalogue } from "../models";
 import type { OrchestrationToolContext } from "./shared";
 import { callOrchestration } from "./shared";
 
@@ -38,6 +39,25 @@ export function injectTuiMode(adapter: string, startupOptions: Record<string, un
   return { ...startupOptions, [adapter]: { ...existing, mode: "tui" } };
 }
 
+/**
+ * CREW-8's refusal, shaped once because CREW-53 gave it a second caller.
+ * `configuredModel` is the RAW text from `.omp/crew.json`: the correction
+ * path is to edit that file, so the error has to name what the reader will
+ * find in it, not the canonical id it resolves to.
+ */
+function modelConflictResult(adapter: string, configuredModel: string): AgentToolResult<unknown> {
+  return {
+    content: [
+      {
+        type: "text",
+        text: `model already configured as ${configuredModel} for adapter ${adapter} -- crew_profile never overwrites a stored model; edit the repository's .omp/crew.json directly to change it (/crew config path locates it).`,
+      },
+    ],
+    details: { code: "model-conflict", adapter, configuredModel },
+    isError: true,
+  };
+}
+
 export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
     adapter: pi.zod.string().describe("The adapter name this profile launches, e.g. claude, codex, copilot, ompRpc, terminalDegraded."),
@@ -45,7 +65,7 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
       .string()
       .optional()
       .describe(
-        "The model identifier this profile uses. Optional: if omitted and no model is already configured for this adapter (in .omp/crew.json), registration is refused with a typed 'model-not-configured' error -- ask the user which model to use, then call crew_profile again with it. The first time a model is given explicitly for an adapter with none configured, it is persisted into the repository's .omp/crew.json for future sessions to reuse silently. crew_profile never overwrites an already-recorded model, and never silently ignores an explicit value that conflicts with one: passing a *different* model than the one already configured is refused with a typed 'model-conflict' error naming the stored value -- correct it by editing the repository's .omp/crew.json directly (/crew config path locates it; /crew config has no set/edit subcommand), never by passing a new value here. Passing the same value as already configured is a no-op success.",
+        "The model identifier this profile uses. Optional: if omitted and no model is already configured for this adapter (in .omp/crew.json), registration is refused with a typed 'model-not-configured' error -- ask the user which model to use, then call crew_profile again with it. For claude, codex and copilot the value you pass is resolved before anything else happens, against omp's own model catalogue and the vendor's aliases: a vendor alias ('opus', 'haiku') and a name matching exactly one model ('sol' -> gpt-5.6-sol) both resolve to the canonical id, and the result is reported back to you. A name matching several models is refused with a typed 'model-ambiguous' error listing them -- name one of them exactly. A name omp's catalogue does not know is still used, but is reported as UNVERIFIED and is NOT recorded in .omp/crew.json: pass it again next session, or record it there yourself once a run has proven it. The first time a confirmed model is given explicitly for an adapter with none configured, its canonical id is persisted into the repository's .omp/crew.json for future sessions to reuse silently. crew_profile never overwrites an already-recorded model, and never silently ignores an explicit value that conflicts with one: passing a value naming a *different* model than the one already configured is refused with a typed 'model-conflict' error naming the stored value -- correct it by editing the repository's .omp/crew.json directly (/crew config path locates it; /crew config has no set/edit subcommand), never by passing a new value here. Passing a value naming the same model as the configured one is a no-op success, whichever of the two is the shorthand.",
       ),
     startupOptions: pi.zod
       .record(pi.zod.string(), pi.zod.unknown())
@@ -59,7 +79,7 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
     name: CREW_PROFILE_TOOL_NAME,
     label: "Crew Profile",
     description:
-      "Register a reusable worker profile (adapter, model, startup options, environment allowlist) before provisioning workers. Call this once per adapter/model combination, then pass the returned profileId to crew_worker { op: 'create', profileId }. model is optional -- if none is configured yet for this adapter, you'll get a typed error telling you to ask the user which model to use and call this again; that answer is remembered for future sessions. mode:'tui' is filled in automatically for reserved adapters when omitted. The profile-first flow (crew_profile → crew_worker → crew_run) replaces the legacy fingerprint/adapter/model pattern. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
+      "Register a reusable worker profile (adapter, model, startup options, environment allowlist) before provisioning workers. Call this once per adapter/model combination, then pass the returned profileId to crew_worker { op: 'create', profileId }. model is optional -- if none is configured yet for this adapter, you'll get a typed error telling you to ask the user which model to use and call this again; that answer is remembered for future sessions. For claude, codex and copilot, model names are resolved against omp's catalogue and the vendor's aliases, so a shorthand or a unique partial name is accepted and echoed back as the canonical id; a name the catalogue does not know still runs, but is flagged UNVERIFIED and is not remembered. mode:'tui' is filled in automatically for reserved adapters when omitted. The profile-first flow (crew_profile → crew_worker → crew_run) replaces the legacy fingerprint/adapter/model pattern. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
     parameters: params,
     approval: () => "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -85,31 +105,68 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
       // named, with the correction path spelled out; the *same* explicit
       // value as already stored is a no-op success (nothing to persist,
       // nothing to reject).
-      if (input.model !== undefined && configuredModel !== undefined && input.model !== configuredModel) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `model already configured as ${configuredModel} for adapter ${input.adapter} -- crew_profile never overwrites a stored model; edit the repository's .omp/crew.json directly to change it (/crew config path locates it).`,
-            },
-          ],
-          details: { code: "model-conflict", adapter: input.adapter, configuredModel },
-          isError: true,
-        };
-      }
+      //
+      // CREW-53 puts *resolution* in front of that comparison, for the
+      // adapters omp catalogues. `haiku` and a stored `claude-haiku-4-5` are
+      // one model, so comparing the spellings would refuse a correct call
+      // with an error telling the user to edit a file that is already right.
+      // `decideModel` owns the comparison and the ambiguity rule together --
+      // see its doc comment for why each ordering is load-bearing.
+      let model: string;
+      let note: string | undefined;
+      // Whether persistence is allowed to write this model down. Withholding
+      // it is only justified where a check was available and came back
+      // negative, which is why the non-catalogued path below leaves it true.
+      let mayPersist: boolean;
 
-      const model = input.model ?? configuredModel;
-      if (model === undefined) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `no model configured for adapter ${input.adapter} -- ask the user which model to use, then call crew_profile again with it; the answer will be persisted for future sessions.`,
-            },
-          ],
-          details: { code: "model-not-configured", adapter: input.adapter },
-          isError: true,
-        };
+      if (input.model !== undefined && isCataloguedAdapter(input.adapter)) {
+        const catalogue = await (ctx.readModelCatalogue ?? readCatalogue)(input.adapter);
+        const decision = decideModel(input.adapter, input.model, configuredModel, catalogue);
+        if (decision.kind === "conflict") {
+          return modelConflictResult(input.adapter, decision.configuredModel);
+        }
+        if (decision.kind === "ambiguous") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `"${decision.from}" matches ${decision.candidates.length} models for adapter ${input.adapter}: ${decision.candidates.join(", ")} -- name one of them exactly.`,
+              },
+            ],
+            details: { code: "model-ambiguous", adapter: input.adapter, requested: decision.from, candidates: decision.candidates },
+            isError: true,
+          };
+        }
+        model = decision.model;
+        note = decision.note;
+        mayPersist = decision.verified;
+      } else {
+        // No catalogue and no alias source for this adapter (`ompRpc`, or a
+        // caller-defined one), or no explicit model to resolve: behaviour
+        // here is exactly what it was before CREW-53.
+        if (input.model !== undefined && configuredModel !== undefined && input.model !== configuredModel) {
+          return modelConflictResult(input.adapter, configuredModel);
+        }
+        const chosen = input.model ?? configuredModel;
+        if (chosen === undefined) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `no model configured for adapter ${input.adapter} -- ask the user which model to use, then call crew_profile again with it; the answer will be persisted for future sessions.`,
+              },
+            ],
+            details: { code: "model-not-configured", adapter: input.adapter },
+            isError: true,
+          };
+        }
+        // A model taken from `.omp/crew.json` is used exactly as recorded. It
+        // is already the repository's answer, and re-resolving it could turn
+        // a stored value that has always worked into an ambiguity error on a
+        // call that passed no model at all.
+        model = chosen;
+        note = undefined;
+        mayPersist = true;
       }
 
       const client = await ctx.getClient(extCtx);
@@ -123,17 +180,41 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
         source: "omp",
       });
 
+      // CREW-53: a resolution is never silent. Whatever the input spelling
+      // was, the caller is told what it became -- or that nothing could
+      // confirm it.
+      if (result.isError !== true && note !== undefined) {
+        result.content.push({ type: "text", text: note });
+      }
+
       if (result.isError !== true && input.model !== undefined && configuredModel === undefined) {
-        // Registration is already durable by this point -- a failure to
-        // persist the model for next time (e.g. a malformed crew.json a
-        // concurrent process left mid-edit) must never surface as a
-        // failed crew_profile call; it's a missed convenience, not a
-        // failed registration. Warn, don't throw or flip isError.
-        try {
-          persistConfiguredModel(extCtx.cwd, input.adapter, input.model);
-        } catch (err) {
-          const message = err instanceof CrewConfigError ? err.message : err instanceof Error ? err.message : String(err);
-          result.content.push({ type: "text", text: `Warning: model was registered but not persisted for future sessions: ${message}` });
+        if (!mayPersist) {
+          // The failure CREW-53 exists for: an invented dated id became the
+          // repository's durable answer in `.omp/crew.json`. A name omp's
+          // catalogue does not know is exactly that value, so it may run
+          // this once and is not written down.
+          result.content.push({
+            type: "text",
+            text: `Not persisted to .omp/crew.json: nothing could confirm ${model} is a real model for adapter ${input.adapter}. Pass it again next session, or record it in .omp/crew.json yourself once a run has proven it.`,
+          });
+        } else {
+          // Registration is already durable by this point -- a failure to
+          // persist the model for next time (e.g. a malformed crew.json a
+          // concurrent process left mid-edit) must never surface as a
+          // failed crew_profile call; it's a missed convenience, not a
+          // failed registration. Warn, don't throw or flip isError.
+          //
+          // The *resolved* id is what gets persisted, not the spelling the
+          // caller typed: claude's config carries an `alias_migration` map,
+          // so the vendor anticipates renaming aliases, and a persisted
+          // alias is a durable value whose meaning can move underneath the
+          // repository.
+          try {
+            persistConfiguredModel(extCtx.cwd, input.adapter, model);
+          } catch (err) {
+            const message = err instanceof CrewConfigError ? err.message : err instanceof Error ? err.message : String(err);
+            result.content.push({ type: "text", text: `Warning: model was registered but not persisted for future sessions: ${message}` });
+          }
         }
       }
 
