@@ -8975,9 +8975,12 @@ a listener should act on; this is operator-facing detail only.`,
                   $ref: "#/$defs/WorkerId"
                 },
                 reason: {
+                  description: `Why the run was escalated, as a short machine-assigned code from
+a closed set -- never a worker's or a caller's own words.`,
                   type: "string"
                 },
                 question: {
+                  description: "The worker's own question, redacted, when the escalation carries\none; absent otherwise, in which case `reason` is the whole of\nwhat is known.",
                   anyOf: [
                     {
                       $ref: "#/$defs/Redacted"

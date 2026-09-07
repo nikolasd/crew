@@ -71,4 +71,15 @@ reason: Redacted, } } | { "type": "planProposed", "payload": { runId: RunId, tas
 /**
  * `null` when no rationale was given for the decision.
  */
-reason: Redacted | null, } } | { "type": "workerQuestion", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, question: Redacted | null, } } | { "type": "escalationRaised", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, reason: string, question: Redacted | null, } } | { "type": "escalationAnswered", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, answeredBy: AnsweredBy, answer: Redacted | null, } } | { "type": "budgetExceeded", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, turnsUsed: number, turnLimit: number, } } | { "type": "workerTimeout", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, kind: TimeoutKind, sinceMs: number, } };
+reason: Redacted | null, } } | { "type": "workerQuestion", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, question: Redacted | null, } } | { "type": "escalationRaised", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, 
+/**
+ * Why the run was escalated, as a short machine-assigned code from
+ * a closed set -- never a worker's or a caller's own words.
+ */
+reason: string, 
+/**
+ * The worker's own question, redacted, when the escalation carries
+ * one; absent otherwise, in which case `reason` is the whole of
+ * what is known.
+ */
+question: Redacted | null, } } | { "type": "escalationAnswered", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, answeredBy: AnsweredBy, answer: Redacted | null, } } | { "type": "budgetExceeded", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, turnsUsed: number, turnLimit: number, } } | { "type": "workerTimeout", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, kind: TimeoutKind, sinceMs: number, } };
