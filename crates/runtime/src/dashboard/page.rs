@@ -262,6 +262,18 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
     // transient blip the browser will fix. EventSource keeps retrying
     // either way; only the label changes.
     let failures = 0;
+    // CREW-56: a fresh connect (first load, or EventSource's own silent
+    // reconnect) now replays the whole journal as a burst of ordinary
+    // `data:` frames before any live one. Re-fetching `/api/state` per
+    // message -- fine for one live event at a time -- would fire one
+    // fetch per historical row. Debounced to one settled re-fetch once
+    // the burst quiets down; see the module doc's note on why this file
+    // debounces rather than reduces.
+    let refreshTimer = null;
+    const scheduleRefresh = () => {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(refresh, 150);
+    };
     source.onopen = () => {
       failures = 0;
       live.textContent = "live";
@@ -271,28 +283,61 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
     source.onerror = () => {
       failures += 1;
       live.classList.remove("on");
-      if (failures < 3) {
-        live.textContent = "reconnecting…";
-        live.title = "the event stream dropped; retrying";
-      } else {
-        live.textContent = "daemon not running";
-        live.title =
-          "the daemon is not reachable. It exits when idle, and an open dashboard does not keep it alive. " +
-          "Start work in the repository (or run crewd serve) and reload.";
-      }
+      live.textContent = "reconnecting…";
+      live.title = "the event stream dropped; retrying";
+      // CREW-54: a bare `error` event cannot say WHY the connection
+      // dropped -- network blip, a genuinely dead daemon, or (the case
+      // that made the "daemon not running" label actively wrong) a
+      // daemon that restarted and is very much running, but issued a new
+      // per-run token, so this page's cookie is now permanently rejected
+      // and EventSource's own retries can never succeed again on their
+      // own. fetch() can read the real status; probe it to tell those
+      // apart. `attempt` freezes this failure streak's identity so a
+      // late-arriving probe can never overwrite a state a LATER
+      // onopen/onerror already produced.
+      const attempt = failures;
+      fetch("/api/state", { cache: "no-store" })
+        .then(response => {
+          if (failures !== attempt) return;
+          if (response.status === 401) {
+            live.textContent = "dashboard link expired";
+            live.title =
+              "this dashboard's token is no longer valid -- the daemon behind it restarted " +
+              "since this link was issued. Get a fresh link (crewd status) and reload.";
+          } else if (attempt >= 3) {
+            live.textContent = "daemon not running";
+            live.title =
+              "the daemon is not reachable. It exits when idle, and an open dashboard does not keep it alive. " +
+              "Start work in the repository (or run crewd serve) and reload.";
+          }
+        })
+        .catch(() => {
+          if (failures === attempt && attempt >= 3) {
+            live.textContent = "daemon not running";
+            live.title =
+              "the daemon is not reachable. It exits when idle, and an open dashboard does not keep it alive. " +
+              "Start work in the repository (or run crewd serve) and reload.";
+          }
+        });
     };
     source.onmessage = message => {
       let label = "event";
+      // The envelope's own timestamp, not wall-clock "now": a replayed
+      // row (CREW-56) can be arbitrarily old, and stamping it with the
+      // moment the browser happened to receive it would misreport
+      // exactly what this fix exists to get right.
+      let when = new Date();
       try {
         const envelope = JSON.parse(message.data);
+        if (envelope.timestamp) when = new Date(envelope.timestamp);
         const kind = envelope.event?.type || envelope.event?.kind || Object.keys(envelope.event || {})[0] || "event";
         label = `#${envelope.sequence} ${kind}` + (envelope.runId ? ` · run ${short(envelope.runId)}` : "");
       } catch { /* render the placeholder label */ }
       const row = document.createElement("div");
-      row.textContent = `${new Date().toLocaleTimeString()} ${label}`;
+      row.textContent = `${when.toLocaleTimeString()} ${label}`;
       feed.prepend(row);
       while (feed.childElementCount > 200) feed.lastElementChild.remove();
-      refresh();
+      scheduleRefresh();
     };
   }
 

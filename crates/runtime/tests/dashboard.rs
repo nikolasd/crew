@@ -595,6 +595,42 @@ async fn index_serves_the_html_page() {
     harness.server.stop();
 }
 
+/// CREW-56 (client half): the feed's displayed clock must be the
+/// envelope's own `timestamp`, not the moment the browser happened to
+/// receive it -- a replayed row can be arbitrarily old, and stamping it
+/// "now" would misreport exactly what replaying the journal exists to
+/// get right. No JS runtime exercises this page in CI (see the BRAND
+/// compliance tests above for the same limitation), so this pins the
+/// source fact directly, the same way those do.
+#[test]
+fn the_feed_clock_reads_the_envelopes_own_timestamp_not_wall_clock() {
+    let page = crew_runtime::dashboard::PAGE_HTML;
+    assert!(
+        page.contains("new Date(envelope.timestamp)"),
+        "the feed row's clock must come from the envelope, not `new Date()` alone"
+    );
+}
+
+/// CREW-54: a stale dashboard token (the daemon restarted since this
+/// page's link was issued) makes every `EventSource` reconnect fail
+/// forever with 401 -- a condition `onerror`'s bare event cannot see, and
+/// the pre-fix code's only failure message ("daemon not running") is
+/// actively false in exactly this case, since the daemon is running.
+/// Pins that the client distinguishes it via a real status probe, rather
+/// than only ever reporting the generic message.
+#[test]
+fn the_client_distinguishes_an_expired_token_from_an_unreachable_daemon() {
+    let page = crew_runtime::dashboard::PAGE_HTML;
+    assert!(
+        page.contains("response.status === 401"),
+        "onerror must probe for the specific case a bare error event cannot see"
+    );
+    assert!(
+        page.contains("dashboard link expired"),
+        "the 401 case needs its own honest message, distinct from \"daemon not running\""
+    );
+}
+
 #[tokio::test]
 async fn non_get_methods_are_rejected_with_405() {
     let harness = start_dashboard().await;
@@ -793,6 +829,81 @@ async fn sse_stream_receives_a_broadcast_envelope() {
         serde_json::from_str(data_line.trim_start_matches("data:").trim()).unwrap();
     assert_eq!(payload["sequence"], 42);
     assert_eq!(payload["runId"].as_str(), Some(run_id.to_string().as_str()));
+
+    harness.server.stop();
+}
+
+/// CREW-56: the maintainer's own words on the reproduced symptom --
+/// "starts empty, shows something, empty again, then other events -- I
+/// really don't understand what I am seeing." Root cause: `serve_sse`
+/// subscribed to the live broadcast with no journal replay, so a viewer
+/// connecting after events already happened saw nothing until the NEXT
+/// live mutation. This seeds real, already-committed events through the
+/// real `DomainRepository` (mirroring `seed_run`/how every other event
+/// reaches the journal), connects fresh with NOTHING sent on the live
+/// broadcast, and asserts the connection sees them anyway.
+#[tokio::test]
+async fn sse_stream_replays_already_committed_events_on_a_fresh_connect() {
+    let harness = start_dashboard().await;
+    let run_id = seed_run(&harness.db, harness.project_id).await;
+
+    let mut stream = TcpStream::connect(harness.server.local_addr())
+        .await
+        .unwrap();
+    stream
+        .write_all(
+            format!(
+                "GET /events HTTP/1.1\r\nHost: localhost\r\n{}\r\n",
+                authed(harness.server.token())
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut reader = BufReader::new(stream);
+
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    assert!(line.starts_with("HTTP/1.1 200"), "{line}");
+    loop {
+        line.clear();
+        reader.read_line(&mut line).await.unwrap();
+        if line == "\r\n" {
+            break;
+        }
+    }
+
+    // NOTHING is sent on the live broadcast -- every frame below must come
+    // from the journal replay alone.
+    let replayed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut seen_run_id = false;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            if !line.starts_with("data:") {
+                continue;
+            }
+            let payload: serde_json::Value =
+                serde_json::from_str(line.trim_start_matches("data:").trim()).unwrap();
+            if payload["runId"].as_str() == Some(run_id.to_string().as_str()) {
+                seen_run_id = true;
+            }
+            // `submit_run` (inside `seed_run`) journals a `runQueued`
+            // event last; its arrival is the signal the whole seeded
+            // history has been replayed.
+            if payload["event"]["type"] == "runEvent"
+                && payload["event"]["payload"]["kind"] == "runQueued"
+            {
+                return seen_run_id;
+            }
+        }
+    })
+    .await
+    .expect("the seeded run's events must replay without any live broadcast send");
+    assert!(
+        replayed,
+        "the replayed runQueued event must carry the seeded run's id"
+    );
 
     harness.server.stop();
 }
