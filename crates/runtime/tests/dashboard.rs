@@ -629,6 +629,23 @@ fn the_client_distinguishes_an_expired_token_from_an_unreachable_daemon() {
         page.contains("dashboard link expired"),
         "the 401 case needs its own honest message, distinct from \"daemon not running\""
     );
+    assert!(
+        page.contains("/crew health"),
+        "the expired-link message must name how to actually get a fresh one"
+    );
+}
+
+/// CREW-56 review: `serve_sse` subscribes to the live broadcast before
+/// querying the replay snapshot (never a silent gap, at the cost of a
+/// possible duplicate frame for an event straddling the two). The client
+/// must not draw that duplicate twice.
+#[test]
+fn the_feed_deduplicates_replayed_events_that_also_arrive_live() {
+    let page = crew_runtime::dashboard::PAGE_HTML;
+    assert!(
+        page.contains("seenSequences"),
+        "onmessage must track rendered sequences to skip a replay/live duplicate"
+    );
 }
 
 #[tokio::test]

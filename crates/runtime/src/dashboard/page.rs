@@ -274,6 +274,13 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
       clearTimeout(refreshTimer);
       refreshTimer = setTimeout(refresh, 150);
     };
+    // CREW-56: `serve_sse` subscribes to the live broadcast BEFORE
+    // querying the replay snapshot, so a mutation landing in that window
+    // can arrive twice -- once in the replay array, once live. Sequence
+    // numbers are unique and monotonic; a row already rendered is skipped
+    // rather than drawn again. Unbounded only in principle: a real
+    // session's duplicate count is the width of one query, never more.
+    const seenSequences = new Set();
     source.onopen = () => {
       failures = 0;
       live.textContent = "live";
@@ -303,7 +310,7 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
             live.textContent = "dashboard link expired";
             live.title =
               "this dashboard's token is no longer valid -- the daemon behind it restarted " +
-              "since this link was issued. Get a fresh link (crewd status) and reload.";
+              "since this link was issued. Run /crew health to get a fresh link, then reload.";
           } else if (attempt >= 3) {
             live.textContent = "daemon not running";
             live.title =
@@ -329,6 +336,10 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
       let when = new Date();
       try {
         const envelope = JSON.parse(message.data);
+        if (envelope.sequence !== undefined) {
+          if (seenSequences.has(envelope.sequence)) return;
+          seenSequences.add(envelope.sequence);
+        }
         if (envelope.timestamp) when = new Date(envelope.timestamp);
         const kind = envelope.event?.type || envelope.event?.kind || Object.keys(envelope.event || {})[0] || "event";
         label = `#${envelope.sequence} ${kind}` + (envelope.runId ? ` · run ${short(envelope.runId)}` : "");
