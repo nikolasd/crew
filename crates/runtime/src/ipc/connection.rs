@@ -975,17 +975,36 @@ mod tests {
     // ------------------------------------------- CREW-66: instanceId bounds
 
     /// Every `instance_id` value this codebase is actually known to send.
-    /// Not invented shapes: an omp session UUID read out of a real
-    /// `runtime.db`, the extension's own fallback when `getSessionId()`
-    /// returns nothing, the runtime's coordination MCP client, and the
-    /// literals the integration tests hand the handshake. The bound has to
-    /// admit all of them or it breaks a working client, which is the way a
-    /// validation change does real damage.
+    /// The bound has to admit all of them or it breaks a working client,
+    /// which is the way a validation change does real damage.
+    ///
+    /// **How to extend this list, because the obvious way is wrong.** The
+    /// first version of it was assembled by grepping for `ClientAuth`
+    /// variant constructions, and it missed four values -- every caller
+    /// that builds the handshake as a JSON literal rather than through the
+    /// type. `crewd`'s own status probe and monitor client are both in
+    /// that category (`lifecycle.rs`), and both are production senders, not
+    /// tests. **Search the wire key** -- `grep -rn '"instanceId"'` over
+    /// `crates/` and `packages/extension/src/` -- not the Rust type.
+    /// Searching for the type finds only the callers that happen to use
+    /// it.
     const KNOWN_REAL_INSTANCE_IDS: &[&str] = &[
+        // A real omp session UUID, read out of an actual `runtime.db`
+        // rather than invented.
         "01a04d83-09c4-75b2-b77e-2be2ef4d1b23",
+        // The extension's fallback when `getSessionId()` returns nothing.
         "crew-extension",
+        // The runtime's own clients: coordination MCP, and `crewd`'s
+        // status probe and monitor, both built as JSON literals.
         "coordination-mcp",
+        "crewd-status",
+        "crewd-monitor",
+        // Literals the integration tests hand the handshake. They are as
+        // load-bearing as the rest: rejecting one breaks the suite, which
+        // is how a too-tight bound would first be noticed.
         "omp-1",
+        "display-1",
+        "worker-1",
         "test-session-id-12345",
     ];
 
