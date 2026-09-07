@@ -1076,6 +1076,50 @@ async fn omp_agent_directory_must_be_absolute_existing_and_owned() {
     );
 }
 
+/// CREW-66: `instanceId` lands verbatim in `tasks.owner_client_instance_id`,
+/// `plans.owner_client_instance_id` and `policy_violations.resolved_by` --
+/// durable TEXT columns that no redactor inspects -- so the handshake must
+/// bound it. The unit tests in `ipc::connection` prove the validator
+/// works; this proves `authenticate` actually CALLS it, which is the part
+/// a validator sitting unwired would still pass.
+#[tokio::test]
+async fn a_handshake_whose_instance_id_could_smuggle_a_payload_is_rejected() {
+    let harness = Harness::start(|c| c.credential_reader = matching_reader()).await;
+    let agent_dir = harness.owned_dir.to_str().unwrap().to_string();
+
+    for bad in [
+        "has space",
+        "two\nlines",
+        "c2VjcmV0Cg==",
+        "id;DROP TABLE tasks",
+        "",
+    ] {
+        let mut client = Client::connect(&harness.socket).await;
+        let mut init = omp_init(&agent_dir, 1024 * 1024, (1, 0), (1, 0));
+        init["params"]["auth"]["instanceId"] = json!(bad);
+        client.send(&init).await;
+        assert_eq!(
+            client.recv().await.unwrap()["error"]["code"],
+            error_code::INVALID_PARAMS,
+            "an instanceId of {bad:?} must be refused at the handshake"
+        );
+    }
+
+    // The positive control: the same handshake, with the same agent
+    // directory, differing only in a well-formed instanceId. Without this
+    // the loop above cannot distinguish "the validator rejected it" from
+    // "this fixture never handshakes successfully at all".
+    let mut good = Client::connect(&harness.socket).await;
+    let mut init = omp_init(&agent_dir, 1024 * 1024, (1, 0), (1, 0));
+    init["params"]["auth"]["instanceId"] = json!("01a04d83-09c4-75b2-b77e-2be2ef4d1b23");
+    good.send(&init).await;
+    let response = good.recv().await.unwrap();
+    assert!(
+        response.get("error").is_none(),
+        "a real omp session UUID must still handshake: {response}"
+    );
+}
+
 #[tokio::test]
 async fn strict_role_variant_rejects_cross_role_fields() {
     let harness = Harness::start(|c| c.credential_reader = matching_reader()).await;

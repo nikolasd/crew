@@ -1029,7 +1029,13 @@ pub enum RuntimeEvent {
         run_id: RunId,
         task_id: TaskId,
         worker_id: WorkerId,
+        /// Why the run was escalated, as a short machine-assigned code from
+        /// a closed set -- never a worker's or a caller's own words.
         reason: String,
+        /// The worker's own question, redacted. Absent when the escalation
+        /// was raised from a condition the runtime detected rather than
+        /// from a worker asking something, in which case `reason` is the
+        /// whole of what is known.
         question: Option<Redacted>,
     },
     /// An escalation was answered by the leader or a human user.
@@ -1423,7 +1429,15 @@ mod redaction_enumeration {
         ),
         (
             "RuntimeEvent::TaskEvent.owner_client_instance_id",
-            "An OMP-assigned client instance id.",
+            "Bounded at the handshake -- non-empty, at most 128 bytes, and only \
+             `[A-Za-z0-9._-]` (`validate_instance_id`, \
+             crates/runtime/src/ipc/connection.rs), so it cannot carry whitespace, \
+             control characters or base64 into the durable columns it reaches \
+             unredacted (`tasks.owner_client_instance_id`, \
+             `plans.owner_client_instance_id`, `policy_violations.resolved_by`). \
+             CREW-66: it previously said only \"an OMP-assigned client instance id\", \
+             which described the one client that existed rather than any constraint \
+             on the field.",
         ),
         (
             "RuntimeEvent::WorkerEvent.profile_id",
@@ -1443,11 +1457,27 @@ mod redaction_enumeration {
         ),
         (
             "RuntimeEvent::ReconcileEvent.old_owner_client_instance_id",
-            "An OMP-assigned client instance id.",
+            "Bounded at the handshake -- non-empty, at most 128 bytes, and only \
+             `[A-Za-z0-9._-]` (`validate_instance_id`, \
+             crates/runtime/src/ipc/connection.rs), so it cannot carry whitespace, \
+             control characters or base64 into the durable columns it reaches \
+             unredacted (`tasks.owner_client_instance_id`, \
+             `plans.owner_client_instance_id`, `policy_violations.resolved_by`). \
+             CREW-66: it previously said only \"an OMP-assigned client instance id\", \
+             which described the one client that existed rather than any constraint \
+             on the field.",
         ),
         (
             "RuntimeEvent::ReconcileEvent.new_owner_client_instance_id",
-            "An OMP-assigned client instance id.",
+            "Bounded at the handshake -- non-empty, at most 128 bytes, and only \
+             `[A-Za-z0-9._-]` (`validate_instance_id`, \
+             crates/runtime/src/ipc/connection.rs), so it cannot carry whitespace, \
+             control characters or base64 into the durable columns it reaches \
+             unredacted (`tasks.owner_client_instance_id`, \
+             `plans.owner_client_instance_id`, `policy_violations.resolved_by`). \
+             CREW-66: it previously said only \"an OMP-assigned client instance id\", \
+             which described the one client that existed rather than any constraint \
+             on the field.",
         ),
         (
             "RuntimeEvent::AdapterProcessEvent.signal",
@@ -1499,7 +1529,15 @@ mod redaction_enumeration {
         ),
         (
             "RuntimeEvent::EscalationRaised.reason",
-            "A plain, machine-assigned code, never raw worker content -- as the field's own doc states; the worker's text travels in the sibling `question: Option<Redacted>`.",
+            "A machine-assigned code from a closed set, chosen by the runtime and never \
+             caller- or vendor-derived: the only two production construction sites pass \
+             the literals `repeated_failure` \
+             (crates/runtime/src/adapter/run_lifecycle.rs) and `write_violation` \
+             (crates/runtime/src/domain/repository.rs). CREW-66: this reason previously \
+             offered two supports and neither existed -- it cited \"the field's own doc\", \
+             which had no doc, and said the worker's text travels in the sibling \
+             `question`, which no production site populates. What actually secures the \
+             field is the literals above.",
         ),
         (
             "RuntimeEventKind::PolicyViolation.profile_id",

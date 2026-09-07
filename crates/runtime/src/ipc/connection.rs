@@ -270,6 +270,25 @@ fn authenticate(
     ctx: &ConnContext,
     shared: &Arc<Shared>,
 ) -> Result<ClientPrincipal, String> {
+    // CREW-66: every role carries an `instance_id`, and until now none
+    // validated it -- while the sibling field three lines below has had
+    // `validate_agent_directory` all along. It is not a decorative id:
+    // it lands verbatim in `tasks.owner_client_instance_id`,
+    // `plans.owner_client_instance_id` and `policy_violations.resolved_by`,
+    // all durable TEXT columns, and it never crosses the redactor. So it
+    // was caller-supplied text of unbounded length and content wearing an
+    // identifier's name.
+    //
+    // Bound once, here, before any role-specific check: the or-pattern
+    // binds `instance_id` from all three variants, so a fourth variant
+    // cannot be added without this line being confronted.
+    let instance_id = match auth {
+        ClientAuth::OmpExtension { instance_id, .. }
+        | ClientAuth::Display { instance_id }
+        | ClientAuth::WorkerMcp { instance_id, .. } => instance_id,
+    };
+    validate_instance_id(instance_id)?;
+
     match auth {
         ClientAuth::OmpExtension {
             instance_id,
@@ -326,6 +345,51 @@ fn validate_agent_directory(dir: &str, euid: u32) -> Result<(), String> {
         return Err(format!(
             "agentDirectory {dir:?} is owned by uid {}, not the current uid {euid}",
             metadata.uid()
+        ));
+    }
+    Ok(())
+}
+
+/// The longest `instance_id` accepted. Every real value observed is well
+/// inside it -- an omp session UUID is 36 characters -- so this is a
+/// bound, not a format: it exists to stop unbounded caller text reaching a
+/// durable column, not to dictate what an id looks like.
+const INSTANCE_ID_MAX_LEN: usize = 128;
+
+/// Any role's `instance_id` must be a short, non-empty run of
+/// `[A-Za-z0-9._-]`.
+///
+/// **Deliberately a bound and not a format.** The values that legitimately
+/// arrive here have no single shape: omp sends a session UUID
+/// (`01a04d83-09c4-75b2-b77e-2be2ef4d1b23`), the extension falls back to
+/// the literal `crew-extension` when `getSessionId()` returns nothing
+/// (`packages/extension/src/runtime.ts`), and the runtime's own
+/// coordination MCP client announces `coordination-mcp`. `getSessionId(): string`
+/// carries no documented format, so requiring one would reject a
+/// legitimate client the first time omp changed its id scheme.
+///
+/// What the charset does buy is worth stating, because it is the reason
+/// this is a security fix and not tidiness: excluding whitespace and
+/// control characters means an id cannot carry a multi-line payload into a
+/// durable column, and excluding `/`, `+` and `=` means it cannot carry
+/// base64 -- so a credential cannot be smuggled through a field that
+/// bypasses the redactor by being called an identifier.
+fn validate_instance_id(instance_id: &str) -> Result<(), String> {
+    if instance_id.is_empty() {
+        return Err("instanceId must not be empty".to_string());
+    }
+    if instance_id.len() > INSTANCE_ID_MAX_LEN {
+        return Err(format!(
+            "instanceId is {} bytes, over the {INSTANCE_ID_MAX_LEN}-byte limit",
+            instance_id.len()
+        ));
+    }
+    if let Some(bad) = instance_id
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
+    {
+        return Err(format!(
+            "instanceId contains {bad:?}, which is not allowed --              only ASCII letters, digits, '.', '_' and '-'"
         ));
     }
     Ok(())
@@ -906,6 +970,80 @@ mod tests {
             event: RuntimeEvent::RuntimeStarted,
             vendor_event_ref: None,
         }
+    }
+
+    // ------------------------------------------- CREW-66: instanceId bounds
+
+    /// Every `instance_id` value this codebase is actually known to send.
+    /// Not invented shapes: an omp session UUID read out of a real
+    /// `runtime.db`, the extension's own fallback when `getSessionId()`
+    /// returns nothing, the runtime's coordination MCP client, and the
+    /// literals the integration tests hand the handshake. The bound has to
+    /// admit all of them or it breaks a working client, which is the way a
+    /// validation change does real damage.
+    const KNOWN_REAL_INSTANCE_IDS: &[&str] = &[
+        "01a04d83-09c4-75b2-b77e-2be2ef4d1b23",
+        "crew-extension",
+        "coordination-mcp",
+        "omp-1",
+        "test-session-id-12345",
+    ];
+
+    #[test]
+    fn every_instance_id_this_codebase_actually_sends_is_accepted() {
+        for id in KNOWN_REAL_INSTANCE_IDS {
+            assert!(
+                validate_instance_id(id).is_ok(),
+                "a real client's instanceId must not be rejected: {id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_instance_id_is_rejected() {
+        assert!(validate_instance_id("").is_err());
+    }
+
+    #[test]
+    fn an_over_long_instance_id_is_rejected_and_the_limit_is_named() {
+        let long = "a".repeat(INSTANCE_ID_MAX_LEN + 1);
+        let err = validate_instance_id(&long).expect_err("over the limit must be rejected");
+        assert!(err.contains(&INSTANCE_ID_MAX_LEN.to_string()), "{err}");
+        // The boundary itself is accepted -- an off-by-one here would
+        // reject a legitimate id of exactly the documented length.
+        assert!(validate_instance_id(&"a".repeat(INSTANCE_ID_MAX_LEN)).is_ok());
+    }
+
+    /// The point of the charset, field by field. Each of these would
+    /// otherwise reach a durable TEXT column that no redactor inspects.
+    #[test]
+    fn an_instance_id_cannot_smuggle_a_payload_into_a_durable_column() {
+        for (id, what) in [
+            ("has space", "whitespace"),
+            ("two\nlines", "a newline, i.e. a multi-line payload"),
+            ("with\ttab", "a tab"),
+            ("null\0byte", "a NUL"),
+            ("c2VjcmV0Cg==", "base64 padding"),
+            ("a/b+c", "base64 body characters"),
+            ("Bearer:abc", "a credential-shaped colon form"),
+            ("../../etc/passwd", "path traversal"),
+            ("id;DROP TABLE tasks", "SQL punctuation"),
+            ("ünïcode", "non-ASCII"),
+        ] {
+            assert!(
+                validate_instance_id(id).is_err(),
+                "an instanceId carrying {what} must be rejected: {id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_rejection_names_the_offending_character() {
+        let err = validate_instance_id("a b").expect_err("space is rejected");
+        assert!(
+            err.contains('\'') || err.contains("' '"),
+            "the error must name what it objected to, so a client can fix it: {err}"
+        );
     }
 
     #[tokio::test]
