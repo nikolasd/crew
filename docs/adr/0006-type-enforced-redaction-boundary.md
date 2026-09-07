@@ -78,3 +78,11 @@ raw-string append API to reach for instead.
 
 * Narrated in `../journal.md`, commit `8cd8ad8`
 * Proven by `crates/runtime/tests/redaction_boundary.rs`
+* CREW-61 (2026-09-01) added a compile-time guard for one specific gap this ADR's original scope
+  didn't name explicitly: every `String`-typed field reachable from `RuntimeEvent` must be either
+  `Redacted` or explicitly allowlisted with a stated reason
+  (`crates/protocol/src/event.rs::every_reachable_string_field_is_redacted_or_allowlisted`).
+* [`docs/security/redacted-field-inventory-2026-09-07.md`](../security/redacted-field-inventory-2026-09-07.md)
+  is a point-in-time audit (CREW-64) of the gap that guard cannot close on its own: a field typed
+  `Redacted` states which boundary a value must cross, not that it did. Read it for when this
+  boundary's actual construction sites were last swept, not as a current index.
