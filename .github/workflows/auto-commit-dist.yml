@@ -4,7 +4,12 @@ on:
   pull_request:
     paths:
       - 'packages/extension/src/**'
+      - 'packages/extension/package.json'
       - 'packages/protocol-ts/**'
+      - 'bun.lock'
+      - 'bunfig.toml'
+      - 'package.json'
+      - 'tsconfig.json'
       - '.github/workflows/auto-commit-dist.yml'
 
 concurrency:
