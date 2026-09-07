@@ -587,7 +587,7 @@ verified descendant of the same live vendor process may reconnect).
 
 ### 4f. TUI pane attach + out-of-band input (journal check needs no model call)
 
-All four adapters (claude, codex, copilot, omp-rpc) default to **TUI mode**: each worker runs as the real vendor CLI spawned on a PTY inside a pane owned by a display backend (herdr / tmux / terminal). A viewer (or the harness) can type into that pane. Every burst of keystrokes written to a pane is journaled as a `RuntimeEvent::OutOfBandInput { backend, pane_ref }` — the keystrokes themselves are never recorded, only that input happened and on which pane — and the run's `needsReconciliation` flag is set. This is the redaction-boundary guarantee for interactive control: a human steering a live run leaves an auditable trace without leaking typed content.
+All four adapters (claude, codex, copilot, omp-rpc) default to **TUI mode**: each worker runs as the real vendor CLI spawned on a PTY inside a pane owned by a display backend (herdr / tmux / terminal). A viewer (or the harness) can type into that pane. Every burst of keystrokes written to a pane is journaled as a `RuntimeEvent::OutOfBandInput { backend, pane_ref }` (Rust type notation; see below for wire format) — the keystrokes themselves are never recorded, only that input happened and on which pane — and the run's `needsReconciliation` flag is set. This is the redaction-boundary guarantee for interactive control: a human steering a live run leaves an auditable trace without leaking typed content.
 
 Manual check (observing the journal needs no model call; only *starting* the run does):
 
@@ -604,7 +604,7 @@ crewd monitor --repo "$PWD" --state-dir "$HOME/.omp/crew" | grep -i OutOfBandInp
 ```
 
 Attach to the run's pane via the active display backend (e.g. `tmux attach -t <pane-ref>` for tmux, or the herdr/terminal viewer), type a few characters, and confirm:
-- Terminal B shows one `OutOfBandInput` event per pane-write burst, carrying only `backend` + `pane_ref` — **no keystroke text**.
+- Terminal B shows one `outOfBandInput` event per pane-write burst, carrying only `backend` + `paneRef` — **no keystroke text**.
 - The run's `needsReconciliation` flips true (visible via `/crew` after a `crew_reconcile`, or `crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl` and grep for the flag).
 
 **Attach-socket liveness (CREWATTACH1):** when testing `/crew reopen` or pane persistence, the
@@ -644,6 +644,23 @@ Observed per-vendor outcomes (this release):
   `/tmp` to `/private/tmp` the way claude does). A rollout/session file containing your prompt
   but no assistant reply means billing, not the adapter.
 - `session_resume` — **skipped**: a single-process resume is not a daemon restart; genuine restart recovery is proven by the separate serve→stop→serve end-to-end smoke, not this report.
+
+#### 4f.2 Pane creation failures and downgrading (no model call needed)
+
+When a requested display backend or placement is not available, the runtime attempts to downgrade to the `hidden` backend instead of failing the run. This downgrade is journaled as a `paneDowngraded` event (note camelCase in the wire format) carrying:
+- `requestedBackend` and `requestedPlacement`: what the run asked for
+- `actualBackend`: the backend that was used instead (always `hidden` on downgrade)
+- `reason`: a redacted error message explaining why creation failed
+
+To observe this behavior, attempt to attach a run with a backend/placement combination the current environment doesn't support (e.g., request `Workspace` placement on tmux, or run in an environment with no active display server). The run should proceed with `hidden` backend, and the journal should contain one `paneDowngraded` event.
+
+Verify via `crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl` and grep for `paneDowngraded`:
+
+```bash
+grep paneDowngraded /tmp/audit.jsonl
+```
+
+**What this verifies:** display backend selection is resilient — when a pane cannot be created at the requested backend, the runtime logs the failure and falls back gracefully instead of failing the run.
 
 ## 5. Cross-agent workspace isolation (requires a real adapter)
 
@@ -830,6 +847,22 @@ turn ends. Every message kind delivers down this path; the one exception is `ste
 the adapter's interrupt-then-compose capability and is **refused with `capability_unsupported`**
 on adapters without it — a typed refusal there is correct behavior, not a finding
 (`crates/runtime/src/adapter/registry.rs`).
+
+When the run resumes (either from an explicit follow-up message or from a genuine user-authored
+turn in the vendor's transcript), a `runResumed` event is journaled with a `cause` field
+distinguishing the two paths (note camelCase in wire format):
+- `cause: "followUpMessage"` — the leader sent an explicit follow-up via `crew_message`
+- `cause: "realUserTurn"` — the vendor's transcript contained a genuine new user-authored entry
+  (type `"user"`, not a sidechain), not bookkeeping or metadata
+
+Verify the event appears in the audit export:
+```bash
+crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl && grep runResumed /tmp/audit.jsonl
+```
+
+Expect one `runResumed` entry with the appropriate `cause`. This event documents what triggered
+resumption, so consumers (dashboards, tools, audit trails) can distinguish between user-directed
+follow-ups and resumptions triggered by new transcript content.
 
 ### 7c. A subagent's turn never settles the parent (isSidechain)
 
