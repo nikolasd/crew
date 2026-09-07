@@ -564,7 +564,7 @@ pub enum RuntimeEventKind {
     /// message as a question awaiting a human answer, rather than a
     /// completed message. Carried on the same `adapterMessageEvent`
     /// shape as `adapterMessageFinal` (role/text), distinguished
-    /// only by this `kind`.
+    /// only by this kind value.
     #[serde(rename = "adapterQuestionDetected")]
     AdapterQuestionDetected,
     // ADR-0027.
@@ -942,7 +942,7 @@ pub enum RuntimeEvent {
         pane_ref: String,
     },
     /// A human typed directly into a native pane, bypassing the
-    /// adapter. Sets the run's `needsReconciliation` flag.
+    /// adapter. Sets the run's `RunFlags.needsReconciliation` flag.
     OutOfBandInput {
         run_id: RunId,
         backend: DisplayBackend,
