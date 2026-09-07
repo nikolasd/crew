@@ -1032,10 +1032,9 @@ pub enum RuntimeEvent {
         /// Why the run was escalated, as a short machine-assigned code from
         /// a closed set -- never a worker's or a caller's own words.
         reason: String,
-        /// The worker's own question, redacted. Absent when the escalation
-        /// was raised from a condition the runtime detected rather than
-        /// from a worker asking something, in which case `reason` is the
-        /// whole of what is known.
+        /// The worker's own question, redacted, when the escalation carries
+        /// one; absent otherwise, in which case `reason` is the whole of
+        /// what is known.
         question: Option<Redacted>,
     },
     /// An escalation was answered by the leader or a human user.

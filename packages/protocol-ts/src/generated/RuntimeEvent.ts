@@ -78,9 +78,8 @@ reason: Redacted | null, } } | { "type": "workerQuestion", "payload": { runId: R
  */
 reason: string, 
 /**
- * The worker's own question, redacted. Absent when the escalation
- * was raised from a condition the runtime detected rather than
- * from a worker asking something, in which case `reason` is the
- * whole of what is known.
+ * The worker's own question, redacted, when the escalation carries
+ * one; absent otherwise, in which case `reason` is the whole of
+ * what is known.
  */
 question: Redacted | null, } } | { "type": "escalationAnswered", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, answeredBy: AnsweredBy, answer: Redacted | null, } } | { "type": "budgetExceeded", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, turnsUsed: number, turnLimit: number, } } | { "type": "workerTimeout", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, kind: TimeoutKind, sinceMs: number, } };
