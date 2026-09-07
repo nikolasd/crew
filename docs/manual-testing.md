@@ -946,6 +946,27 @@ Checks:
   any §7 run, usage and cost figures populate from `adapterUsageReported` events. The journaled
   prompt is *not* shown on the dashboard today (that column is future work) — read it via
   `/crew run <runId>` or an audit export instead.
+- **Known adapters show their real vendor mark (CREW-55).** `claude`, `codex`, `copilot`, and
+  `omp`/`ompRpc` each render an inline vendor logo in the run/worker table instead of the plain
+  BRAND.md colour cell; an adapter with no supplied mark (or a run whose worker row is missing, so
+  its adapter can't be proven) falls back to the neutral colour cell exactly as before CREW-55 —
+  that fallback is correct, not a regression (`crates/runtime/src/dashboard/page.rs::markOf`,
+  `LOGOS`).
+- **Reload or reconnect now shows history immediately (CREW-54/56).** Open the dashboard (or kill
+  and restart your connection) *after* runs already exist, with nothing new happening: every
+  already-committed run/event appears right away, replayed from the journal — before this fix, a
+  viewer connecting after the fact saw an empty feed until the *next* live mutation. A brief
+  network blip that reconnects the `EventSource` must not duplicate any row already shown (the
+  client tracks rendered sequences and skips a replay/live duplicate of the same event).
+- **A stale dashboard token after a daemon restart says so, and stops retrying (CREW-62).**
+  Restart the daemon (`crewd stop --repo "$PWD"` then let `/crew health` respawn it) without
+  reloading the already-open dashboard page: the live indicator changes to **"dashboard link
+  expired"** (title text names `/crew health` as the fix), not the generic "daemon not running" —
+  the old message was actively wrong here, since the daemon *is* running, just behind a new
+  per-run token this page's cookie no longer matches. The page probes `/api/state` on the next
+  `EventSource` error specifically to tell a rejected token (401, unrecoverable — retries stop)
+  apart from a genuinely unreachable daemon (no response after 3 failures, retries continue, "daemon
+  not running"). Reload the page to pick up a fresh token from a new `/crew health`.
 
 ## Reading the widget line
 
