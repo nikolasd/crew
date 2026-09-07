@@ -624,9 +624,22 @@ pub enum RuntimeEventKind {
         /// authorized under, so the violation is auditable against a
         /// specific merge of org/repo/user/per-run layers.
         policy_fingerprint: String,
+        // Not the raw adapter payload: `DomainAdapterEventSink::emit`
+        // extracts these from the already-built `AdapterNestedWorkerEvent`
+        // rather than the raw `AdapterEventPayload`, specifically so this
+        // table never receives unredacted vendor-subprocess text
+        // (crates/runtime/src/adapter/event_sink.rs:451-464). Both fields
+        // carry forward the `Redactor::redact_text` pass that event's own
+        // `vendor_child_id`/`vendor_parent_ref` doc names -- never applied
+        // a second time here, and never needing to be.
         /// Present (non-`null`) only for a nested-worker violation; `null`
         /// for any violation with no vendor child, such as a cost ceiling.
+        /// Already passed through `Redactor::redact_text` when present (via
+        /// the already-built `adapterNestedWorkerEvent` this is extracted
+        /// from, not redacted again here).
         vendor_child_id: Option<String>,
+        /// The vendor-reported parent worker reference, on the same terms
+        /// as `vendor_child_id`.
         vendor_parent_ref: Option<String>,
         action: String,
     },
@@ -893,7 +906,20 @@ pub enum RuntimeEvent {
         run_id: RunId,
         task_id: TaskId,
         worker_id: WorkerId,
+        // Not guaranteed identifier-shaped -- a vendor subprocess could
+        // report anything in these fields. The constraint is a mechanism,
+        // not a shape: `DomainAdapterEventSink::build_runtime_event`
+        // passes both through `Redactor::redact_text` via `self.label()`
+        // while building this event (crates/runtime/src/adapter/
+        // event_sink.rs:393-394), the same secret-scrubbing every other
+        // adapter-sourced field gets.
+        /// The vendor-reported child worker reference. Passed through
+        /// `Redactor::redact_text` before this event is built: secret-shaped
+        /// substrings are masked.
         vendor_child_id: String,
+        /// The vendor-reported parent worker reference. Passed through
+        /// `Redactor::redact_text` before this event is built, on the same
+        /// terms as `vendor_child_id`.
         vendor_parent_ref: String,
     },
     PolicyViolationRecorded {
@@ -1456,11 +1482,15 @@ mod redaction_enumeration {
         ),
         (
             "RuntimeEvent::AdapterNestedWorkerEvent.vendor_child_id",
-            "A vendor-assigned identifier.",
+            "Passed `Redactor::redact_text` via `self.label()` before this event is built \
+             (crates/runtime/src/adapter/event_sink.rs:393-394); the field's own doc names the \
+             same citation.",
         ),
         (
             "RuntimeEvent::AdapterNestedWorkerEvent.vendor_parent_ref",
-            "A vendor-assigned identifier.",
+            "Passed `Redactor::redact_text` via `self.label()` before this event is built \
+             (crates/runtime/src/adapter/event_sink.rs:393-394); the field's own doc names the \
+             same citation.",
         ),
         (
             "RuntimeEvent::DisplayEvent.pane_ref",
@@ -1500,11 +1530,15 @@ mod redaction_enumeration {
         ),
         (
             "RuntimeEventKind::PolicyViolationRecorded.vendor_child_id",
-            "A vendor-assigned identifier.",
+            "Extracted from the already-`redact_text`-passed `AdapterNestedWorkerEvent`, never the \
+             raw adapter payload (crates/runtime/src/adapter/event_sink.rs:451-464); the field's \
+             own doc names the same citation.",
         ),
         (
             "RuntimeEventKind::PolicyViolationRecorded.vendor_parent_ref",
-            "A vendor-assigned identifier.",
+            "Extracted from the already-`redact_text`-passed `AdapterNestedWorkerEvent`, never the \
+             raw adapter payload (crates/runtime/src/adapter/event_sink.rs:451-464); the field's \
+             own doc names the same citation.",
         ),
         (
             "RuntimeEventKind::PolicyViolationRecorded.action",

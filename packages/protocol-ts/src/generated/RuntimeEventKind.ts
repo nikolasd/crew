@@ -29,5 +29,13 @@ policy_fingerprint: string,
 /**
  * Present (non-`null`) only for a nested-worker violation; `null`
  * for any violation with no vendor child, such as a cost ceiling.
+ * Already passed through `Redactor::redact_text` when present (via
+ * the already-built `adapterNestedWorkerEvent` this is extracted
+ * from, not redacted again here).
  */
-vendor_child_id: string | null, vendor_parent_ref: string | null, action: string, } } | { "policyViolationDecided": { violation_id: PolicyViolationId, resolution: string, resolved_by: Redacted, } };
+vendor_child_id: string | null, 
+/**
+ * The vendor-reported parent worker reference, on the same terms
+ * as `vendor_child_id`.
+ */
+vendor_parent_ref: string | null, action: string, } } | { "policyViolationDecided": { violation_id: PolicyViolationId, resolution: string, resolved_by: Redacted, } };

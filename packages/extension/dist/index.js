@@ -8589,9 +8589,11 @@ what an unexpected observation means.`,
                   $ref: "#/$defs/WorkerId"
                 },
                 vendorChildId: {
+                  description: "The vendor-reported child worker reference. Passed through\n`Redactor::redact_text` before this event is built: secret-shaped\nsubstrings are masked.",
                   type: "string"
                 },
                 vendorParentRef: {
+                  description: "The vendor-reported parent worker reference. Passed through\n`Redactor::redact_text` before this event is built, on the same\nterms as `vendor_child_id`.",
                   type: "string"
                 }
               },
@@ -9358,13 +9360,14 @@ specific merge of org/repo/user/per-run layers.`,
                   type: "string"
                 },
                 vendor_child_id: {
-                  description: "Present (non-`null`) only for a nested-worker violation; `null`\nfor any violation with no vendor child, such as a cost ceiling.",
+                  description: "Present (non-`null`) only for a nested-worker violation; `null`\nfor any violation with no vendor child, such as a cost ceiling.\nAlready passed through `Redactor::redact_text` when present (via\nthe already-built `adapterNestedWorkerEvent` this is extracted\nfrom, not redacted again here).",
                   type: [
                     "string",
                     "null"
                   ]
                 },
                 vendor_parent_ref: {
+                  description: "The vendor-reported parent worker reference, on the same terms\nas `vendor_child_id`.",
                   type: [
                     "string",
                     "null"
