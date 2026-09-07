@@ -574,6 +574,56 @@ fn the_mark_carries_none_of_the_forbidden_treatments() {
     );
 }
 
+/// CREW-55: the maintainer's ruling was real vendor logos, not BRAND.md's
+/// own cell colours -- knowingly, given §02 already covers this ground.
+/// Each mark must be embedded verbatim (inline SVG, no network fetch --
+/// `page.rs`'s own no-external-asset constraint) and unaltered: no
+/// recolouring, no reproportioning. Pins a distinctive, unlikely-to-drift
+/// fragment of each file's actual content, the same style the mark
+/// test above uses for the crew logo itself.
+#[test]
+fn dashboard_embeds_the_four_vendor_marks_inline() {
+    let page = crew_runtime::dashboard::PAGE_HTML;
+    for (adapter, fragment) in [
+        ("claude", "Claude Code"),
+        ("codex", "Codex (OpenAI)"),
+        ("copilot", "M205.3 31.4"),
+        ("omp", "Pi symbol with plugin connector"),
+    ] {
+        assert!(
+            page.contains(fragment),
+            "the {adapter} mark must be embedded inline, unaltered: missing {fragment:?}"
+        );
+    }
+}
+
+/// GitHub's mark is `viewBox="0 0 256 208"` -- not square. Forcing it into
+/// a square box (matching the other three) stretches it, which is an
+/// alteration the vendor guidelines forbid as surely as recolouring
+/// would be. A fixed height with width left to the browser preserves the
+/// real aspect ratio regardless of which mark is shown.
+#[test]
+fn the_vendor_marks_render_at_a_fixed_height_with_width_left_free() {
+    let page = crew_runtime::dashboard::PAGE_HTML;
+    assert!(
+        page.contains("width: auto"),
+        "a fixed-height, auto-width box is what keeps a non-square mark \
+         (GitHub's) from being stretched into a square"
+    );
+}
+
+/// An adapter absent from `LOGOS` (no mark supplied, or a future adapter
+/// nobody has added a mark for yet) must keep working exactly as before
+/// CREW-55 -- the coloured cell, never a broken image or a missing icon.
+#[test]
+fn an_adapter_with_no_vendor_mark_still_falls_back_to_the_neutral_cell() {
+    let page = crew_runtime::dashboard::PAGE_HTML;
+    assert!(
+        page.contains("const NEUTRAL"),
+        "the pre-CREW-55 colour fallback must still exist for adapters with no mark"
+    );
+}
+
 #[tokio::test]
 async fn index_serves_the_html_page() {
     let harness = start_dashboard().await;
@@ -925,18 +975,20 @@ async fn sse_stream_replays_already_committed_events_on_a_fresh_connect() {
     harness.server.stop();
 }
 
-/// Review on the replay fix: a viewer that can't get history should still
-/// get what happens next, not a refused or hung connection. Shutting down
-/// the actor is a real way to make the replay query fail (not a mock),
-/// while the live broadcast (independent of the db) still works, so this
-/// proves the connection survives the failure and reaches the live loop.
-///
-/// This does NOT prove the failure gets logged -- this crate's tests have
-/// no tracing-capture harness, so the `tracing::warn!` this same review
-/// asked for is reviewed by reading, not asserted here. Naming that gap
-/// rather than letting "tested" imply more than this test covers.
+/// A regression guard, not a test of CREW-62's own delta: staff proved by
+/// mutation (`Err(err) => { tracing::warn!(...) }` replaced with the
+/// pre-fix silent `Err(_) => {}`) that this test still passes either way
+/// -- `if let Ok(rows) = ...` already fell through to the live loop on
+/// `Err` before this fix, so the property here was already true on main.
+/// What it protects is real (a viewer that can't get history should
+/// still get what happens next, never a refused or hung connection), and
+/// worth pinning against a future change that starts refusing on a
+/// replay error -- it just is not evidence FOR this PR's change. The
+/// `tracing::warn!` line itself has no assertion: this crate's tests
+/// have no tracing-capture harness, so it is accepted as read-reviewed,
+/// not tested.
 #[tokio::test]
-async fn a_replay_query_failure_still_reaches_the_live_loop() {
+async fn a_replay_failure_must_not_refuse_the_connection() {
     let harness = start_dashboard().await;
     harness.db.shutdown().await.expect("shutdown the db actor");
 
