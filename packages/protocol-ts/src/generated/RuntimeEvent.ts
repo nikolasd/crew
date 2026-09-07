@@ -36,15 +36,13 @@ message: Redacted, } } | { "type": "taskEvent", "payload": { kind: RuntimeEventK
  */
 reason?: Redacted, } } | { "type": "childEvent", "payload": { kind: RuntimeEventKind, parentRunId: RunId, childTaskId: TaskId | null, childWorkerId: WorkerId | null, childRunId: RunId | null, reason: Redacted | null, } } | { "type": "reconcileEvent", "payload": { taskId: TaskId, oldOwnerClientInstanceId: string, newOwnerClientInstanceId: string, revision: number, } } | { "type": "adapterProcessEvent", "payload": { kind: RuntimeEventKind, runId: RunId, taskId: TaskId, workerId: WorkerId, pid: number | null, exitCode: number | null, signal: string | null, } } | { "type": "adapterVendorSessionEvent", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, vendorSessionId: string, } } | { "type": "adapterTurnEvent", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, outcome: TurnOutcome, } } | { "type": "adapterMessageEvent", "payload": { kind: RuntimeEventKind, runId: RunId, taskId: TaskId, workerId: WorkerId, role: string, text: Redacted | null, } } | { "type": "adapterToolEvent", "payload": { kind: RuntimeEventKind, runId: RunId, taskId: TaskId, workerId: WorkerId, toolCallId: string, name: string, ok: boolean | null, detail: Redacted | null, } } | { "type": "adapterUsageEvent", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, inputTokens: number, outputTokens: number, costUsd: number | null, } } | { "type": "adapterArtifactEvent", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, artifactId: ArtifactId, artifactKind: string, } } | { "type": "adapterProtocolHealthEvent", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, healthy: boolean, detail: Redacted | null, } } | { "type": "workspaceEvent", "payload": { kind: WorkspaceEvent, runId: RunId, leaseId: string, } } | { "type": "adapterNestedWorkerEvent", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, 
 /**
- * The vendor-reported child worker reference. Passed through
- * `Redactor::redact_text` before this event is built: secret-shaped
- * substrings are masked.
+ * The vendor-reported child worker reference. Already redacted:
+ * secret-shaped substrings are masked before this event is built.
  */
 vendorChildId: string, 
 /**
- * The vendor-reported parent worker reference. Passed through
- * `Redactor::redact_text` before this event is built, on the same
- * terms as `vendor_child_id`.
+ * The vendor-reported parent worker reference, on the same terms
+ * as `vendorChildId`.
  */
 vendorParentRef: string, } } | { "type": "policyViolationRecorded", "payload": { kind: RuntimeEventKind, runId: RunId, taskId: TaskId, workerId: WorkerId, } } | { "type": "policyViolationDecided", "payload": { kind: RuntimeEventKind, runId: RunId, taskId: TaskId, workerId: WorkerId, } } | { "type": "displayEvent", "payload": { kind: RuntimeEventKind, runId: RunId, backend: DisplayBackend, placement: DisplayPlacement, 
 /**
