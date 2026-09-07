@@ -401,7 +401,10 @@ fn fast_timings() -> TuiTimings {
         discovery_timeout: Duration::from_secs(4),
         tailer_poll: Duration::from_millis(40),
         submit_idle: Duration::from_millis(50),
-        paste_write_timeout: Duration::from_millis(500),
+        // CREW-65: production's own value. `paste_write_timeout` is a
+        // failure bound, not a pacing delay -- accelerating it makes
+        // nothing faster and only manufactures false failures under load.
+        paste_write_timeout: TuiTimings::default().paste_write_timeout,
         escalation: crate::supervisor::EscalationTimings::default(),
         preflight_timeout: Duration::from_secs(4),
     }
