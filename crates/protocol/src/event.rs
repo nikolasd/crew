@@ -634,9 +634,8 @@ pub enum RuntimeEventKind {
         // a second time here, and never needing to be.
         /// Present (non-`null`) only for a nested-worker violation; `null`
         /// for any violation with no vendor child, such as a cost ceiling.
-        /// Already passed through `Redactor::redact_text` when present (via
-        /// the already-built `adapterNestedWorkerEvent` this is extracted
-        /// from, not redacted again here).
+        /// Already redacted when present -- extracted from the already-built
+        /// `adapterNestedWorkerEvent`, not redacted again here.
         vendor_child_id: Option<String>,
         /// The vendor-reported parent worker reference, on the same terms
         /// as `vendor_child_id`.
@@ -913,13 +912,11 @@ pub enum RuntimeEvent {
         // while building this event (crates/runtime/src/adapter/
         // event_sink.rs:393-394), the same secret-scrubbing every other
         // adapter-sourced field gets.
-        /// The vendor-reported child worker reference. Passed through
-        /// `Redactor::redact_text` before this event is built: secret-shaped
-        /// substrings are masked.
+        /// The vendor-reported child worker reference. Already redacted:
+        /// secret-shaped substrings are masked before this event is built.
         vendor_child_id: String,
-        /// The vendor-reported parent worker reference. Passed through
-        /// `Redactor::redact_text` before this event is built, on the same
-        /// terms as `vendor_child_id`.
+        /// The vendor-reported parent worker reference, on the same terms
+        /// as `vendorChildId`.
         vendor_parent_ref: String,
     },
     PolicyViolationRecorded {

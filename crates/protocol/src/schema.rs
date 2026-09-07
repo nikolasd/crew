@@ -106,26 +106,13 @@ mod tests {
     /// Backticked names this test does not require to resolve as a
     /// `$defs` key or a real wire value -- each with why it's exempt, not
     /// just that it is. CREW-46 (see `docs/engineering-lessons.md`).
-    const ALLOWED_UNRESOLVED_BACKTICKED_NAMES: &[(&str, &str)] = &[
-        (
-            "Terminal",
-            "DisplayBackend::Hidden's description deliberately names the \
-             retired `Terminal` variant to explain what `hidden` replaced. \
-             The sentence's whole point is that `Terminal` no longer exists --\
-             \"fixing\" the reference would make the sentence false.",
-        ),
-        (
-            "Redactor",
-            "CREW-63: the vendor-ref fields' shipped descriptions name the \
-             runtime's `Redactor` type on purpose -- the point of each doc is \
-             that the value has crossed that specific mechanism \
-             (`Redactor::redact_text`), not merely that it looks \
-             identifier-shaped. `Redactor` has no wire representation to \
-             resolve to; it is a runtime-crate type these docs cite \
-             deliberately (see crates/runtime/src/adapter/event_sink.rs:\
-             393-394 and :451-464).",
-        ),
-    ];
+    const ALLOWED_UNRESOLVED_BACKTICKED_NAMES: &[(&str, &str)] = &[(
+        "Terminal",
+        "DisplayBackend::Hidden's description deliberately names the \
+         retired `Terminal` variant to explain what `hidden` replaced. \
+         The sentence's whole point is that `Terminal` no longer exists --\
+         \"fixing\" the reference would make the sentence false.",
+    )];
 
     /// Every `const` string and every `enum` array element anywhere in
     /// `value`, recursively -- i.e. every string a wire consumer could

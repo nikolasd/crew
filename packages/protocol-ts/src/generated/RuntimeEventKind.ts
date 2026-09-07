@@ -29,9 +29,8 @@ policy_fingerprint: string,
 /**
  * Present (non-`null`) only for a nested-worker violation; `null`
  * for any violation with no vendor child, such as a cost ceiling.
- * Already passed through `Redactor::redact_text` when present (via
- * the already-built `adapterNestedWorkerEvent` this is extracted
- * from, not redacted again here).
+ * Already redacted when present -- extracted from the already-built
+ * `adapterNestedWorkerEvent`, not redacted again here.
  */
 vendor_child_id: string | null, 
 /**

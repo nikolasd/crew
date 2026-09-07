@@ -8589,11 +8589,12 @@ what an unexpected observation means.`,
                   $ref: "#/$defs/WorkerId"
                 },
                 vendorChildId: {
-                  description: "The vendor-reported child worker reference. Passed through\n`Redactor::redact_text` before this event is built: secret-shaped\nsubstrings are masked.",
+                  description: `The vendor-reported child worker reference. Already redacted:
+secret-shaped substrings are masked before this event is built.`,
                   type: "string"
                 },
                 vendorParentRef: {
-                  description: "The vendor-reported parent worker reference. Passed through\n`Redactor::redact_text` before this event is built, on the same\nterms as `vendor_child_id`.",
+                  description: "The vendor-reported parent worker reference, on the same terms\nas `vendorChildId`.",
                   type: "string"
                 }
               },
@@ -9360,7 +9361,7 @@ specific merge of org/repo/user/per-run layers.`,
                   type: "string"
                 },
                 vendor_child_id: {
-                  description: "Present (non-`null`) only for a nested-worker violation; `null`\nfor any violation with no vendor child, such as a cost ceiling.\nAlready passed through `Redactor::redact_text` when present (via\nthe already-built `adapterNestedWorkerEvent` this is extracted\nfrom, not redacted again here).",
+                  description: "Present (non-`null`) only for a nested-worker violation; `null`\nfor any violation with no vendor child, such as a cost ceiling.\nAlready redacted when present -- extracted from the already-built\n`adapterNestedWorkerEvent`, not redacted again here.",
                   type: [
                     "string",
                     "null"
