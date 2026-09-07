@@ -307,6 +307,12 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
         .then(response => {
           if (failures !== attempt) return;
           if (response.status === 401) {
+            // Closing here, unlike the plain-network-failure branch
+            // below, is not a "give up" -- it is the honest end state.
+            // A rejected token can never start succeeding on its own;
+            // leaving EventSource retrying would just repeat this same
+            // probe every ~3s forever, on a page only a reload can fix.
+            source.close();
             live.textContent = "dashboard link expired";
             live.title =
               "this dashboard's token is no longer valid -- the daemon behind it restarted " +
