@@ -8589,9 +8589,11 @@ what an unexpected observation means.`,
                   $ref: "#/$defs/WorkerId"
                 },
                 vendorChildId: {
+                  description: "The vendor-reported child worker reference. Passed through\n`Redactor::redact_text` before this event is built: secret-shaped\nsubstrings are masked.",
                   type: "string"
                 },
                 vendorParentRef: {
+                  description: "The vendor-reported parent worker reference. Passed through\n`Redactor::redact_text` before this event is built, on the same\nterms as `vendor_child_id`.",
                   type: "string"
                 }
               },
@@ -9358,13 +9360,14 @@ specific merge of org/repo/user/per-run layers.`,
                   type: "string"
                 },
                 vendor_child_id: {
-                  description: "Present (non-`null`) only for a nested-worker violation; `null`\nfor any violation with no vendor child, such as a cost ceiling.",
+                  description: "Present (non-`null`) only for a nested-worker violation; `null`\nfor any violation with no vendor child, such as a cost ceiling.\nAlready passed through `Redactor::redact_text` when present (via\nthe already-built `adapterNestedWorkerEvent` this is extracted\nfrom, not redacted again here).",
                   type: [
                     "string",
                     "null"
                   ]
                 },
                 vendor_parent_ref: {
+                  description: "The vendor-reported parent worker reference, on the same terms\nas `vendor_child_id`.",
                   type: [
                     "string",
                     "null"
@@ -12932,6 +12935,114 @@ function registerPlanTool(pi, ctx) {
 
 // src/tools/profiles.ts
 import { homedir as homedir5 } from "os";
+
+// src/models.ts
+import { execFile } from "child_process";
+import { promisify } from "util";
+var execFileAsync = promisify(execFile);
+var PROVIDER_FOR_ADAPTER = {
+  claude: "anthropic",
+  codex: "openai-codex",
+  copilot: "github-copilot"
+};
+var VENDOR_ALIASES = {
+  claude: {
+    fable: "claude-fable-5-1",
+    opus: "claude-opus-5",
+    sonnet: "claude-sonnet-5",
+    haiku: "claude-haiku-4-5"
+  },
+  codex: {
+    "gpt-5.6": "gpt-5.6-sol"
+  }
+};
+async function readCatalogue(adapter, run = defaultRun) {
+  const provider = PROVIDER_FOR_ADAPTER[adapter];
+  if (provider === undefined) {
+    return { available: false, why: `no single catalogue provider bounds the ${adapter} adapter` };
+  }
+  let raw;
+  try {
+    raw = await run("omp", ["models", "ls", "--json"]);
+  } catch (err) {
+    return { available: false, why: `could not run \`omp models\`: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { available: false, why: "`omp models --json` did not return JSON" };
+  }
+  const models = parsed?.models;
+  if (!Array.isArray(models)) {
+    return { available: false, why: "`omp models --json` has no `models` array -- its shape has changed" };
+  }
+  const ids = models.filter((m) => typeof m?.provider === "string" && typeof m?.id === "string").filter((m) => m.provider === provider).map((m) => m.id);
+  if (ids.length === 0) {
+    return { available: false, why: `omp's catalogue lists no models for provider \`${provider}\`` };
+  }
+  return { available: true, ids };
+}
+async function defaultRun(cmd, args) {
+  const { stdout } = await execFileAsync(cmd, args, { maxBuffer: 8 * 1024 * 1024 });
+  return stdout;
+}
+function resolveModelName(adapter, input, catalogue) {
+  const aliases = VENDOR_ALIASES[adapter] ?? {};
+  if (catalogue.available && catalogue.ids.includes(input)) {
+    return { kind: "exact", model: input };
+  }
+  const aliased = aliases[input];
+  if (aliased !== undefined) {
+    return { kind: "alias", model: aliased, from: input };
+  }
+  if (!catalogue.available) {
+    return { kind: "unverified", model: input, why: "catalogue-unavailable", detail: catalogue.why };
+  }
+  const matches = catalogue.ids.filter((id) => id.includes(input));
+  if (matches.length === 1) {
+    return { kind: "match", model: matches[0], from: input };
+  }
+  if (matches.length > 1) {
+    return { kind: "ambiguous", from: input, candidates: matches };
+  }
+  return { kind: "unverified", model: input, why: "not-in-catalogue" };
+}
+function resolutionNote(adapter, r) {
+  switch (r.kind) {
+    case "exact":
+      return;
+    case "alias":
+      return `model: ${r.model} (resolved "${r.from}" via ${adapter}'s own alias table)`;
+    case "match":
+      return `model: ${r.model} (resolved "${r.from}" -- the only ${PROVIDER_FOR_ADAPTER[adapter]} model matching it)`;
+    case "ambiguous":
+      return;
+    case "unverified":
+      return r.why === "not-in-catalogue" ? `model: ${r.model} (not in omp's catalogue for ${PROVIDER_FOR_ADAPTER[adapter]}; passing through UNVERIFIED -- the vendor will reject it if it is wrong)` : `model: ${r.model} (could not be verified: ${r.detail ?? "catalogue unavailable"}; passing through UNVERIFIED)`;
+  }
+}
+function isCataloguedAdapter(adapter) {
+  return Object.hasOwn(PROVIDER_FOR_ADAPTER, adapter);
+}
+function decideModel(adapter, requested, configured, catalogue) {
+  const resolved = resolveModelName(adapter, requested, catalogue);
+  if (resolved.kind === "ambiguous") {
+    return { kind: "ambiguous", from: resolved.from, candidates: resolved.candidates };
+  }
+  if (configured !== undefined) {
+    const storedResolution = resolveModelName(adapter, configured, catalogue);
+    const storedCanonical = storedResolution.kind === "ambiguous" ? configured : storedResolution.model;
+    if (storedCanonical !== resolved.model) {
+      return { kind: "conflict", configuredModel: configured };
+    }
+  }
+  const note = resolutionNote(adapter, resolved);
+  const verified = resolved.kind !== "unverified";
+  return note === undefined ? { kind: "use", model: resolved.model, verified } : { kind: "use", model: resolved.model, verified, note };
+}
+
+// src/tools/profiles.ts
 var CREW_PROFILE_TOOL_NAME = "crew_profile";
 var RESERVED_ADAPTER_NAMES = ["claude", "codex", "copilot", "ompRpc"];
 function injectTuiMode(adapter, startupOptions) {
@@ -12944,10 +13055,22 @@ function injectTuiMode(adapter, startupOptions) {
   }
   return { ...startupOptions, [adapter]: { ...existing, mode: "tui" } };
 }
+function modelConflictResult(adapter, configuredModel) {
+  return {
+    content: [
+      {
+        type: "text",
+        text: `model already configured as ${configuredModel} for adapter ${adapter} -- crew_profile never overwrites a stored model; edit the repository's .omp/crew.json directly to change it (/crew config path locates it).`
+      }
+    ],
+    details: { code: "model-conflict", adapter, configuredModel },
+    isError: true
+  };
+}
 function registerProfileTool(pi, ctx) {
   const params = pi.zod.object({
     adapter: pi.zod.string().describe("The adapter name this profile launches, e.g. claude, codex, copilot, ompRpc, terminalDegraded."),
-    model: pi.zod.string().optional().describe("The model identifier this profile uses. Optional: if omitted and no model is already configured for this adapter (in .omp/crew.json), registration is refused with a typed 'model-not-configured' error -- ask the user which model to use, then call crew_profile again with it. The first time a model is given explicitly for an adapter with none configured, it is persisted into the repository's .omp/crew.json for future sessions to reuse silently. crew_profile never overwrites an already-recorded model, and never silently ignores an explicit value that conflicts with one: passing a *different* model than the one already configured is refused with a typed 'model-conflict' error naming the stored value -- correct it by editing the repository's .omp/crew.json directly (/crew config path locates it; /crew config has no set/edit subcommand), never by passing a new value here. Passing the same value as already configured is a no-op success."),
+    model: pi.zod.string().optional().describe("The model identifier this profile uses. Optional: if omitted and no model is already configured for this adapter (in .omp/crew.json), registration is refused with a typed 'model-not-configured' error -- ask the user which model to use, then call crew_profile again with it. For claude, codex and copilot the value you pass is resolved before anything else happens, against omp's own model catalogue and the vendor's aliases: a vendor alias ('opus', 'haiku') and a name matching exactly one model ('sol' -> gpt-5.6-sol) both resolve to the canonical id, and the result is reported back to you. A name matching several models is refused with a typed 'model-ambiguous' error listing them -- name one of them exactly. A name omp's catalogue does not know is still used, but is reported as UNVERIFIED and is NOT recorded in .omp/crew.json: pass it again next session, or record it there yourself once a run has proven it. The first time a confirmed model is given explicitly for an adapter with none configured, its canonical id is persisted into the repository's .omp/crew.json for future sessions to reuse silently. crew_profile never overwrites an already-recorded model, and never silently ignores an explicit value that conflicts with one: passing a value naming a *different* model than the one already configured is refused with a typed 'model-conflict' error naming the stored value -- correct it by editing the repository's .omp/crew.json directly (/crew config path locates it; /crew config has no set/edit subcommand), never by passing a new value here. Passing a value naming the same model as the configured one is a no-op success, whichever of the two is the shorthand."),
     startupOptions: pi.zod.record(pi.zod.string(), pi.zod.unknown()).optional().describe("Adapter-specific startup options, tagged by adapter kind, e.g. { claude: { mode: 'tui' } }. For a reserved adapter (claude, codex, copilot, ompRpc), an omitted mode is filled in as 'tui' automatically -- headless is retired. Other options depend on the adapter (see crew-orchestration skill)."),
     environmentAllowlist: pi.zod.array(pi.zod.string()).optional().describe("Environment variable names this profile's process is allowed to read."),
     permissionEnvelope: pi.zod.record(pi.zod.string(), pi.zod.unknown()).optional()
@@ -12955,7 +13078,7 @@ function registerProfileTool(pi, ctx) {
   pi.registerTool({
     name: CREW_PROFILE_TOOL_NAME,
     label: "Crew Profile",
-    description: "Register a reusable worker profile (adapter, model, startup options, environment allowlist) before provisioning workers. Call this once per adapter/model combination, then pass the returned profileId to crew_worker { op: 'create', profileId }. model is optional -- if none is configured yet for this adapter, you'll get a typed error telling you to ask the user which model to use and call this again; that answer is remembered for future sessions. mode:'tui' is filled in automatically for reserved adapters when omitted. The profile-first flow (crew_profile \u2192 crew_worker \u2192 crew_run) replaces the legacy fingerprint/adapter/model pattern. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
+    description: "Register a reusable worker profile (adapter, model, startup options, environment allowlist) before provisioning workers. Call this once per adapter/model combination, then pass the returned profileId to crew_worker { op: 'create', profileId }. model is optional -- if none is configured yet for this adapter, you'll get a typed error telling you to ask the user which model to use and call this again; that answer is remembered for future sessions. For claude, codex and copilot, model names are resolved against omp's catalogue and the vendor's aliases, so a shorthand or a unique partial name is accepted and echoed back as the canonical id; a name the catalogue does not know still runs, but is flagged UNVERIFIED and is not remembered. mode:'tui' is filled in automatically for reserved adapters when omitted. The profile-first flow (crew_profile \u2192 crew_worker \u2192 crew_run) replaces the legacy fingerprint/adapter/model pattern. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
     parameters: params,
     approval: () => "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -12973,30 +13096,50 @@ function registerProfileTool(pi, ctx) {
         }
         throw err;
       }
-      if (input.model !== undefined && configuredModel !== undefined && input.model !== configuredModel) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `model already configured as ${configuredModel} for adapter ${input.adapter} -- crew_profile never overwrites a stored model; edit the repository's .omp/crew.json directly to change it (/crew config path locates it).`
-            }
-          ],
-          details: { code: "model-conflict", adapter: input.adapter, configuredModel },
-          isError: true
-        };
-      }
-      const model = input.model ?? configuredModel;
-      if (model === undefined) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `no model configured for adapter ${input.adapter} -- ask the user which model to use, then call crew_profile again with it; the answer will be persisted for future sessions.`
-            }
-          ],
-          details: { code: "model-not-configured", adapter: input.adapter },
-          isError: true
-        };
+      let model;
+      let note;
+      let mayPersist;
+      if (input.model !== undefined && isCataloguedAdapter(input.adapter)) {
+        const catalogue = await (ctx.readModelCatalogue ?? readCatalogue)(input.adapter);
+        const decision = decideModel(input.adapter, input.model, configuredModel, catalogue);
+        if (decision.kind === "conflict") {
+          return modelConflictResult(input.adapter, decision.configuredModel);
+        }
+        if (decision.kind === "ambiguous") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `"${decision.from}" matches ${decision.candidates.length} models for adapter ${input.adapter}: ${decision.candidates.join(", ")} -- name one of them exactly.`
+              }
+            ],
+            details: { code: "model-ambiguous", adapter: input.adapter, requested: decision.from, candidates: decision.candidates },
+            isError: true
+          };
+        }
+        model = decision.model;
+        note = decision.note;
+        mayPersist = decision.verified;
+      } else {
+        if (input.model !== undefined && configuredModel !== undefined && input.model !== configuredModel) {
+          return modelConflictResult(input.adapter, configuredModel);
+        }
+        const chosen = input.model ?? configuredModel;
+        if (chosen === undefined) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `no model configured for adapter ${input.adapter} -- ask the user which model to use, then call crew_profile again with it; the answer will be persisted for future sessions.`
+              }
+            ],
+            details: { code: "model-not-configured", adapter: input.adapter },
+            isError: true
+          };
+        }
+        model = chosen;
+        note = undefined;
+        mayPersist = true;
       }
       const client = await ctx.getClient(extCtx);
       const startupOptions = injectTuiMode(input.adapter, input.startupOptions ?? {});
@@ -13008,12 +13151,22 @@ function registerProfileTool(pi, ctx) {
         permissionEnvelope: input.permissionEnvelope ?? {},
         source: "omp"
       });
+      if (result.isError !== true && note !== undefined) {
+        result.content.push({ type: "text", text: note });
+      }
       if (result.isError !== true && input.model !== undefined && configuredModel === undefined) {
-        try {
-          persistConfiguredModel(extCtx.cwd, input.adapter, input.model);
-        } catch (err) {
-          const message = err instanceof CrewConfigError ? err.message : err instanceof Error ? err.message : String(err);
-          result.content.push({ type: "text", text: `Warning: model was registered but not persisted for future sessions: ${message}` });
+        if (!mayPersist) {
+          result.content.push({
+            type: "text",
+            text: `Not persisted to .omp/crew.json: nothing could confirm ${model} is a real model for adapter ${input.adapter}. Pass it again next session, or record it in .omp/crew.json yourself once a run has proven it.`
+          });
+        } else {
+          try {
+            persistConfiguredModel(extCtx.cwd, input.adapter, model);
+          } catch (err) {
+            const message = err instanceof CrewConfigError ? err.message : err instanceof Error ? err.message : String(err);
+            result.content.push({ type: "text", text: `Warning: model was registered but not persisted for future sessions: ${message}` });
+          }
         }
       }
       return result;
