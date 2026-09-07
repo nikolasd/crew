@@ -387,9 +387,38 @@ which drives `ApprovalService` directly, the same way this walkthrough can't.
 
 `crew_profile` registered with an adapter but **no model** triggers ask-on-first-use in an
 interactive session: the extension asks which model to use, persists the answer to the
-repository's `.omp/crew.json`, and later registrations are silent. The deterministic negative
-check is free: register a profile whose explicit model **conflicts** with the stored one and
-expect the exact typed refusal —
+repository's `.omp/crew.json`, and later registrations are silent.
+
+For `claude`, `codex`, and `copilot` (not `ompRpc`, which has no single catalogue provider to
+check against), an explicit `model` is resolved against omp's own model catalogue
+(`omp models ls --json`, read fresh every call, never refreshed over the network) plus a small
+per-adapter table of vendor-defined aliases, before anything else happens
+(`packages/extension/src/models.ts`). There are five outcomes; each is deterministic and
+free to exercise (no model call, just `crew_profile` calls):
+
+| You call `crew_profile` with... | Resolves to | What you see |
+|---|---|---|
+| An id already exact in the catalogue, e.g. `claude-opus-5` | Itself | Registered silently — no note, nothing persisted differently from before CREW-53 |
+| A vendor alias, e.g. `haiku` for `claude` | `claude-haiku-4-5` | `model: claude-haiku-4-5 (resolved "haiku" via claude's own alias table)` |
+| A shorthand matching exactly one catalogue id, e.g. `sol` for `codex` | `gpt-5.6-sol` | `model: gpt-5.6-sol (resolved "sol" -- the only openai-codex model matching it)` |
+| A shorthand matching **several** catalogue ids | Nothing — refused | `"<input>" matches N models for adapter <adapter>: <id>, <id>, ... -- name one of them exactly.` (a typed `model-ambiguous` error; nothing is registered or persisted) |
+| A name omp's catalogue does not know (typo, or a genuinely new/unlisted model) | Used as given, **not persisted** | `model: <name> (not in omp's catalogue for <provider>; passing through UNVERIFIED -- the vendor will reject it if it is wrong)` |
+
+The alias table itself is small and vendor-sourced (`claude`: `fable`/`opus`/`sonnet`/`haiku`, read
+from the installed binary's own `latest_per_family` config, not its `--help` text; `codex`: the
+single documented `gpt-5.6` → `gpt-5.6-sol`; `copilot`: none, since it defines no aliases crew can
+verify) — see the doc comment on `VENDOR_ALIASES` in `models.ts` before assuming it needs a new
+entry for some other shorthand.
+
+**Persistence follows verification, not success.** An `exact`, `alias`, or `match` resolution is
+confirmed and gets written to `.omp/crew.json` on first use, same as before CREW-53. An
+`unverified` name runs (the vendor gets the final say) but is deliberately **not** recorded — pass
+it again next session, or add it to `.omp/crew.json` yourself once a run has proven it works.
+
+CREW-8's conflict check still applies, but now compares canonical ids, not raw spelling — a stored
+`claude-opus-5` and an explicit `opus` are recognized as the same model and accepted as a no-op,
+not refused. A request that resolves to a genuinely *different* model than the one stored is still
+refused with the same typed error as before:
 
 ```
 model already configured as <stored> for adapter <adapter> -- crew_profile never overwrites a
@@ -397,8 +426,11 @@ stored model; edit the repository's .omp/crew.json directly to change it (/crew 
 locates it).
 ```
 
-A conflict is refused, never silently overwritten and never silently dropped
-(`packages/extension/src/tools/profiles.ts`).
+`configuredModel` in that message is always the raw text from `.omp/crew.json` (the file the
+correction path points at), never the resolved canonical id — even when the stored value is itself
+a shorthand. A conflict is refused, never silently overwritten and never silently dropped
+(`packages/extension/src/tools/profiles.ts`, `decideModel`/`resolveModelName` in `models.ts`; see
+`models.test.ts` for worked examples of each outcome above).
 
 ### Clean up
 
@@ -438,7 +470,8 @@ integration test harness's own assertions and `#[ignore]`/live gating.
 Four vendor CLIs, plus everything from the top-level [Prerequisites](#prerequisites) above:
 
 ```bash
-claude --version   # verified baseline: Claude Code 2.1.217 (2.1.220 verified to work)
+claude --version   # prints a version and confirms the CLI is authenticated -- do not pin the
+                    # number here; it drifted from 2.1.251 to 2.1.263 in one week during wave 2
 codex --version    # verified baseline: codex-cli 0.145.0 (exact match required for the
                     # schema-compatibility check — see 4b)
 copilot --version  # verified baseline: GitHub Copilot CLI 1.0.73 (1.0.75 verified to work)
@@ -914,6 +947,27 @@ Checks:
   any §7 run, usage and cost figures populate from `adapterUsageReported` events. The journaled
   prompt is *not* shown on the dashboard today (that column is future work) — read it via
   `/crew run <runId>` or an audit export instead.
+- **Known adapters show their real vendor mark (CREW-55).** `claude`, `codex`, `copilot`, and
+  `omp`/`ompRpc` each render an inline vendor logo in the run/worker table instead of the plain
+  BRAND.md colour cell; an adapter with no supplied mark (or a run whose worker row is missing, so
+  its adapter can't be proven) falls back to the neutral colour cell exactly as before CREW-55 —
+  that fallback is correct, not a regression (`crates/runtime/src/dashboard/page.rs::markOf`,
+  `LOGOS`).
+- **Reload or reconnect now shows history immediately (CREW-54/56).** Open the dashboard (or kill
+  and restart your connection) *after* runs already exist, with nothing new happening: every
+  already-committed run/event appears right away, replayed from the journal — before this fix, a
+  viewer connecting after the fact saw an empty feed until the *next* live mutation. A brief
+  network blip that reconnects the `EventSource` must not duplicate any row already shown (the
+  client tracks rendered sequences and skips a replay/live duplicate of the same event).
+- **A stale dashboard token after a daemon restart says so, and stops retrying (CREW-62).**
+  Restart the daemon (`crewd stop --repo "$PWD"` then let `/crew health` respawn it) without
+  reloading the already-open dashboard page: the live indicator changes to **"dashboard link
+  expired"** (title text names `/crew health` as the fix), not the generic "daemon not running" —
+  the old message was actively wrong here, since the daemon *is* running, just behind a new
+  per-run token this page's cookie no longer matches. The page probes `/api/state` on the next
+  `EventSource` error specifically to tell a rejected token (401, unrecoverable — retries stop)
+  apart from a genuinely unreachable daemon (no response after 3 failures, retries continue, "daemon
+  not running"). Reload the page to pick up a fresh token from a new `/crew health`.
 
 ## Reading the widget line
 
