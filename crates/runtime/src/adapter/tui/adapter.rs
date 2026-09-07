@@ -232,6 +232,19 @@ pub struct TuiTimings {
     /// the prompt is declared undeliverable -- see
     /// [`PASTE_CHUNK_WRITE_TIMEOUT`], which is this field's production
     /// value.
+    ///
+    /// **A failure bound, not a pacing delay.** Every other `Duration` in
+    /// this struct is time a caller actually spends waiting, so shrinking
+    /// it in a test makes the test faster. A timeout costs wall-clock time
+    /// only when it FIRES, so shrinking this one makes nothing faster and
+    /// its only other effect is to manufacture false failures on a loaded
+    /// machine. CREW-65: an accelerated 500ms here failed
+    /// `a_multi_line_prompt_reaches_the_pty_framed_as_one_intact_paste`
+    /// 100% of the time under CPU load and ~8% of the time idle, because
+    /// [`PtyProcess::write_input`] awaits an ack from a separate writer
+    /// thread -- so this budget covers our own channel queueing and thread
+    /// scheduling, not just the vendor's read. Shorten it ONLY in a test
+    /// that deliberately trips it, and shorten it there and not globally.
     pub paste_write_timeout: Duration,
     /// SIGINT/SIGTERM/SIGKILL escalation timings for [`PtyProcess`].
     pub escalation: EscalationTimings,
@@ -319,14 +332,28 @@ async fn write_paste(
             Ok(Ok(())) => {}
             Ok(Err(err)) => return Err(AdapterError::process(kind, op, err.to_string())),
             Err(_) => {
+                // Report what was OBSERVED, not a diagnosis of it. What
+                // elapsed is our own write's acknowledgement: `write_input`
+                // queues the chunk to a separate writer thread and awaits a
+                // oneshot ack, so this budget spans channel queueing, that
+                // thread being scheduled, the blocking write, and the ack's
+                // return -- and a vendor that has stopped reading is only
+                // ONE of the things that produces it. The previous wording
+                // ("the vendor stopped consuming input") asserted that one
+                // cause, which sent a reader to the vendor when the machine
+                // being saturated produces the same timeout (CREW-65).
                 return Err(AdapterError::process(
                     kind,
                     op,
                     format!(
-                        "the vendor stopped consuming input {} of {total} chunks into a {} byte \
-                         prompt: it was not delivered",
+                        "chunk {} of {total} of a {} byte prompt was not acknowledged within \
+                         {:?}, so the prompt was not delivered: either the vendor has stopped \
+                         reading its stdin, or this host is too loaded to complete the write \
+                         (the timeout bounds our own writer thread and channel, not the \
+                         vendor's read alone)",
                         index + 1,
-                        text.len()
+                        text.len(),
+                        write_timeout
                     ),
                 ));
             }

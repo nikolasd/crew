@@ -636,7 +636,16 @@ fn fast_timings() -> TuiTimings {
         discovery_timeout: Duration::from_secs(4),
         tailer_poll: Duration::from_millis(40),
         submit_idle: Duration::from_millis(50),
-        paste_write_timeout: Duration::from_millis(500),
+        // CREW-65: production's own value, NOT an accelerated one.
+        // `paste_write_timeout` is a failure bound, not a pacing delay (see
+        // its doc on `TuiTimings`): a timeout costs wall-clock time only
+        // when it fires, so shortening it makes no test faster and only
+        // manufactures false failures on a loaded machine -- an accelerated
+        // 500ms here failed the bracketed-paste test 100% of the time under
+        // CPU load. Reading it from `default()` also means it cannot drift
+        // from production. The one test that deliberately TRIPS this bound
+        // overrides it locally.
+        paste_write_timeout: TuiTimings::default().paste_write_timeout,
         escalation: EscalationTimings {
             sigint_to_sigterm: Duration::from_millis(150),
             sigterm_to_sigkill: Duration::from_millis(150),
@@ -1926,7 +1935,13 @@ async fn a_prompt_a_deaf_vendor_never_consumes_fails_the_start_loudly() {
         run_id,
         task_id,
         worker_id,
-        fast_timings(),
+        // The one place a SHORT paste bound belongs: this test's whole
+        // point is to trip it, so it pays the wait deliberately and keeps
+        // it off every other test in the file (CREW-65).
+        TuiTimings {
+            paste_write_timeout: Duration::from_millis(500),
+            ..fast_timings()
+        },
         ResumeContext::default(),
     );
 
@@ -1941,9 +1956,18 @@ async fn a_prompt_a_deaf_vendor_never_consumes_fails_the_start_loudly() {
         .await
         .expect_err("a prompt that cannot be delivered must fail the start");
     let message = err.to_string();
+    // The message must say the prompt was not delivered, and must name a
+    // deaf vendor as ONE possible cause without asserting it -- the same
+    // timeout also fires when the host is too loaded to complete the write
+    // (CREW-65). Asserting the old wording's single diagnosis is what let
+    // that message claim more than it observed.
     assert!(
-        message.contains("stopped consuming input"),
+        message.contains("was not delivered"),
         "the failure must name undeliverable input, not something vaguer; got: {message}"
+    );
+    assert!(
+        message.contains("stopped reading its stdin") && message.contains("too loaded"),
+        "the failure must offer both causes of an unacknowledged write, not assert one; got: {message}"
     );
 
     harness.shutdown().await;
