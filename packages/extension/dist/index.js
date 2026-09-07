@@ -8736,7 +8736,7 @@ contents, never an absolute socket or filesystem path.`,
           additionalProperties: false
         },
         {
-          description: "A human typed directly into a native pane, bypassing the\nadapter. Sets the run's `needsReconciliation` flag.",
+          description: "A human typed directly into a native pane, bypassing the\nadapter. Sets the run's `RunFlags.needsReconciliation` flag.",
           type: "object",
           properties: {
             type: {
@@ -9267,7 +9267,7 @@ session/thread identifier.`,
           const: "adapterNestedWorkerObserved"
         },
         {
-          description: "A TUI-mode worker adapter's transcript classified an assistant\nmessage as a question awaiting a human answer, rather than a\ncompleted message. Carried on the same `adapterMessageEvent`\nshape as `adapterMessageFinal` (role/text), distinguished\nonly by this `kind`.",
+          description: "A TUI-mode worker adapter's transcript classified an assistant\nmessage as a question awaiting a human answer, rather than a\ncompleted message. Carried on the same `adapterMessageEvent`\nshape as `adapterMessageFinal` (role/text), distinguished\nonly by this kind value.",
           type: "string",
           const: "adapterQuestionDetected"
         },
