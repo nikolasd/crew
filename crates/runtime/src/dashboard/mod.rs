@@ -730,6 +730,15 @@ fn annotate_workers_with_spend(workers: &mut serde_json::Value, runs: &serde_jso
 /// already-committed `RuntimeEvent`s, redacted at write time (ADR-0006) --
 /// reading them back crosses no redaction boundary, unlike constructing a
 /// fresh event from raw content.
+///
+/// `replay_events(0)` -- unbounded, the whole journal -- is not a
+/// considered cost/benefit trade-off; it is inherited unexamined from
+/// `events/replay`'s own default (`afterSequence` unset). A long-lived
+/// project's journal grows without bound, and every connect materializes
+/// the whole thing on the single-threaded actor that owns the one
+/// `rusqlite` connection, queuing every other domain mutation behind it.
+/// The viewer only ever keeps the newest 200 rows (`page.rs`), so a
+/// bounded query is very possible; it just has not been done.
 async fn serve_sse(
     stream: &mut (impl tokio::io::AsyncWrite + Unpin),
     deps: &DashboardDeps,
@@ -754,35 +763,48 @@ async fn serve_sse(
     // (`onmessage` re-fetches `/api/state`, which is idempotent), so a
     // rare double-render of one feed row costs nothing a lost row would.
     let mut rx = deps.events_tx.subscribe();
-    if let Ok(rows) = deps.db.replay_events(0).await {
-        for row in rows {
-            let event: RuntimeEvent = match serde_json::from_str(&row.event_json) {
-                Ok(event) => event,
-                // A row that fails to deserialize predates this binary's
-                // protocol (see `ipc/connection.rs`'s `replay` for the
-                // same condition) -- the dashboard is read-only and
-                // best-effort, so it skips the row rather than refusing
-                // the whole connection over one historical entry.
-                Err(_) => continue,
-            };
-            let envelope = EventEnvelope {
-                sequence: row.sequence,
-                timestamp: row.timestamp,
-                project_id: row.project_id,
-                task_id: row.task_id,
-                worker_id: row.worker_id,
-                run_id: row.run_id,
-                parent_worker_id: None,
-                source: EventSource::Runtime,
-                event,
-                vendor_event_ref: None,
-            };
-            let json = serde_json::to_string(&envelope).unwrap_or_else(|_| "{}".to_string());
-            stream
-                .write_all(format!("data: {json}\n\n").as_bytes())
-                .await?;
+    match deps.db.replay_events(0).await {
+        Ok(rows) => {
+            for row in rows {
+                let event: RuntimeEvent = match serde_json::from_str(&row.event_json) {
+                    Ok(event) => event,
+                    // A row that fails to deserialize predates this
+                    // binary's protocol (see `ipc/connection.rs`'s
+                    // `replay` for the same condition) -- the dashboard
+                    // is read-only and best-effort, so it skips the row
+                    // rather than refusing the whole connection over one
+                    // historical entry.
+                    Err(_) => continue,
+                };
+                let envelope = EventEnvelope {
+                    sequence: row.sequence,
+                    timestamp: row.timestamp,
+                    project_id: row.project_id,
+                    task_id: row.task_id,
+                    worker_id: row.worker_id,
+                    run_id: row.run_id,
+                    parent_worker_id: None,
+                    source: EventSource::Runtime,
+                    event,
+                    vendor_event_ref: None,
+                };
+                let json = serde_json::to_string(&envelope).unwrap_or_else(|_| "{}".to_string());
+                stream
+                    .write_all(format!("data: {json}\n\n").as_bytes())
+                    .await?;
+            }
+            stream.flush().await?;
         }
-        stream.flush().await?;
+        // Unlike a single row's deserialize failure above, a query
+        // failure means this viewer gets NOTHING replayed -- silently
+        // discarding it would reproduce CREW-56's exact original
+        // symptom (an empty feed on a connect that should have had
+        // history) with no trace of why. The connection still proceeds
+        // to the live loop below: a missed replay is not a reason to
+        // refuse a viewer live events too.
+        Err(err) => {
+            tracing::warn!(error = %err, "dashboard_sse_replay_failed");
+        }
     }
 
     loop {

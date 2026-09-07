@@ -925,6 +925,105 @@ async fn sse_stream_replays_already_committed_events_on_a_fresh_connect() {
     harness.server.stop();
 }
 
+/// Review on the replay fix: a viewer that can't get history should still
+/// get what happens next, not a refused or hung connection. Shutting down
+/// the actor is a real way to make the replay query fail (not a mock),
+/// while the live broadcast (independent of the db) still works, so this
+/// proves the connection survives the failure and reaches the live loop.
+///
+/// This does NOT prove the failure gets logged -- this crate's tests have
+/// no tracing-capture harness, so the `tracing::warn!` this same review
+/// asked for is reviewed by reading, not asserted here. Naming that gap
+/// rather than letting "tested" imply more than this test covers.
+#[tokio::test]
+async fn a_replay_query_failure_still_reaches_the_live_loop() {
+    let harness = start_dashboard().await;
+    harness.db.shutdown().await.expect("shutdown the db actor");
+
+    let mut stream = TcpStream::connect(harness.server.local_addr())
+        .await
+        .unwrap();
+    stream
+        .write_all(
+            format!(
+                "GET /events HTTP/1.1\r\nHost: localhost\r\n{}\r\n",
+                authed(harness.server.token())
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut reader = BufReader::new(stream);
+
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    assert!(
+        line.starts_with("HTTP/1.1 200"),
+        "a replay failure must not refuse the connection: {line}"
+    );
+    loop {
+        line.clear();
+        reader.read_line(&mut line).await.unwrap();
+        if line == "\r\n" {
+            break;
+        }
+    }
+
+    // `serve_sse` subscribes before attempting the (failing) replay
+    // query, but the header bytes reaching this reader is not a promise
+    // the connection task's own next line has executed yet -- they run on
+    // separate tasks. Poll rather than assume, so this never becomes a
+    // rare flake under load instead of a real assertion.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while harness.events_tx.receiver_count() == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("serve_sse must subscribe to the live broadcast even when replay fails");
+
+    let run_id = crew_protocol::RunId::new();
+    let envelope = EventEnvelope {
+        sequence: 1,
+        timestamp: Timestamp::now(),
+        project_id: harness.project_id,
+        task_id: None,
+        worker_id: None,
+        run_id: Some(run_id),
+        parent_worker_id: None,
+        source: EventSource::Runtime,
+        event: RuntimeEvent::RunEvent {
+            kind: crew_protocol::RuntimeEventKind::RunWorking,
+            run_id,
+            task_id: TaskId::new(),
+            worker_id: WorkerId::new(),
+            state: "working".to_string(),
+        },
+        vendor_event_ref: None,
+    };
+    harness
+        .events_tx
+        .send(envelope)
+        .expect("sse subscriber listening");
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            if line.starts_with("data:") {
+                return;
+            }
+        }
+    })
+    .await
+    .expect(
+        "the live loop must still run after a replay failure -- \
+         the connection must not hang or close over it",
+    );
+
+    harness.server.stop();
+}
+
 // ----------------------------------------- access control (CREW-12)
 
 /// The property that matters: loopback is not access control. A TCP
