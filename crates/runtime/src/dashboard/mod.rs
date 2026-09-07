@@ -56,7 +56,7 @@ pub use page::PAGE_HTML;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use crew_protocol::{EventEnvelope, ProjectId};
+use crew_protocol::{EventEnvelope, EventSource, ProjectId, RuntimeEvent};
 use std::sync::Arc as StdArc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
@@ -716,6 +716,20 @@ fn annotate_workers_with_spend(workers: &mut serde_json::Value, runs: &serde_jso
 /// until the viewer disconnects, the daemon shuts down, or (on lag) the
 /// subscription skips ahead -- a dashboard that misses frames re-fetches
 /// state; it must never exert backpressure on the daemon.
+///
+/// CREW-56: replays the whole journal as ordinary `data:` frames BEFORE
+/// subscribing to the live broadcast, so a viewer connecting after events
+/// already happened -- the common case, since every page load and every
+/// browser-native SSE reconnect is indistinguishable from a fresh
+/// connect here -- sees them too, instead of only whatever happens next.
+/// Subscribing only after the replay query returns leaves the same small
+/// window `packages/extension/src/client.ts`'s `subscribe()` already
+/// accepts for the RPC layer's own `events/replay` + `events/subscribe`
+/// pair (see its doc comment): a mutation landing in that window is
+/// caught by the NEXT reconnect, not lost forever. Replayed rows are
+/// already-committed `RuntimeEvent`s, redacted at write time (ADR-0006) --
+/// reading them back crosses no redaction boundary, unlike constructing a
+/// fresh event from raw content.
 async fn serve_sse(
     stream: &mut (impl tokio::io::AsyncWrite + Unpin),
     deps: &DashboardDeps,
@@ -731,7 +745,46 @@ async fn serve_sse(
         .await?;
     stream.flush().await?;
 
+    // Subscribe BEFORE querying the replay snapshot: an event committed
+    // between the query and the subscribe call would otherwise never
+    // reach this viewer at all. Subscribing first means the worst case is
+    // the live channel also delivering a handful of the just-replayed
+    // rows a second time -- never a silent gap. The dashboard is a
+    // projection its own viewer already tolerates duplicates from
+    // (`onmessage` re-fetches `/api/state`, which is idempotent), so a
+    // rare double-render of one feed row costs nothing a lost row would.
     let mut rx = deps.events_tx.subscribe();
+    if let Ok(rows) = deps.db.replay_events(0).await {
+        for row in rows {
+            let event: RuntimeEvent = match serde_json::from_str(&row.event_json) {
+                Ok(event) => event,
+                // A row that fails to deserialize predates this binary's
+                // protocol (see `ipc/connection.rs`'s `replay` for the
+                // same condition) -- the dashboard is read-only and
+                // best-effort, so it skips the row rather than refusing
+                // the whole connection over one historical entry.
+                Err(_) => continue,
+            };
+            let envelope = EventEnvelope {
+                sequence: row.sequence,
+                timestamp: row.timestamp,
+                project_id: row.project_id,
+                task_id: row.task_id,
+                worker_id: row.worker_id,
+                run_id: row.run_id,
+                parent_worker_id: None,
+                source: EventSource::Runtime,
+                event,
+                vendor_event_ref: None,
+            };
+            let json = serde_json::to_string(&envelope).unwrap_or_else(|_| "{}".to_string());
+            stream
+                .write_all(format!("data: {json}\n\n").as_bytes())
+                .await?;
+        }
+        stream.flush().await?;
+    }
+
     loop {
         tokio::select! {
             _ = shutdown.changed() => return Ok(()),
