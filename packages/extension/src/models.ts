@@ -109,15 +109,47 @@ export type Resolution =
 /**
  * Reads one provider's model ids from omp's catalogue.
  *
- * Shell-out rather than an API call: omp's model registry lives on the
- * internal agent session (`ctx.session.modelRegistry`), and the context an
- * extension receives does not reach it -- `extCtx` offers `cwd`, `ui`,
- * `sessionManager`, `hasUI`, and `sessionManager` is session metadata only.
- * That is an argument from absence, which is weaker than one from presence:
- * the authoritative source is `@oh-my-pi/pi-coding-agent`'s typings, which
- * are a peerDependency provided at runtime rather than installed, so they
- * could not be read. If an extension-facing API turns out to exist, this is
- * the one function to replace.
+ * Shell-out rather than an API call, and NOT for want of an API. omp does
+ * expose a model facade to extensions, on the very context `execute`
+ * receives -- `extCtx.models: ExtensionModelQuery`, with `list()`,
+ * `current()`, `resolve(spec)` and `family(model)`, plus
+ * `extCtx.modelRegistry`. (Read it from the published typings:
+ * `npm view @oh-my-pi/pi-coding-agent dist.tarball`, then
+ * `dist/types/extensibility/extensions/types.d.ts`. It is a peerDependency
+ * omp provides at runtime, so it is not in `node_modules` here -- which is
+ * not the same as unreadable, and an earlier version of this comment made
+ * exactly that mistake.)
+ *
+ * It is the wrong tool for this particular question, for three reasons
+ * taken from those typings:
+ *
+ *   1. `resolve()` breaks ambiguity by PREFERENCE. It is backed by
+ *      `resolveModelFromString(value, available, matchPreferences)`, and
+ *      `ModelMatchPreferences` carries `usageOrder` ("most-recently-used
+ *      model keys to prefer when ambiguous"), `providerOrder` and
+ *      `deprioritizeProviders`. So an ambiguous shorthand resolves to
+ *      whatever the user last used -- a plausible answer, chosen silently.
+ *      That is the failure this whole module exists to stop, so ambiguity
+ *      has to come back as a refusal naming the candidates instead.
+ *   2. `list()` is scoped to models OMP is authenticated for. Crew is not
+ *      asking "can omp call this model", it is asking "will the `codex`
+ *      binary accept this name" -- and that binary has its own auth and its
+ *      own catalogue. `omp models ls` answers the second: it lists models
+ *      this machine plainly cannot call right now (`lm-studio`), so it is a
+ *      catalogue, not an entitlement list.
+ *   3. `resolve()`'s aliases are omp's configured `modelRoles` (`@slow`,
+ *      `advisor`, `task`), not the vendor's. Nothing in omp knows claude's
+ *      `latest_per_family` or codex's `gpt-5.6` -> Sol, so
+ *      `VENDOR_ALIASES` is needed either way.
+ *
+ * Related trap, since it touches the persistence rule in `decideModel`:
+ * `family()`'s own doc says "compare it; do not persist it (the vocabulary
+ * tracks new releases)". What gets persisted here is a catalogue id, not a
+ * family token. Do not reach for `family()` to canonicalise for storage.
+ *
+ * This is still the one function to replace if that reasoning stops
+ * holding -- e.g. if omp grows an unfiltered catalogue query, reason 2 goes
+ * away.
  *
  * `ls` reads a local cached catalogue; only `refresh` is networked, and this
  * never refreshes. So a stale catalogue is possible, which is exactly why an
