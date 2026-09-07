@@ -470,7 +470,8 @@ integration test harness's own assertions and `#[ignore]`/live gating.
 Four vendor CLIs, plus everything from the top-level [Prerequisites](#prerequisites) above:
 
 ```bash
-claude --version   # verified baseline: Claude Code 2.1.217 (2.1.220 verified to work)
+claude --version   # prints a version and confirms the CLI is authenticated -- do not pin the
+                    # number here; it drifted from 2.1.251 to 2.1.263 in one week during wave 2
 codex --version    # verified baseline: codex-cli 0.145.0 (exact match required for the
                     # schema-compatibility check — see 4b)
 copilot --version  # verified baseline: GitHub Copilot CLI 1.0.73 (1.0.75 verified to work)
