@@ -574,6 +574,56 @@ fn the_mark_carries_none_of_the_forbidden_treatments() {
     );
 }
 
+/// CREW-55: the maintainer's ruling was real vendor logos, not BRAND.md's
+/// own cell colours -- knowingly, given §02 already covers this ground.
+/// Each mark must be embedded verbatim (inline SVG, no network fetch --
+/// `page.rs`'s own no-external-asset constraint) and unaltered: no
+/// recolouring, no reproportioning. Pins a distinctive, unlikely-to-drift
+/// fragment of each file's actual content, the same style the mark
+/// test above uses for the crew logo itself.
+#[test]
+fn dashboard_embeds_the_four_vendor_marks_inline() {
+    let page = crew_runtime::dashboard::PAGE_HTML;
+    for (adapter, fragment) in [
+        ("claude", "Claude Code"),
+        ("codex", "Codex (OpenAI)"),
+        ("copilot", "M205.3 31.4"),
+        ("omp", "Pi symbol with plugin connector"),
+    ] {
+        assert!(
+            page.contains(fragment),
+            "the {adapter} mark must be embedded inline, unaltered: missing {fragment:?}"
+        );
+    }
+}
+
+/// GitHub's mark is `viewBox="0 0 256 208"` -- not square. Forcing it into
+/// a square box (matching the other three) stretches it, which is an
+/// alteration the vendor guidelines forbid as surely as recolouring
+/// would be. A fixed height with width left to the browser preserves the
+/// real aspect ratio regardless of which mark is shown.
+#[test]
+fn the_vendor_marks_render_at_a_fixed_height_with_width_left_free() {
+    let page = crew_runtime::dashboard::PAGE_HTML;
+    assert!(
+        page.contains("width: auto"),
+        "a fixed-height, auto-width box is what keeps a non-square mark \
+         (GitHub's) from being stretched into a square"
+    );
+}
+
+/// An adapter absent from `LOGOS` (no mark supplied, or a future adapter
+/// nobody has added a mark for yet) must keep working exactly as before
+/// CREW-55 -- the coloured cell, never a broken image or a missing icon.
+#[test]
+fn an_adapter_with_no_vendor_mark_still_falls_back_to_the_neutral_cell() {
+    let page = crew_runtime::dashboard::PAGE_HTML;
+    assert!(
+        page.contains("const NEUTRAL"),
+        "the pre-CREW-55 colour fallback must still exist for adapters with no mark"
+    );
+}
+
 #[tokio::test]
 async fn index_serves_the_html_page() {
     let harness = start_dashboard().await;

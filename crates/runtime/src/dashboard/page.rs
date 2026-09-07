@@ -13,7 +13,19 @@
 //! per-event re-fetch ever becomes a cost worth addressing, debounce it;
 //! do not reduce here. See the parent module's own note.
 
-pub const PAGE_HTML: &str = r##"<!doctype html>
+// CREW-55: the four vendor marks are spliced in via `concat!` +
+// `include_str!` at the one point `PAGE_HTML`'s JS builds its `LOGOS`
+// table, so each file's bytes reach the page exactly as `assets/agents/`
+// stores them -- no recolouring, no reproportioning, the same
+// no-alteration rule `SOURCES.md` documents for each. Dark-ground only
+// (BRAND.md §03, `page.rs`'s own dark-only styling): every mark below is
+// either a fixed light colour, a fixed brand colour, or `currentColor`,
+// so none needs a light-theme variant. If this page ever grows a light
+// theme, each mark needs its own light-safe variant from the vendor's
+// own guidelines before it can render there -- do not assume these four
+// files already work on a light ground.
+pub const PAGE_HTML: &str = concat!(
+    r##"<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -41,13 +53,25 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
   .card { background: #171a20; border: 1px solid #23262d; border-radius: 8px; padding: 10px 12px; }
   .card .title { color: #fff; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; }
   .card .meta { font-size: 12px; color: #8a93a4; }
-  /* The per-runtime glyph is BRAND.md's own vocabulary rather than a
-     third-party logo: one cell, one colour, one runtime (§02). Square
-     corners and a flat fill, because §08 forbids rounding the cells,
-     gradients on them, and setting the mark in a pill or tile. */
+  /* CREW-55: the maintainer's ruling was real vendor marks where one is
+     available (`LOGOS`, below), falling back to BRAND.md's own cell
+     vocabulary (§02) for any adapter that has none -- crew's own colour
+     coding, never a guessed brand colour. Square corners and a flat
+     fill on the cell fallback, because §08 forbids rounding it,
+     gradients on it, or setting it in a pill or tile; that rule is
+     crew's own vocabulary and does not extend to a vendor's real mark,
+     which keeps its own shape and colour unaltered instead. */
   .card .runtime { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 12px; }
   .cell { width: 10px; height: 10px; flex: none; }
   td .cell { display: inline-block; vertical-align: -1px; margin-right: 6px; }
+  /* A vendor mark is a row icon naming which adapter ran, never a
+     standalone badge: fixed height keeps every mark the same visual
+     weight as the cell it replaces, and `width: auto` is load-bearing --
+     GitHub's mark is `viewBox="0 0 256 208"`, and forcing it square
+     would stretch it, an alteration the vendor guidelines forbid as
+     surely as recolouring would. */
+  .mark { display: inline-flex; align-items: center; margin-right: 6px; vertical-align: -3px; }
+  .mark svg { height: 14px; width: auto; display: block; }
   /* The task cell absorbs the table's spare width and clips with an
      ellipsis. The server already bounds the string; how much of it fits is
      the viewport's business, which only the browser knows. The full first
@@ -159,6 +183,41 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
   };
   const NEUTRAL = "#8a93a4";
   const brand = adapter => BRAND[adapter] || NEUTRAL;
+  // CREW-55: real vendor marks, inline (no external asset, matching
+  // this page's own no-network-at-render constraint). `ompRpc` and
+  // `omp` share one file for the same reason `BRAND` lists both keys
+  // above -- same runtime, two spellings. An adapter absent here (no
+  // supplied mark yet, or one BRAND lists but has no adapter for --
+  // `hermes`, `opencode`) falls through to the coloured cell exactly as
+  // before CREW-55.
+  const LOGOS = {
+    claude: `"##,
+    include_str!("../../../../assets/agents/claude-code.svg"),
+    r##"`,
+    codex: `"##,
+    include_str!("../../../../assets/agents/codex-openai.svg"),
+    r##"`,
+    copilot: `"##,
+    include_str!("../../../../assets/agents/github-copilot.svg"),
+    r##"`,
+    ompRpc: `"##,
+    include_str!("../../../../assets/agents/omp.svg"),
+    r##"`,
+    omp: `"##,
+    include_str!("../../../../assets/agents/omp.svg"),
+    r##"`,
+  };
+  // Renders the vendor mark for `adapter` if CREW-55 supplied one,
+  // coloured via `colour` for the `currentColor` marks (`codex`) --
+  // fixed-colour marks (`claude`, `copilot`, `omp`) ignore it, which is
+  // correct: their fill is baked in and must never be overridden.
+  // Falls back to the plain BRAND.md cell otherwise.
+  const markOf = (adapter, colour) => {
+    const logo = LOGOS[adapter];
+    return logo
+      ? `<span class="mark" style="color:${colour}">${logo}</span>`
+      : `<span class="cell" style="background:${colour}"></span>`;
+  };
   // `adapter · model` is the worker label until workers are nameable; the
   // id stays reachable as the cell's tooltip. A run whose worker row is
   // missing has no adapter at all, so it shows the id in the neutral
@@ -218,7 +277,7 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
           return `<tr>
           <td title="${esc(run.runId)}">${esc(short(run.runId))}</td>
           <td><span class="state ${esc(run.state)}">${esc(run.state)}</span></td>
-          <td title="${esc(run.workerId)}" style="color:${colour}"><span class="cell" style="background:${colour}"></span>${esc(label || short(run.workerId))}</td>
+          <td title="${esc(run.workerId)}" style="color:${colour}">${markOf(run.adapter, colour)}${esc(label || short(run.workerId))}</td>
           <td class="task" title="${esc(run.taskSummary || "")}">${esc(run.taskSummary || "—")}</td>
           <td class="spend" title="${esc(costTitle(run.usage))}">${esc(spendOf(run.usage))}</td>
           <td title="${esc(run.startedAt || "")}">${esc(clock(run.startedAt))}</td>
@@ -235,7 +294,7 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
           return `<div class="card">
           <div class="title" title="${esc(worker.workerId)}">${esc(short(worker.workerId))}</div>
           <div class="runtime" style="color:${colour}">
-            <span class="cell" style="background:${colour}"></span>
+            ${markOf(adapter, colour)}
             <span>${esc(runtimeLabel(worker.profileRef || {}) || "unknown runtime")}</span>
           </div>
           <div class="meta">spend ${esc(workerSpend(worker.spend))}</div>
@@ -377,4 +436,5 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
 </script>
 </body>
 </html>
-"##;
+"##
+);
