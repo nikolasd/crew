@@ -262,6 +262,16 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
     // transient blip the browser will fix. EventSource keeps retrying
     // either way; only the label changes.
     let failures = 0;
+    // Bumped on every onopen AND onerror -- an ever-increasing identity
+    // for "the current state", as opposed to `failures`, which is a
+    // COUNT and resets to 0 on reconnect. A count is not an identity: a
+    // stale probe from an earlier failure streak can see an equal
+    // `failures` value in a later streak after a successful reconnect
+    // sat between them, and wrongly conclude nothing has changed. This
+    // never repeats, so a probe comparing against it can tell "nothing
+    // has happened since I was launched" from "something happened,
+    // possibly including a full recovery I never saw".
+    let generation = 0;
     // CREW-56: a fresh connect (first load, or EventSource's own silent
     // reconnect) now replays the whole journal as a burst of ordinary
     // `data:` frames before any live one. Re-fetching `/api/state` per
@@ -283,12 +293,15 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
     const seenSequences = new Set();
     source.onopen = () => {
       failures = 0;
+      generation += 1;
       live.textContent = "live";
       live.classList.add("on");
       live.title = "receiving events from the daemon";
     };
     source.onerror = () => {
       failures += 1;
+      generation += 1;
+      const myGeneration = generation;
       live.classList.remove("on");
       live.textContent = "reconnecting…";
       live.title = "the event stream dropped; retrying";
@@ -299,13 +312,14 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
       // per-run token, so this page's cookie is now permanently rejected
       // and EventSource's own retries can never succeed again on their
       // own. fetch() can read the real status; probe it to tell those
-      // apart. `attempt` freezes this failure streak's identity so a
-      // late-arriving probe can never overwrite a state a LATER
-      // onopen/onerror already produced.
-      const attempt = failures;
+      // apart. `myGeneration` freezes this exact failure's identity, not
+      // just its count in this streak -- `generation` also advances on
+      // onopen, so a probe launched here can tell a later onerror from a
+      // full recovery that happened while it was in flight, which a mere
+      // failure count (equal across two different streaks) cannot.
       fetch("/api/state", { cache: "no-store" })
         .then(response => {
-          if (failures !== attempt) return;
+          if (generation !== myGeneration) return;
           if (response.status === 401) {
             // Closing here, unlike the plain-network-failure branch
             // below, is not a "give up" -- it is the honest end state.
@@ -317,7 +331,7 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
             live.title =
               "this dashboard's token is no longer valid -- the daemon behind it restarted " +
               "since this link was issued. Run /crew health to get a fresh link, then reload.";
-          } else if (attempt >= 3) {
+          } else if (failures >= 3) {
             live.textContent = "daemon not running";
             live.title =
               "the daemon is not reachable. It exits when idle, and an open dashboard does not keep it alive. " +
@@ -325,7 +339,7 @@ pub const PAGE_HTML: &str = r##"<!doctype html>
           }
         })
         .catch(() => {
-          if (failures === attempt && attempt >= 3) {
+          if (generation === myGeneration && failures >= 3) {
             live.textContent = "daemon not running";
             live.title =
               "the daemon is not reachable. It exits when idle, and an open dashboard does not keep it alive. " +

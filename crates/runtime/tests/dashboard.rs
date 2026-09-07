@@ -925,18 +925,20 @@ async fn sse_stream_replays_already_committed_events_on_a_fresh_connect() {
     harness.server.stop();
 }
 
-/// Review on the replay fix: a viewer that can't get history should still
-/// get what happens next, not a refused or hung connection. Shutting down
-/// the actor is a real way to make the replay query fail (not a mock),
-/// while the live broadcast (independent of the db) still works, so this
-/// proves the connection survives the failure and reaches the live loop.
-///
-/// This does NOT prove the failure gets logged -- this crate's tests have
-/// no tracing-capture harness, so the `tracing::warn!` this same review
-/// asked for is reviewed by reading, not asserted here. Naming that gap
-/// rather than letting "tested" imply more than this test covers.
+/// A regression guard, not a test of CREW-62's own delta: staff proved by
+/// mutation (`Err(err) => { tracing::warn!(...) }` replaced with the
+/// pre-fix silent `Err(_) => {}`) that this test still passes either way
+/// -- `if let Ok(rows) = ...` already fell through to the live loop on
+/// `Err` before this fix, so the property here was already true on main.
+/// What it protects is real (a viewer that can't get history should
+/// still get what happens next, never a refused or hung connection), and
+/// worth pinning against a future change that starts refusing on a
+/// replay error -- it just is not evidence FOR this PR's change. The
+/// `tracing::warn!` line itself has no assertion: this crate's tests
+/// have no tracing-capture harness, so it is accepted as read-reviewed,
+/// not tested.
 #[tokio::test]
-async fn a_replay_query_failure_still_reaches_the_live_loop() {
+async fn a_replay_failure_must_not_refuse_the_connection() {
     let harness = start_dashboard().await;
     harness.db.shutdown().await.expect("shutdown the db actor");
 
