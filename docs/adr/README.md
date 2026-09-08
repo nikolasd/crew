@@ -40,6 +40,8 @@ never edited to read as though it always agreed with what came later.
 | [0026](0026-headless-retirement.md) | Headless control plane retirement | Accepted |
 | [0027](0027-turn-end-settles-a-run.md) | A run is a conversation the leader closes; a vendor's turn-end is durable evidence, not a terminal state | Accepted |
 | [0028](0028-submit-prompt-is-journaled-redacted-run-intent.md) | The submit prompt is journaled, redacted, as durable run intent | Accepted |
+| [0029](0029-placement-follows-the-backend-embedded-deleted.md) | Display placement is the backend's natural form, and `Embedded` is deleted rather than deprecated | Accepted |
+| [0030](0030-paste-delivery-bounded-on-progress.md) | Paste delivery is bounded on progress, not on elapsed time | Accepted |
 
 ## When to add one
 
