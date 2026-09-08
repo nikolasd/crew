@@ -654,9 +654,9 @@ impl CoordinationBroker {
         let kind = MessageKind::PeerMessage;
         // This route builds its `RunMessage` directly rather than
         // going through `send`, so `send`'s redaction does not cover it --
-        // which is exactly why the redaction crossing added at the three
-        // named routes missed this one. The bound checks above already ran
-        // on the caller's own bytes, so redacting here keeps that ordering.
+        // which is exactly why redacting at `send` alone left this route
+        // uncovered. The bound checks above already ran on the caller's
+        // own bytes, so redacting here keeps that ordering.
         let payload =
             self.redact_worker_text(description.unwrap_or_else(|| artifact_ref.clone()))?;
         let mut result = self
