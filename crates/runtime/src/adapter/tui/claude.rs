@@ -217,7 +217,18 @@ impl TuiVendor for ClaudeTuiVendor {
                 ),
             },
             None => VersionVerdict::Incompatible {
-                detail: format!("could not parse a MAJOR.MINOR.PATCH version from {probed:?}"),
+                // CREW-78 review: never interpolate `probed` here -- it is
+                // the vendor's raw `--version` stdout, and this is
+                // precisely the branch that fires when it is NOT a
+                // version (an auth error, an update notice, a stack
+                // trace). `AdapterErrorCode::IncompatibleVersion` built
+                // from this can reach `fail_start`, which now journals
+                // `detail` durably. The adapter and operation already
+                // scope the message; a parsed version (the branch above)
+                // is not vendor bytes and stays interpolated.
+                detail: "could not parse a MAJOR.MINOR.PATCH version from the vendor's \
+                         --version output"
+                    .to_string(),
             },
         }
     }
@@ -738,6 +749,25 @@ mod tests {
             vendor().version_gate("not-a-version"),
             VersionVerdict::Incompatible { .. }
         ));
+    }
+
+    /// CREW-78 review guard: the unparseable branch fires precisely when
+    /// `--version` did NOT print a version -- an auth error, an update
+    /// notice, a stack trace are all things a real vendor CLI could print
+    /// there instead, and this `detail` can reach the durable journal
+    /// through `fail_start`. It must never echo what was actually probed.
+    #[test]
+    fn version_gate_on_unparseable_output_never_echoes_the_probed_junk() {
+        let junk = "FATAL: auth token abc123-secret-looking-value expired, stack trace follows";
+        match vendor().version_gate(junk) {
+            VersionVerdict::Incompatible { detail } => {
+                assert!(
+                    !detail.contains("abc123-secret-looking-value"),
+                    "detail must not echo the vendor's raw --version output: {detail:?}"
+                );
+            }
+            other => panic!("junk output must be incompatible, got {other:?}"),
+        }
     }
 
     #[test]

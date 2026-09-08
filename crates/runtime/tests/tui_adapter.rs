@@ -992,6 +992,159 @@ async fn discovery_failure_fails_the_run_tears_down_the_pty_and_closes_the_pane(
     harness.shutdown().await;
 }
 
+/// CREW-78 instance 1 (2026-09-08 attempt-3 conformance run, `01a08216`/
+/// `01a08251`): a start failure must never journal a bare `ProcessExited`.
+/// `fail_start` now emits a failure-shaped `ProtocolHealthChanged{healthy:
+/// false}` diagnostic naming the real reason (discovery timeout, here)
+/// BEFORE the `ProcessExited` its teardown produces -- so the journal
+/// carries the actual diagnosis, not just a clean exit indistinguishable
+/// from a run that did real work. `terminal_state_for`'s own fix (never
+/// mapping an exit code to `succeeded`) is covered separately in
+/// `run_lifecycle.rs`'s unit tests; this test is about durability of the
+/// failure reason, not the resulting `RunState`.
+#[tokio::test]
+async fn discovery_failure_journals_a_failure_shaped_diagnostic_before_the_exit() {
+    let _guard = SERIAL_PTY.lock().await;
+    let harness = harness().await;
+    let work_dir = tempfile::Builder::new()
+        .prefix("bat-tui-mock-silent-diag-")
+        .tempdir_in("/tmp")
+        .expect("mock work dir");
+    let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Silent);
+
+    let mut timings = fast_timings();
+    timings.discovery_timeout = Duration::from_millis(250);
+
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let worker_id = WorkerId::new();
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        timings,
+        ResumeContext::default(),
+    );
+
+    let sink = RecordingSink::new();
+
+    let result = adapter
+        .start(spec(run_id, task_id, worker_id, "hello"), sink.clone())
+        .await;
+    result.expect_err("discovery must time out against the silent mock vendor");
+
+    let payloads = sink.payloads();
+    let health_before_exit = payloads.iter().enumerate().find_map(|(i, p)| match p {
+        AdapterEventPayload::ProtocolHealthChanged { healthy, detail } if !*healthy => {
+            Some((i, detail.value.clone()))
+        }
+        _ => None,
+    });
+    let (health_index, detail) = health_before_exit.unwrap_or_else(|| {
+        panic!(
+            "a failure-shaped ProtocolHealthChanged{{healthy: false}} must be journaled on a \
+             start failure: {payloads:?}"
+        )
+    });
+    assert!(
+        !detail.trim().is_empty(),
+        "the diagnostic must name the actual failure, not be empty"
+    );
+
+    let exit_index = payloads
+        .iter()
+        .position(|p| matches!(p, AdapterEventPayload::ProcessExited { .. }))
+        .expect("a ProcessExited must still be journaled so the run settles terminal");
+    assert!(
+        health_index < exit_index,
+        "the failure diagnostic must be journaled BEFORE the ProcessExited it precedes, so the \
+         ProcessExited is never bare: payloads = {payloads:?}"
+    );
+
+    harness.shutdown().await;
+}
+
+/// CREW-78 review guard (staff, "this PR makes `AdapterError` detail
+/// strings durable for the first time"): before this fix, `detail` only
+/// ever reached the RPC response to the caller, so a start-failure path
+/// echoing raw vendor bytes cost only a chatty error message. Now that
+/// `fail_start` journals it, that would be a durable leak of whatever the
+/// vendor had just written to its pty. `MockScript::Bursty` writes a
+/// distinctive, fixed marker (`burst-0`..`burst-3`) to the pty and never
+/// creates a transcript, so discovery legitimately times out with pty
+/// content already flowing -- the exact shape (readiness satisfied,
+/// discovery not) `readiness_gate_injects_only_after_the_quiet_window`
+/// also exercises. The failure diagnostic must describe the TIMEOUT
+/// (nonce, root, duration -- all crew's own values, per `DiscoveryError::
+/// Timeout`'s `Display`), never the bytes the vendor actually sent.
+#[tokio::test]
+async fn discovery_failure_diagnostic_never_echoes_pty_bytes_the_vendor_sent() {
+    let _guard = SERIAL_PTY.lock().await;
+    let harness = harness().await;
+    // Deliberately NOT named after the mock script (a prior version used
+    // "bursty" here, which leaked into `DiscoveryError::Timeout`'s own
+    // `root` path and made the assertion below a false positive against
+    // crew's OWN fixture naming, not the vendor's bytes).
+    let work_dir = tempfile::Builder::new()
+        .prefix("bat-tui-mock-vendor-bytes-diag-")
+        .tempdir_in("/tmp")
+        .expect("mock work dir");
+    let vendor = MockTuiVendor::new(work_dir.path(), MockScript::Bursty);
+
+    let mut timings = fast_timings();
+    // Generous relative to the ~320ms burst (4 x 80ms): long enough that
+    // the vendor's bytes have definitely arrived and been observed before
+    // discovery gives up, short enough to keep the test fast. See
+    // `readiness_gate_injects_only_after_the_quiet_window`'s own comment
+    // for why a loaded CI runner still needs real margin here.
+    timings.discovery_timeout = Duration::from_secs(2);
+
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let worker_id = WorkerId::new();
+    let adapter = build_adapter(
+        vendor,
+        &harness,
+        run_id,
+        task_id,
+        worker_id,
+        timings,
+        ResumeContext::default(),
+    );
+
+    let sink = RecordingSink::new();
+
+    let result = adapter
+        .start(spec(run_id, task_id, worker_id, "hello"), sink.clone())
+        .await;
+    result.expect_err("discovery must time out against a vendor that never creates a transcript");
+
+    let payloads = sink.payloads();
+    let detail = payloads
+        .iter()
+        .find_map(|p| match p {
+            AdapterEventPayload::ProtocolHealthChanged { healthy, detail } if !*healthy => {
+                Some(detail.value.clone())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("a failure diagnostic must be journaled: {payloads:?}"));
+
+    // The exact marker `BURSTY_SCRIPT` echoes to the pty, not the loose
+    // substring "burst" -- the fixture's own directory/vendor naming
+    // legitimately contains that (see the tempdir prefix note above), so
+    // only the precise vendor-written token proves the byte boundary.
+    assert!(
+        !detail.contains("burst-0"),
+        "the diagnostic must never echo raw vendor pty output, only crew's own structured \
+         failure description: {detail:?}"
+    );
+
+    harness.shutdown().await;
+}
+
 #[tokio::test]
 async fn send_writes_the_composed_bytes_to_the_pty() {
     let _guard = SERIAL_PTY.lock().await;

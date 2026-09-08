@@ -34,6 +34,33 @@ impl RunState {
         )
     }
 
+    /// The terminal state for "the leader never rendered a verdict" on a
+    /// run that had already done real work -- shared by CREW-78 (a vendor
+    /// process exits cleanly while parked in `waitingUser`/`waitingPeer`/
+    /// `paused` with its turn already settled, and no `run/finish` call
+    /// ever arrived) and CREW-80 (the leader disconnects entirely while a
+    /// turn sits settled). Not `succeeded`: nothing said it was -- only
+    /// `run/finish` may say that (ADR-0027). Not `failed`: the run did
+    /// real work and produced a result, unlike the case
+    /// `terminal_state_for` maps to `failed` instead. Not `lost`: the
+    /// supervisor observed exactly what happened. `cancelled` is the
+    /// existing word for "ended without a verdict" (`run/cancel`'s own
+    /// terminal state), reused rather than adding a fifth terminal state.
+    ///
+    /// **Provenance:** `cancelled` is not this function's author's
+    /// preference -- it is the maintainer's ruling, made 2026-09-09 for
+    /// CREW-78 and CREW-80 together (both tickets asked the same
+    /// question independently; the answer is one word for both). A
+    /// CREW-80 reader arriving here should read this as a closed
+    /// decision, not a default to reconsider.
+    ///
+    /// One function, not a literal repeated at each call site, so the two
+    /// tickets can never drift on the word.
+    #[must_use]
+    pub fn unrendered_verdict() -> RunState {
+        RunState("cancelled".to_string())
+    }
+
     /// Returns whether a transition from `self` to `target` is legal
     /// according to the authoritative lifecycle table.
     #[must_use]

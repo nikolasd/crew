@@ -189,8 +189,14 @@ impl TuiVendor for CopilotTuiVendor {
         match known {
             Some(_) => VersionVerdict::Compatible,
             None => VersionVerdict::Incompatible {
+                // CREW-78 review: never interpolate `probed` here -- it is
+                // the vendor's raw `--version` prose, and this whole
+                // branch fires precisely when it matched no known-verified
+                // string (an auth error, an update notice, a stack trace
+                // included). The verified-versions list is crew's own
+                // data, not vendor bytes, and stays interpolated.
                 detail: format!(
-                    "copilot probe {probed:?} matches none of the empirically verified \
+                    "copilot's --version output matches none of the empirically verified \
                      versions {:?}; see tui::copilot_compatibility",
                     compatibility::COPILOT_KNOWN_CLI_VERSIONS
                         .iter()
@@ -474,6 +480,28 @@ mod tests {
             vendor.version_gate(""),
             VersionVerdict::Incompatible { .. }
         ));
+    }
+
+    /// CREW-78 review guard: the no-match branch fires precisely when
+    /// `--version` matched none of the empirically verified strings -- an
+    /// auth error, an update notice, a stack trace are all things a real
+    /// vendor CLI could print there instead, and this `detail` can reach
+    /// the durable journal through `fail_start`. It must never echo what
+    /// was actually probed (the verified-versions list it DOES include is
+    /// crew's own data, not vendor bytes).
+    #[test]
+    fn version_gate_on_unmatched_output_never_echoes_the_probed_junk() {
+        let vendor = CopilotTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let junk = "FATAL: auth token abc123-secret-looking-value expired, stack trace follows";
+        match vendor.version_gate(junk) {
+            VersionVerdict::Incompatible { detail } => {
+                assert!(
+                    !detail.contains("abc123-secret-looking-value"),
+                    "detail must not echo the vendor's raw --version output: {detail:?}"
+                );
+            }
+            other => panic!("junk output must be incompatible, got {other:?}"),
+        }
     }
 
     #[test]
