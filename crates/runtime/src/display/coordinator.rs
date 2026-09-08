@@ -245,10 +245,17 @@ impl PaneCoordinator {
                 // No candidate left to try. Reachable only with a
                 // hand-built registry that never registered `Hidden` (a
                 // test); production registries built by
-                // `DisplayRegistry::with_default_backends` always do, so
-                // this can only be hit before any real backend was ever
-                // reserved.
-                debug_assert!(!reserved, "Hidden always succeeds in production registries");
+                // `DisplayRegistry::with_default_backends` always do. Can
+                // still be hit AFTER a real candidate was reserved and
+                // then failed (a retry's remaining candidates all turn
+                // out unavailable), so the reservation must be released
+                // here too, exactly like the sibling `registry.find`
+                // branch just below -- a debug assertion is not a
+                // release, and would leak the slot silently in a release
+                // build.
+                if reserved {
+                    self.release_pane(req.run_id);
+                }
                 return self.attach_hidden(req.run_id, req.placement).await;
             };
             if is_first_attempt {
