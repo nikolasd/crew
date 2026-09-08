@@ -15,6 +15,64 @@ method, an OMP tool, or the monitor — the automated suites can tell you a func
 right value; only these checks can tell you the *whole system*, wired together, still behaves the
 way `architecture.md` says it does.
 
+## How to use this document
+
+1. **Adding a check:** append a new numbered section (or a lettered sub-step under an existing one)
+   once a change needs a check no existing section covers — what to run, in what order, exactly what
+   you should see, and what it means if you don't, matching the existing sections' shape.
+2. **Revisiting:** when the behavior a check verifies changes, rewrite that check in place —
+   command, expected output, and all — rather than leaving the stale version next to a new one; a
+   check that describes behavior the system no longer has is worse than no check.
+3. **Retiring:** when a check no longer applies (the feature it verified was removed or superseded),
+   remove it from this document and record the retirement in `engineering-lessons.md` or an ADR, the
+   same rule `future-features.md` uses for its own entries.
+
+This document is the complete, current list of these checks — pruning it when a check goes stale is
+separate work from writing this rule down, and has not happened yet.
+
+## Topic index
+
+- [Prerequisites](#prerequisites)
+- [Environment variables and configuration](#environment-variables-and-configuration)
+- [Owning what you test](#owning-what-you-test)
+- [1. The daemon through OMP (no model call, no extension CLI needed)](#1-the-daemon-through-omp-no-model-call-no-extension-cli-needed)
+  - [Direct CLI testing (alternative to extension)](#direct-cli-testing-alternative-to-extension)
+- [2. The embedded monitor (`/crew` slash command, no model call)](#2-the-embedded-monitor-crew-slash-command-no-model-call)
+  - [2a. Daemon death and widget healing (no model call)](#2a-daemon-death-and-widget-healing-no-model-call)
+  - [Direct CLI monitor (alternative to extension)](#direct-cli-monitor-alternative-to-extension)
+- [3. The orchestration tools (needs a real model call)](#3-the-orchestration-tools-needs-a-real-model-call)
+  - [3a. Create a task, a worker, and submit a run](#3a-create-a-task-a-worker-and-submit-a-run)
+  - [3b. Watch it live — two processes, on purpose](#3b-watch-it-live-two-processes-on-purpose)
+  - [3c. Replay after a full restart](#3c-replay-after-a-full-restart)
+  - [3d. What this walkthrough can't cover](#3d-what-this-walkthrough-cant-cover)
+  - [3e. Adapter model selection and persistence (no model call)](#3e-adapter-model-selection-and-persistence-no-model-call)
+  - [Clean up](#clean-up)
+- [4. Worker adapters](#4-worker-adapters)
+  - [4a. Prerequisites](#4a-prerequisites)
+  - [4b. Per-adapter smoke, fixture mode (no model call)](#4b-per-adapter-smoke-fixture-mode-no-model-call)
+  - [4c. Live mode (requires a real vendor CLI session; makes a real, billed model call)](#4c-live-mode-requires-a-real-vendor-cli-session-makes-a-real-billed-model-call)
+  - [4d. AdapterRegistry wiring](#4d-adapterregistry-wiring)
+  - [4e. Worker MCP coordination tools](#4e-worker-mcp-coordination-tools)
+  - [4f. TUI pane attach + out-of-band input (journal check needs no model call)](#4f-tui-pane-attach-out-of-band-input-journal-check-needs-no-model-call)
+- [5. Cross-agent workspace isolation (requires a real adapter)](#5-cross-agent-workspace-isolation-requires-a-real-adapter)
+  - [5a. Prerequisites](#5a-prerequisites)
+  - [5b. Register profiles and create workers](#5b-register-profiles-and-create-workers)
+  - [5c. Submit two concurrent isolated runs](#5c-submit-two-concurrent-isolated-runs)
+  - [5d. Poll runs to completion](#5d-poll-runs-to-completion)
+  - [5e. Cross-workspace review via `crew_peer_workspace`](#5e-cross-workspace-review-via-crew_peer_workspace)
+  - [5f. Clean up](#5f-clean-up)
+- [6. Reading a finished run's output (`run/result` — needs a real model call)](#6-reading-a-finished-runs-output-runresult-needs-a-real-model-call)
+  - [6a. One run, one answer](#6a-one-run-one-answer)
+  - [6b. Chaining: A's answer becomes B's prompt](#6b-chaining-as-answer-becomes-bs-prompt)
+- [7. Run completion semantics, live (ADR-0027 — needs a real model call)](#7-run-completion-semantics-live-adr-0027-needs-a-real-model-call)
+  - [7a. A finished turn settles the run; the pane stays open](#7a-a-finished-turn-settles-the-run-the-pane-stays-open)
+  - [7b. Follow-up steering into the live pane](#7b-follow-up-steering-into-the-live-pane)
+  - [7c. A subagent's turn never settles the parent (isSidechain)](#7c-a-subagents-turn-never-settles-the-parent-issidechain)
+  - [7d. Large prompts arrive whole](#7d-large-prompts-arrive-whole)
+- [8. The dashboard (no model call)](#8-the-dashboard-no-model-call)
+- [Reading the widget line](#reading-the-widget-line)
+- [If something doesn't match](#if-something-doesnt-match)
+
 ## Prerequisites
 
 Same as [development.md](development.md#prerequisites): Rust stable, Bun 1.3.14+,
@@ -37,7 +95,9 @@ export CREW_STATE_DIR=/path/to/state
 # dependencies. Live conformance and the availability probe run by default -- no gate needs to be
 # set to exercise a real vendor CLI. Set this only to forbid observation-only vendor invocation
 # (live conformance suites, the availability probe, #[ignore]d live tests) on a machine without
-# the CLIs installed, or in CI:
+# the CLIs installed, or in CI. This variable gates the conformance harness and test suite only --
+# a running daemon's run/submit spawns the real vendor CLI regardless, so any live run through
+# omp/crewd in the sections below is a real, possibly billed, vendor launch:
 export CREW_DISABLE_VENDOR_CLI=1
 
 # Path override for the crewd binary (bypasses packaged binary discovery)

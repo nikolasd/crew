@@ -557,6 +557,33 @@ question, since everything it needs is already a local value at its call site.
 
 ---
 
+## Legacy `/crew-status`, `/crew-doctor`, `/crew-config` Forwarders (2026-08-29)
+
+**References:** `packages/extension/src/index.ts:5-6`
+
+### What it is
+
+Three deprecation forwarders — `/crew-status`, `/crew-doctor`, `/crew-config` — kept alongside their
+replacements (`/crew health`, `/crew doctor`, `/crew config`) so a script or muscle-memory habit built
+against the pre-consolidation command names keeps working. The module's own entry-point comment
+documents them, verbatim: "The legacy `/crew-status`, `/crew-doctor`, `/crew-config` are deprecation
+forwarders removed in the release after next" (`index.ts:5-6`).
+
+### Why deferred
+
+The forwarders cost nothing to keep running today and removing them before anyone who depended on
+the old names has had a release cycle to notice would trade a small maintenance saving for a real
+breakage. The comment's own "release after next" already states when removal is due; there is
+nothing to design, only a date to keep.
+
+### Decision trigger
+
+The comment was written against 0.6.0, the version shipped at the time — so "next" is 0.7.0 and "the
+release after next" is 0.8.0. Remove the three forwarders (and this entry) as part of the 0.8.0
+checklist.
+
+---
+
 ## How to use this document
 
 1. **Adding a future feature:** Append a new section with the feature name, what it is, concrete scenarios that justify it, why it's deferred, and a decision trigger.

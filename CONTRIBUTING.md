@@ -197,6 +197,17 @@ When contributing, consider updating documentation:
 - **docs/future-features.md** — consciously deferred features with decision triggers
 - **docs/adr/** — architectural decisions
 
+User-facing docs (`user-guide.md`, `cli-reference.md`, `operations.md`, `compatibility.md`) describe
+shipped behavior only. A decision that has been made but not yet implemented belongs in an ADR or in
+`future-features.md` until the code catches up — write it down there instead of in a user-facing doc,
+even when the semantics are already settled and the wording is easy to draft early. One instance of
+this: a widget-visibility decision was written into the user guide the same day it was decided,
+ahead of the change that would make it true — worth checking that a doc changed alongside a decision
+actually describes what shipped, not what was agreed.
+
+Citations (in code comments, ADRs, or docs) may only point at something that survives — an in-repo
+path, an ADR, a PR number, or a URL — never a local or gitignored file.
+
 ## Questions?
 
 - Open an issue for questions or discussions

@@ -70,8 +70,11 @@ crewd stop --repo /path/to/repo
 crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl
 ```
 
-`CREW_DISABLE_VENDOR_CLI=1` skips live vendor CLI calls — set it for any local test run to avoid
-billed model calls; CI always sets it. Rust test suite names live under `crates/runtime/tests/`
+`CREW_DISABLE_VENDOR_CLI=1` skips live vendor CLI calls made by the conformance harness and test
+suite only — set it for any local test run to avoid billed model calls; CI always sets it. It does
+not gate a running daemon: `run/submit` against a live `crewd` spawns the real vendor CLI regardless
+of this variable, so any live run through the daemon is a real, possibly billed, vendor launch. Rust
+test suite names live under `crates/runtime/tests/`
 (`adapter_contract`, `adapter_registry`, `approval`, `audit`, `coordination`, `redaction_boundary`,
 `workspace_lease`, etc.) — grep that directory when you need the exact name for `cargo test --test`.
 
@@ -170,6 +173,5 @@ These are enforced in review, not just style preference:
 
 ## Source-of-truth docs (read before assuming a gap is unintentional)
 
-- `REVIEW.md` (gitignored — present on the maintainer's machine, not in fresh clones) — open implementation gaps and findings by severity, verified against the current code (not planning docs); check before re-reporting something already tracked. Engineering lessons from closed findings: `docs/engineering-lessons.md`.
 - `docs/future-features.md` — items deliberately deferred, each with a decision trigger.
 - `docs/engineering-lessons.md` — past bugs and the invariant/test that now guards against each.
