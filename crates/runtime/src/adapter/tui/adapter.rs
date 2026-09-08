@@ -50,7 +50,7 @@ use crate::config::crew::{AdapterConfig, CloseOnExit};
 use crate::display::{
     AttachServer, AttachTarget, PaneAttachOutcome, PaneAttachRequest, PaneCoordinator,
 };
-use crate::supervisor::{EscalationTimings, PtyProcess};
+use crate::supervisor::{EscalationTimings, PtyProcess, SupervisorError};
 
 use super::discovery::{DiscoveryError, find_transcript_by_nonce};
 use super::input::{PASTE_CHUNK_BYTES, paste_chunks};
@@ -297,13 +297,43 @@ const ENTER_IDLE_CAP: Duration = Duration::from_secs(90);
 /// synchronization -- correctness comes from the framing and the timeout.
 const PASTE_CHUNK_PAUSE: Duration = Duration::from_millis(15);
 
-/// How long a single paste chunk may sit unaccepted before the prompt is
-/// declared undeliverable. `PtyProcess::write_input` resolves only once
-/// the kernel has taken every byte, so a chunk that never completes means
-/// the vendor has stopped reading its stdin -- the one case where the old
-/// single blocking write would hang or silently lose the tail. Failing
-/// here is the "never a silent fragment" half of CREW-4.
-const PASTE_CHUNK_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the PTY may accept NOT ONE BYTE before a paste is declared
+/// stalled (CREW-70).
+///
+/// This is the primary signal; [`PASTE_CHUNK_WRITE_TIMEOUT`] is only the
+/// backstop behind it. Two seconds because a vendor that has accepted
+/// nothing at all for two full seconds is meaningfully stuck, while a
+/// vendor -- or a loaded host -- that is merely slow keeps the write
+/// alive by accepting anything at all.
+///
+/// Deliberately NOT a [`TuiTimings`] field. It is a failure bound, and
+/// CREW-65 is what happens when a failure bound is made configurable and
+/// then accelerated for a whole test suite: an accelerated 500ms paste
+/// bound failed the bracketed-paste test 100% of the time under CPU
+/// load. The one test that wants to trip this pays the two seconds.
+const PASTE_STALL_WINDOW: Duration = Duration::from_secs(2);
+
+/// The absolute backstop behind [`PASTE_STALL_WINDOW`]: how long one
+/// chunk may take even while the vendor keeps accepting bytes. Only a
+/// vendor that dribbles -- accepting something in every stall window but
+/// never finishing -- ever reaches it.
+///
+/// **A backstop must be much larger than the primary signal, or it IS the
+/// primary signal.** CREW-70 nearly shipped with this left at the 10s it
+/// had when it *was* the only bound, which would have made the new
+/// failure set a strict superset of the old one: every write the flat
+/// bound failed, plus every write that paused for two seconds. A progress
+/// bound underneath an unchanged ceiling is not a progress bound.
+///
+/// 90 seconds, matching [`ENTER_IDLE_CAP`] rather than being picked as a
+/// round number: both are the same decision -- the point at which crew
+/// stops waiting on a vendor regardless of what it appears to be doing --
+/// and having one figure for it in this file is worth more than tuning
+/// two. It is well above any excursion observed (CREW-65 measured the old
+/// 10s exceeded under 2x CPU oversubscription; nothing has been seen near
+/// 90s) and well below the point where a start reads as hung rather than
+/// slow.
+const PASTE_CHUNK_WRITE_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// The prompt-injection half of the readiness gate: the text to type once
 /// the vendor's stdin is wired, and the bound on each chunk's write.
@@ -312,10 +342,144 @@ struct PromptInjection<'a> {
     write_timeout: Duration,
 }
 
+/// Why one chunk's write did not complete.
+#[derive(Debug)]
+enum ChunkWriteError {
+    /// The write itself failed (the vendor closed its side, an io error).
+    Failed(SupervisorError),
+    /// Not one byte was accepted for `waited`. That is the window
+    /// actually waited, not [`PASTE_STALL_WINDOW`]: the ceiling clamps
+    /// the last window, so reporting the constant would overstate the
+    /// wait whenever a caller's ceiling is shorter than the window.
+    Stalled { accepted: u64, waited: Duration },
+    /// Bytes kept being accepted, but the chunk was still unfinished at
+    /// [`TuiTimings::paste_write_timeout`]. Distinct from `Stalled`
+    /// because the two say opposite things about the vendor.
+    Ceiling { accepted: u64 },
+    // `accepted` in both variants is bytes accepted DURING THIS PASTE.
+    // `PtyProcess::bytes_accepted` is cumulative for the process's
+    // lifetime, so a follow-up `send` would otherwise report every byte
+    // of the original prompt as progress on this one.
+}
+
+/// Writes one chunk, bounding the time the PTY may accept NOTHING rather
+/// than the time the whole write may take (CREW-70).
+///
+/// The decision logic lives in [`bound_on_progress`]; this supplies the
+/// PTY's own write future and byte counter.
+///
+/// A write that is advancing is never failed for being slow: each expiry
+/// of [`PASTE_STALL_WINDOW`] re-reads [`PtyProcess::bytes_accepted`] and
+/// keeps waiting if it moved. `paste_write_timeout` remains as an
+/// absolute per-chunk backstop, so a vendor accepting one byte per window
+/// cannot hold delivery open forever.
+///
+/// **This cannot tell a starved writer thread from a vendor that has
+/// stopped reading, and no wording of the error should claim otherwise.**
+/// The counter is incremented by the writer thread, so when that thread
+/// is not being scheduled the observable is identical to a vendor that
+/// accepts nothing: the counter simply stops moving. Distinguishing them
+/// would need a second signal -- a heartbeat the thread bumps each
+/// iteration, separating "running but bytes static" from "not running at
+/// all" -- and nothing currently acts differently on the answer, so it is
+/// deliberately not built. `Stalled`'s message names both causes for that
+/// reason; it is not hedging, it is the honest limit of what was
+/// observed.
+///
+/// What the bound DOES buy is that the distinction stops mattering for
+/// the failure this ticket exists for: a starved thread needs to accept
+/// one byte per window to keep the write alive, where the previous flat
+/// bound required it to finish a whole 1KB chunk inside 10 seconds.
+/// CREW-65 measured that flat bound failing 3 of 14 runs under 2x CPU
+/// oversubscription.
+async fn write_chunk(
+    pty: &Arc<PtyProcess>,
+    chunk: &[u8],
+    ceiling: Duration,
+    baseline: u64,
+) -> Result<(), ChunkWriteError> {
+    let write = pty.write_input(chunk);
+    let progress = || pty.bytes_accepted();
+    bound_on_progress(write, progress, PASTE_STALL_WINDOW, ceiling, baseline).await
+}
+
+/// [`write_chunk`]'s decision logic, with the PTY factored out so it can
+/// be driven directly.
+///
+/// `write` is the pending write; `progress` reports cumulative bytes the
+/// far side has accepted. Extracted as its own function for the reason
+/// CREW-67's `resolve_property_reference` was: the interesting cases here
+/// are timing ones, and a test that has to arrange a real vendor to
+/// dribble bytes at a chosen rate is testing the tty buffer as much as
+/// the bound. Driven directly, "advancing slowly" and "stopped" are two
+/// closures.
+async fn bound_on_progress<F, P>(
+    write: F,
+    progress: P,
+    stall_window: Duration,
+    ceiling: Duration,
+    baseline: u64,
+) -> Result<(), ChunkWriteError>
+where
+    F: Future<Output = Result<(), SupervisorError>>,
+    P: Fn() -> u64,
+{
+    let deadline = tokio::time::Instant::now() + ceiling;
+    tokio::pin!(write);
+    let mut last_accepted = progress();
+
+    loop {
+        // Never wait past the ceiling, so the backstop is exactly as
+        // tight as it claims to be.
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return Err(ChunkWriteError::Ceiling {
+                accepted: progress().saturating_sub(baseline),
+            });
+        }
+        let window = stall_window.min(deadline - now);
+
+        match tokio::time::timeout(window, &mut write).await {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(err)) => return Err(ChunkWriteError::Failed(err)),
+            Err(_) => {
+                let accepted = progress();
+                if accepted > last_accepted {
+                    // Advancing. Keep waiting -- this is the whole point:
+                    // a write that is getting somewhere is never failed
+                    // for being slow, only for stopping.
+                    last_accepted = accepted;
+                    continue;
+                }
+                return Err(ChunkWriteError::Stalled {
+                    accepted: accepted.saturating_sub(baseline),
+                    waited: window,
+                });
+            }
+        }
+    }
+}
+
 /// Writes `text` into the PTY as one bracketed paste, in paced chunks.
 ///
 /// The framing makes every byte of `text` content rather than keystrokes,
 /// so a multi-line prompt is no longer submitted line-by-line (CREW-4).
+///
+/// **CREW-4's invariant, restated (CREW-70).** "Never a silent fragment"
+/// has never meant the write is atomic -- a chunked write can fail after
+/// earlier chunks landed, so bytes may already have reached the vendor.
+/// It means no fragment is ever *silent*, and that is now satisfied at
+/// two distinct points:
+///
+/// - **A truncating vendor** accepts every byte and then drops some in
+///   its own composer, which is invisible at the PTY boundary. Caught by
+///   comparing the recorded prompt (CREW-13,
+///   `a_vendor_that_records_only_part_of_the_prompt_fails_the_start`) --
+///   untouched by this change, since that write succeeds.
+/// - **A write that does not complete** now reports how many bytes of
+///   this paste the vendor accepted before it stopped, so a partial
+///   delivery is stated rather than merely failed. That count is what
+///   the explicit write loop in `PtyProcess` exists to make knowable.
 /// The submit byte is never part of this: callers deliver the vendor's own
 /// submit convention separately, once the TUI is idle.
 async fn write_paste(
@@ -327,11 +491,15 @@ async fn write_paste(
 ) -> Result<(), AdapterError> {
     let chunks = paste_chunks(text, PASTE_CHUNK_BYTES);
     let total = chunks.len();
+    // Progress is reported relative to this paste, not to the process.
+    let baseline = pty.bytes_accepted();
     for (index, chunk) in chunks.into_iter().enumerate() {
-        match tokio::time::timeout(write_timeout, pty.write_input(&chunk)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => return Err(AdapterError::process(kind, op, err.to_string())),
-            Err(_) => {
+        match write_chunk(pty, &chunk, write_timeout, baseline).await {
+            Ok(()) => {}
+            Err(ChunkWriteError::Failed(err)) => {
+                return Err(AdapterError::process(kind, op, err.to_string()));
+            }
+            Err(ChunkWriteError::Stalled { accepted, waited }) => {
                 // Report what was OBSERVED, not a diagnosis of it. What
                 // elapsed is our own write's acknowledgement: `write_input`
                 // queues the chunk to a separate writer thread and awaits a
@@ -346,14 +514,27 @@ async fn write_paste(
                     kind,
                     op,
                     format!(
-                        "chunk {} of {total} of a {} byte prompt was not acknowledged within \
-                         {:?}, so the prompt was not delivered: either the vendor has stopped \
-                         reading its stdin, or this host is too loaded to complete the write \
-                         (the timeout bounds our own writer thread and channel, not the \
-                         vendor's read alone)",
+                        "the vendor accepted no input for {waited:?} while chunk {} \
+                         of {total} of a {} byte prompt was being written -- {accepted} bytes of \
+                         the prompt had been accepted, so it was not delivered. Either the \
+                         vendor has stopped reading its stdin, or this host is too loaded to run \
+                         the writer thread (this bound covers our own writer thread and channel, \
+                         not the vendor's read alone)",
                         index + 1,
                         text.len(),
-                        write_timeout
+                    ),
+                ));
+            }
+            Err(ChunkWriteError::Ceiling { accepted }) => {
+                return Err(AdapterError::process(
+                    kind,
+                    op,
+                    format!(
+                        "chunk {} of {total} of a {} byte prompt was still being written after \
+                         {write_timeout:?} -- {accepted} bytes of the prompt had been accepted, \
+                         advancing the whole time but never finishing, so it was not delivered",
+                        index + 1,
+                        text.len(),
                     ),
                 ));
             }
@@ -1733,6 +1914,162 @@ mod tests {
     use crew_protocol::{Classified, ContentClass};
 
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // ----------------------------------------- CREW-70: the progress bound
+
+    /// The invariant CREW-70 nearly shipped without, and the reason this
+    /// test exists rather than a comment: the ceiling is a BACKSTOP, and a
+    /// backstop must be much larger than the primary signal or it IS the
+    /// primary signal.
+    ///
+    /// The first version of this change left the ceiling at the 10s it had
+    /// when it was the only bound. That made the new failure set a strict
+    /// superset of the old one -- every write the flat bound failed, plus
+    /// every write that paused for two seconds -- so it would have made
+    /// the CREW-65 failure it was written to fix strictly more likely. The
+    /// arithmetic was caught in review; this keeps it caught.
+    #[test]
+    fn the_ceiling_is_a_backstop_not_the_primary_bound() {
+        assert!(
+            PASTE_CHUNK_WRITE_TIMEOUT >= PASTE_STALL_WINDOW * 10,
+            "the ceiling ({PASTE_CHUNK_WRITE_TIMEOUT:?}) must be far above the stall window \
+             ({PASTE_STALL_WINDOW:?}), or a write that is advancing still fails on the clock \
+             and the progress bound buys nothing"
+        );
+    }
+
+    /// A write that never finishes on its own, so each test below is
+    /// decided by the bound rather than by the write completing.
+    async fn never_completes() -> Result<(), SupervisorError> {
+        std::future::pending().await
+    }
+
+    /// Scaled-down stand-ins for the real constants. The bound is
+    /// parameterised precisely so its LOGIC can be tested in
+    /// milliseconds; the real values' relationship is asserted above.
+    const TEST_WINDOW: Duration = Duration::from_millis(100);
+    const TEST_CEILING: Duration = Duration::from_millis(900);
+
+    /// THE BEHAVIOUR CHANGE. A write that is advancing must not be failed
+    /// for being slow -- only for stopping. It ticks well inside every
+    /// window and never completes, so if the bound were on total duration
+    /// (as it was) this would fail early; on progress it survives to the
+    /// backstop.
+    #[tokio::test]
+    async fn a_write_that_advances_slowly_is_never_failed_for_being_slow() {
+        let accepted = Arc::new(AtomicU64::new(0));
+        let ticker = Arc::clone(&accepted);
+        let pump = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                ticker.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+
+        let reader = Arc::clone(&accepted);
+        let outcome = bound_on_progress(
+            never_completes(),
+            move || reader.load(Ordering::Relaxed),
+            TEST_WINDOW,
+            TEST_CEILING,
+            0,
+        )
+        .await;
+        pump.abort();
+
+        match outcome {
+            Err(ChunkWriteError::Ceiling { accepted }) => {
+                assert!(
+                    accepted > 0,
+                    "the ceiling report must show the progress that did happen"
+                );
+            }
+            other => panic!(
+                "a steadily-advancing write must survive to the ceiling, never stall: {other:?}"
+            ),
+        }
+    }
+
+    /// The other half of the trade: a write accepting nothing fails at the
+    /// stall window, not at the backstop -- sooner than the bound it
+    /// replaced, not later.
+    #[tokio::test]
+    async fn a_write_that_accepts_nothing_stalls_at_the_window_not_the_ceiling() {
+        let started = std::time::Instant::now();
+        let outcome =
+            bound_on_progress(never_completes(), || 0, TEST_WINDOW, TEST_CEILING, 0).await;
+        let waited = started.elapsed();
+
+        match outcome {
+            Err(ChunkWriteError::Stalled { accepted, waited }) => {
+                assert_eq!(accepted, 0);
+                assert_eq!(
+                    waited, TEST_WINDOW,
+                    "the reported wait must be the real one"
+                );
+            }
+            other => panic!("a write accepting nothing must stall: {other:?}"),
+        }
+        assert!(
+            waited < TEST_CEILING,
+            "must fail at the window, not the backstop: waited {waited:?}"
+        );
+    }
+
+    /// A caller whose ceiling is shorter than the stall window still gets
+    /// an honest report of how long was actually waited. An earlier
+    /// version interpolated the constant here, so it claimed "2s" after
+    /// waiting 500ms -- a false claim in an error message, in the change
+    /// about false claims in error messages.
+    #[tokio::test]
+    async fn a_ceiling_shorter_than_the_stall_window_reports_the_clamped_wait() {
+        let clamped = Duration::from_millis(40);
+        let outcome = bound_on_progress(never_completes(), || 0, TEST_WINDOW, clamped, 0).await;
+
+        match outcome {
+            // Not an exact equality: the clamp is computed as
+            // `deadline - now`, so it lands a few microseconds under the
+            // nominal figure. What matters is that it reports the clamp
+            // rather than the constant, which is a 2.5x difference here.
+            Err(ChunkWriteError::Stalled { waited, .. }) => {
+                assert!(
+                    waited <= clamped && waited * 2 > clamped,
+                    "the reported wait must be the clamped window ({clamped:?}), got {waited:?}"
+                );
+                assert!(
+                    waited < TEST_WINDOW,
+                    "reporting the unclamped constant ({TEST_WINDOW:?}) would overstate the \
+                     wait, which is the defect this pins: got {waited:?}"
+                );
+            }
+            other => panic!("expected a stall inside the clamped window: {other:?}"),
+        }
+    }
+
+    /// Progress is relative to THIS paste. `bytes_accepted` is cumulative
+    /// for the process, so without a baseline a follow-up `send` would
+    /// report every byte of the original prompt as progress on the new
+    /// one.
+    #[tokio::test]
+    async fn reported_progress_is_relative_to_this_paste_not_the_process() {
+        let outcome = bound_on_progress(
+            never_completes(),
+            || 500_000,
+            TEST_WINDOW,
+            TEST_CEILING,
+            500_000,
+        )
+        .await;
+
+        match outcome {
+            Err(ChunkWriteError::Stalled { accepted, .. }) => assert_eq!(
+                accepted, 0,
+                "half a megabyte written by an EARLIER paste is not progress on this one"
+            ),
+            other => panic!("expected a stall: {other:?}"),
+        }
+    }
 
     fn text(value: &str) -> TuiEvent {
         TuiEvent::AssistantText {

@@ -31,6 +31,8 @@
 
 use std::future::Future;
 use std::io::{Read, Write};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use nix::sys::signal::{Signal, kill};
@@ -101,6 +103,11 @@ impl SyncMasterPty {
 pub struct PtyProcess {
     master: SyncMasterPty,
     input_tx: mpsc::Sender<WriteJob>,
+    /// Cumulative bytes the pty master has accepted over this process's
+    /// lifetime, published by the writer thread (CREW-70). Monotonic and
+    /// never reset: callers compare two reads, they never interpret the
+    /// absolute value.
+    accepted: Arc<AtomicU64>,
     pid: i32,
     out_tx: broadcast::Sender<Vec<u8>>,
     escalation: EscalationTimings,
@@ -199,11 +206,49 @@ impl PtyProcess {
         // `input_tx` clone is dropped (the channel closes and
         // `blocking_recv` returns `None`).
         let (input_tx, mut input_rx) = mpsc::channel::<WriteJob>(INPUT_CHANNEL_CAPACITY);
+        let accepted = Arc::new(AtomicU64::new(0));
+        let accepted_writer = Arc::clone(&accepted);
         std::thread::Builder::new()
             .name(format!("pty-input-{pid}"))
             .spawn(move || {
+                let accepted = accepted_writer;
                 while let Some(job) = input_rx.blocking_recv() {
-                    let result = writer.write_all(&job.bytes).and_then(|()| writer.flush());
+                    // CREW-70: an explicit write loop rather than
+                    // `write_all`, so the bytes the vendor has actually
+                    // accepted are observable from outside this thread.
+                    // `write_all` loops over `write()` internally, which
+                    // put the only progress information there is inside
+                    // std and left a caller unable to tell a write that
+                    // is advancing slowly from one that is not advancing
+                    // at all.
+                    let mut written = 0usize;
+                    let result = loop {
+                        if written == job.bytes.len() {
+                            break writer.flush();
+                        }
+                        match writer.write(&job.bytes[written..]) {
+                            // A zero-length write on a pty master means
+                            // the far side is gone; `write_all` reports
+                            // this as `WriteZero` and so do we, rather
+                            // than spinning on it forever.
+                            Ok(0) => {
+                                break Err(std::io::Error::new(
+                                    std::io::ErrorKind::WriteZero,
+                                    "pty master accepted no bytes",
+                                ));
+                            }
+                            Ok(n) => {
+                                written += n;
+                                // Published BEFORE the loop continues, so
+                                // a caller polling this counter sees the
+                                // progress that has already happened even
+                                // while the next `write` blocks.
+                                accepted.fetch_add(n as u64, Ordering::Relaxed);
+                            }
+                            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+                            Err(err) => break Err(err),
+                        }
+                    };
                     // The caller may have stopped awaiting (e.g. it timed
                     // out); a dropped ack receiver is not this thread's
                     // problem.
@@ -244,6 +289,7 @@ impl PtyProcess {
         Ok(Self {
             master: SyncMasterPty(pair.master),
             input_tx,
+            accepted,
             pid,
             out_tx,
             escalation,
@@ -286,6 +332,26 @@ impl PtyProcess {
             .map_err(|source| SupervisorError::Pty {
                 message: format!("pty input write failed: {source}"),
             })
+    }
+
+    /// Cumulative bytes the pty master has accepted since this process
+    /// started (CREW-70).
+    ///
+    /// Only ever meaningful as a *difference* between two reads: it says
+    /// whether a write is advancing, never how far along one job is. A
+    /// caller bounding a write compares this across a window rather than
+    /// bounding the whole write, so a slow-but-advancing write is not
+    /// failed for being slow.
+    ///
+    /// **What it cannot tell you**, and the reason matters more than the
+    /// caveat: it is incremented by the writer thread, so it cannot
+    /// distinguish that thread being starved of CPU from the vendor
+    /// having stopped reading. Under both, this counter simply stops
+    /// advancing. See `write_paste`'s stall check for what that means for
+    /// the error a caller can honestly report.
+    #[must_use]
+    pub fn bytes_accepted(&self) -> u64 {
+        self.accepted.load(Ordering::Relaxed)
     }
 
     /// Subscribes a new viewer to the raw PTY output stream. Lagging
