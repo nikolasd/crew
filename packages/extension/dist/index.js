@@ -8798,6 +8798,13 @@ failed.`,
                   description: "The backend actually used instead.",
                   $ref: "#/$defs/DisplayBackend"
                 },
+                attempted: {
+                  description: "The backends tried, in order, before this downgrade -- the\nsame sequence resolution walked to pick `requested_backend`.",
+                  type: "array",
+                  items: {
+                    $ref: "#/$defs/DisplayBackend"
+                  }
+                },
                 reason: {
                   description: `Why creation failed, redacted. The typed fields above are what
 a listener should act on; this is operator-facing detail only.`,
@@ -8810,6 +8817,7 @@ a listener should act on; this is operator-facing detail only.`,
                 "requestedBackend",
                 "requestedPlacement",
                 "actualBackend",
+                "attempted",
                 "reason"
               ]
             }
