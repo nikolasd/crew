@@ -9,14 +9,25 @@
 //! | `ProcessStarted` | `queued -> starting` |
 //! | `TurnEnded` | up to `waitingUser` (non-terminal -- ADR-0027) |
 //! | any other payload except `ProcessExited`/`TurnEnded` | up to `working` |
-//! | `ProcessExited` with an observed exit code (0 or otherwise) or a signal | `-> failed` |
+//! | `ProcessExited` with a signal, or a non-zero code | `-> failed` |
+//! | `ProcessExited` with exit 0 and no turn ever settled | `-> failed` |
+//! | `ProcessExited` with exit 0 after a settled turn (no `run/finish`) | `-> RunState::unrendered_verdict()` (`cancelled`) |
 //! | `ProcessExited` with no code and no signal | `-> lost` |
 //!
 //! CREW-78: a TUI vendor process exiting cleanly is never itself evidence of
 //! success -- only the leader's own `run/finish` call judges that
-//! (`OrchestrationService::run_finish`'s doc comment). A zero exit means the
-//! process (or its terminal) closed, nothing more; `lost` stays reserved for
-//! an exit the supervisor could not observe at all.
+//! (`OrchestrationService::run_finish`'s doc comment). The ruling's exact
+//! condition is load-bearing (`release/live-conformance/
+//! 2026-09-08-live-e2e-attempt-3.md:296`): "a cleanly exited run that **did
+//! no work** is `failed`". Whether it did work is the run's own
+//! `turnSettled` flag (ADR-0027's `observe_turn_ended`), not its current
+//! state -- `waitingUser` is also reachable through ADR-0012's approval
+//! flow with no turn ever settled, and that case is still `failed`. A run
+//! whose turn genuinely settled and then saw a bare exit with no
+//! `run/finish` did real work with no verdict rendered on it, which is
+//! neither `succeeded` nor `failed` -- see `RunState::unrendered_verdict`'s
+//! own doc comment. `lost` stays reserved for an exit the supervisor could
+//! not observe at all.
 //!
 //! Four properties this shape depends on:
 //!
@@ -425,13 +436,19 @@ impl RunLifecycle {
     /// `ProcessExited` evidence: the vendor process is gone, so the run
     /// terminalizes. The walk keeps the hop-by-hop edges legal without
     /// touching the protocol's transition table (`queued -> lost` and
-    /// `waitingUser -> succeeded` are not direct edges).
+    /// `waitingUser -> succeeded` are not direct edges; `waitingUser ->
+    /// cancelled` and `working -> cancelled` are, so `RunState::
+    /// unrendered_verdict()` never needs one). Reads `turnSettled` first
+    /// (CREW-78): it is the fact `terminal_state_for` branches on, not the
+    /// run's current state, since `waitingUser` is also reachable with no
+    /// turn ever settled (ADR-0012's approval flow).
     pub(crate) async fn observe_process_exited(
         &self,
         exit_code: Option<i32>,
         signal: Option<&str>,
     ) {
-        let terminal = terminal_state_for(exit_code, signal);
+        let turn_settled = self.turn_settled().await;
+        let terminal = terminal_state_for(exit_code, signal, turn_settled);
         self.walk_to(&terminal).await;
         // WP20 repeated-failure escalation: a run that just failed for the
         // same task whose previous run also failed raises the leader's
@@ -605,19 +622,40 @@ fn next_hop(from: &RunState, target: &RunState) -> Option<RunState> {
     }
 }
 
-/// The terminal state an exit status is evidence of. A signalled death is
-/// `failed`; any observed exit code is `failed`, including zero -- CREW-78:
-/// a cleanly-exited-but-did-nothing run is `failed`, never a guessed
-/// `succeeded` (that judgment belongs to the leader's own `run/finish`,
-/// ADR-0027). An exit whose status the supervisor could not observe at all
-/// is `lost` -- ADR-0023 names that uncertainty rather than guessing, and
-/// it is the ONLY case `lost` now covers: a `ProcessExited` with an actual
-/// code or signal was, by definition, something the supervisor observed.
-fn terminal_state_for(exit_code: Option<i32>, signal: Option<&str>) -> RunState {
+/// The terminal state an exit status is evidence of, given `turn_settled`
+/// -- whether this run's turn had already settled (ADR-0027's
+/// `observe_turn_ended`) with no `run/finish` verdict since. CREW-78's
+/// ruling is exact about the condition, not just the exit code
+/// (`release/live-conformance/2026-09-08-live-e2e-attempt-3.md:296`, "a
+/// cleanly exited run that **did no work** is `failed`"):
+///
+/// * a signalled death is always `failed` (the code is not trustworthy
+///   once a signal is);
+/// * a non-zero exit is always `failed`;
+/// * a zero exit with no settled turn is `failed` -- the run did no work,
+///   whether because it never got past starting (a start failure) or
+///   because it parked at `waitingUser` some other way (ADR-0012's
+///   approval flow) without ever finishing a turn;
+/// * a zero exit AFTER a settled turn is `RunState::unrendered_verdict()`
+///   -- the run did real work and produced a result, but nothing (no
+///   `run/finish` call) ever rendered a verdict on it before the process
+///   went away. Never a guessed `succeeded`: that judgment belongs solely
+///   to the leader's own `run/finish` (ADR-0027);
+/// * an exit whose status the supervisor could not observe at all is
+///   `lost` -- ADR-0023 names that uncertainty rather than guessing, and
+///   it is the ONLY case `lost` now covers: a `ProcessExited` with an
+///   actual code or signal was, by definition, something the supervisor
+///   observed.
+fn terminal_state_for(
+    exit_code: Option<i32>,
+    signal: Option<&str>,
+    turn_settled: bool,
+) -> RunState {
     if signal.is_some() {
         return state("failed");
     }
     match exit_code {
+        Some(0) if turn_settled => RunState::unrendered_verdict(),
         Some(_) => state("failed"),
         None => state("lost"),
     }
@@ -1671,14 +1709,19 @@ mod tests {
 
     /// CREW-78: a human closing a parked worker's terminal must not read as
     /// success. This reproduces the 2026-09-08 attempt-3 conformance run's
-    /// F17 (`01a08253`): the run reached `waitingUser` with no real
-    /// `TurnEnded` ever journaled through this sink (`drive_to_state`
-    /// force-writes the state, exactly like the leftover watcher on a
-    /// closed pane observed a clean exit with no new turn of its own), and
-    /// a bare zero exit arrived. Unlike the old `succeeded` target,
-    /// `waitingUser -> failed` is a direct, legal edge (`RunState::
-    /// can_transition_to`), so no forced intermediate hop is needed here --
-    /// the walk lands on `failed` in one commit.
+    /// F4/F17 (`01a08216`/`01a08251`/`01a08253`): the run reached
+    /// `waitingUser` with `turnSettled` still `false` (`drive_to_state`
+    /// force-writes the state with no real `TurnEnded` ever journaled
+    /// through this sink -- exactly ADR-0012's approval-flow arrival at
+    /// `waitingUser`, or a start failure's own teardown, neither of which
+    /// ever finished a turn), and a bare zero exit arrived. The governing
+    /// fact is `turnSettled`, not the current state -- see
+    /// `an_exit_after_a_settled_turn_with_no_run_finish_settles_the_run_as_
+    /// the_unrendered_verdict_state` below for the settled-turn case this
+    /// is NOT. Unlike the old `succeeded` target, `waitingUser -> failed`
+    /// is a direct, legal edge (`RunState::can_transition_to`), so no
+    /// forced intermediate hop is needed here -- the walk lands on
+    /// `failed` in one commit.
     #[tokio::test]
     async fn an_exit_while_waiting_on_a_user_settles_the_run_as_failed() {
         let (_dir, db) = open_db().await;
@@ -1719,6 +1762,85 @@ mod tests {
                 "working".to_string(),
                 "waitingUser".to_string(),
                 "failed".to_string()
+            ]
+        );
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// CREW-78's false-failure regression (staff review of the first
+    /// version of this fix): a run whose turn genuinely settled -- a real
+    /// `TurnEnded` emitted through this sink, exactly `a_turn_end_marks_
+    /// the_run_turn_settled`'s setup -- did real work. A bare zero exit
+    /// with no `run/finish` call in between must not read as `failed`
+    /// either: the leader simply never rendered a verdict (a human closed
+    /// the parked worker's terminal instead of answering, or leaving it,
+    /// which is the same "did work, no verdict" shape CREW-80's abandoned-
+    /// leader trigger will also reach through `RunState::
+    /// unrendered_verdict()`). `waitingUser -> cancelled` is a legal
+    /// direct edge, same as `-> failed`, so no forced hop here either.
+    #[tokio::test]
+    async fn an_exit_after_a_settled_turn_with_no_run_finish_settles_the_run_as_the_unrendered_verdict_state()
+     {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
+        drive_to_state(&db, project_id, run_id, "working").await;
+        let (tx, _rx) = broadcast::channel(64);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run_id,
+            Arc::new(ActivityClock::new()),
+        );
+
+        // A REAL turn boundary, not `drive_to_state` -- this is what sets
+        // `turnSettled` and is the fact under test.
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::TurnEnded {
+                outcome: crew_protocol::TurnOutcome::Normal,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit turn end");
+        assert_eq!(run_state(&db, run_id).await, "waitingUser");
+        assert!(
+            run_flags(&db, project_id, run_id).await.turn_settled,
+            "the turn must genuinely be settled for this test to exercise the right branch"
+        );
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::ProcessExited {
+                exit_code: Some(0),
+                signal: None,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit exit");
+
+        let unrendered = RunState::unrendered_verdict().to_string();
+        assert_eq!(
+            run_state(&db, run_id).await,
+            unrendered,
+            "a settled turn with no run/finish call must not read as failed OR succeeded"
+        );
+        assert_eq!(
+            run_states(&db, run_id).await,
+            vec![
+                "queued".to_string(),
+                "starting".to_string(),
+                "working".to_string(),
+                "waitingUser".to_string(),
+                unrendered,
             ]
         );
         db.shutdown().await.expect("shutdown database");
