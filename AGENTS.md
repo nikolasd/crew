@@ -190,14 +190,14 @@ crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/aud
   marks it as exclusively someone's, so the convention is the only thing that keeps sessions from
   colliding.
 - **Branch off local `main`, not `origin/main`.** `git worktree add -b <branch> <path> origin/main`
-  sets the new branch's upstream tracking to `main` itself, which can make branch-management
+  sets the new branch's upstream tracking to `origin/main`, which can make branch-management
   tooling refuse to push or sync on the mismatch. Branch off the local ref.
-- **Don't stack branches.** This repository squash-merges every PR into one new commit with no
-  ancestry match to the branch it came from, so a branch stacked on an unmerged parent loses the
+- **Don't stack branches.** PRs land as a single new commit (merge commits are disabled), with no
+  ancestry link to the branch it came from, so a branch stacked on an unmerged parent loses the
   ability to detect that the parent shipped — tooling that infers "merged" from commit ancestry
   can't see it, and the child keeps trying to sync against a branch that no longer exists on the
-  far side. Branch every PR off `main`. Stack only when a change genuinely cannot compile without
-  an unmerged dependency, and expect a rebuild once the parent lands.
+  far side. Branch every PR off `main`. If a change genuinely depends on one that hasn't merged
+  yet, wait for the parent to land, then branch off `main`.
 - **Push a branch once, when it's actually ready** — rebased onto current `main`, tests and lint
   green, commit history the way you want it to land — then open the PR in the same motion. An
   early "just in case" push isn't safety; it's a future forced push. **Once a branch is pushed,
