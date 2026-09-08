@@ -10,8 +10,8 @@ use ts_rs::TS;
 
 /// Result of `retention/clean`: what one on-demand prune pass removed.
 ///
-/// `deleted_events` counts journal rows removed by BOTH policies (age
-/// cutoff and `maxRuns` recency cap). `runs_pruned` counts distinct
+/// `deletedEvents` counts journal rows removed by BOTH policies (age
+/// cutoff and `maxRuns` recency cap). `runsPruned` counts distinct
 /// terminal runs beyond `retention.maxRuns` whose events were removed by
 /// the recency cap alone; age-based deletions are not attributed to runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

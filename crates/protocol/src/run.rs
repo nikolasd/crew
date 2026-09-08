@@ -165,7 +165,7 @@ pub struct Run {
 /// The runtime applies the adapter-correct fold before this leaves the
 /// daemon: Claude journals per-invocation deltas (summed); every other
 /// reporting adapter journals cumulative totals (last one wins). Codex
-/// never reports cost, so `cost_usd` is `null` there.
+/// never reports cost, so `costUsd` is `null` there.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export)]

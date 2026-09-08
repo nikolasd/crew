@@ -410,6 +410,32 @@ mod tests {
         /// A real property, but of some OTHER object -- CREW-67's exact
         /// bug shape: right word, wrong object.
         WrongObject,
+        /// Not a property anywhere under its own spelling, but its
+        /// camelCase form IS a property somewhere -- CREW-75: a Rust
+        /// snake_case field name leaked into shipped prose instead of the
+        /// object's actual (camelCase) wire name. Carries the camelCase
+        /// form the description should have said instead.
+        SnakeCaseLeak(String),
+    }
+
+    /// `snake_case` -> `camelCase`, e.g. `requested_backend` ->
+    /// `requestedBackend`. A name with no underscore converts to itself,
+    /// which is deliberate and harmless: `resolve_property_reference`
+    /// only reaches this conversion after `all_property_keys.contains(name)`
+    /// has already failed, so a no-op conversion just fails the same
+    /// membership check again and falls through to `NotAProperty`, same as
+    /// today -- this function never needs to special-case "no underscore".
+    fn to_camel_case(name: &str) -> String {
+        let mut parts = name.split('_');
+        let mut out = parts.next().unwrap_or_default().to_string();
+        for part in parts {
+            let mut chars = part.chars();
+            if let Some(first) = chars.next() {
+                out.push(first.to_ascii_uppercase());
+                out.extend(chars);
+            }
+        }
+        out
     }
 
     fn resolve_property_reference(
@@ -422,7 +448,12 @@ mod tests {
         } else if all_property_keys.contains(name) {
             PropertyReferenceResolution::WrongObject
         } else {
-            PropertyReferenceResolution::NotAProperty
+            let camel = to_camel_case(name);
+            if camel != name && all_property_keys.contains(&camel) {
+                PropertyReferenceResolution::SnakeCaseLeak(camel)
+            } else {
+                PropertyReferenceResolution::NotAProperty
+            }
         }
     }
 
@@ -770,12 +801,33 @@ mod tests {
 
         let mut all_property_keys = HashSet::new();
         collect_all_property_keys(&schema, &mut all_property_keys);
+        // A floor, not a non-empty check -- the same "nothing to iterate" trap
+        // CREW-61's `every_reachable_string_field_is_redacted_or_allowlisted`
+        // and the wire-contract drift test both close with a minimum-carriers
+        // assertion, applied here to a walk this check depends on just as
+        // completely. If `collect_all_property_keys` ever returned an empty
+        // (or badly shrunken) set -- a schemars shape change, a bug in the
+        // walk itself -- EVERY reference below would classify `NotAProperty`
+        // (nothing to match against), so both `wrong_object` and
+        // `snake_case_leak` would report empty while the check had inspected
+        // nothing at all. 211 real property keys exist in the schema as of
+        // this writing; the floor is set at roughly half that, comfortably
+        // below normal schema growth/shrinkage but nowhere near zero.
+        assert!(
+            all_property_keys.len() >= 100,
+            "found only {} property keys across the whole schema -- the walk is broken, not the \
+             surface clean; a collapsed all_property_keys silently disables both the \
+             wrong-object and the snake-case-leak checks below, since every reference would \
+             classify NotAProperty with nothing to match against",
+            all_property_keys.len()
+        );
 
         let mut descriptions = Vec::new();
         collect_descriptions_with_scope(&schema, &mut descriptions);
 
         let mut entry_used = vec![false; ALLOWED_CROSS_OBJECT_PROPERTY_REFERENCES.len()];
         let mut wrong_object = Vec::new();
+        let mut snake_case_leak = Vec::new();
         for (desc, scope) in &descriptions {
             for name in backticked_lower_case_identifiers(desc) {
                 if allowlist_permits(
@@ -791,6 +843,9 @@ mod tests {
                     | PropertyReferenceResolution::NotAProperty => {}
                     PropertyReferenceResolution::WrongObject => {
                         wrong_object.push((name, desc.to_string()));
+                    }
+                    PropertyReferenceResolution::SnakeCaseLeak(camel) => {
+                        snake_case_leak.push((name, camel, desc.to_string()));
                     }
                 }
             }
@@ -817,6 +872,9 @@ mod tests {
                     PropertyReferenceResolution::WrongObject => {
                         wrong_object.push((last, desc.to_string()));
                     }
+                    PropertyReferenceResolution::SnakeCaseLeak(camel) => {
+                        snake_case_leak.push((last, camel, desc.to_string()));
+                    }
                 }
             }
         }
@@ -830,6 +888,16 @@ mod tests {
              or a deliberate-absence sentence, add it to \
              ALLOWED_CROSS_OBJECT_PROPERTY_REFERENCES with a required_substring and reason: \
              {wrong_object:#?}"
+        );
+
+        assert!(
+            snake_case_leak.is_empty(),
+            "shipped description(s) name a backticked property by its Rust (snake_case) field \
+             name instead of the object's actual wire (camelCase) name -- CREW-75: the name is \
+             not a property of ANY object under its own spelling, but its camelCase form IS a \
+             real property, which is what tells this apart from a genuine CLI flag or config \
+             key. Each entry below is (snake_case name found, camelCase name it should say, \
+             description): {snake_case_leak:#?}"
         );
 
         assert_no_stale_allowlist_entries(
@@ -898,6 +966,76 @@ mod tests {
             ),
             PropertyReferenceResolution::NotAProperty
         );
+    }
+
+    /// CREW-75's exact bug, reproduced directly against
+    /// `resolve_property_reference`: a real, currently-open case
+    /// (`PaneDowngraded.attempted`'s own shipped description) named a
+    /// sibling by its RUST field name, `` `requested_backend` `` --
+    /// snake_case -- instead of the object's actual (camelCase) wire name,
+    /// `requestedBackend`. Unlike CREW-67's bug, `requested_backend` is not
+    /// a property of ANY object anywhere in the schema (every object here
+    /// renames to camelCase), so it does not hit `WrongObject` --
+    /// `resolve_property_reference` as it shipped for CREW-67/71 falls all
+    /// the way through to `NotAProperty`, the same bucket a genuine CLI
+    /// flag or config key belongs in. That is the exact gap: a Rust-only
+    /// name is indistinguishable from an unrelated ordinary word once its
+    /// own spelling resolves nowhere.
+    #[test]
+    fn a_snake_case_sibling_name_whose_camel_case_form_is_a_real_property_is_not_a_leak_by_accident()
+     {
+        let scope: HashSet<String> = [
+            "requestedBackend",
+            "requestedPlacement",
+            "actualBackend",
+            "reason",
+            "attempted",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        // Every object in the shipped schema renames to camelCase, so the
+        // snake_case spelling is a property of nothing, anywhere -- unlike
+        // CREW-67's bug shape, there is no OTHER object to blame this on.
+        let all_property_keys = scope.clone();
+
+        assert_eq!(
+            resolve_property_reference("requested_backend", &scope, &all_property_keys),
+            PropertyReferenceResolution::SnakeCaseLeak("requestedBackend".to_string()),
+            "a snake_case name that resolves nowhere, but whose camelCase form is a real \
+             property of this very object, must be reported as a leak naming the wire form -- \
+             not waved through as though it might be a CLI flag or config key"
+        );
+
+        // The fix: naming the object's own actual (camelCase) field.
+        assert_eq!(
+            resolve_property_reference("requestedBackend", &scope, &all_property_keys),
+            PropertyReferenceResolution::ResolvedLocally,
+            "the wire form itself must keep resolving locally, unaffected by this check"
+        );
+
+        // A genuine non-property word that merely contains an underscore
+        // must still fall through as NotAProperty -- this check only fires
+        // when the CAMEL-CASED form is itself a real property somewhere,
+        // never merely because a name happens to look snake_case-shaped.
+        assert_eq!(
+            resolve_property_reference("not_a_real_property", &scope, &all_property_keys),
+            PropertyReferenceResolution::NotAProperty,
+            "a snake_case-shaped word whose camelCase form is ALSO not a property anywhere must \
+             stay NotAProperty, exactly as before this check existed"
+        );
+    }
+
+    /// `to_camel_case` in isolation, including the no-underscore case
+    /// `resolve_property_reference` relies on being a harmless no-op (see
+    /// its own doc comment).
+    #[test]
+    fn to_camel_case_converts_snake_case_and_leaves_bare_words_alone() {
+        assert_eq!(to_camel_case("requested_backend"), "requestedBackend");
+        assert_eq!(to_camel_case("vendor_child_id"), "vendorChildId");
+        assert_eq!(to_camel_case("already_camel"), "alreadyCamel");
+        assert_eq!(to_camel_case("bareword"), "bareword");
+        assert_eq!(to_camel_case(""), "");
     }
 
     /// CREW-71's exact evasion, reproduced directly: a dotted span whose
