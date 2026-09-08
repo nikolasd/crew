@@ -233,6 +233,85 @@ append path and byte-scans the database, WAL, log, and replay output for it.
 
 ---
 
+## Claims and Their Evidence
+
+Every guard in this repository that permits an exception does so on the strength of a written
+reason. These are the ways a reason can be true and still be worthless.
+
+### A provenance claim is load-bearing only where it licenses skipping the guard
+**Location:** `crates/protocol/src/event.rs` (`Redacted`), `crates/runtime/src/adapter/event_sink.rs`
+
+`Redacted` has two constructors and they carry opposite risk. `from_sanitized` says "this crossed the
+redactor"; a wrong claim there over-redacts and costs nothing. `assert_runtime_authored` says "this
+never needed to", and a wrong claim there is a leak. So an audit of redaction provenance is an audit
+of the `assert_runtime_authored` call sites, and time spent verifying `from_sanitized` sites is time
+spent where being wrong is harmless. When the whole surface was inventoried, the two sites worth the
+scrutiny were a fixed sentence with nothing interpolated and a `format!` whose only interpolation was
+a `usize` — and the second is only defensible once its declared type is checked, not its expression.
+
+### A parameter type is not a provenance claim in either direction
+**Location:** `crates/runtime/src/service/orchestration.rs`, `crates/runtime/src/domain/repository.rs`
+
+Two mirror-image mistakes, both made here. `Redacted` deliberately deserializes from a bare wire
+string, because stored events must round-trip — so a caller's raw JSON can arrive in a field whose
+*type* claims it is clean, and `plan/propose` must route each subtask description through the
+redactor explicitly even though the field is already typed `Redacted`. Running the other way,
+`record_policy_violation` takes `&str`, and an audit concluded from that signature that its vendor
+fields reach the durable table unsanitized. They do not: the caller extracts them from the
+already-labelled event, one hop upstream. **A type states which boundary a value must cross; it is
+never evidence that the value crossed one.** In both directions the answer is at the construction
+site, not in the signature.
+
+### A reason must name the property that makes the field safe, not the intent behind it
+**Location:** `crates/protocol/src/event.rs` (`NON_REDACTED_STRING_FIELDS`), `crates/protocol/src/schema.rs`
+
+An allowlist entry reading "an OMP-assigned client instance id" describes the only client that
+existed when it was written. It constrains nothing: the field was unvalidated wire text of unbounded
+length that reached three durable columns, and the sentence stayed true throughout. Contrast an entry
+that cites a mechanism — "passed `Redactor::redact_text` before this event is built" with the file
+and lines, or "the field's own doc forbids terminal contents and absolute paths". A reason that names
+a mechanism is checkable against the code; a reason that describes a shape is checkable only against
+its author's belief, and reads identically.
+
+Three entries in one guard failed this way at once, and the sharpest was self-undermining in two
+directions: it cited "the field's own doc" for a field that had no doc, and said the worker's text
+travelled in a sibling field that no production site populates. Both clauses were reassuring
+specifics; neither existed. The generalisation is the test an author can actually run: **for each
+clause in a reason, ask whether it is about the code or about the design.**
+
+### Put the reason beside the entry it justifies, and check the list against itself
+**Location:** `crates/protocol/src/schema.rs` (`ALLOWED_UNRESOLVED_BACKTICKED_NAMES`)
+
+A guard exemption keyed on a bare name exempts that name everywhere in the artifact, forever — one
+field's justification silently covering every future mention. Keying an entry on `(name,
+required_substring, reason)` scopes it to the description it actually justifies. The reverse check
+matters as much: an entry that no longer exempts anything is a standing pre-authorisation for
+whatever next takes that name, so every list needs an assertion that each of its entries is still
+used. Three separate allowlists in this repository needed that assertion added after the fact.
+
+Reading a list for *internal inconsistency* is a check its own author can perform: a shallow entry
+standing beside a deeper one answering the same question is visible in a way that a shallow entry is
+not on its own. It has a hard limit, though. It cannot find a **uniformly** shallow family, because
+there is no contrast to trip on — which is why a family of three entries sharing one inadequate
+reason survived the pass that caught a different entry three rows above them. That gap is what an
+independent reader who does not know which entries you have already judged is for.
+
+### A mechanism does not get to answer its own question
+**Location:** `crates/protocol/src/event.rs` (`redaction_enumeration`), ADR-0006
+
+The redaction boundary asked every field to state a claim and never asked whether a *new* field would
+be asked at all. It would not: the obligation was opt-in by declaration, so a `String` added later
+was asked nothing, and one shipped a week afterwards journaling raw subprocess stderr. The guard
+built to close that gap then enforced `found ⊆ allowed` and not the reverse, and its own
+"an unresolvable field type is an error, not a skip" test asserted the two predicates *leading to*
+the error branch without ever calling the walk — so changing `return Err(..)` to `continue` left it
+green with its name claiming otherwise.
+
+Every one of those was found by someone who had not built the thing. From inside a mechanism its own
+assumptions do not look like questions; they look like the thing doing the asking. The instruction
+that works is not "check your guard carefully" — its author will say in good faith that they did —
+but a named second reader asked to turn the mechanism's own question back on it.
+
 ## Coordination Bounds
 
 ### A bound enforced at one call site is not an enforced policy
@@ -678,6 +757,141 @@ current contract. It is being deleted in CREW-51 in favour of the correctly-name
 is the right direction — when a rule changes, audit the names of the tests that still pass, not only
 the ones that break.
 
+## Instruments and Their Blind Spots
+
+The section above is about the product's tests. This one is about the tools a reviewer or auditor
+reaches for, and the ways they return a confident answer to a different question than the one asked.
+
+### Reading from the ref is not reading the current ref
+**Location:** review practice; `git show <remote-ref>:<path>`
+
+A review deliberately avoided the pull request's description and read the branch source directly, to
+check three claims first-hand. All three were true of what was read. By the time the verdict was
+written the head had moved twice, and the first of those pushes had already fixed the finding being
+filed — visible only because the cited line numbers were stale. Nothing in the review was wrong about
+the ref it read, which is exactly why nothing in it looked wrong.
+
+The defence against trusting a description produced a fresh failure of the same shape: first-hand
+contact with the wrong version. `git show origin/<branch>:<path>` reads the last-fetched ref
+silently, and freshness has no smell. Re-fetch immediately before writing the verdict, not before
+starting the read, and state the SHA the review is against in its first line — a verdict that names
+its SHA is falsifiable by the reader in one glance, one that names line numbers only by accident.
+
+### A filter over serialised text must normalise whitespace, and a hit count is a free self-check
+**Location:** `packages/protocol-ts/schema/crew.schema.json`
+
+A scan for shipped descriptions containing "same terms" found one of two occurrences. JSON
+descriptions carry hard newlines, and the text was `same\nterms`. The scan printed a tidy result for
+the correct instance and nothing at all for the broken one. It was caught only because the count
+disagreed with what had already been seen by eye in the diff.
+
+Normalise whitespace before matching anything that has been through a serialiser. And keep the
+cheaper habit: **a filter that returns fewer hits than you have already seen with your own eyes is
+the least expensive tripwire available**, and it works only if the count is printed rather than the
+results skimmed.
+
+### Enumerate by wire form, not by Rust type
+**Location:** `crates/runtime/src/lifecycle.rs`, `crates/runtime/src/ipc/connection.rs`
+
+A fixture claiming to hold every `instance_id` this codebase sends was assembled by grepping for
+`ClientAuth` variant constructions. It found five of nine. Every value it missed was built as a JSON
+literal rather than through the type — including two production senders, the daemon's own status
+probe and monitor client. Searching the wire key found all nine.
+
+The same asymmetry runs through the protocol: `#[serde(tag = "type", content = "payload")]` and
+camelCase renaming mean a field's Rust name and its wire name differ, and a description or a search
+that uses one will silently miss the other. The generated bindings under
+`packages/protocol-ts/src/generated/` are the ground truth for what a consumer sees.
+
+### A scan that returns zero needs a positive control
+**Location:** `crates/protocol/src/schema.rs`, `crates/runtime/tests/`
+
+"No other instances found" is indistinguishable from "the scanner does not work", and a green result
+prompts nobody to ask. The habit that costs nothing: reintroduce the known instance and confirm the
+scanner reports it. A doc-comment scan across a whole branch returned zero suspects and became
+trustworthy only after the fix it was checking was temporarily reverted and the scanner named the
+exact line.
+
+The codified form of the same idea is a `#[should_panic]` test on any fail-closed assertion. An
+assertion whose failure path is never exercised is indistinguishable from an absent one — a
+reverse-staleness check shipped able to be turned into a no-op with an entire suite still green,
+which was demonstrated by doing exactly that.
+
+### A finding about the baseline needs the baseline's conditions
+**Location:** `CLAUDE.md` (`CREW_DISABLE_VENDOR_CLI=1`)
+
+Four test failures were reported as pre-existing on `main`, and retracted after the baseline was
+reproduced both ways: the runs had omitted a precondition this repository documents for every local
+invocation. The reason this earns an entry rather than a shrug is the blast radius. **A baseline
+claim is the one claim nobody re-derives** — everyone downstream builds on "main is broken" without
+re-running it, so a wrong baseline is believed for longer than any other kind of wrong finding, and
+by more people.
+
+### Not installed is not unreadable, and writing the caveat is not performing the check
+**Location:** `packages/extension/`, `@oh-my-pi/pi-coding-agent` typings
+
+A scoping note needed to know whether the host exposes a model API to extensions. It investigated by
+inspecting the installed binary and inventorying what the extension already called, concluded "no
+evidence of an extension-facing API", and recorded an honest caveat: absence in a strings dump is
+weak evidence, the authoritative source is the host's own typings, and those are a peerDependency
+provided at runtime rather than installed, so they could not be read.
+
+Every sentence in the caveat was correct. It was also wrong about the only thing that mattered: the
+package is published and ships its type definitions, so the typings were thirty seconds away. The
+API existed, on the very context the tool already received.
+
+The caveat did active harm. Having written down that the evidence was weak and named what would
+settle it, its author felt the obligation discharged — and so did two reviewers, who read diligence
+where an open action was. It converted an unanswered question into a documented limitation, which is
+the form unanswered questions take when nobody intends to answer them. **A caveat that names the
+authoritative source and then explains why it was not consulted is the tell.** If you can name the
+source precisely, price consulting it before writing the sentence explaining why you did not.
+
+### File shape is not provenance
+**Location:** `assets/agents/SOURCES.md`
+
+A vendor mark was hand-authored rectangles and circles with comments describing intent, where its
+three siblings were single `<path>` elements. That looked like evidence it was somebody's
+approximation rather than the real mark — a serious charge against a document whose entire purpose is
+recording provenance and licence terms. It was wrong: the upstream project's own icon really is
+drawn that way, byte-identical to the cited URL.
+
+"This does not look professionally produced" is an aesthetic judgement wearing a provenance check's
+clothes. **The check for any provenance claim is the artifact against its cited source**, never the
+artifact against your expectation of what such artifacts look like.
+
+### Name-resolves-globally is not name-resolves-here
+**Location:** `crates/protocol/src/schema.rs`, `crates/protocol/src/event.rs`
+
+A shipped description referenced a sibling field by its snake_case name while the object it belonged
+to serialises camelCase, so it pointed a consumer at a key absent from the object being read. The
+guard that checks backticked names passed it, because the name *is* a real wire value — in a
+different variant of the same concept. Resolution was global where the requirement was local.
+
+Two adjacent traps came out of closing it. A rule requiring the whole backtick span to be a bare
+identifier correctly excludes `message/send` and an explicitly type-scoped `Type.field`, and silently
+excludes a dotted path whose first segment names no type. And an exemption added for a name the
+checker could not see from the wrapper — an internally-tagged enum's discriminant, which lives one
+level down in each branch — papers over the checker's own scope model rather than justifying
+anything. When a guard needs an exemption, establish first whether the exemption is irreducible or
+whether the guard is looking in the wrong place.
+
+### Agreement is not verification
+**Location:** `crates/runtime/src/adapter/tui/adapter.rs` (CREW-70)
+
+A design note argued that bounding a PTY write on progress rather than elapsed time would let a
+starved write survive, "where today it must finish an entire chunk inside the bound". True clause,
+wrong comparison: it silently treated the two bounds as alternatives when the absolute ceiling was
+staying put. With the ceiling unchanged the new failure set was a strict *superset* of the old —
+every write the flat bound failed, plus every write that paused for one window — so the change would
+have made the failure it was written to fix strictly more likely.
+
+The review reflected the claim back approvingly, in the same message that credited the note for
+catching a different overclaim in the paragraph above it. The check was applied to the claim already
+flagged and not to the one beside it: **the flagged claim gets scrutiny precisely because it is
+flagged, and the unflagged claim next to it inherits the credibility.** A sentence you would have
+written yourself is the one you are least likely to test.
+
 ## Health Checks (`doctor`)
 
 ### A check scoped to the Crew source tree must not run against `--repo`
@@ -757,6 +971,49 @@ The test opens a second connection to the daemon-owned `runtime.db` and writes d
 `busy_timeout`, a momentary lock held by the live daemon throws `SQLITE_BUSY`. The daemon itself sets
 `busy_timeout=5000` on that database; the test connection must match it. A second writer to a live
 WAL file without a busy timeout is a latent flake, not a logic bug.
+
+### A backstop must be far above the primary signal, or it is the primary signal
+**Location:** `crates/runtime/src/adapter/tui/adapter.rs` (`PASTE_STALL_WINDOW`, `PASTE_CHUNK_WRITE_TIMEOUT`)
+
+A flat 10-second per-chunk bound on PTY paste delivery failed 3 of 14 runs under 2× CPU
+oversubscription. About a kilobyte to a PTY master is microseconds of real work, so ten seconds means
+the writer thread went unscheduled for ten seconds — starvation, not a vendor and not I/O. The fix
+bounds the time the far side may accept *nothing* (two seconds) and keeps the absolute per-chunk
+timeout only as a backstop behind it.
+
+That change was nearly shipped with the backstop left at the 10 seconds it had when it was the only
+bound, which would have made the new failure set a strict superset of the old one: every write the
+flat bound failed, plus every write that paused for one window. The ceiling moved to 90 seconds,
+matching the existing idle cap in the same file rather than being picked as a round number — both are
+the same decision, the point at which the runtime stops waiting on a vendor regardless of what it
+appears to be doing. A test now asserts the ratio, because a sentence explains and an assertion
+holds.
+
+Making progress observable at all required replacing `write_all` with an explicit `write()` loop
+publishing accepted bytes: `write_all` iterates internally, which is why the only progress
+information there is lived inside the standard library and a caller could not tell a write advancing
+slowly from one not advancing at all.
+
+### A progress bound cannot distinguish starvation from a deaf vendor, and does not need to
+**Location:** `crates/runtime/src/adapter/tui/adapter.rs` (`bound_on_progress`), `crates/runtime/src/supervisor/pty.rs`
+
+The accepted-bytes counter is incremented by the writer thread, so when that thread is starved of CPU
+the observable is identical to a vendor that has stopped reading: the counter simply stops moving. No
+wording of the resulting error can honestly claim to tell them apart, and the error names both causes
+for that reason — not hedging, the limit of what was observed.
+
+What the bound buys is that the distinction stops mattering for the failure that motivated it: a
+starved thread needs to accept one byte per window to stay alive, where the flat bound required it to
+finish a whole chunk. Separating the two would take a second signal — a heartbeat distinguishing
+"running but bytes static" from "not running at all" — and nothing acts differently on the answer, so
+it is deliberately absent. The limitation is documented at the stall check itself, so that a later
+edit does not "improve" the message into a claim the mechanism cannot support.
+
+Two defects in this change were found by printing its own error rather than reading its code: the
+message interpolated the window *constant* instead of the window actually waited, overstating the
+wait whenever a caller's ceiling clamped it, and the counter is cumulative for the process, so
+progress had to be baselined per paste or a follow-up write would report the previous prompt's bytes
+as its own.
 
 ## Reported Outcomes
 
@@ -959,6 +1216,35 @@ name, say). Present in one and absent in the other is proof; a byte diff is not.
 
 ---
 
+### A toolchain that tracks `stable` moves under a local gate, and a lint change is detection rather than severity
+**Location:** `rust-toolchain.toml`, CI `clippy` job
+
+A gate reported `clippy -D warnings` clean locally and CI failed on it. `rust-toolchain.toml` tracks
+`stable`, CI's action picks up a point release the day it ships, and a developer machine picks it up
+only on an explicit update — so the two were a point release apart and the newer one had taught
+`doc_lazy_continuation` to see a shape the older one could not. The distinction matters because the
+obvious workaround does not work: enabling the lint locally at warn level on the older toolchain
+still reported nothing. It was detection, not a severity threshold.
+
+Two habits close it. Print `rustc --version` in every gate report, so a toolchain gap is visible
+rather than inferred from a red CI. And after any toolchain move, run one full-workspace
+`clippy --all-targets --all-features -- -D warnings` deliberately: it is the cheapest possible sweep
+for "what did this release start seeing", and it is better spent once than discovered separately by
+everyone with open work. On the release in question that sweep found exactly one instance in the
+whole repository.
+
+Worth separating the two claims when this happens: the newer lint found a real defect — a list item
+running directly into a following paragraph reads as a continuation to a human too — and the
+toolchain gap explains only why the gate missed it, not why the code was fine.
+
+### Cargo trusts mtimes, so a restore-by-move can build stale
+**Location:** local build practice
+
+Files moved aside and moved back keep their original modification times, so Cargo's freshness check
+sees nothing newer than the last build and reuses stale artifacts. A "verified" run after such a
+restore may never have compiled the restored code. Touch the restored files, or prefer copies over
+moves when the point of the move is to reinstate the original.
+
 ## Protocol Evolution
 
 ### Retiring a journaled wire value is three rules, not one
@@ -1160,6 +1446,43 @@ before and after the move rather than assumed. `schema_compatibility_passes_agai
 covers the other half of CREW-45 (that the shipped descriptions actually changed).
 
 ---
+
+### Ask what would make this test pass while the thing it names is broken
+**Location:** `packages/extension/src/tools/tools.test.ts`, `crates/runtime/tests/dashboard.rs`
+
+One question, three answers, all found in a single wave.
+
+*Nothing to iterate.* A copy-drift guard introspected tool schemas using the previous major version's
+shape (`_def.values`, a `_def.description` that had moved), so it found **zero** enum fields on every
+tool on every run and its issue list could never be non-empty. A guard against drift that had itself
+drifted from the library it inspects. The remedy is an assertion inside the test that the discovered
+collection is non-empty: a test has no reader to notice an impossible zero. Fixed count: 29 fields.
+
+*A mutation that did not remove the thing.* Verifying that fix, a reviewer deleted one of **two**
+occurrences of the word being asserted on; the survivor satisfied `includes()`, the test passed, and
+a working test was nearly recorded as broken. Confirm the mutation actually removed what the
+assertion depends on before believing the result.
+
+*An error from the wrong cause.* A legible-error test seeds a journal row and asserts a failure. That
+cannot distinguish "failed because the value under test is the retired one" from "failed because the
+fixture has a typo". The positive control is the same input with the defect removed: it must pass.
+
+Each variant is invisible to careful reading. The test looks right, passes, and passes for a reason
+nobody has stated.
+
+### A fail-closed assertion whose failure path is never exercised is indistinguishable from an absent one
+**Location:** `crates/protocol/src/schema.rs`, `crates/protocol/src/event.rs`, `crates/xtask/src/main.rs`
+
+Three instances in one wave, by three different authors, all in code written specifically to make a
+class of mistake impossible. A reverse-staleness assertion over a guard allowlist could be reduced to
+a no-op with an entire suite of 149 tests still green. A test named for an error branch asserted only
+the predicates leading to it and stayed green when the branch was changed to a `continue`. A guard's
+allowlist enforced containment in one direction only.
+
+The pattern is not carelessness; it is that the assertion is the deliverable, so its presence feels
+like the work being done. Assertions of this kind are cheap to test precisely because they are
+usually pure functions of a list and a set of flags: pass a deliberately stale fixture, assert the
+panic, and the guard becomes a guard.
 
 ## Deletion Sweeps
 
