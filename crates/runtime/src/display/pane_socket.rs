@@ -71,8 +71,9 @@ const LIVENESS_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 /// somehow slow enough to miss the timeout makes `pane/reopen` refuse a
 /// pane that actually is live -- recoverable (retry, or `pane/reopen`
 /// again) and honest. Claiming a dead pane is live is the lie the
-/// connect()-based check above was written to kill, and this fix exists
-/// because it turned out that check had not fully killed it. Anyone
+/// connect()-based check above was written to kill, and the
+/// `LIVENESS_MARKER` requirement exists because that check had not fully
+/// killed it. Anyone
 /// tempted to "fix" a false negative here
 /// by loosening this check should read this paragraph first.
 pub async fn is_live(socket: &Path) -> bool {

@@ -100,8 +100,8 @@ pub struct CoordinationBroker {
     /// broker held no redactor at all, which made every worker-authored
     /// string it journaled a live exposure -- `requestChild`'s reason into
     /// `ChildEvent.reason`, and `askPolicy`/`reportBlocked` into
-    /// `messages.payload` through a second entry point the earlier fix at
-    /// `message/send` did not close.
+    /// `messages.payload` through a second entry point the redaction
+    /// crossing added at `message/send` did not close.
     redactor: Arc<crate::security::redaction::Redactor>,
 }
 
@@ -654,9 +654,9 @@ impl CoordinationBroker {
         let kind = MessageKind::PeerMessage;
         // This route builds its `RunMessage` directly rather than
         // going through `send`, so `send`'s redaction does not cover it --
-        // which is exactly why the earlier fix at the three named routes
-        // missed this one. The bound checks above already ran on the
-        // caller's own bytes, so redacting here keeps that ordering.
+        // which is exactly why the redaction crossing added at the three
+        // named routes missed this one. The bound checks above already ran
+        // on the caller's own bytes, so redacting here keeps that ordering.
         let payload =
             self.redact_worker_text(description.unwrap_or_else(|| artifact_ref.clone()))?;
         let mut result = self

@@ -2072,9 +2072,9 @@ async fn a_multi_line_follow_up_is_framed_as_a_paste_too() {
 }
 
 /// A vendor that stops consuming its stdin must produce a loud failure,
-/// never a partial prompt. Before this fix the whole prompt was one
-/// unbounded blocking write, so this case either hung the start or lost
-/// the tail with no error anywhere.
+/// never a partial prompt. Before the chunked bracketed-paste write, the
+/// whole prompt was one unbounded blocking write, so this case either hung
+/// the start or lost the tail with no error anywhere.
 #[tokio::test]
 async fn a_prompt_a_deaf_vendor_never_consumes_fails_the_start_loudly() {
     let _guard = SERIAL_PTY.lock().await;

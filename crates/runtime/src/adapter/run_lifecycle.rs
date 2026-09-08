@@ -1767,9 +1767,10 @@ mod tests {
         db.shutdown().await.expect("shutdown database");
     }
 
-    /// This is the false-failure regression caught by staff review of the
-    /// first version of this fix: a run whose turn genuinely settled -- a
-    /// real `TurnEnded` emitted through this sink, exactly `a_turn_end_marks_
+    /// This is the false-failure regression caught by staff review of
+    /// `terminal_state_for`'s first version: a run whose turn genuinely
+    /// settled -- a real `TurnEnded` emitted through this sink, exactly
+    /// `a_turn_end_marks_
     /// the_run_turn_settled`'s setup -- did real work. A bare zero exit
     /// with no `run/finish` call in between must not read as `failed`
     /// either: the leader simply never rendered a verdict (a human closed

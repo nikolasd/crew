@@ -1362,9 +1362,9 @@ async fn a_blocked_report_from_a_worker_is_redacted_before_journaling() {
 
 /// `coordination/publishArtifact` builds its `RunMessage`
 /// directly instead of going through `send`, so `send`'s redaction never
-/// covered it — which is why the fix applied at the three routes tested
-/// above missed this fourth one. Found by the compiler when
-/// `RunMessage::payload` became `Redacted`, not by review.
+/// covered it — which is why the ADR-0006 redaction crossing applied at
+/// the three routes tested above missed this fourth one. Found by the
+/// compiler when `RunMessage::payload` became `Redacted`, not by review.
 #[tokio::test]
 async fn a_published_artifact_description_from_a_worker_is_redacted() {
     let harness = Harness::start().await;
