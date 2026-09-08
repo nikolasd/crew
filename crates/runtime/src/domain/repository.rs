@@ -49,7 +49,7 @@ pub enum DomainError {
     /// stale intent. Checked inside [`DomainRepository::upsert_task`]'s own
     /// guarded write, not a caller-side pre-check read from a separate
     /// `run_domain_op` round trip the database actor could interleave with
-    /// another write to the same task (R74, applying R70-R72's doctrine to
+    /// another write to the same task (applying the same ownership doctrine to
     /// task writes).
     #[error("task {task_id} revision {presented} is lower than stored revision {stored}")]
     RevisionTooLow {
@@ -87,7 +87,7 @@ pub enum DomainError {
     /// by an undecided policy violation. Checked inside the same guarded
     /// transaction as the write it protects -- not as a caller-side
     /// pre-check round trip the database actor could interleave with a
-    /// quarantine landing on the same run (R78, applying R70-R81's
+    /// quarantine landing on the same run (applying the same
     /// doctrine to the quarantine gates).
     #[error("run {run_id} is quarantined by an undecided policy violation")]
     PolicyQuarantined { run_id: String },
@@ -760,7 +760,7 @@ impl<'c> DomainRepository<'c> {
             move |tx| {
                 let now = Timestamp::now();
                 // Ownership is arbitrated here, inside the guarded write,
-                // not by a caller-side snapshot (R70-R77 doctrine): the
+                // not by a caller-side snapshot: the
                 // database actor interleaves whole `run_domain_op`
                 // closures, so only a re-read from inside this same
                 // transaction can observe a `reconcile/omp` rebind that
@@ -954,7 +954,7 @@ impl<'c> DomainRepository<'c> {
                 // `submit_run`'s doc comment for why a re-read from inside
                 // this same closure, not a caller-side snapshot, is what
                 // makes this safe against a concurrent `reconcile/omp`
-                // rebind (R70-R77 doctrine).
+                // rebind.
                 if let Some(principal_instance_id) = principal_instance_id {
                     let owner: Option<String> = tx
                         .query_row(
@@ -2015,7 +2015,7 @@ impl<'c> DomainRepository<'c> {
     /// This is the **only** authority on whether an approval may be decided.
     /// The database actor interleaves whole `run_domain_op` closures, never
     /// a service's sequence of round trips, so any caller-side pre-check is
-    /// advisory only (R70, R71): ownership, conflict, and the terminal-run
+    /// advisory only: ownership, conflict, and the terminal-run
     /// state are all re-checked from inside this one guarded transaction,
     /// never from a snapshot a caller read earlier. `principal_instance_id`
     /// is checked against `tasks.owner_client_instance_id` first, before the
@@ -2590,7 +2590,7 @@ impl<'c> DomainRepository<'c> {
     /// This is the **only** authority on whether a violation may be
     /// resolved. The database actor interleaves whole `run_domain_op`
     /// closures, never a service's sequence of round trips, so any
-    /// caller-side pre-check is advisory only (R54, R72): ownership,
+    /// caller-side pre-check is advisory only: ownership,
     /// conflict, and the terminal-run state are all re-checked from inside
     /// this one guarded transaction, never from a snapshot a caller read
     /// earlier. `principal_instance_id` is checked against
@@ -2656,7 +2656,7 @@ impl<'c> DomainRepository<'c> {
                 // closures, so a `reconcile_ownership` rebind can commit
                 // between a caller's snapshot read and this write. Only a
                 // re-read from inside this same transaction can observe
-                // that rebind (R72, mirroring R71's `decide_approval`).
+                // that rebind (mirroring `decide_approval`).
                 let owner: Option<String> = tx
                     .query_row(
                         "SELECT owner_client_instance_id FROM tasks WHERE task_id = ?1",
@@ -2741,7 +2741,7 @@ impl<'c> DomainRepository<'c> {
     /// presenting the same revision succeeds, last reconciler wins), and a
     /// usurped owner is still refused at decision time by the in-tx
     /// ownership arbitration in `decide_approval`/`resolve_policy_violation`
-    /// (R71/R72). Emits a `ReconcileOwnershipChanged` event carrying
+    /// Emits a `ReconcileOwnershipChanged` event carrying
     /// old/new owner ids and the (unchanged) stored revision.
     pub fn reconcile_ownership(
         &mut self,

@@ -1046,7 +1046,7 @@ async fn gate_profile(
         // `false` and this function proceeds -- a kill-switch daemon is
         // never denied here. The fixture suite run below then reports
         // every scenario it cannot attempt under the switch as `Skipped`
-        // too, and a skip strips no capability (R68/R52, see
+        // too, and a skip strips no capability (see
         // `conformance::vendor_cli_required_scenario`'s doc comment), so
         // `effective_capabilities` comes back equal to the adapter's full
         // *declared* set. This is by design, not a gap: `authorize()`

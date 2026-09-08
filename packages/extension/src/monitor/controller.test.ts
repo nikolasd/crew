@@ -1,6 +1,5 @@
 // Tests for the monitor controller's session lifecycle: the widget shows
-// when the journal has runs and stays hidden when it doesn't (R56,
-// revised), and a `session_shutdown` followed by a new session must
+// when the journal has runs and stays hidden when it doesn't, and a `session_shutdown` followed by a new session must
 // resubscribe rather than early-return into a dead monitor. Both
 // drive `registerMonitor` through a fake ExtensionAPI, mirroring
 // tools.test.ts's fake-API pattern.

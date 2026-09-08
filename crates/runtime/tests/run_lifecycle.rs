@@ -401,7 +401,7 @@ async fn a_real_worker_process_exit_settles_its_run() {
     );
 
     // The startup sweep must not touch a run the state machine already
-    // terminalized (R51's sweep takes every *non-terminal* run).
+    // terminalized (the sweep takes every *non-terminal* run).
     let coordinator = RecoveryCoordinator::with_defaults(Arc::clone(&db), project_id);
     let result = coordinator.recover().await.expect("recovery must succeed");
     assert!(

@@ -288,7 +288,7 @@ async fn terminal_adapter_cancel_settles_the_run_with_a_synthetic_exit() {
 
     // A second cancel is a clean no-op success, never a second exit --
     // an Err would read as a real kill failure and raise a false
-    // degradedControl (R93 x R95, batch-12 review W2).
+    // degradedControl.
     adapter
         .cancel(CancelScope::Worker)
         .await

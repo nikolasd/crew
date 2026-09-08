@@ -58,7 +58,7 @@ pub struct RunDriverContext {
 /// not a kill failure. `Cancelled` means a live adapter acknowledged the
 /// cancel; `NoRunningAdapter` means there was nothing to kill (the run
 /// settled, or never started an adapter) -- a clean outcome, not an error
-/// (R13: stringifying `NoRunningAdapter` into the `Err` channel made it
+/// (stringifying `NoRunningAdapter` into the `Err` channel made it
 /// indistinguishable from a real kill failure).
 ///
 /// `Cancelled` means the vendor was *signalled*, not that teardown has

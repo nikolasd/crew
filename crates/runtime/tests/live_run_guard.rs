@@ -4,7 +4,7 @@
 //! -- despite the broker's doc promising a live-token connection can
 //! "never ... mutate ... state for a run that is no longer active".
 //! `record_message` now takes `enforce_live` and re-reads the run's state
-//! inside the same guarded transaction as its `INSERT` (R78's
+//! inside the same guarded transaction as its `INSERT` (the
 //! `enforce_quarantine` pattern), and `request_child` re-runs its
 //! transition check inside its own guarded write, so a racing settle can
 //! no longer be overwritten with `waitingPeer`.

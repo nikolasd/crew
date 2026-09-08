@@ -471,7 +471,7 @@ impl OrchestrationService {
     /// guard: the legitimate extension always presents its own session
     /// id, so no caller behavior changes. Revision monotonicity and,
     /// for an existing task, ownership of the row itself are both
-    /// arbitrated inside `upsert_task`'s own guarded write (R74/R76): a
+    /// arbitrated inside `upsert_task`'s own guarded write: a
     /// caller-side pre-check read in a separate round trip could be
     /// interleaved with another write to this task.
     async fn task_upsert(
@@ -1152,7 +1152,7 @@ impl OrchestrationService {
             .map_err(ServiceError::from)?;
 
         // Append workspace info if an active lease exists for this run.
-        // A lease-DB failure propagates (R62 review W2): collapsing it to
+        // A lease-DB failure propagates: collapsing it to
         // "no workspace" would silently hide a real workspace from callers.
         if let Some(info) = self
             .lease_service
@@ -1936,7 +1936,7 @@ impl OrchestrationService {
         let info = self.require_lease_owner(principal, lease_id, false).await?;
 
         // Canonical `WorkspaceInfo` serialization; byte-identical to the
-        // previous hand-rolled shape (R55 review E1).
+        // previous hand-rolled shape.
         serde_json::to_value(&info)
             .map_err(|e| ServiceError::internal(format!("serializing WorkspaceInfo: {e}")))
     }
@@ -1966,7 +1966,6 @@ impl OrchestrationService {
                 // Releasing an already-released lease is the caller's
                 // error (a racing double-release), not an internal fault --
                 // abandon_lease treats the same condition as benign
-                // (R84 review W4).
                 crate::workspace::LeaseError::AlreadyReleased { .. } => {
                     ServiceError::invalid_params(e.to_string())
                 }
@@ -2299,7 +2298,7 @@ impl OrchestrationService {
         // Post-authorization, the caller is a proven owner and the id is
         // known, so a failure here (digest mismatch on read -- on-disk
         // tampering) is an internal fault worth naming, never the
-        // ownership refusal (R35 review W6).
+        // ownership refusal.
         let result = self
             .artifact_store
             .fetch_chunked(&artifact_id, offset, length)
@@ -2384,7 +2383,7 @@ impl OrchestrationService {
                 // `message/send` deliberately passes `enforce_live: false`:
                 // OMP may journal a message against a run in any state --
                 // the delivery diagnostic path already handles a run with
-                // no live adapter (R94 gates only the worker-MCP broker
+                // no live adapter (that gate covers only the worker-MCP broker
                 // writes whose doc promises liveness). The turn-budget
                 // guard (WP19) sits in that same transaction.
                 let (committed, answered) =
@@ -2760,7 +2759,7 @@ impl OrchestrationService {
 
         // Deserialize through the canonical serde tokens rather than a
         // hand-rolled string match, so `DecidedBy`'s rename attributes stay
-        // the single authority (R34 review S-3). Absent defaults to Model.
+        // the single authority. Absent defaults to Model.
         let decided_by = match params.get("decidedBy") {
             None | Some(Value::Null) => crew_protocol::DecidedBy::Model,
             Some(value) => serde_json::from_value::<crew_protocol::DecidedBy>(value.clone())

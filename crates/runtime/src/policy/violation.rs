@@ -44,7 +44,7 @@
 //! decision may commit at all -- ownership, conflict, idempotent replay,
 //! settled run -- is enforced inside that same guarded write, so two
 //! concurrent `decide` calls cannot both journal a decision or both fire
-//! side effects (R54, R72). Releasing quarantine on an
+//! side effects. Releasing quarantine on an
 //! already-terminal/cancelled run is refused in that same transaction; it
 //! must never be revived.
 //!
@@ -549,8 +549,7 @@ impl ViolationService {
     /// (`crate::service::orchestration::OrchestrationService::policy_violation_decide`)
     /// so an operator who just released a violation can tell, in the same
     /// response, whether the run actually left quarantine or a different,
-    /// still-open violation kept it held (R75 follow-up, `agent://ReviewR75`
-    /// W4) -- without a second `run/get` and without the response's
+    /// still-open violation kept it held -- without a second `run/get` and without the response's
     /// `"decided"` outcome silently meaning either.
     ///
     /// Ownership is not pre-checked here: `reconcile/omp` can rebind a
@@ -558,8 +557,8 @@ impl ViolationService {
     /// [`DomainRepository::reconcile_ownership`], including in the window
     /// between this call and the guarded write, so it is arbitrated
     /// exclusively inside [`DomainRepository::resolve_policy_violation`]'s
-    /// guarded transaction (R72, mirroring
-    /// [`crate::approval::ApprovalService::decide`]'s R71 fix). The rest is
+    /// guarded transaction (mirroring
+    /// [`crate::approval::ApprovalService::decide`]'s fix). The rest is
     /// decided by that same transaction: whether a different resolution is
     /// already on record (a losing call is refused with
     /// [`ViolationError::Conflict`]), whether this is an idempotent replay
@@ -567,7 +566,7 @@ impl ViolationService {
     /// -- for `"release"` -- whether the run has already settled
     /// ([`ViolationError::RunSettled`]). The database actor interleaves
     /// whole `run_domain_op` round trips, so none of these can be
-    /// caller-side pre-checks (R54, R72): the guarded write is the sole
+    /// caller-side pre-checks: the guarded write is the sole
     /// arbiter, exactly one `PolicyViolationDecided` event is journaled per
     /// violation, and only the deciding call fires side effects.
     ///
@@ -688,7 +687,7 @@ impl ViolationService {
     /// open -- unlike the pre-R75 `set_quarantined(run_id, false)` this
     /// replaced, a release is no longer guaranteed to change the flag it
     /// targets, and [`Self::decide_and_release_status`] reports that back
-    /// to its caller instead of discarding it (R75 follow-up).
+    /// to its caller instead of discarding it.
     async fn release_quarantine(&self, run_id: RunId) -> Result<bool, ViolationError> {
         let project_id = self.project_id;
         let mut result = self

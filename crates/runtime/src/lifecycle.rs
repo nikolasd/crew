@@ -1257,7 +1257,7 @@ pub async fn stop(opts: &StopOptions) -> Result<StopOutcome, StopError> {
 /// the socket file alone is not one -- an unclean crash (SIGKILL, machine
 /// crash) leaves `runtime.sock` on disk, and only the graceful shutdown
 /// path removes it. Used by `crewd lease release` to refuse out-of-band
-/// writes only when a daemon is genuinely serving (R86 review W1).
+/// writes only when a daemon is genuinely serving.
 #[must_use]
 pub fn runtime_is_live(lock_path: &Path) -> bool {
     read_lock(lock_path).is_some() && !lock_file_is_free(lock_path)

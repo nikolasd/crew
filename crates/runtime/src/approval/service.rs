@@ -154,7 +154,7 @@ impl ApprovalService {
     /// re-applies nothing), and whether the run has already settled
     /// ([`ApprovalError::RunSettled`]). The database actor interleaves
     /// whole `run_domain_op` round trips, so none of these can be
-    /// caller-side pre-checks (R70, R71): the guarded write is the sole
+    /// caller-side pre-checks: the guarded write is the sole
     /// arbiter, exactly one `ApprovalDecided` event is journaled per
     /// approval, and only the deciding call fires side effects.
     ///

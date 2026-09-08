@@ -53,7 +53,7 @@
 //! guards the ordinary case a fix must not regress -- releasing a
 //! violation with nothing racing it must still clear quarantine.
 //!
-//! Which hunk each test falsifies (`agent://ReviewR75` A6). The three
+//! Which hunk each test falsifies. The three
 //! pre-existing tests all falsify the *same* hunk,
 //! `DomainRepository::release_quarantine`'s unresolved-violation count
 //! guard; restoring the pre-fix unconditional clear in its place breaks
@@ -446,7 +446,7 @@ async fn a_plain_release_with_no_concurrent_violation_clears_quarantine() {
     );
 }
 
-/// Falsifies the record-side fix (`agent://ReviewR75` W1): `decide` is
+/// Falsifies the record-side fix: `decide` is
 /// declared first this time, and `record_nested_worker` is wrapped in one
 /// leading no-op round trip, so `biased` FIFO forces the enqueue order
 /// decide-snapshot, no-op, decide-resolve, record-fingerprint,
