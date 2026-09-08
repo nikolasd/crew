@@ -40,6 +40,8 @@ never edited to read as though it always agreed with what came later.
 | [0026](0026-headless-retirement.md) | Headless control plane retirement | Accepted |
 | [0027](0027-turn-end-settles-a-run.md) | A run is a conversation the leader closes; a vendor's turn-end is durable evidence, not a terminal state | Accepted |
 | [0028](0028-submit-prompt-is-journaled-redacted-run-intent.md) | The submit prompt is journaled, redacted, as durable run intent | Accepted |
+| [0031](0031-tool-results-are-gated-on-capability-not-durability.md) | What a tool result may carry is decided by capability, not by durability | Accepted |
+| [0032](0032-model-names-are-resolved-and-persisted-on-confirmation.md) | A worker's model name is resolved against the host's catalogue, and persisted only once confirmed | Accepted |
 
 ## When to add one
 
