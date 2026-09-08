@@ -78,14 +78,16 @@ failures are simply not written. Against `README.md:18` ("Every action is persis
 executes. Crash? Replay from the last known state"), a replay of run `01a08251` shows a success that
 never happened.
 
-**F17 is attributed:** the maintainer closed both Ghostty tabs by hand at 18:49:43. Run `01a08253`
+**F17 is attributed:** the maintainer closed both Ghostty tabs by hand, at different times — run
+`01a08219`'s at 18:39:45 (seq 597) and run `01a08253`'s at 18:49:43 (seq 15338). Run `01a08253`
 then went `displayPaneDetached` → `adapterProcessExited{0}` → `runWorking` → `runSucceeded` in the
 same second, with no leader action and no new turn. So the sequence is *"a human closes a parked
 worker's terminal ⇒ the run is recorded succeeded"* — not an unattended failure. The instantaneous
 `runWorking` is a transition-table artefact (`waitingUser → succeeded` is not a legal direct edge, so
 `walk_to` hops through `working`); the artefact is benign, the `succeeded` it reaches is not.
 
-Open decision for the maintainer: **`failed` or `lost`?** The recommendation on record is `failed` —
+Open decision for the maintainer (still open — see the rulings addendum at the end): **`failed` or
+`lost`?** The recommendation on record is `failed` —
 `lost` means the supervisor could not observe *how* the process exited, and here it observed a clean
 exit perfectly well.
 
@@ -137,7 +139,7 @@ exception, and the module says so: *"the runtime's 'journal, never decide' stanc
 everything except the one case the leader provably walked away from."* But `crew-orchestration`'s
 skill and ADR-0025 both promise that a `WorkerTimeout` is a fact the leader acts on — extend, nudge,
 or abort. **Whether the runtime should decide here is a product question for the maintainer**, not
-something the code can settle.
+something the code can settle. *Answered after the run — see the rulings addendum at the end.*
 
 **And the clock it rests on is corrupted by finding 4 below.** `activity.touch()` re-arms the
 inactivity deadline from `RunLifecycleSink::emit` (`adapter/run_lifecycle.rs:540-544`) for *any*
@@ -263,3 +265,37 @@ Two corrections made during diagnosis are recorded because they changed conclusi
 fixing orchestration's error path would remove the fabricated success (it would not — the terminal
 state is committed inside `start()`), and the belief that the P4 export was the wrong window (it was
 not — start failures are not journaled).
+
+
+---
+
+## Rulings after the run — 2026-09-08, night
+
+Recorded here so this record does not keep an open question that has since been answered. These came
+from the maintainer directly, on his own channel, after reading the diagnoses.
+
+**CREW-90 — build coordination, do not retire it.** The missing piece is delivery: the worker never
+receives the MCP helper or its scope token, because `build_adapter` discards both
+(`crates/runtime/src/adapter/registry.rs:1372`). Wiring it re-opens ADR-0016's PID-reuse question,
+because scope tokens would exist for the first time — so `revoke_for_run`, which still has no caller,
+must be closed inside the same work rather than after it. Shipping delivery without revocation would
+create the exposure ADR-0016 warned about, in a system that is currently safe only because the
+feature is dead.
+
+**CREW-80 — an abandoned run must stop the worker process.** Today `settle_abandoned_turn`
+(`crates/runtime/src/domain/repository.rs:1852-1875`) only transitions the run's state; it never
+touches the process, adapter, pane, concurrency slot or lease. This run demonstrated the effect: the
+run was declared dead at 17:50:22 and its worker lived until 18:39:45. Further direction: *"abandoned"
+is to mean the leader is gone, not that a timer expired* — the maintainer does not park workers by
+hand and does not intend to, so the leader owns every worker's lifetime. Crew stores the owner's
+identity on tasks but has no disconnect handling today, so that trigger needs building. The terminal
+state must not be `lost`; `cancelled` is the candidate.
+
+**CREW-99 — documentation follows code, never leads it.** A behaviour is documented once it ships.
+This closes the class of finding F1 belongs to.
+
+**CREW-78 — pending.** The maintainer's position is that a cleanly exited run which did no work
+should be `failed`, with `lost` reserved for genuine unobservability — i.e. the case where the
+supervisor could not see how the process exited. He asked to review the meaning of `lost` before
+settling it and has not yet confirmed, so this is recorded as his stated position and **not** as a
+ruling. Do not treat it as decided until he confirms.
