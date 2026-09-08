@@ -39,9 +39,9 @@ use std::sync::Arc;
 use crew_protocol::{Classified, TurnOutcome};
 use serde::{Deserialize, Serialize};
 
-#[cfg(test)]
-pub(crate) use adapter::cursor_placements;
 pub use adapter::{LaunchSpec, ResumeContext, TuiAdapter, TuiTimings, TuiVendor, VersionVerdict};
+#[cfg(test)]
+pub(crate) use adapter::{assert_only_pacing_is_accelerated, cursor_placements};
 pub use claude::ClaudeTuiVendor;
 pub use discovery::{DiscoveryError, find_transcript_by_nonce};
 pub use tailer::{TailerHandle, TranscriptTailer};

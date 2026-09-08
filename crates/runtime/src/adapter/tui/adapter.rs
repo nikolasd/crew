@@ -258,6 +258,116 @@ pub struct TuiTimings {
     pub preflight_timeout: Duration,
 }
 
+/// How long a conformance scenario waits to *observe* an expected event
+/// before declaring the scenario unproven (CREW-76).
+///
+/// **The invariant, and it is the reason this is one constant rather than
+/// a literal per call site: an observation deadline must strictly dominate
+/// the production bound it waits behind.** A scenario that waits less time
+/// than the adapter is permitted to take fails before the thing it is
+/// testing does — so the test reports a defect that is really its own
+/// impatience, and it does so at whatever rate the machine happens to be
+/// slow.
+///
+/// That inversion was present before this constant existed and was not
+/// load-dependent: the cancel scenarios waited 5s for `ProcessExited`
+/// while passing production's [`EscalationTimings`], whose default budget
+/// is 5s to SIGTERM plus a further 5s to SIGKILL. A vendor that needed
+/// full escalation failed the scenario on an idle machine.
+///
+/// 20 seconds is chosen to dominate every bound a scenario can sit behind
+/// — the 10s escalation total being the largest — and the assertions in
+/// `the_observation_deadline_dominates_every_production_bound` are what
+/// keep that true if a production bound is ever raised. Like any failure
+/// bound it costs wall-clock time only when it fires, so its size buys
+/// nothing and its generosity costs nothing.
+pub(crate) const SCENARIO_OBSERVATION_DEADLINE: Duration = Duration::from_secs(20);
+
+/// Asserts that a test harness's [`TuiTimings`] accelerates only *pacing*
+/// fields and leaves every *failure bound* at production's value
+/// (CREW-65, CREW-76).
+///
+/// **The distinction, once, for the group.** A pacing field is time a
+/// caller actually spends waiting, so shrinking it is what makes a suite
+/// fast. A failure bound costs wall-clock time only when it FIRES — so
+/// shrinking one makes nothing faster, and its only other effect is
+/// manufacturing false failures on a loaded machine. CREW-65 established
+/// that on `paste_write_timeout` after an accelerated 500ms bound failed
+/// a bracketed-paste test 100% of the time under CPU load; CREW-76 is
+/// the same defect found in three sibling fields of the same struct,
+/// which had been left accelerated in all four conformance harnesses
+/// because the rule was applied to the field that had failed rather than
+/// to the kind it named.
+///
+/// **This is a compile-time guard, not only a runtime one.** The
+/// destructuring below is exhaustive on purpose: a field added to
+/// `TuiTimings` — or to `EscalationTimings` — fails to compile here until
+/// whoever added it has decided which kind it is. A runtime list of
+/// failure bounds would silently not cover a new one, which is how the
+/// three fields this closes were missed.
+#[cfg(test)]
+pub(crate) fn assert_only_pacing_is_accelerated(harness: TuiTimings, harness_name: &str) {
+    let production = TuiTimings::default();
+
+    let TuiTimings {
+        // Pacing — the exception list, and the only fields a harness may
+        // accelerate. Bound and ignored deliberately rather than omitted,
+        // so this stays exhaustive.
+        readiness_quiet: _,
+        tailer_poll: _,
+        submit_idle: _,
+        // Failure bounds — every one must equal production's.
+        readiness_cap,
+        discovery_timeout,
+        preflight_timeout,
+        paste_write_timeout,
+        escalation:
+            crate::supervisor::EscalationTimings {
+                sigint_to_sigterm,
+                sigterm_to_sigkill,
+            },
+    } = harness;
+
+    for (field, actual, expected) in [
+        ("readiness_cap", readiness_cap, production.readiness_cap),
+        (
+            "discovery_timeout",
+            discovery_timeout,
+            production.discovery_timeout,
+        ),
+        (
+            "preflight_timeout",
+            preflight_timeout,
+            production.preflight_timeout,
+        ),
+        (
+            "paste_write_timeout",
+            paste_write_timeout,
+            production.paste_write_timeout,
+        ),
+        (
+            "escalation.sigint_to_sigterm",
+            sigint_to_sigterm,
+            production.escalation.sigint_to_sigterm,
+        ),
+        (
+            "escalation.sigterm_to_sigkill",
+            sigterm_to_sigkill,
+            production.escalation.sigterm_to_sigkill,
+        ),
+    ] {
+        assert_eq!(
+            actual, expected,
+            "{harness_name}'s fast timings accelerate the failure bound `{field}` \
+             ({actual:?} against production's {expected:?}). A timeout costs wall-clock time \
+             only when it fires, so accelerating it makes no test faster and only manufactures \
+             false failures under load -- read `TuiTimings::default().{field}` instead. If this \
+             field is genuinely pacing rather than a bound, move it to the ignored group above \
+             and say why."
+        );
+    }
+}
+
 impl Default for TuiTimings {
     fn default() -> Self {
         Self {
@@ -1916,6 +2026,33 @@ mod tests {
 
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// CREW-76: the constant is derived from the bounds it must dominate,
+    /// not chosen. If a production bound is ever raised past it, this fails
+    /// rather than a scenario becoming quietly flaky.
+    #[test]
+    fn the_observation_deadline_dominates_every_production_bound() {
+        let production = TuiTimings::default();
+        let escalation_total =
+            production.escalation.sigint_to_sigterm + production.escalation.sigterm_to_sigkill;
+
+        for (name, bound) in [
+            ("readiness_cap", production.readiness_cap),
+            ("discovery_timeout", production.discovery_timeout),
+            ("preflight_timeout", production.preflight_timeout),
+            (
+                "the escalation total (sigint->sigterm->sigkill)",
+                escalation_total,
+            ),
+        ] {
+            assert!(
+                SCENARIO_OBSERVATION_DEADLINE > bound,
+                "a scenario waits {SCENARIO_OBSERVATION_DEADLINE:?} to observe an event, but \
+                 {name} permits the adapter {bound:?} -- so the scenario would fail before the \
+                 behaviour it is testing does. Raise SCENARIO_OBSERVATION_DEADLINE above it."
+            );
+        }
+    }
 
     // ----------------------------------------- CREW-70: the progress bound
 

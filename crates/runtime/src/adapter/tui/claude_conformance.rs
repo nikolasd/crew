@@ -49,7 +49,7 @@ use crate::conformance::{ConformanceMode, ConformanceReport, ScenarioResult, sce
 use crate::db::DatabaseHandle;
 use crate::display::{DisplayRegistry, HiddenDisplay, PaneCoordinator};
 
-use super::adapter::{ResumeContext, TuiAdapter, TuiTimings};
+use super::adapter::{ResumeContext, SCENARIO_OBSERVATION_DEADLINE, TuiAdapter, TuiTimings};
 use super::claude::ClaudeTuiVendor;
 
 fn adapter_config(bin: PathBuf, session_dir: PathBuf) -> AdapterConfig {
@@ -427,16 +427,17 @@ done
 fn fast_timings() -> TuiTimings {
     TuiTimings {
         readiness_quiet: Duration::from_millis(80),
-        readiness_cap: Duration::from_secs(4),
-        discovery_timeout: Duration::from_secs(4),
+        // CREW-76: production's own values. `readiness_cap`,
+        // `discovery_timeout` and `preflight_timeout` are failure bounds,
+        // not pacing delays -- see `assert_only_pacing_is_accelerated`,
+        // which is what keeps this true for any field added later.
+        readiness_cap: TuiTimings::default().readiness_cap,
+        discovery_timeout: TuiTimings::default().discovery_timeout,
         tailer_poll: Duration::from_millis(40),
         submit_idle: Duration::from_millis(50),
-        // CREW-65: production's own value. `paste_write_timeout` is a
-        // failure bound, not a pacing delay -- accelerating it makes
-        // nothing faster and only manufactures false failures under load.
         paste_write_timeout: TuiTimings::default().paste_write_timeout,
         escalation: crate::supervisor::EscalationTimings::default(),
-        preflight_timeout: Duration::from_secs(4),
+        preflight_timeout: TuiTimings::default().preflight_timeout,
     }
 }
 
@@ -540,10 +541,10 @@ async fn mock_process_scenarios(harness: &Harness) -> Vec<ScenarioResult> {
     }
 
     let saw_started = sink
-        .wait_for(is_process_started, Duration::from_secs(3))
+        .wait_for(is_process_started, SCENARIO_OBSERVATION_DEADLINE)
         .await;
     let saw_session = sink
-        .wait_for(is_vendor_session, Duration::from_secs(3))
+        .wait_for(is_vendor_session, SCENARIO_OBSERVATION_DEADLINE)
         .await;
 
     let mut out = Vec::new();
@@ -569,7 +570,7 @@ async fn mock_process_scenarios(harness: &Harness) -> Vec<ScenarioResult> {
     let saw_ack = sink
         .wait_for(
             |p| matches!(p, AdapterEventPayload::MessageFinal { text, .. } if text.value.starts_with("ack:")),
-            Duration::from_secs(3),
+            SCENARIO_OBSERVATION_DEADLINE,
         )
         .await;
     out.push(match (follow_up, saw_ack) {
@@ -585,12 +586,15 @@ async fn mock_process_scenarios(harness: &Harness) -> Vec<ScenarioResult> {
         ),
     });
 
-    let cancel_outcome =
-        tokio::time::timeout(Duration::from_secs(5), adapter.cancel(CancelScope::Worker)).await;
+    let cancel_outcome = tokio::time::timeout(
+        SCENARIO_OBSERVATION_DEADLINE,
+        adapter.cancel(CancelScope::Worker),
+    )
+    .await;
     let exited = sink
         .wait_for(
             |p| matches!(p, AdapterEventPayload::ProcessExited { .. }),
-            Duration::from_secs(5),
+            SCENARIO_OBSERVATION_DEADLINE,
         )
         .await;
     out.push(match (cancel_outcome, exited) {
@@ -683,7 +687,7 @@ async fn resume_scenarios(harness: &Harness, break_resume: bool) -> Vec<Scenario
                 let tailed = sink
                     .wait_for(
                         |p| matches!(p, AdapterEventPayload::MessageFinal { text, .. } if text.value == "resumed ok"),
-                        Duration::from_secs(3),
+                        SCENARIO_OBSERVATION_DEADLINE,
                     )
                     .await;
                 if tailed {
@@ -765,6 +769,15 @@ pub async fn live_report() -> Result<ConformanceReport, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CREW-76: this harness may accelerate pacing fields and must leave
+    /// every failure bound at production's value. The guard's own
+    /// destructuring is what covers a field added later; this call is what
+    /// covers THIS harness.
+    #[test]
+    fn fast_timings_accelerate_only_pacing_fields() {
+        super::super::assert_only_pacing_is_accelerated(fast_timings(), "claude-tui");
+    }
 
     #[tokio::test]
     async fn fixture_report_covers_all_14_canonical_scenarios_exactly_once() {
