@@ -1,9 +1,11 @@
 //! Herdr display backend tests: real `herdr status --json` compatibility
 //! gating and pane-lifecycle operations, using injected command
 //! executors keyed off `fixtures/displays/herdr/*.txt` -- the exact
-//! `status --json` shape captured from the installed `herdr 0.7.5`
-//! binary (mismatch fixture's server side edited to the previously
-//! observed protocol-16 workstation state).
+//! `status --json` shape captured from the installed `herdr 0.8.2`
+//! binary (CREW-82; mismatch fixture's server side edited to a
+//! plausible protocol-19 workstation state, and the below-minimum
+//! fixture preserved verbatim from the previously verified 0.7.5/17
+//! state to exercise the minimum-protocol floor).
 
 use crew_protocol::{DisplayBackend, DisplayConfig, DisplayPlacement};
 use crew_runtime::display::{
@@ -83,9 +85,37 @@ fn the_compatible_fixture_makes_the_backend_available() {
     let status = herdr
         .probe()
         .expect("probe must succeed against a well-formed fixture");
-    assert_eq!(status.client_protocol, 17);
-    assert_eq!(status.server_protocol, Some(17));
+    assert_eq!(status.client_protocol, 20);
+    assert_eq!(status.server_protocol, Some(20));
     assert!(status.compatible);
+}
+
+#[tokio::test]
+async fn a_below_minimum_protocol_fixture_makes_the_backend_unavailable_and_issues_no_pane_command()
+{
+    let executor = Arc::new(FixtureExecutor::new().with(
+        "herdr status --json",
+        ok(load_fixture("status-below-minimum.txt")),
+    ));
+    let herdr = HerdrDisplay::with_executor(
+        DisplayConfig::default(),
+        Arc::clone(&executor) as Arc<dyn CommandExecutor>,
+    );
+    // The fixture's client and server agree with each other
+    // (`compatible: true`) on protocol 17 -- self-agreement alone must
+    // not clear the verified-minimum floor (CREW-82).
+    assert!(!herdr.is_available());
+
+    let result = herdr
+        .create_pane(pane_request(vec!["crewd", "monitor"], "display-1"))
+        .await;
+    let err = result.expect_err("a below-minimum protocol must refuse to create a pane");
+    assert!(
+        err.contains("minimum protocol"),
+        "expected minimum-protocol guidance in: {err}"
+    );
+    assert!(herdr.owned_pane_ids().is_empty());
+    assert_eq!(executor.call_count(), 1);
 }
 
 fn pane_request(command: Vec<&str>, title: &str) -> PaneRequest {
@@ -140,7 +170,7 @@ async fn a_created_pane_updates_state_three_times_and_close_only_touches_crew_ta
                 ok("{}"),
             )
             .with(
-                "herdr pane report-agent --source crew --agent display-1 --state working w1:p9",
+                "herdr pane report-agent w1:p9 --source crew --agent display-1 --state working",
                 ok("{}"),
             )
             .with("herdr pane close w1:p9", ok("{}")),
