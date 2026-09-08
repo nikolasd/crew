@@ -42,6 +42,8 @@ never edited to read as though it always agreed with what came later.
 | [0028](0028-submit-prompt-is-journaled-redacted-run-intent.md) | The submit prompt is journaled, redacted, as durable run intent | Accepted |
 | [0029](0029-placement-follows-the-backend-embedded-deleted.md) | Display placement is the backend's natural form, and `Embedded` is deleted rather than deprecated | Accepted |
 | [0030](0030-paste-delivery-bounded-on-progress.md) | Paste delivery is bounded on progress, not on elapsed time | Accepted |
+| [0031](0031-tool-results-are-gated-on-capability-not-durability.md) | What a tool result may carry is decided by capability, not by durability | Accepted |
+| [0032](0032-model-names-are-resolved-and-persisted-on-confirmation.md) | A worker's model name is resolved against the host's catalogue, and persisted only once confirmed | Accepted |
 
 ## When to add one
 
