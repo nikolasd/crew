@@ -519,6 +519,44 @@ methods' underlying shapes are different in a way that matters, not merely prese
 
 ---
 
+## Escalations Carry the Worker's Actual Question
+
+**Specified by:** maintainer ruling, deferred to post-E2E implementation
+**References:** `crates/protocol/src/event.rs` (`EscalationRaised.question: Option<Redacted>`),
+`crates/runtime/src/adapter/run_lifecycle.rs` (repeated-failure trigger),
+`crates/runtime/src/domain/repository.rs` (`raise_write_violation_if_declared_read_only`,
+`record_adapter_event`'s `WorkerQuestion` handling)
+
+### What it is
+
+`EscalationRaised.question` is populated at only one of its three effective call sites today. A
+worker's own question (`kind = 'question'`, raised when the vendor transcript surfaces one) already
+carries real, sanitized text — that path works and is the existence proof the field's shape is
+right. The other two — a run's second consecutive failure (`reason: "repeated_failure"`) and a
+write-shaped tool running against a subtask declared read-only (`reason: "write_violation"`) — pass
+`None`. Both should instead carry something that tells OMP what actually happened, not just the
+fixed code naming the kind of escalation it is.
+
+### Why deferred
+
+Ruled in scope, but implementation is deliberately scheduled after the supervised live E2E rather
+than folded into the v0.7.0 cut: neither site's exact text is a mechanical fill-in. The
+`write_violation` site needs no new data (the tool name and the plan/subtask ids are already local
+values at the call site), but the `repeated_failure` site does — nothing in scope there today
+captures what the run was doing when it failed twice, only that it did. Closing that gap is a real
+design choice (thread the exited process's exit code/signal one call frame down, versus querying the
+run's last visible message from the journal), not something to pick under an unrelated ticket's
+scope.
+
+### Decision trigger
+
+Already triggered — implement after the v0.7.0 supervised E2E. Whoever picks this up still needs to
+settle, at the `repeated_failure` site specifically, what evidence to surface and whether it needs
+plumbing beyond what's already in scope there — the `write_violation` site has no equivalent
+question, since everything it needs is already a local value at its call site.
+
+---
+
 ## How to use this document
 
 1. **Adding a future feature:** Append a new section with the feature name, what it is, concrete scenarios that justify it, why it's deferred, and a decision trigger.

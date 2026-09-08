@@ -131,6 +131,8 @@ docs/                     Engineering documentation (start here: docs/developmen
 ## Pull Request Process
 
 1. Ensure your PR:
+   - Covers one concern — a focused fix, feature, or refactor. An unrelated cleanup you noticed
+     along the way is its own PR, reviewed and merged on its own.
    - Passes all tests (`bun run check`)
    - Follows the non-negotiable invariants
    - Includes documentation updates if needed
@@ -139,6 +141,9 @@ docs/                     Engineering documentation (start here: docs/developmen
 2. Submit your PR:
    - There is no PR template — write a clear description covering what changed, why, and how you
      verified it (test output, manual-testing steps run, etc.)
+   - Docs-only changes are welcome as their own PR — the CI pipeline classifies a PR as docs-only
+     and skips the heavier build/test jobs accordingly (see `.github/workflows/ci.yml`), so keeping
+     a docs change free of unrelated source edits keeps it on that faster path.
    - Link any related issues
    - Request review from maintainers
 
@@ -146,6 +151,11 @@ docs/                     Engineering documentation (start here: docs/developmen
    - Respond to all comments
    - Make requested changes
    - Update tests if needed
+
+4. Merging: the maintainer merges once CI is green. If review is still in progress when CI turns
+   green, say so rather than treating green CI alone as ready-to-merge — reporting review state
+   alongside CI state (e.g. "green; review still in progress" vs. "green; review complete") lets
+   the person merging choose knowingly instead of by default.
 
 ## Releasing
 
