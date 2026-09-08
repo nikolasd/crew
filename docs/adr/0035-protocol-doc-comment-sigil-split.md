@@ -48,13 +48,16 @@ what bug it fixed, which ticket drove it, maintainer-facing history — moves to
 convention is load-bearing, not aspirational, because `crates/protocol/src/schema.rs` derives a set
 of tests directly from the rendered schema rather than from the source:
 
-* Every backticked identifier in a shipped description must resolve to something real — a `$defs`
-  type key, an actual enum/const value anywhere in the schema, or an explicit,
+* Every backticked *type* name (PascalCase) in a shipped description must resolve to something
+  real — a `$defs` type key, an actual enum/const value anywhere in the schema, or an explicit,
   reason-carrying entry in an allowlist for the rare case where a name is deliberately unresolved
   (e.g., naming a retired variant specifically because it no longer exists).
-* A backticked reference to a sibling property is checked *scoped to its own object*, not resolved
-  globally against the whole schema — a name that happens to be a real property somewhere else no
-  longer satisfies a reference that is locally wrong.
+* A backticked *property* name (lowercase) is checked differently: *scoped to its own object*, not
+  resolved globally against the whole schema — a name that happens to be a real property somewhere
+  else no longer satisfies a reference that is locally wrong. A lowercase name that is a property
+  nowhere at all passes as out of scope for this check (it could be a CLI flag or a config key) —
+  including a Rust snake_case field name whose camelCase wire form is a property somewhere, which
+  is not caught by either check as originally shipped.
 * The allowlist itself is checked for staleness: an entry naming a field that no longer exists is
   reported, not silently carried forward as a stale exemption waiting to attach to some future,
   unrelated field of the same name.
@@ -120,3 +123,6 @@ comment sigil that no longer executes it.
   bindings this decision keeps clean are themselves generated from these same Rust types), and
   [ADR-0006](0006-type-enforced-redaction-boundary.md) (the same "a convention nobody's build
   enforces eventually fails" reasoning, applied there to redaction and here to doc comments)
+* The lowercase-property-name gap this ADR states above (a snake_case field name whose camelCase
+  wire form is a property somewhere, resolving as out of scope rather than as a leak) is CREW-75,
+  closed by a fourth resolution case in the same sibling-property check.

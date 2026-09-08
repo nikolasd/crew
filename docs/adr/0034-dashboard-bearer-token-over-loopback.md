@@ -50,10 +50,13 @@ listener, but cheap enough not to be worth arguing about.
 
 * No new account or credential system: the token is generated, not chosen, and needs no storage
   beyond the daemon's own memory for the run's lifetime.
-* The redirect-and-cookie exchange means a bookmarked or copy-pasted dashboard link stops working
-  the moment it's used once for its intended purpose (the URL's token becomes unnecessary once the
-  cookie is set) and stops working entirely the next time the daemon restarts (a fresh token
-  invalidates the old cookie) — a stale, leaked link has a short useful life either way.
+* The redirect-and-cookie exchange moves the secret out of the browser's own persisted state — the
+  address bar, history, and any `Referer` — after first load, but the token itself is not
+  single-use: a `?token=` URL keeps authenticating for as long as the daemon that issued it keeps
+  running, since the token is generated once per daemon run and nothing invalidates or rotates it
+  on exchange. What the exchange buys is that the *browser* stops carrying the secret around, not
+  that the secret expires. It does stop working the next time the daemon restarts (a fresh token
+  invalidates the old cookie and the old URL alike).
 * Access control ahead of routing means the unauthenticated surface reveals nothing — not even
   which paths exist — to a request that doesn't already have the token.
 
