@@ -7,9 +7,12 @@ exercises what has changed since.
 
 **The gate is open and no P1 remains.** CREW-52 made panes work under tmux and herdr for the first
 time and added state root + socket to `/crew health`; CREW-61 closed the redaction class with a
-compile-time guard and fixed four live leaks on the way. The one open ticket at the time this was
-last revised is CREW-69 (escalations carrying the worker's question, deferred to post-E2E by
-ruling); it does not block the test.
+compile-time guard and fixed four live leaks on the way. CREW-73 and CREW-74 then landed the pane
+half of that work: an attach walks the remaining backend candidates before falling back to hidden,
+and every requested-versus-actual divergence is journaled with the sequence it tried. The exact
+commit under test is the one recorded in [`release/checklist-0.7.0.md`](checklist-0.7.0.md). The
+one open ticket at the time this was last revised is CREW-69 (escalations carrying the worker's
+question, deferred to post-E2E by ruling); it does not block the test.
 
 Results from the run go under [`release/live-conformance/`](live-conformance/) once it completes.
 
@@ -117,7 +120,9 @@ Register a task and a claude worker, submit a short run (a one-paragraph questio
 |---|---|
 | Model selection on first use | Asked once, then persisted to the repository's config; silent on later runs — the ask must appear if no model is configured yet for this adapter |
 | Pane attach | Pane opens in the chosen host — note the pane reference in `/crew` ("pane attached: `<backend>`") |
-| **If no pane opens** (CREW-60) | The fallback is typed and journaled, not silent: a `paneDowngraded` event carries `requestedBackend`, `requestedPlacement`, `actualBackend` (always `hidden` today), and a redacted `reason`; the monitor shows a sticky downgrade flag a later unrelated event cannot overwrite. Grep the export for `paneDowngraded` (camelCase, the wire form). A missing pane *without* this event is the finding; a missing pane *with* it is the mechanism working, and `reason` says why. |
+| **If the pane is not in the preferred host** (CREW-73/74) | Not a failure by itself — an attach retries the remaining candidates, so a pane in a *different* host is the retry working. What must accompany it: a `paneDowngraded` event whose `requestedBackend` differs from its `actualBackend`, carrying `requestedPlacement`, the `attempted` sequence, and a redacted `reason`. A pane in a non-preferred host **with** that event is correct behaviour; **without** it is the finding, because the divergence then reached nobody. Grep the export for `paneDowngraded` (camelCase, the wire form). |
+| **If no pane opens at all** (CREW-60) | The fallback is typed and journaled, not silent: `actualBackend` is `hidden`, `reason` names how many candidates were tried and the last failure, and `attempted` lists the backends resolution walked or tried in order (an entry means resolution reached that backend, not that a pane was attempted on it). The monitor shows a sticky downgrade flag a later unrelated event cannot overwrite. A missing pane *without* this event is the finding; a missing pane *with* it is the mechanism working, and `reason` says why. |
+| **On `/crew reopen`** (CREW-74) | Reopen is single-attempt by design: pane-creation failure returns an **error to the caller**, not a hidden fallback, so expect a failed command rather than a downgrade event. A reopen that silently reports success with no visible pane is worth noting — the two paths where no backend is available journal a hidden attach and return success. |
 | **Run completion** — the headline check (CREW-47/48) | On the worker's turn end, the run moves to `waitingUser` with the pane still open, and stays there. Only a delivered follow-up or a genuine user turn may resume it, and a thinking-only turn end is not a boundary at all. **Watch for any return to `working` you did not cause — that is a regression, and it is the single most important observation of the run.** |
 | `crew_run` op `"result"` on the parked run (CREW-49) | Returns the full answer text and usage — a `null` result with a visible answer already in the pane is a regression |
 | `crew_transcript` op `"replay"` on the same run (CREW-50) | Returns a normalized digest array — free to check, and the tool to reach for if anything else goes wrong |

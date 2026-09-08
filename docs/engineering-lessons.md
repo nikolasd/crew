@@ -1470,6 +1470,30 @@ fixture has a typo". The positive control is the same input with the defect remo
 Each variant is invisible to careful reading. The test looks right, passes, and passes for a reason
 nobody has stated.
 
+### A fourth variant: the thing compared against was never at risk
+**Location:** `crates/runtime/src/display/coordinator.rs`
+
+The three variants above ask what would make a test pass while the thing it names is broken. This is
+the fourth answer, and the hardest to see by reading: **the comparison target had its own fresh copy
+of the resource, so the assertion held whether or not the behaviour under test happened.**
+
+A test named for a resource being released proved it by performing a second attach — through a
+**second, independently-constructed coordinator**, whose live-pane set was fresh regardless of what
+the first one reserved or released. The cap therefore appeared free in both worlds. The comment
+directly above the assertion said *"the cap of 1 must still be entirely free"*, which is exactly the
+right property; the code measured a different object's cap. It survived weeks beside that comment,
+and an architecture decision record cited it **by name** as pinning the resource consequence, so the
+citation was evidence of nothing and a reader who checked it would have been reassured.
+
+Found by mutation while implementing a sibling change: removing the release line failed neither that
+test nor the new one written next to it, both of which had the same shape. The fix is to share one
+instance across both observations, so the second genuinely depends on the first having released.
+
+**The tell, and it generalises past resource pools:** if the assertion would still hold with the
+production line deleted, the comparison is against something that was never at risk. Ask what the
+comparison target's state depends on — if the answer does not include the behaviour under test, the
+test is measuring the wrong object however well its name and comments describe the right one.
+
 ### A fail-closed assertion whose failure path is never exercised is indistinguishable from an absent one
 **Location:** `crates/protocol/src/schema.rs`, `crates/protocol/src/event.rs`, `crates/xtask/src/main.rs`
 

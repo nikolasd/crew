@@ -121,6 +121,51 @@ otherwise assume means all of it is.
   from it. The decision stands; the work does not exist yet. Anyone reading `attempts` today is
   reading selection history only. Tracked as CREW-73, to land before the next live exercise.
 
+> **Amendment, 2026-09-08.** Every claim in the section above was true when written and three of
+> them are no longer the whole picture. Recorded as an addition rather than by editing the text,
+> because the original was a decision's state at a moment and the changes since are what happened
+> to it.
+>
+> **The `attempts` extension was never built, and the intent landed elsewhere.**
+> `DisplaySelection` is not reachable from any wire message — it appears nowhere in
+> `crew.schema.json`, has no generated binding, and nothing consumed its `attempts` field — so
+> extending it as this decision specified would have built a channel with no far end. The sequence
+> instead became `attempted` on the `PaneDowngraded` event, which is journaled, monitor-visible and
+> already fires exactly when the preferred backend lost. It carries the backends **walked or
+> tried**, in order, without duplicates: each retry re-resolves over a strict suffix of the
+> previous candidate list, so entries cannot repeat — but an entry is not proof that
+> `create_pane` was called on that backend, only that resolution reached it. Payloads written
+> before the field existed replay as an empty sequence.
+>
+> **Attach now retries the remaining candidates before falling back to hidden**, where this
+> decision described a single attempt. Two consequences for the surfacing half: `actualBackend` is
+> no longer always `hidden` — a pane can land in a non-preferred backend — and a downgrade is
+> journaled on **any** requested-versus-actual divergence, including when a later candidate
+> *succeeded*. Emitting only on total failure would have made "landed in tmux when herdr was
+> preferred" silent, which is the class this decision exists to close. Each retry re-derives its
+> placement from the candidate's own natural form rather than carrying the first backend's, or the
+> retry would reintroduce the mismatch the default half of this decision fixed.
+>
+> **Reopen is deliberately not symmetric with attach, and that is a decision rather than an
+> omission.** `pane/reopen` remains single-attempt: on pane-creation failure it returns an error
+> to the caller rather than degrading to hidden, so there is nothing to downgrade and no event to
+> journal — for a fresh attach a pane is optional and the run must proceed, while for a reopen the
+> pane is the entire request. Retrying there would also scatter one run's panes across hosts over
+> its lifetime. One inconsistency inside that: reopen's two early returns (no backend selected, or
+> the registry cannot find the selected one) journal a hidden attach and report success, so a
+> reopen with nothing available is visible only as "pane attached: hidden" rather than as an error
+> or a downgrade.
+>
+> **And a citation in this ADR's own Links was evidence of nothing.**
+> `a_failed_pane_creation_does_not_hold_a_slot` was listed here as pinning the resource
+> consequence. It was vacuous until the retry work fixed it: it asserted the cap was free by
+> attaching through a **second, independently-constructed coordinator** whose `live_panes` set was
+> fresh regardless of what the first released, so it passed whether or not the release happened.
+> The comment above the assertion described the right property while the code measured a different
+> object. Both slot tests now share one coordinator and both fail when the release is removed.
+> Left in the Links list rather than removed, with this note, because a reader who checked the
+> citation before that fix would have been misled and should be able to see why.
+
 ### Why the result field was dropped, and what it would have reversed
 
 The first shape of this decision put a warning on the `run/submit` response, on the reasoning that
