@@ -112,7 +112,15 @@ baked into the binary.
       `crates/protocol/src/event.rs`) passes as part of `cargo test --workspace` — confirms no
       wave-2 change (or anything landing after) reintroduced an unaccounted `String` field on
       `RuntimeEvent`
-- [ ] **Live end-to-end test (supervised) — NOT YET RUN against this `main`.** The wave-2 fixes
+- [ ] **Live end-to-end test (supervised) — ATTEMPT 3 RUN 2026-09-08 against `main` @ cab041a;
+      FAILED, gate stays closed.** Record: `release/live-conformance/2026-09-08-live-e2e-attempt-3.md`.
+      P0-P4 executed; **P5-P9 not run**. Pass bar is P1-P7 all green (P5 explicitly), so the bar was
+      not met and could not have been met by this attempt. Seventeen findings, five P1 candidates —
+      fabricated success with a start failure leaving no durable trace (CREW-78), first-run vendor
+      prompts invisible with paste-and-Enter into them (CREW-79), a parked run declared `lost` at
+      five minutes (CREW-80), and a parked run flooding the journal at ~30 rows/s (CREW-81).
+      **v0.7.0 does not cut on this attempt**; P5-P7 wait for attempt 4 against the fixed build.
+      No stop condition fired: redaction sweep clean, no crash loop, no billed runaway. The wave-2 fixes
       (CREW-47 through CREW-62) and the CREW-52 breaking change are gated on a supervised live E2E
       re-run before tagging. The runbook is `release/live-e2e-runbook-0.7.0.md` (companion to
       `docs/manual-testing.md`), phases **P0 through P10** — P0 is preflight (no model call,
@@ -123,11 +131,17 @@ baked into the binary.
       743d7ae before running it**, and use a brand-new `CREW_STATE_DIR` (an old one carrying a
       pre-CREW-52 `"embedded"` placement event will legibly refuse to replay, not silently
       misbehave — see "Breaking changes" above).
-  - [ ] Supervised live E2E re-run completed against this checklist's commit
+  - [ ] Supervised live E2E re-run completed against this checklist's commit — **attempt 3
+        (2026-09-08) did not complete: stopped after P4 by maintainer decision once five P1
+        candidates had accumulated. Attempt 4 required against the post-fix-wave build.**
   - [ ] Each wave-2 behavioral claim above (CREW-47/48, CREW-49, CREW-50, CREW-52, CREW-53,
         CREW-54/56, CREW-58, CREW-60, CREW-62) observed matching its stated fix during the E2E
-  - [ ] Findings from the run, if any, filed as new tickets rather than blocking this checklist on
-        a full re-triage
+  - [x] Findings from the run, if any, filed as new tickets rather than blocking this checklist on
+        a full re-triage — **done for attempt 3: F1-F17 filed as CREW-77 through CREW-88** (mapping
+        in the attempt-3 record). Two of these are maintainer decisions rather than defects: whether
+        a cleanly-exited run that did no work is `failed` or `lost` (CREW-78), and whether the
+        runtime may auto-settle a parked run at all, given ADR-0025 and the skill promise a leader
+        choice (CREW-80).
 - [ ] Live adapter conformance evidence: carries forward from v0.6.0 — no NEW adapter-selection
       behavior beyond CREW-53's model-name resolution (TypeScript-only, `packages/extension`; no
       Rust adapter changes) — see `release/checklist-0.6.0.md` and `release/live-conformance/*.json`.
