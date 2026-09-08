@@ -202,9 +202,9 @@ fn render_schema() -> Result<Vec<u8>> {
 /// there transitively), and a request/param shape has no independent
 /// schema-validated consumer today.
 ///
-/// CREW-44: this list, and the assertion in `check_export_list_is_schema_reachable`
-/// that reads it, exist because CREW-43 found `RunMessage` and
-/// `MessageListResult` on the export allowlist below with no counterpart in
+/// This list, and the assertion in `check_export_list_is_schema_reachable`
+/// that reads it, exist because `RunMessage` and
+/// `MessageListResult` were once found on the export allowlist below with no counterpart in
 /// `ProtocolDocument` -- nothing caught it until a human noticed. A type
 /// belongs on the export allowlist AND in `ProtocolDocument` the moment it's
 /// a wire message (a request/result/event with an independent consumer);
@@ -356,9 +356,9 @@ fn export_bindings(dir: &Path) -> Result<Vec<String>> {
 /// reachable from `ProtocolDocument`'s schema (a `$defs` key) or explicitly
 /// named in `NOT_WIRE_MESSAGE_ROOTS` as a deliberate non-message type. A
 /// type in neither is new and unclassified -- exactly the state `RunMessage`
-/// and `MessageListResult` were silently left in before CREW-43 -- so this
-/// is an error, not a warning, naming the offending type(s) and both places
-/// to fix it.
+/// and `MessageListResult` were silently left in before this guard existed
+/// -- so this is an error, not a warning, naming the offending type(s) and
+/// both places to fix it.
 fn check_export_list_is_schema_reachable(
     schema_bytes: &[u8],
     root_idents: &[String],
@@ -383,7 +383,7 @@ fn check_export_list_is_schema_reachable(
              (a request/result/event with an independent consumer), add it as a field on \
              ProtocolDocument in crates/protocol/src/schema.rs; if it's a bare id/enum/param \
              shape with no independent consumer, add it to NOT_WIRE_MESSAGE_ROOTS in this file. \
-             See CREW-44 (this is the CREW-43 regression guard).",
+             This is the regression guard for the RunMessage/MessageListResult gap described above.",
             unclassified.len()
         );
     }

@@ -96,12 +96,12 @@ pub struct CoordinationBroker {
     lease_service: Arc<crate::workspace::LeaseService>,
     artifact_store: Arc<crate::workspace::ArtifactStore>,
     /// Worker-supplied text becomes durable through this broker, so it
-    /// crosses the ADR-0006 boundary here (CREW-33). Before this the
+    /// crosses the ADR-0006 boundary here. Before this the
     /// broker held no redactor at all, which made every worker-authored
     /// string it journaled a live exposure -- `requestChild`'s reason into
     /// `ChildEvent.reason`, and `askPolicy`/`reportBlocked` into
-    /// `messages.payload` through a second entry point CREW-28 did not
-    /// close at `message/send`.
+    /// `messages.payload` through a second entry point the earlier fix at
+    /// `message/send` did not close.
     redactor: Arc<crate::security::redaction::Redactor>,
 }
 
@@ -248,7 +248,7 @@ impl CoordinationBroker {
         // reverse. Redaction can *shrink* text (a long secret becomes a
         // short marker), so checking afterwards would let an oversized
         // payload slip under the bound by being masked. Same ordering as
-        // `request_child` (CREW-33), for the same reason.
+        // `request_child`, for the same reason.
         Self::reject_oversized("payload", &payload)?;
         // The single redaction point for everything that reaches
         // `messages.payload`: `send`, `send_internal`, and every
@@ -608,7 +608,7 @@ impl CoordinationBroker {
     /// quarantined worker still sees `POLICY_QUARANTINED`, not
     /// `RATE_LIMITED` -- keep that order.
     /// Redacts worker-supplied free text before it becomes durable
-    /// (ADR-0006, CREW-33).
+    /// (ADR-0006).
     ///
     /// Classified `Visible` for the same reason a prompt, a steer and a
     /// decision reason are: the text is meant to be read by whoever is
@@ -652,9 +652,9 @@ impl CoordinationBroker {
         self.charge_rate_limit(worker_id)?;
         let project_id = self.project_id;
         let kind = MessageKind::PeerMessage;
-        // CREW-34: this route builds its `RunMessage` directly rather than
+        // This route builds its `RunMessage` directly rather than
         // going through `send`, so `send`'s redaction does not cover it --
-        // which is exactly why CREW-33's fix at the three named routes
+        // which is exactly why the earlier fix at the three named routes
         // missed this one. The bound checks above already ran on the
         // caller's own bytes, so redacting here keeps that ordering.
         let payload =

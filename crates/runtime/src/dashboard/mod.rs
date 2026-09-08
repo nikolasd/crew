@@ -717,7 +717,7 @@ fn annotate_workers_with_spend(workers: &mut serde_json::Value, runs: &serde_jso
 /// subscription skips ahead -- a dashboard that misses frames re-fetches
 /// state; it must never exert backpressure on the daemon.
 ///
-/// CREW-56: replays the whole journal as ordinary `data:` frames BEFORE
+/// Replays the whole journal as ordinary `data:` frames BEFORE
 /// subscribing to the live broadcast, so a viewer connecting after events
 /// already happened -- the common case, since every page load and every
 /// browser-native SSE reconnect is indistinguishable from a fresh
@@ -797,7 +797,7 @@ async fn serve_sse(
         }
         // Unlike a single row's deserialize failure above, a query
         // failure means this viewer gets NOTHING replayed -- silently
-        // discarding it would reproduce CREW-56's exact original
+        // discarding it would reproduce the exact original
         // symptom (an empty feed on a connect that should have had
         // history) with no trace of why. The connection still proceeds
         // to the live loop below: a missed replay is not a reason to

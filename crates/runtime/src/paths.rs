@@ -75,7 +75,7 @@ pub struct RuntimePaths {
     /// A short, private, per-user directory (created mode `0700`) holding
     /// one per-worker attach socket per active run across *every*
     /// repository this user runs Crew against (see [`Self::pane_socket`]).
-    /// Deliberately **not** nested under `root` (CREW-1): a run id is
+    /// Deliberately **not** nested under `root`: a run id is
     /// already a globally unique UUIDv7, so the socket never needed
     /// per-repository namespacing for correctness -- only the durable
     /// state below does -- and `<root>/panes/<run-id>.sock`'s fixed
@@ -196,7 +196,7 @@ fn discover_vcs_root(canonical: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Resolves and creates the pane-socket directory (CREW-1) using the real
+/// Resolves and creates the pane-socket directory using the real
 /// environment and the real effective uid; see [`ensure_pane_socket_root`]
 /// for the fallback-on-any-failure logic this delegates to.
 fn pane_socket_root() -> Result<PathBuf, SecurityError> {
@@ -214,10 +214,10 @@ fn pane_socket_root() -> Result<PathBuf, SecurityError> {
 /// length check and still be unusable: a stale value left over from a
 /// torn-down session, a container remount where `/run/user/<uid>` no
 /// longer exists, a directory owned by someone else, or (thanks to
-/// [`ensure_private_dir`]'s own rejection) a planted symlink. Before
-/// CREW-1, `panes` lived under the always-creatable state root, so nothing
-/// about a bogus `XDG_RUNTIME_DIR` could stop the daemon from starting;
-/// this fallback preserves that property. Only a failure to create the
+/// [`ensure_private_dir`]'s own rejection) a planted symlink. `panes` used
+/// to live under the always-creatable state root, so nothing about a bogus
+/// `XDG_RUNTIME_DIR` could stop the daemon from starting; this fallback
+/// preserves that property. Only a failure to create the
 /// `/tmp` form itself is propagated.
 ///
 /// # Errors
@@ -323,7 +323,7 @@ mod tests {
         let paths = RuntimePaths::resolve(state_root.path(), repo.path()).unwrap();
 
         assert!(paths.panes.is_dir());
-        // CREW-1: panes is deliberately NOT nested under root any more -- a
+        // panes is deliberately NOT nested under root -- a
         // run id is already a globally unique UUIDv7, so the socket never
         // needed per-repository namespacing, and nesting it under root's
         // long `<state_root>/repos/<id>/` prefix is exactly what overflowed
@@ -353,7 +353,7 @@ mod tests {
         );
     }
 
-    /// CREW-1 regression: even under an unrealistically long state root
+    /// Regression test: even under an unrealistically long state root
     /// (simulating a long `$HOME`), the pane socket path must still fit the
     /// platform `sun_path` bound -- the entire point of no longer nesting
     /// `panes` under `root`.
@@ -413,7 +413,7 @@ mod tests {
         );
     }
 
-    /// CREW-1 rider: `$XDG_RUNTIME_DIR` is env-supplied and unbounded --
+    /// `$XDG_RUNTIME_DIR` is env-supplied and unbounded --
     /// an unusually long value must not be trusted blindly. A deliberately
     /// long one must fall back to the always-short `/tmp/crew-<uid>` form
     /// rather than produce a socket path that itself overflows.
@@ -429,7 +429,7 @@ mod tests {
         );
     }
 
-    /// CREW-1 review should-fix: a *short enough* `XDG_RUNTIME_DIR` that is
+    /// A *short enough* `XDG_RUNTIME_DIR` that is
     /// nonetheless unusable (stale value, no longer exists, sits under a
     /// non-writable parent) must fall back to `/tmp/crew-<uid>` instead of
     /// failing the whole daemon startup on a directory the user never

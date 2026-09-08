@@ -225,8 +225,8 @@ impl ViolationService {
     /// observe `already_actioned = false` and each create an audited
     /// cancellation intent and attempt [`Self::cancel_and_transition`];
     /// the losing transition simply fails and is only logged. That
-    /// residue is pre-existing, outside this fix's mechanism, and tracked
-    /// as CREW-105 rather than fixed here.
+    /// residue is pre-existing, outside this fix's mechanism, and is
+    /// deliberately left unaddressed here rather than fixed.
     ///
     /// # Errors
     /// Returns [`ViolationError::Domain`] if `run_id` does not exist.

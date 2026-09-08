@@ -217,7 +217,7 @@ impl TuiVendor for ClaudeTuiVendor {
                 ),
             },
             None => VersionVerdict::Incompatible {
-                // CREW-78 review: never interpolate `probed` here -- it is
+                // Never interpolate `probed` here -- it is
                 // the vendor's raw `--version` stdout, and this is
                 // precisely the branch that fires when it is NOT a
                 // version (an auth error, an update notice, a stack
@@ -304,7 +304,7 @@ fn map_entry(value: &Value) -> (Vec<TuiEvent>, Option<String>) {
         // Extracting `sessionId` above (the one thing every user entry
         // usefully carries for this adapter) already happened.
         //
-        // CREW-47 (D1): a real one -- see `is_real_user_turn` -- still
+        // A real one -- see `is_real_user_turn` -- still
         // pushes `UserTurnStarted`, deliberately never journaled content,
         // to resume a run a finished turn parked. Firing on this run's own
         // very first turn (the fresh-start case above) is harmless: the
@@ -316,7 +316,7 @@ fn map_entry(value: &Value) -> (Vec<TuiEvent>, Option<String>) {
             if let Some(content) = value.pointer("/message/content").and_then(Value::as_array) {
                 events.extend(map_assistant_content(content, ts.as_deref()));
             }
-            // The vendor's own turn boundary (CREW-3 / ADR-0027). Pushed
+            // The vendor's own turn boundary (ADR-0027). Pushed
             // after the content so the answer is journaled before the
             // boundary that tells the leader it is readable.
             if let Some(outcome) = turn_outcome(value) {
@@ -337,7 +337,7 @@ fn map_entry(value: &Value) -> (Vec<TuiEvent>, Option<String>) {
 }
 
 /// Whether this `"user"`-typed entry is a real, new user-authored turn
-/// (CREW-47 D1) -- the evidence that resumes a run a finished turn parked
+/// -- the evidence that resumes a run a finished turn parked
 /// -- as opposed to a subagent's sidechain or a mid-turn tool-result
 /// delivery, both of which are `"user"`-typed too but carry no new
 /// instruction from anyone.
@@ -362,8 +362,9 @@ fn map_entry(value: &Value) -> (Vec<TuiEvent>, Option<String>) {
 /// `text` block), not fail-open. The two wrong answers are not symmetric:
 /// excluding a genuine new instruction leaves the run visibly parked in
 /// `waitingUser`, recoverable by the very next follow-up; including a
-/// tool-result-bearing entry resumes the run silently, mid-turn -- CREW-47
-/// restored in a narrower, easier-to-miss shape. Observed live transcripts
+/// tool-result-bearing entry resumes the run silently, mid-turn -- the same
+/// wrongly-inferred-resumption bug fixed above, restored in a narrower,
+/// easier-to-miss shape. Observed live transcripts
 /// never actually produce a mixed array (an attachment sent alongside a
 /// tool result arrives as its own separate entry), so this asymmetry is
 /// robustness against a shape not yet seen, not a fix for one that was.
@@ -383,7 +384,8 @@ fn is_real_user_turn(value: &Value) -> bool {
             // `all()` is vacuously true on an empty slice: without this
             // guard, `content: []` would flip from excluded (the old
             // fail-open `any()` returns false on empty) to included --
-            // CREW-47 in a corner no real session has produced.
+            // the same wrongly-inferred-resumption bug, in a corner no
+            // real session has produced.
             !blocks.is_empty()
                 && blocks
                     .iter()
@@ -420,7 +422,7 @@ fn is_real_user_turn(value: &Value) -> bool {
 /// edge, which ADR-0027 wave 2 deliberately does not introduce -- it is
 /// wave 3's `run/finish`.
 ///
-/// CREW-48 (D2): a thinking-only `end_turn` is not a boundary either.
+/// A thinking-only `end_turn` is not a boundary either.
 /// Observed live: the vendor emitted `end_turn` twice for one answer -- an
 /// entry whose content was entirely a `thinking` block, immediately
 /// followed by the real entry carrying the answer's `text`, both stamped
@@ -751,7 +753,7 @@ mod tests {
         ));
     }
 
-    /// CREW-78 review guard: the unparseable branch fires precisely when
+    /// This guards against the unparseable branch firing precisely when
     /// `--version` did NOT print a version -- an auth error, an update
     /// notice, a stack trace are all things a real vendor CLI could print
     /// there instead, and this `detail` can reach the durable journal
@@ -812,7 +814,7 @@ mod tests {
             .map(|(_, c)| c.clone())
             .unwrap_or_else(Cursor::start);
         // A real user turn (a plain string prompt) now also signals
-        // `UserTurnStarted` (CREW-47 D1) -- but it carries no data of its
+        // `UserTurnStarted` -- but it carries no data of its
         // own, so "hi" never appears in either event.
         assert_eq!(events.len(), 2);
         assert!(matches!(
@@ -824,9 +826,10 @@ mod tests {
     }
 
     /// The mandatory exclusion, tested directly rather than only asserted
-    /// in a doc comment (staff's review on #76): if this regresses, every
-    /// tool call's own result delivery resumes a settled run -- CREW-47
-    /// restored in a hot path, not merely an edge case.
+    /// in a doc comment: if this regresses, every
+    /// tool call's own result delivery resumes a settled run -- the same
+    /// wrongly-inferred-resumption bug restored in a hot path, not merely
+    /// an edge case.
     #[test]
     fn a_tool_result_user_entry_is_not_a_real_user_turn() {
         let raw = line(serde_json::json!({
@@ -851,7 +854,7 @@ mod tests {
         );
     }
 
-    /// Fail-closed on a mixed array (staff's review on #76): a
+    /// Fail-closed on a mixed array: a
     /// `tool_result` block alongside a `text` block excludes the whole
     /// entry, even though the `text` block alone would otherwise qualify.
     /// The asymmetry is deliberate -- see [`is_real_user_turn`]'s own doc
@@ -908,10 +911,10 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------- turn end (CREW-3)
+    // ------------------------------------------------------- turn end
 
-    /// One assistant entry, with `stop_reason` and the CREW-3 guard flags
-    /// spelled the way the real CLI writes them (both flags are always
+    /// One assistant entry, with `stop_reason` and the sidechain/api-error
+    /// guard flags spelled the way the real CLI writes them (both flags are always
     /// present on a real entry, not optional).
     fn assistant_entry(stop_reason: &str, sidechain: bool, api_error: bool) -> Vec<u8> {
         line(serde_json::json!({
@@ -959,7 +962,7 @@ mod tests {
         );
     }
 
-    /// CREW-48 (D2): observed live -- the vendor emitted `end_turn` twice
+    /// Observed live -- the vendor emitted `end_turn` twice
     /// for one answer, the first entry's content entirely a `thinking`
     /// block. Treating that first entry as the boundary would park the run
     /// before the answer it is supposedly ending even exists.

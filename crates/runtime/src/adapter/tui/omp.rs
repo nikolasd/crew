@@ -293,7 +293,7 @@ impl TuiVendor for OmpTuiVendor {
                 ),
             },
             None => VersionVerdict::Incompatible {
-                // CREW-78 review: `probed` is the vendor's raw `--version`
+                // `probed` is the vendor's raw `--version`
                 // stdout -- see claude.rs's identical fix for why this
                 // branch (fired precisely when it is NOT a version) must
                 // never interpolate it. The parsed branch above is safe.
@@ -723,7 +723,7 @@ mod tests {
         ));
     }
 
-    /// CREW-78 review guard: the unparseable branch fires precisely when
+    /// This guards against the unparseable branch firing precisely when
     /// `--version` did NOT print a version -- an auth error, an update
     /// notice, a stack trace are all things a real vendor CLI could print
     /// there instead, and this `detail` can reach the durable journal

@@ -270,7 +270,7 @@ fn authenticate(
     ctx: &ConnContext,
     shared: &Arc<Shared>,
 ) -> Result<ClientPrincipal, String> {
-    // CREW-66: every role carries an `instance_id`, and until now none
+    // Every role carries an `instance_id`, and until now none
     // validated it -- while the sibling field three lines below has had
     // `validate_agent_directory` all along. It is not a decorative id:
     // it lands verbatim in `tasks.owner_client_instance_id`,
@@ -445,12 +445,12 @@ async fn dispatch(
                 protocol_healthy: is_protocol_healthy(negotiated_version),
                 uptime_seconds: shared.started_at.elapsed().as_secs(),
                 binary_source: shared.config.binary_source,
-                // CREW-35: the maintainer explicitly chose to include the
+                // The maintainer explicitly chose to include the
                 // live token here (not just point at the daemon log) --
                 // see `RuntimeStatus::dashboard_url`'s doc comment for the
                 // tradeoff and why this is deliberate, not an oversight.
                 dashboard_url: shared.dashboard_url.get().cloned(),
-                // D25: printed by `/crew health` so a two-daemon mixup is
+                // Printed by `/crew health` so a two-daemon mixup is
                 // visible at a glance instead of costing an operator real
                 // debugging time down the wrong database.
                 state_root: shared.state_dir.display().to_string(),
@@ -832,7 +832,7 @@ async fn replay(shared: &Arc<Shared>, after: u64) -> Result<Value, String> {
 
     let mut envelopes = Vec::with_capacity(rows.len());
     for row in rows {
-        // CREW-52: a bare serde error here ("unknown variant `embedded`")
+        // A bare serde error here ("unknown variant `embedded`")
         // is technically accurate and useless to whoever hits it -- the
         // remedy (this plugin has no external users yet, so old-journal
         // compatibility was never a goal; see `DisplayPlacement`'s own
@@ -972,7 +972,7 @@ mod tests {
         }
     }
 
-    // ------------------------------------------- CREW-66: instanceId bounds
+    // ------------------------------------------------- instanceId bounds
 
     /// Every `instance_id` value this codebase is actually known to send.
     /// The bound has to admit all of them or it breaks a working client,

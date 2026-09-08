@@ -913,7 +913,7 @@ async fn per_run_policy_overrides_snapshot_only_their_own_run() {
     );
 }
 
-/// CREW-11: `run/submit` must never claim a display outcome it hasn't
+/// `run/submit` must never claim a display outcome it hasn't
 /// observed. The old behavior journaled a placeholder `DisplayPaneAttached`
 /// (empty pane ref -- no vendor pane id exists yet) purely from backend
 /// *availability*, and echoed that same prediction back as
@@ -2646,7 +2646,7 @@ async fn message_send_on_successful_delivery_advances_delivery_state_to_sent() {
     );
 }
 
-/// CREW-47 (D1): a delivered follow-up IS the leader steering the run --
+/// A delivered follow-up IS the leader steering the run --
 /// `message_send`'s own success arm resumes it directly, not by waiting
 /// for whatever the vendor produces next. Uses `SettlingRunDriver` (its
 /// full definition and doc comment are below, in the run/finish section)
@@ -2713,7 +2713,7 @@ async fn a_delivered_follow_up_resumes_a_settled_run() {
 
     assert!(
         wait_for_state(&mut client, 8, &run_id, "working").await,
-        "a delivered follow-up must resume the run directly -- CREW-47 (D1)"
+        "a delivered follow-up must resume the run directly"
     );
     let resumed = client.call(9, "run/get", json!({ "runId": run_id })).await;
     assert_eq!(
@@ -2722,7 +2722,7 @@ async fn a_delivered_follow_up_resumes_a_settled_run() {
     );
 }
 
-/// CREW-58/D30: the resume above (#76/#77) was already caused, not
+/// The resume above was already caused, not
 /// inferred -- this is the evidence a `waitingUser -> working` edge
 /// previously carried none of. Same setup as the test above, replaying
 /// the journal afterward to find the typed cause.
@@ -2781,7 +2781,7 @@ async fn a_delivered_follow_up_resume_journals_its_cause() {
     assert!(send.get("error").is_none(), "message/send failed: {send:?}");
     assert!(
         wait_for_state(&mut client, 8, &run_id, "working").await,
-        "a delivered follow-up must resume the run directly -- CREW-47 (D1)"
+        "a delivered follow-up must resume the run directly"
     );
 
     let replayed = client
@@ -2945,14 +2945,16 @@ async fn run_timeout_ack_nudge_noops_and_abort_cancels() {
     );
 }
 
-/// CREW-40: `extend`'s `rearmed` field must be honest. A run with no
+/// `extend`'s `rearmed` field must be honest. A run with no
 /// tracked activity clock -- never submitted (this test), or submitted and
 /// since settled/forgotten -- has nothing for `extend` to actually re-arm.
 /// `ActivityClock::extend` used to silently no-op in that case while
 /// `run_timeout_ack` still unconditionally reported `"rearmed": true`: a
 /// leader could never tell a real re-arm from this lie from the response
-/// alone. Same fabricated-success shape CREW-15/CREW-30 exist to kill, at
-/// a different call site.
+/// alone. Same fabricated-success shape the `pane/reopen` liveness gate
+/// exists to kill below -- a stale socket file, or a completed connect
+/// with no live attach protocol behind it, both used to make `reopen`
+/// falsely report success -- just at this different call site.
 ///
 /// A `FakeRunDriver`-submitted run (as `run_timeout_ack_nudge_noops_and_abort_cancels`
 /// uses) is no different from "never submitted" here: this harness's fake
@@ -3030,7 +3032,7 @@ async fn plan_propose_then_get_round_trips() {
     assert_eq!(get["result"]["approved"], Value::Null);
 }
 
-/// CREW-61: `SubtaskSpec.description` is leader-authored free text (the
+/// `SubtaskSpec.description` is leader-authored free text (the
 /// instruction a subtask executes) with no sanitization anywhere on
 /// `plan/propose`'s path -- unlike the identical text once it becomes a
 /// run's prompt via `crew_spawn` -> `run/submit`, which crosses
@@ -3094,7 +3096,7 @@ async fn plan_proposes_secret_shaped_subtask_description_is_actually_redacted_be
     );
 }
 
-/// CREW-61: `taskText` (`plan_propose`'s other free-text input, stored
+/// `taskText` (`plan_propose`'s other free-text input, stored
 /// verbatim in the `plans.task_text` column -- never returned over the
 /// wire by any RPC result, so this is an internal-storage sanitization
 /// change, not a protocol type change) crosses the same handler with no
@@ -4070,7 +4072,7 @@ async fn start_queued_run_releases_the_lease_and_worktree_when_driver_start_fail
         .await;
     let runs = list["result"]["runs"].as_array().unwrap();
     assert_eq!(runs.len(), 1, "the run row must be preserved: {runs:?}");
-    // CREW-78: `FailingRunDriver` never touches the adapter event sink at
+    // `FailingRunDriver` never touches the adapter event sink at
     // all, so nothing durable would otherwise record that this start
     // failed -- exactly the fabricated-success gap the 2026-09-08
     // attempt-3 conformance run found. `start_queued_run`'s own
@@ -5504,10 +5506,10 @@ async fn workspace_release_by_the_owning_instance_succeeds() {
     );
 }
 
-/// CREW-61: `WorkspaceEvent::CleanupFailed.error` used to carry raw
-/// teardown-failure text -- the same shape as the #88/CREW-60 leak
-/// (`PaneDowngraded.reason`), just for `git`/filesystem errors instead of
-/// a multiplexer's stderr. This drives a REAL `git worktree remove`
+/// `WorkspaceEvent::CleanupFailed.error` used to carry raw
+/// teardown-failure text -- the same unredacted-subprocess-text leak
+/// shape as `PaneDowngraded.reason`, just for `git`/filesystem errors
+/// instead of a multiplexer's stderr. This drives a REAL `git worktree remove`
 /// failure (by corrupting the lease's stored path between acquire and
 /// release, so the removal target is not an actual registered worktree)
 /// whose stderr echoes the literal path back, and asserts the JOURNALED
@@ -5826,7 +5828,7 @@ async fn retention_clean_and_pane_reopen_are_omp_only_and_route_to_daemon_suppor
     );
 }
 
-// ------------------------------------------- run/finish (CREW-3 wave 3)
+// ------------------------------------------- run/finish (leader-driven turn closure)
 
 /// Seeds events through the real `RunLifecycleSink` -- so a seeded
 /// `TurnEnded` produces the same `working -> waitingUser` edge and
@@ -6097,7 +6099,7 @@ async fn run_finish_refuses_an_unknown_outcome() {
     assert_eq!(finish["error"]["code"], -32602, "{finish:?}");
 }
 
-// ------------------- pane/reopen liveness gate (CREW-3 wave 3 / CREW-15)
+// ------------------- pane/reopen liveness gate (stale-socket sweep)
 
 /// The gate used to be `socket.exists()`, which a crashed daemon's leftover
 /// file satisfies forever. A stale file must now be refused: the run may
@@ -6143,7 +6145,7 @@ async fn pane_reopen_refuses_a_stale_socket_file_with_no_listener() {
     );
 }
 
-// ------------------------------------------------ CREW-27: prompt as intent
+// ------------------------------------------------ prompt as caller-supplied intent
 
 /// Every `runPromptEvent` payload in a replay response.
 fn prompt_events(replay: &Value) -> Vec<&Value> {
@@ -6283,7 +6285,7 @@ async fn a_run_submitted_without_a_prompt_journals_no_prompt_event() {
     );
 }
 
-/// CREW-28: a message payload is caller-supplied content and must cross
+/// A message payload is caller-supplied content and must cross
 /// the ADR-0006 boundary before it becomes durable, exactly like a submit
 /// prompt. It reached `INSERT INTO messages` verbatim until this.
 #[tokio::test]
@@ -6333,7 +6335,7 @@ async fn a_secret_shaped_string_in_a_message_payload_is_masked_before_it_is_jour
     );
 }
 
-// ------------------- CREW-32: decision reasons are caller-supplied content
+// ------------------- decision reasons are caller-supplied content
 
 /// A vendor-key-shaped string a leader might paste into a decision reason.
 const REASON_SECRET: &str = "sk-ant-api03-IIIIJJJJKKKKLLLL9012";

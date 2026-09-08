@@ -642,7 +642,7 @@ mod tests {
         }
     }
 
-    /// CREW-1 blocker: a local attacker who pre-creates `path` as a symlink
+    /// This guards against a local attacker who pre-creates `path` as a symlink
     /// to a directory the current uid *already owns* (but never intended to
     /// expose here) must be rejected outright -- not have that arbitrary
     /// directory silently chmod-ed to `0700` and reused. This is what makes

@@ -825,7 +825,7 @@ async fn a_decision_persists_the_bare_decided_by_token_and_the_reason() {
     assert_eq!(reason.as_deref(), Some("looks good"));
 }
 
-/// CREW-32: an approval rationale is prose a human wrote, so it can carry
+/// An approval rationale is prose a human wrote, so it can carry
 /// a secret they were explaining. It is journaled as an `ApprovalEvent`,
 /// which `events/replay`, the dashboard transcript and `audit export` all
 /// read — so an unredacted reason is exportable, not merely durable.

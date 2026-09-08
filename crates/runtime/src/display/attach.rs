@@ -68,12 +68,12 @@ const VIEWER_CHANNEL_CAPACITY: usize = 256;
 /// [`pump`].
 const READ_CHUNK_BYTES: usize = 4096;
 
-/// CREW-30: the fixed byte sequence [`serve_viewer`] writes to a newly
+/// The fixed byte sequence [`serve_viewer`] writes to a newly
 /// accepted connection *before* replaying the ring-buffer snapshot or
 /// forwarding any real pane output -- the one thing a bare `connect()`
 /// can never prove on its own. A completed connect shows a listening fd
 /// exists at the socket path; it does not show a real `AttachServer` is
-/// behind it. An fd a racing `fork()`'d child inherited (CREW-30: macOS
+/// behind it. An fd a racing `fork()`'d child inherited (macOS
 /// has no atomic `SOCK_CLOEXEC`, so `socket()` then
 /// `fcntl(FD_CLOEXEC)` leaves a window) answers that same connect and
 /// then never speaks -- proven with a 40,000-iteration reproducer that
@@ -388,7 +388,7 @@ async fn run_accept_loop(
     }
 }
 
-/// Serves one connected viewer: writes the CREW-30 [`LIVENESS_MARKER`],
+/// Serves one connected viewer: writes [`LIVENESS_MARKER`],
 /// replays the ring-buffer snapshot, then pumps live output to the viewer
 /// and viewer bytes into both the target and `on_user_input`, until the
 /// socket closes or errors. A single task owns both halves of the split
@@ -404,7 +404,7 @@ async fn serve_viewer(
     let (mut read_half, mut write_half) = stream.into_split();
 
     // Written first, always, before a single byte of real pane output:
-    // this is what lets a connect that merely completed (CREW-30 -- an fd
+    // this is what lets a connect that merely completed (an fd
     // a raced fork()'d child inherited also does this much) be told apart
     // from a connect answered by this function actually running.
     if write_half.write_all(LIVENESS_MARKER).await.is_err() {
@@ -471,7 +471,7 @@ pub async fn connect(path: &Path) -> Result<UnixStream, AttachError> {
     UnixStream::connect(path).await.map_err(AttachError::from)
 }
 
-/// CREW-30: consumes [`LIVENESS_MARKER`] from a freshly-connected `socket`
+/// Consumes [`LIVENESS_MARKER`] from a freshly-connected `socket`
 /// if it's there, bounded by `timeout`. Returns `None` when the marker
 /// was read in full -- nothing left to reclaim, [`pump`] can start
 /// straight away. Returns `Some(bytes)` for every other outcome (a
@@ -514,7 +514,7 @@ pub async fn consume_marker_or_reclaim(
     Some(buf)
 }
 
-/// CREW-18: the crew identity shown in a pane's title bar/tab, set exactly
+/// The crew identity shown in a pane's title bar/tab, set exactly
 /// once when `crewd attach`'s pump starts. `worker_id` is truncated to its
 /// first 8 hex characters, matching the short-id convention already used
 /// for run ids in the `/crew` widget and this codebase's own manual-test

@@ -782,7 +782,7 @@ async fn run_result_sums_claude_usage_and_takes_last_for_cumulative_adapters() {
     );
 }
 
-/// The CREW-3 regression: a TUI vendor never exits, so before ADR-0027 the
+/// The regression this test guards against: a TUI vendor never exits, so before ADR-0027 the
 /// only way to read a finished answer was to cancel the run first. A
 /// journaled turn boundary now makes it readable in place.
 #[tokio::test]
@@ -811,11 +811,11 @@ async fn run_result_returns_the_answer_after_a_turn_end_without_cancelling() {
     );
 }
 
-/// CREW-49 (D3), ADR-0027 amendment: a turn ending with no visible text
+/// ADR-0027's amendment: a turn ending with no visible text
 /// (tool activity only) has no answer to protect, so the fold skips past
 /// it rather than stopping there. Live evidence: a run whose first turn
 /// was pure tool work, with the real answer arriving in a second turn
-/// (reached via CREW-47's resumption paths) -- the old code reported
+/// (reached via the run's own resumption paths) -- the old code reported
 /// `resultText: null` for a run that plainly had an answer moments later.
 #[tokio::test]
 async fn run_result_reads_an_answer_that_follows_a_content_free_boundary() {
@@ -841,7 +841,7 @@ async fn run_result_reads_an_answer_that_follows_a_content_free_boundary() {
     );
 }
 
-/// Staff's review on #78: the property CREW-49's amendment claims in prose
+/// Staff's review: the property ADR-0027's amendment claims in prose
 /// (a boundary that already carries text is still exactly where the fold
 /// stops) had no direct test -- without one, "always take the LAST
 /// boundary" or "always take the boundary with the most text" would both
@@ -851,7 +851,7 @@ async fn run_result_reads_an_answer_that_follows_a_content_free_boundary() {
 ///
 /// Supersedes the now-deleted `run_result_reads_up_to_the_first_turn_end_
 /// not_a_later_one`, which asserted this same property under a name that
-/// became a false claim after CREW-49: the fold no longer stops at the
+/// became a false claim after ADR-0027's amendment: the fold no longer stops at the
 /// first turn end outright, only at the first one that carries text -- a
 /// test name is a claim (see docs/engineering-lessons.md), so the stale
 /// name was retired rather than kept alongside a second test of the same

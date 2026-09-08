@@ -362,11 +362,13 @@ enum MockScript {
     /// Accepts every byte, then records only the LAST line of the paste
     /// in its transcript -- a vendor that truncated inside its own
     /// composer. Indistinguishable from success at the PTY boundary,
-    /// which is the whole reason CREW-13 compares the recorded prompt.
+    /// which is exactly why the truncating-vendor start-failure test
+    /// below compares the recorded prompt against what was actually sent.
     Truncating,
     /// Prints a ready line and then never reads its stdin at all, so the
     /// tty input buffer fills and a large prompt cannot be delivered --
-    /// the CREW-4 "fail loudly rather than truncate" case.
+    /// the "fail loudly rather than truncate" case for a vendor that stops
+    /// reading its stdin entirely.
     Deaf,
     /// Traps SIGINT/SIGTERM as no-ops, so `cancel(Worker)` must escalate
     /// all the way to SIGKILL -- exercises signal-preserving exit
@@ -442,7 +444,7 @@ while IFS= read -r line; do
   printf '%s %s\n' "$(date +%s%N)" "$line" >> "$CONTROL_LOG"
   # Consume bracketed-paste framing the way a real vendor TUI does, and
   # accumulate the pasted content across reads, so the transcript records
-  # the WHOLE prompt rather than only its last line (CREW-19).
+  # the WHOLE prompt rather than only its last line.
   #
   # Only `tr` and POSIX parameter expansion: the introducer opens the
   # first line and the terminator closes the last, so prefix/suffix
@@ -604,8 +606,9 @@ impl TuiVendor for MockTuiVendor {
     /// vendor's `compose_input` has (`message` + CR; the mock uses LF so
     /// its `/bin/sh` `read` loop sees a line). It deliberately does NOT
     /// flatten embedded newlines any more: that flattening is precisely
-    /// what hid CREW-4, since no prompt this harness sent could ever
-    /// contain the newline that the vendor reads as an Enter.
+    /// what hid the multi-line-prompt truncation bug, since no prompt this
+    /// harness sent could ever contain the newline that the vendor reads
+    /// as an Enter.
     fn compose_input(&self, message: &str) -> Vec<u8> {
         format!("{message}\n").into_bytes()
     }
@@ -636,7 +639,7 @@ fn fast_timings() -> TuiTimings {
         discovery_timeout: Duration::from_secs(4),
         tailer_poll: Duration::from_millis(40),
         submit_idle: Duration::from_millis(50),
-        // CREW-65: production's own value, NOT an accelerated one.
+        // Production's own value, NOT an accelerated one.
         // `paste_write_timeout` is a failure bound, not a pacing delay (see
         // its doc on `TuiTimings`): a timeout costs wall-clock time only
         // when it fires, so shortening it makes no test faster and only
@@ -992,8 +995,9 @@ async fn discovery_failure_fails_the_run_tears_down_the_pty_and_closes_the_pane(
     harness.shutdown().await;
 }
 
-/// CREW-78 instance 1 (2026-09-08 attempt-3 conformance run, `01a08216`/
-/// `01a08251`): a start failure must never journal a bare `ProcessExited`.
+/// From the 2026-09-08 attempt-3 conformance run (`01a08216`/
+/// `01a08251`, see `release/live-conformance/2026-09-08-live-e2e-attempt-3.md`):
+/// a start failure must never journal a bare `ProcessExited`.
 /// `fail_start` now emits a failure-shaped `ProtocolHealthChanged{healthy:
 /// false}` diagnostic naming the real reason (discovery timeout, here)
 /// BEFORE the `ProcessExited` its teardown produces -- so the journal
@@ -1066,7 +1070,7 @@ async fn discovery_failure_journals_a_failure_shaped_diagnostic_before_the_exit(
     harness.shutdown().await;
 }
 
-/// CREW-78 review guard (staff, "this PR makes `AdapterError` detail
+/// Staff review guard ("this PR makes `AdapterError` detail
 /// strings durable for the first time"): before this fix, `detail` only
 /// ever reached the RPC response to the caller, so a start-failure path
 /// echoing raw vendor bytes cost only a chatty error message. Now that
@@ -1898,7 +1902,7 @@ impl FakeBackendHandle {
     }
 }
 
-// ------------------------------------------------- CREW-4 prompt delivery
+// ------------------------------------------------- multi-line prompt delivery
 
 /// Bracketed-paste framing, as the adapter must write it. Spelled out
 /// literally here rather than imported: these bytes are the contract this
@@ -1907,7 +1911,8 @@ const PASTE_START: &str = "\x1b[200~";
 const PASTE_END: &str = "\x1b[201~";
 
 /// A prompt with enough lines to be submitted piecemeal by any vendor
-/// reading raw keystrokes -- the CREW-4 shape.
+/// reading raw keystrokes -- the shape that hid the multi-line-prompt
+/// truncation bug.
 fn multi_line_prompt(lines: usize) -> String {
     (0..lines)
         .map(|i| format!("line {i} of the prompt"))
@@ -1915,7 +1920,7 @@ fn multi_line_prompt(lines: usize) -> String {
         .join("\n")
 }
 
-/// The core CREW-4 regression: a multi-line prompt must reach the PTY
+/// The core multi-line-prompt regression: a multi-line prompt must reach the PTY
 /// wrapped in exactly one bracketed paste, with every line intact.
 ///
 /// Before the fix the prompt travelled as one unframed write, so every
@@ -2067,7 +2072,7 @@ async fn a_multi_line_follow_up_is_framed_as_a_paste_too() {
 }
 
 /// A vendor that stops consuming its stdin must produce a loud failure,
-/// never a partial prompt. Before CREW-4 the whole prompt was one
+/// never a partial prompt. Before this fix the whole prompt was one
 /// unbounded blocking write, so this case either hung the start or lost
 /// the tail with no error anywhere.
 #[tokio::test]
@@ -2090,7 +2095,7 @@ async fn a_prompt_a_deaf_vendor_never_consumes_fails_the_start_loudly() {
         worker_id,
         // The one place a SHORT paste bound belongs: this test's whole
         // point is to trip it, so it pays the wait deliberately and keeps
-        // it off every other test in the file (CREW-65).
+        // it off every other test in the file.
         TuiTimings {
             paste_write_timeout: Duration::from_millis(500),
             ..fast_timings()
@@ -2111,8 +2116,8 @@ async fn a_prompt_a_deaf_vendor_never_consumes_fails_the_start_loudly() {
     let message = err.to_string();
     // The message must say the prompt was not delivered, and must name a
     // deaf vendor as ONE possible cause without asserting it -- the same
-    // timeout also fires when the host is too loaded to complete the write
-    // (CREW-65). Asserting the old wording's single diagnosis is what let
+    // timeout also fires when the host is too loaded to complete the
+    // write. Asserting the old wording's single diagnosis is what let
     // that message claim more than it observed.
     assert!(
         message.contains("was not delivered"),
@@ -2126,7 +2131,7 @@ async fn a_prompt_a_deaf_vendor_never_consumes_fails_the_start_loudly() {
     harness.shutdown().await;
 }
 
-/// CREW-13's end-to-end negative path: a vendor that accepts every byte
+/// The truncating vendor's end-to-end negative path: a vendor that accepts every byte
 /// and then truncates in its own composer must fail the start, not look
 /// like a success. The nonce is appended to the prompt, so it survives the
 /// truncation and discovery still succeeds -- comparing the recorded
