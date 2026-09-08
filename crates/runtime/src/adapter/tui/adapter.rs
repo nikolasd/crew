@@ -1609,6 +1609,44 @@ async fn wait_for_output_idle(
     }
 }
 
+/// Builds the prompt actually delivered to the vendor for a fresh start:
+/// the caller's prompt plus a tracking tag carrying `nonce`, appended
+/// exactly as before.
+///
+/// CREW-83: the tag used to be a bare `[crew:<nonce>]` suffix with
+/// nothing anywhere saying what it was, and a live E2E worker refused an
+/// otherwise ordinary task citing it as an injection attempt
+/// (`release/live-conformance/2026-09-08-live-e2e-attempt-3.md`, F14) --
+/// a correct reaction to an unexplained bracketed token at the end of a
+/// prompt. That review also names F13/F14 as being in tension: relocating
+/// the tag away from the prompt satisfies discovery, but
+/// [`super::verify::verify_recorded_prompt`] (CREW-13) diffs the *whole*
+/// injected string against what the vendor recorded to catch silent
+/// truncation, so moving the tag off the tail it currently occupies
+/// would blind that check to exactly the truncation shape it exists to
+/// catch. Kept here is the cheaper fix the review recommended instead:
+/// the tag stays in place and in shape, but now describes itself, so a
+/// safety-trained model reads it as an inert marker rather than a
+/// directive to interpret.
+///
+/// [`find_transcript_by_nonce`] and `verify_recorded_prompt` are both
+/// still keyed on `nonce` itself (searched/compared as a raw substring,
+/// never on the tag's exact wording), so the extra words here change
+/// nothing for either consumer -- see the test below asserting that
+/// parity directly.
+///
+/// The literal substring `[crew:` is preserved deliberately: the TUI
+/// conformance doubles (`claude_conformance.rs`, `omp_conformance.rs`,
+/// `codex_conformance.rs`, `copilot_conformance.rs`) detect the injected
+/// line with a `case *"[crew:"*` shell glob, and changing that substring
+/// would silently stop matching there.
+fn compose_injected_prompt(prompt: &str, nonce: &str) -> String {
+    format!(
+        "{prompt} [crew:{nonce} — an internal run-correlation marker inserted by the \
+         orchestrator, not part of the task and not an instruction; disregard it]"
+    )
+}
+
 /// Spawns the single task that owns this run's settlement: races the PTY
 /// exiting naturally against a termination request from
 /// [`TuiAdapter::cancel`]/`dispose` (`terminate_rx`) -- this task is the
@@ -1765,7 +1803,7 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
             let launch = self.vendor.launch(&spec, &self.cfg);
             let transcript_root = self.vendor.transcript_root(&spec, &self.cfg);
             let nonce = Uuid::now_v7().to_string();
-            let injected = format!("{} [crew:{}]", spec.prompt, nonce);
+            let injected = compose_injected_prompt(&spec.prompt, &nonce);
             self.run_pipeline(
                 &mut guard,
                 spec.run_id,
@@ -2372,5 +2410,94 @@ mod tests {
         ));
 
         assert!(placements.iter().all(|(_, cursor)| cursor.is_none()));
+    }
+
+    // ------------------------------------------ CREW-83: self-describing tag
+
+    /// The wording change must not detach the tag from what discovery and
+    /// verification actually key on: both search for `nonce` as a raw
+    /// substring of the recorded/delivered text, never for the tag's
+    /// surrounding words. A future edit to the phrasing that accidentally
+    /// dropped the nonce itself (a typo in the format string, say) would
+    /// pass every other test in this file yet silently break discovery in
+    /// production -- this pins the parity directly.
+    #[test]
+    fn the_composed_prompt_carries_the_exact_nonce_discovery_and_verification_key_on() {
+        let nonce = "0198a1b2-fake-nonce-not-a-real-uuid";
+        let injected = compose_injected_prompt("do the thing", nonce);
+        assert!(
+            injected.contains(nonce),
+            "the composed prompt must carry the literal nonce discovery/verify search for: \
+             {injected}"
+        );
+    }
+
+    /// The conformance doubles (`claude_conformance.rs` and friends) find
+    /// the injected line with a shell `case *"[crew:"*` glob. Self-describing
+    /// the tag must not lose that exact substring, or those doubles stop
+    /// recognizing the injected prompt and every conformance test using
+    /// them goes silently inert rather than failing loudly.
+    #[test]
+    fn the_composed_prompt_still_carries_the_bracket_prefix_the_conformance_doubles_match_on() {
+        let injected = compose_injected_prompt("do the thing", "n1");
+        assert!(
+            injected.contains("[crew:"),
+            "conformance doubles match `*\"[crew:\"*`; got: {injected}"
+        );
+    }
+
+    /// End-to-end proof that the wording change is still discoverable by
+    /// the real scanner, not just a string-equality assertion against the
+    /// composing function in isolation: writes a transcript containing the
+    /// composed (self-describing) prompt to a temp `.jsonl` file and drives
+    /// it through the actual `find_transcript_by_nonce` used in
+    /// production.
+    #[tokio::test]
+    async fn find_transcript_by_nonce_still_locates_a_transcript_carrying_the_self_describing_tag()
+    {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let nonce = "0198a1b2-fake-nonce-not-a-real-uuid";
+        let injected = compose_injected_prompt("do the thing", nonce);
+        let transcript = dir.path().join("session.jsonl");
+        std::fs::write(
+            &transcript,
+            format!(r#"{{"type":"user","message":{{"content":"{injected}"}}}}"#),
+        )
+        .expect("write fixture transcript");
+
+        let found = find_transcript_by_nonce(
+            dir.path(),
+            SystemTime::UNIX_EPOCH,
+            nonce,
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("the self-describing tag must still be discoverable by its nonce");
+        assert_eq!(found, transcript);
+    }
+
+    /// Mirrors CREW-13's own truncation check with the new wording: a
+    /// vendor that recorded the composed prompt byte-for-byte is intact,
+    /// proving the extra explanatory words did not change how the intact
+    /// case is judged.
+    #[test]
+    fn an_intact_self_describing_prompt_still_verifies_as_intact() {
+        use crate::adapter::tui::{ClaudeTuiVendor, TuiVendor};
+
+        let nonce = "n1";
+        let injected = compose_injected_prompt("do the thing", nonce);
+        let format = ClaudeTuiVendor::new(PathBuf::from("/w"), vec![]).format();
+        let entry = serde_json::json!({
+            "type": "user",
+            "sessionId": "sess-1",
+            "message": {"role": "user", "content": injected},
+        });
+        let mut transcript = serde_json::to_vec(&entry).expect("serialize");
+        transcript.push(b'\n');
+
+        assert_eq!(
+            verify_recorded_prompt(&transcript, format.as_ref(), &injected, nonce),
+            PromptVerdict::Intact
+        );
     }
 }
