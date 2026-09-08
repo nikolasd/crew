@@ -9,10 +9,14 @@
 //! the adapter's side that is indistinguishable from success.
 //!
 //! Nonce presence does not answer it. The discovery nonce is *appended*
-//! to the prompt (`"<prompt> [crew:<nonce>]"`), so a transcript containing
-//! it proves only that the tail arrived — which is precisely the half that
-//! survived the original CREW-4 corruption. The head is what goes missing,
-//! so the check has to compare the recorded text itself.
+//! to the prompt as a self-describing, ASCII-only tag
+//! (`"<prompt>\n\n[crew:<nonce> run-correlation id; ...]"`, built by
+//! `adapter::compose_injected_prompt`; the wording is CREW-83, the shape
+//! and position are unchanged from CREW-13's original), so a transcript
+//! containing it proves only that the tail arrived — which is precisely
+//! the half that survived the original CREW-4 corruption. The head is
+//! what goes missing, so the check has to compare the recorded text
+//! itself.
 //!
 //! Read once, straight off the discovered transcript, rather than through
 //! the event pipeline: a user entry produces no `TuiEvent` and must not

@@ -1,8 +1,12 @@
-//! Nonce-based transcript discovery: a TUI adapter injects a unique
-//! `[crew:<nonce>]` tag into its first prompt, then finds the vendor's
-//! session transcript by polling the vendor's session root for a `.jsonl`
-//! file, modified at/after the worker started, that contains the nonce.
-//! This avoids guessing vendor file-naming schemes entirely.
+//! Nonce-based transcript discovery: a TUI adapter injects a unique,
+//! self-describing `[crew:<nonce> — ...]` tag (CREW-83; see
+//! `adapter::compose_injected_prompt`) into its first prompt, then finds
+//! the vendor's session transcript by polling the vendor's session root
+//! for a `.jsonl` file, modified at/after the worker started, that
+//! contains the nonce. Only the raw nonce substring is searched for here
+//! -- the surrounding wording is never inspected -- so this scan is
+//! unaffected by what the tag says about itself. This avoids guessing
+//! vendor file-naming schemes entirely.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
