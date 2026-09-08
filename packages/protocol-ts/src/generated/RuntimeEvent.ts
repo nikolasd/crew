@@ -64,8 +64,8 @@ requestedPlacement: DisplayPlacement,
  */
 actualBackend: DisplayBackend, 
 /**
- * The backends tried, in order, before this downgrade -- the
- * same sequence resolution walked to pick `requested_backend`.
+ * The backends this attach tried, in order, before settling on
+ * `actualBackend`.
  */
 attempted: Array<DisplayBackend>, 
 /**

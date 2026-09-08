@@ -213,6 +213,7 @@ test("a paneDowngraded event sets the sticky paneDowngraded field and a latestAc
           requestedBackend: "herdr",
           requestedPlacement: "tab",
           actualBackend: "hidden",
+          attempted: ["herdr"],
           reason: "herdr exploded",
         },
       },
@@ -230,7 +231,7 @@ test("CREW-60: paneDowngraded survives subsequent unrelated events (sticky, like
     envelope({
       event: {
         type: "paneDowngraded",
-        payload: { runId: "run-1", requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", reason: "tmux exploded" },
+        payload: { runId: "run-1", requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", attempted: ["tmux"], reason: "tmux exploded" },
       },
     }),
   );
