@@ -67,7 +67,7 @@ impl From<crate::domain::DomainError> for CoordinationError {
                      ask OMP to decide it via policy/violation/decide"
                 ),
             },
-            // The in-transaction liveness guard (R94) must present the
+            // The in-transaction liveness guard must present the
             // same error require_live_run's pre-check does, not an
             // internal error.
             crate::domain::DomainError::RunSettled { run_id } => Self {
@@ -677,7 +677,7 @@ impl CoordinationBroker {
                     acknowledged_at: None,
                     reply_to: None,
                 };
-                // In-tx quarantine enforcement (R78): the pre-check above
+                // In-tx quarantine enforcement: the pre-check above
                 // is only the fast path that keeps a steady-state
                 // quarantined worker from being charged rate budget; a
                 // quarantine landing between that read and this write is

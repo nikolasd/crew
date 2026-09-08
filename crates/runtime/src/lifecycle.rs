@@ -962,7 +962,7 @@ fn apply_and_render(
         } => {
             // R12/R42/R57 invest in a precise detail (the vendor's error
             // subtype, the raw stop reason); surface it instead of a
-            // constant label (R91).
+            // constant label.
             let label = if *healthy {
                 "protocol healthy"
             } else {
@@ -1210,8 +1210,8 @@ pub enum StopError {
 /// live, sends `SIGTERM`, and waits for the socket to disappear (which the
 /// daemon does only after its journal shutdown completes).
 ///
-/// Deliberately unarbitrated, unlike the in-band `runtime/shutdown` RPC
-/// (R82): this is the operator path -- whoever can signal the process can
+/// Deliberately unarbitrated, unlike the in-band `runtime/shutdown` RPC:
+/// this is the operator path -- whoever can signal the process can
 /// stop it -- while the RPC path refuses when other work is live unless
 /// forced.
 ///

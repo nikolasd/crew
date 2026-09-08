@@ -74,7 +74,7 @@ pub fn copilot_cli_version_known(cli_version: &str) -> bool {
 /// whether a negotiated `agentInfo.version` is verified. A missing
 /// version is **unknown, not implicitly verified** — the vendor omitting
 /// an ordinary optional field must not bypass the empirical-verification
-/// gate (R57).
+/// gate.
 #[must_use]
 pub fn copilot_negotiated_version_verified(agent_version: Option<&str>) -> bool {
     agent_version.is_some_and(copilot_cli_version_known)
@@ -119,7 +119,7 @@ mod tests {
         assert!(!copilot_negotiated_version_verified(Some("9.9.9")));
         assert!(
             !copilot_negotiated_version_verified(None),
-            "a missing version is unknown, never implicitly verified (R57)"
+            "a missing version is unknown, never implicitly verified"
         );
     }
 

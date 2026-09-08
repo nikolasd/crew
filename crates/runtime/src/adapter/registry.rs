@@ -85,7 +85,7 @@ pub trait AdapterAuthorization: Send + Sync {
     /// never silently stripped (that would be a fabricated disproof, R52)
     /// and never silently granted (that would let an unattempted scenario
     /// pass as proof). `effective_capabilities` already carries `Skipped`
-    /// scenarios as undowngraded (R68) precisely so this function can tell
+    /// scenarios as undowngraded precisely so this function can tell
     /// "proved" apart from "merely never disproved" -- collapsing that
     /// distinction back into a bare grant/deny here would silently reopen
     /// the skip-grants-declared hazard the R68/R52 invariants exist to
@@ -729,7 +729,7 @@ impl RunDriver for AdapterRegistry {
         Box::pin(async move {
             // An absent adapter is not a kill failure: the run settled or
             // never started one. Report the typed clean outcome so callers
-            // never mistake it for a failed kill (R13).
+            // never mistake it for a failed kill.
             let Some(adapter) = running.lock().get(&run_id).cloned() else {
                 return Ok(crate::service::CancelOutcome::NoRunningAdapter);
             };
@@ -2188,7 +2188,7 @@ mod settlement_tests {
         );
         authorization
             .authorize(&profile, &capabilities, None)
-            .expect("the settled slot must be free again (R67)");
+            .expect("the settled slot must be free again");
         db.shutdown().await.expect("shutdown database");
     }
 }

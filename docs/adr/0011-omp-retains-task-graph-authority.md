@@ -120,3 +120,9 @@ registered successors from this doctrine (R82-R86) are all Medium or Low, not Hi
 
 * Narrated in `../journal.md`, Part II introduction and throughout
 * Enforced concretely by [ADR-0012](0012-explicit-run-lifecycle-relation-runtime-evidence-only.md)
+* `REVIEW.md`'s R76, R77, R81 and R82-R86 (cited in the sections above) — **cited a register that no
+  longer exists.** `REVIEW.md` was a maintainer-local, gitignored findings register; it is gone, so
+  those numbers cannot be resolved by anyone. The mechanism each one indexed is described in this
+  ADR's own prose above and needs no external source. The citations are left as written, for the same
+  reason the `docs/journal.md` citations are (see `README.md` in this directory): an ADR records what
+  it cited when it was written.

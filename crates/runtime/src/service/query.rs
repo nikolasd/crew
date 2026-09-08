@@ -166,7 +166,7 @@ pub fn run_list_op(task_id: Option<TaskId>, project_id: ProjectId) -> DomainClos
 
 /// Lists every recorded policy violation for `project_id`, newest first,
 /// with its decision state -- the discovery surface for "which violation
-/// still holds this run's quarantine" (R80). Project-wide like the other
+/// still holds this run's quarantine". Project-wide like the other
 /// read ops (`run_list_op`, `approval_list_op`); optionally narrowed to
 /// one run.
 pub fn policy_violation_list_op(run_id: Option<RunId>, project_id: ProjectId) -> DomainClosure {
@@ -405,7 +405,7 @@ pub fn owned_run_ids_op(
 }
 
 /// Confirms `expected_instance_id` currently owns the task that owns
-/// `run_id`, for `workspace/acquire`'s ownership arbitration (R77).
+/// `run_id`, for `workspace/acquire`'s ownership arbitration.
 ///
 /// A workspace lease lives in [`crate::workspace::LeaseService`]'s own
 /// database file, not the runs database this query reads, so this
@@ -464,7 +464,7 @@ pub fn run_owner_op(run_id: RunId, expected_instance_id: String) -> DomainClosur
 /// [`run_owner_op`] plus a policy-quarantine check, in one closure: lease
 /// owner and quarantine flag come from a single consistent snapshot, so
 /// there is no check-to-check window between the ownership gate and the
-/// quarantine gate (R78). The quarantine read deliberately follows the
+/// quarantine gate. The quarantine read deliberately follows the
 /// owner check, so a non-owner cannot probe quarantine state.
 ///
 /// # Errors

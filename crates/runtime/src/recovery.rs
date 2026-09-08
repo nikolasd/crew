@@ -47,7 +47,7 @@
 //! non-terminal run visible at that moment provably has no live supervisor
 //! behind it -- however recent its last event. An age threshold here (the
 //! pre-fix `stuck_threshold`) could only hide the most common real crash, in
-//! which a supervisor restarts the daemon seconds after the death (R51).
+//! which a supervisor restarts the daemon seconds after the death.
 //!
 //! There is deliberately no periodic re-sweep: no adapter emits a heartbeat,
 //! so while a daemon is alive a run can be silent for minutes without being

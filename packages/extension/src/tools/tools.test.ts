@@ -35,7 +35,7 @@ function createFakeApi(): { api: ExtensionAPI; tools: Map<string, FakeToolDefini
 }
 
 // The daemon binds `task/upsert`'s `ownerClientInstanceId` to the connected
-// principal (R76), and production wires `sessionId -> instanceId ->
+// principal, and production wires `sessionId -> instanceId ->
 // ownerClientInstanceId` through one value (runtime.ts:262, tasks.ts) --
 // mirror that chain here or every upsert is refused with -32602.
 const FAKE_SESSION_ID = "test-session-id-12345";
@@ -252,7 +252,7 @@ test("crew_approval requires approvalId, decision, and reason for decide", () =>
   expect(Object.keys(shape)).toEqual(["op", "runId", "approvalId", "decision", "reason"]);
 });
 
-test("crew_violation rejects a prose resolution the runtime would refuse (R16)", () => {
+test("crew_violation rejects a prose resolution the runtime would refuse", () => {
   const { api, tools } = createFakeApi();
   registerOrchestrationTools(api, {
     getClient: () => {
@@ -268,7 +268,7 @@ test("crew_violation rejects a prose resolution the runtime would refuse (R16)",
   expect(schema.safeParse({ op: "decide", violationId: "v-1", resolution: "please release the quarantined run" }).success).toBe(false);
 });
 
-test("crew_message rejects a kind outside the nine coordination kinds (R88)", () => {
+test("crew_message rejects a kind outside the nine coordination kinds", () => {
   const { api, tools } = createFakeApi();
   registerOrchestrationTools(api, {
     getClient: () => {
@@ -285,7 +285,7 @@ test("crew_message rejects a kind outside the nine coordination kinds (R88)", ()
   expect(schema.safeParse({ op: "send", runId: "r-1", kind: "please steer the worker" }).success).toBe(false);
 });
 
-test("crew_run rejects a workspaceMode outside shared/isolated/copy (R29)", () => {
+test("crew_run rejects a workspaceMode outside shared/isolated/copy", () => {
   const { api, tools } = createFakeApi();
   registerOrchestrationTools(api, {
     getClient: () => {

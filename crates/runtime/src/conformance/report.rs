@@ -16,8 +16,8 @@ use crate::adapter::AdapterCapabilities;
 /// The third case is load-bearing, not cosmetic:
 /// [`downgrade_on_scenario_failure`] removes a capability only on a
 /// *disproof*. Encoding "not attempted" as `Fail` is what let a
-/// development-only kill switch deny production runs (REVIEW.md R68);
-/// encoding it as `Pass` would fabricate proof (R52).
+/// development-only kill switch deny production runs;
+/// encoding it as `Pass` would fabricate proof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ScenarioOutcome {

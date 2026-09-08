@@ -37,7 +37,7 @@ pub trait CommandRunner: Send + Sync {
 }
 
 /// The sink and run identity a terminal-adapter `start` captures for
-/// `cancel`'s synthetic settlement (R95).
+/// `cancel`'s synthetic settlement.
 type CapturedSession = (Arc<dyn AdapterEventSink>, RunId, TaskId, WorkerId);
 
 /// A terminal adapter that wraps an underlying harness.
@@ -49,7 +49,7 @@ pub struct TerminalAdapter {
     harness: String,
     /// Optional injected command runner for testing.
     command_runner: Option<Arc<dyn CommandRunner>>,
-    /// The sink and run identity captured at `start` (R95): this adapter
+    /// The sink and run identity captured at `start`: this adapter
     /// supervises no process of its own and so never observes a real
     /// exit; `cancel` emits a synthetic `ProcessExited` through this so
     /// the registry's settlement watcher frees the run's slot -- without
@@ -114,7 +114,7 @@ impl Adapter for TerminalAdapter {
         let session_name = format!("crew-{}", spec.run_id);
         let command_runner = self.command_runner.clone();
         // Capture the sink and run identity for `cancel`'s synthetic
-        // settlement (R95) before the fallible spawn: a failed start
+        // settlement before the fallible spawn: a failed start
         // never reaches the registry map, so a stale capture is inert.
         *self.session.lock() = Some((sink, spec.run_id, spec.task_id, spec.worker_id));
         Box::pin(async move {
@@ -230,7 +230,7 @@ impl Adapter for TerminalAdapter {
         // is a terminal pane a human drives. Cancelling means settling:
         // emit a synthetic ProcessExited so the registry's settlement
         // watcher evicts this adapter and frees its concurrency slot
-        // (R95). `take()` makes a second cancel a clean no-op.
+        // `take()` makes a second cancel a clean no-op.
         let session = self.session.lock().take();
         Box::pin(async move {
             let Some((sink, run_id, task_id, worker_id)) = session else {
@@ -238,7 +238,7 @@ impl Adapter for TerminalAdapter {
                 // genuinely a no-op, the same judgement R13 made for an
                 // absent adapter -- an Err here would read as "a live
                 // vendor process a kill failed against" and raise a false
-                // degradedControl (R93) on a run that settled cleanly.
+                // degradedControl on a run that settled cleanly.
                 return Ok(());
             };
             sink.emit(AdapterEvent {
@@ -401,7 +401,7 @@ mod tests {
     async fn test_terminal_adapter_cancel_without_a_session_is_a_no_op_success() {
         // A never-started adapter is unreachable from the registry; a
         // settled one is not. Err here would read as a real kill failure
-        // and raise a false degradedControl (R93).
+        // and raise a false degradedControl.
         let adapter = TerminalAdapter::new("test".to_string());
         adapter
             .cancel(CancelScope::Worker)

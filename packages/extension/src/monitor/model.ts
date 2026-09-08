@@ -61,7 +61,7 @@ export interface MonitorRow {
   readonly pendingApprovalCount: number;
   /** Open (undecided) policy violations on this run, violationId -> code.
    *  An entry here on a quarantined run is the violation holding the
-   *  quarantine (R80). */
+   *  quarantine. */
   readonly openViolations: Readonly<Record<string, string>>;
   /** Set by the controller from `worker/get`; absent until enriched. */
   readonly adapter?: string;
@@ -333,7 +333,7 @@ function eventPatch(envelope: EventEnvelope): EventPatch | undefined {
       };
     }
     case "adapterUsageEvent": {
-      // `inputTokens`/`outputTokens` are plain JSON numbers (R90):
+      // `inputTokens`/`outputTokens` are plain JSON numbers:
       // never handed to a numeric formatter, which would throw.
       const { inputTokens, outputTokens, costUsd } = event.payload;
       const cost = costUsd === null || costUsd === undefined ? "" : ` ($${costUsd})`;

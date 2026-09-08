@@ -382,7 +382,7 @@ impl OrchestrationService {
     /// The `None` arm is unreachable for a `Visible` fragment, and is
     /// surfaced rather than defaulted because a silently emptied rationale
     /// would record that a reason exists when none does -- the exact thing
-    /// this field's own empty-check (R59) refuses at the boundary.
+    /// this field's own empty-check refuses at the boundary.
     fn redact_caller_text(&self, text: String) -> Result<crew_protocol::Redacted, ServiceError> {
         self.redactor
             .sanitize_fragment(&crew_protocol::Classified {
@@ -876,7 +876,7 @@ impl OrchestrationService {
     /// The `workspaceMode` string a run response echoes for a resolved
     /// isolation kind -- derived from the resolved kind, never the raw
     /// request string, so a future resolution fallback cannot make the
-    /// echo lie again (R89). One authority for `run/submit`, `run/retry`,
+    /// echo lie again. One authority for `run/submit`, `run/retry`,
     /// and `run/get`.
     fn workspace_mode_echo(kind: IsolationKind) -> &'static str {
         match kind {
@@ -887,7 +887,7 @@ impl OrchestrationService {
     }
 
     /// `principal` arbitrates ownership of `taskId` against
-    /// `submit_run`'s own guarded write (R77) -- never as a caller-side
+    /// `submit_run`'s own guarded write -- never as a caller-side
     /// pre-check: the database actor interleaves whole `run_domain_op`
     /// closures, so only a re-read from inside that same transaction can
     /// observe a `reconcile/omp` rebind landing between this call and the
@@ -1216,7 +1216,7 @@ impl OrchestrationService {
     /// the queued run row, identical to submit's behavior.
     ///
     /// `principal` arbitrates ownership the same way `run/submit` does
-    /// (R77), against the prior run's own task -- derived from `prior`'s
+    /// against the prior run's own task -- derived from `prior`'s
     /// row here, never a client-supplied field, so a caller cannot claim a
     /// task it owns to retry a run under a different, unowned task.
     async fn run_retry(
@@ -1464,7 +1464,7 @@ impl OrchestrationService {
     /// Adapters plan concern).
     ///
     /// `principal` arbitrates ownership the same way `run/submit` does
-    /// (R77), against `transition_run`'s own guarded write.
+    /// against `transition_run`'s own guarded write.
     async fn run_cancel(
         &self,
         principal: &ClientPrincipal,
@@ -1493,7 +1493,7 @@ impl OrchestrationService {
             // `CancelOutcome::NoRunningAdapter`, not an `Err`): the run is
             // journaled `cancelled` but a vendor process may still be
             // live. Make that visible to `run/get` and the monitor via
-            // `degradedControl` (R93), mirroring the policy-violation
+            // `degradedControl`, mirroring the policy-violation
             // path's R13 treatment -- guarded write, journaled, broadcast.
             tracing::warn!(error = %err, run_id = %run_id, "failed to cancel running adapter subprocess");
             match self
@@ -1721,7 +1721,7 @@ impl OrchestrationService {
     }
 
     /// Like [`Self::emit_workspace_event`], but the append refuses inside
-    /// its own transaction if the run is policy-quarantined (R78): used
+    /// its own transaction if the run is policy-quarantined: used
     /// for `workspace/apply`'s `ApplyStarted`, so the journal can never
     /// record an apply start for a run quarantined at that instant.
     async fn emit_workspace_event_unless_quarantined(
@@ -1744,7 +1744,7 @@ impl OrchestrationService {
         Ok(())
     }
 
-    /// Ownership arbitration (R77) happens here, in the handler, as a
+    /// Ownership arbitration happens here, in the handler, as a
     /// dedicated domain round trip immediately before
     /// [`crate::workspace::LeaseService::acquire`] -- not inside a
     /// runs-DB write, because there isn't one to embed it in until
@@ -1867,7 +1867,7 @@ impl OrchestrationService {
     /// confirms `principal` currently owns the run it belongs to -- the
     /// ownership gate shared, byte-for-byte, by all four lease-scoped
     /// methods (`workspace/get`, `workspace/release`, `workspace/inspect`,
-    /// `workspace/apply`; R81). As on `workspace_acquire` (R77), this is a
+    /// `workspace/apply`; R81). As on `workspace_acquire`, this is a
     /// dedicated domain round trip against the runs database, separate
     /// from `LeaseService`'s own database file, so the two cannot commit
     /// atomically: a `reconcile/omp` rebind that commits inside the gap
@@ -1883,7 +1883,7 @@ impl OrchestrationService {
         // One refusal string for every caller-distinguishable failure of
         // this gate: unknown leaseId, unowned lease, and a lease whose run
         // row is missing all answer identically, so neither the error code
-        // (R84) nor the message text is an existence oracle -- and the
+        // nor the message text is an existence oracle -- and the
         // ownership arm cannot leak the owning task/instance ids to a
         // caller that was just told it does not own the lease.
         const LEASE_REFUSAL: &str = "leaseId is not a lease on a run you own";
@@ -1896,7 +1896,7 @@ impl OrchestrationService {
         // When asked (inspect/apply), the quarantine flag is read in the
         // SAME domain op as the owner check, so lease, owner, and flags
         // come from one consistent snapshot -- there is no window between
-        // the ownership gate and the quarantine gate (R78).
+        // the ownership gate and the quarantine gate.
         let op = if enforce_quarantine {
             query::run_owner_not_quarantined_op(lease.run_id, principal.instance_id.clone())
         } else {
@@ -2023,7 +2023,7 @@ impl OrchestrationService {
     /// caller refused there never reaches a real git workspace it never
     /// acquired, and journals nothing (`WorkspaceInspected`,
     /// `ArtifactPublished`). The quarantine flag is read in the same
-    /// domain op as the owner check (R78), so there is no gate-to-gate
+    /// domain op as the owner check, so there is no gate-to-gate
     /// window -- but unlike `workspace_apply`, inspect has NO in-tx
     /// re-check on its appends: its quarantine span runs from that gate
     /// through the git read and both journal appends. Deliberate: by
@@ -2085,7 +2085,7 @@ impl OrchestrationService {
         // Serialize the canonical protocol type rather than a hand-rolled
         // shape: `InspectResult`'s serde output is byte-identical to the
         // previous `json!` block (camelCase, ids as UUID strings), and the
-        // extension validates against its schema $def (R55).
+        // extension validates against its schema $def.
         serde_json::to_value(&result)
             .map_err(|e| ServiceError::internal(format!("serializing InspectResult: {e}")))
     }
@@ -2095,7 +2095,7 @@ impl OrchestrationService {
     /// refused for ownership (`-32602`), not for a not-yet-resolved
     /// artifact (`-32603`), and journals nothing. The quarantine flag is
     /// read in the same domain op as the owner check AND re-checked
-    /// inside the `ApplyStarted` append's own transaction (R78), so the
+    /// inside the `ApplyStarted` append's own transaction, so the
     /// journal can never record an apply start for a quarantined run;
     /// the quarantine residue is exactly the append-to-working-tree gap
     /// below, which no cross-database transaction closes. The ownership
@@ -2122,7 +2122,7 @@ impl OrchestrationService {
             self.artifact_store.clone(),
             lease.run_id,
         );
-        // Re-checked inside the append's own transaction (R78): a
+        // Re-checked inside the append's own transaction: a
         // quarantine landing between the gate above and this append can
         // never leave an ApplyStarted record for a quarantined run. The
         // remaining residue is exactly the gap between this append and
@@ -2182,7 +2182,7 @@ impl OrchestrationService {
         }
 
         // Canonical `ApplyResult` serialization; byte-identical to the
-        // previous hand-rolled shape (R55).
+        // previous hand-rolled shape.
         serde_json::to_value(&result)
             .map_err(|e| ServiceError::internal(format!("serializing ApplyResult: {e}")))
     }
@@ -2234,7 +2234,7 @@ impl OrchestrationService {
                 .is_some_and(|id| scope.iter().any(|s| s == id))
         });
         // Canonical `ArtifactListResult` serialization; byte-identical to
-        // the previous hand-rolled shape (R55).
+        // the previous hand-rolled shape.
         serde_json::to_value(&result)
             .map_err(|e| ServiceError::internal(format!("serializing ArtifactListResult: {e}")))
     }
@@ -2279,7 +2279,7 @@ impl OrchestrationService {
 
         // Authorize on metadata only, BEFORE reading and hashing content:
         // fetching first left a latency side-channel between "exists but
-        // not yours" and "does not exist" (R35). One refusal message for
+        // not yours" and "does not exist". One refusal message for
         // unknown, out-of-scope, and unstamped alike -- no oracle.
         let refusal =
             || ServiceError::invalid_params("artifactId is not an artifact on a task you own");
@@ -2307,7 +2307,7 @@ impl OrchestrationService {
             .map_err(|e| ServiceError::internal(format!("artifact content read failed: {e}")))?;
 
         // Canonical `ArtifactFetchResult` serialization; byte-identical to
-        // the previous hand-rolled shape (R55).
+        // the previous hand-rolled shape.
         serde_json::to_value(&result)
             .map_err(|e| ServiceError::internal(format!("serializing ArtifactFetchResult: {e}")))
     }
@@ -2315,7 +2315,7 @@ impl OrchestrationService {
     // ---------------------------------------------------------- message
 
     /// `principal` arbitrates ownership the same way `run/submit` does
-    /// (R77), against `record_message`'s own guarded write -- resolved
+    /// against `record_message`'s own guarded write -- resolved
     /// there from `runId`'s actual owning run, never from `taskId` as
     /// presented in `params`.
     async fn message_send(
@@ -2378,7 +2378,7 @@ impl OrchestrationService {
             .run_domain_op(Box::new(move |conn| {
                 let mut repo = DomainRepository::new(conn, project_id);
                 // Quarantine enforced inside record_message's own guarded
-                // transaction, after the owner re-read (R78) -- the old
+                // transaction, after the owner re-read -- the old
                 // caller-side ensure_not_quarantined pre-check read a
                 // snapshot a quarantine could land behind.
                 // `message/send` deliberately passes `enforce_live: false`:
@@ -2751,7 +2751,7 @@ impl OrchestrationService {
             ));
         }
         let reason = self.redact_caller_text(str_field(params, "reason")?)?;
-        // The rationale is an audit fact (R59): an empty one is refused at
+        // The rationale is an audit fact: an empty one is refused at
         // the boundary rather than silently persisted as a record that a
         // rationale exists when none does.
         if reason.as_str().trim().is_empty() {
@@ -2803,7 +2803,7 @@ impl OrchestrationService {
     /// decided (`outcome: "decided"`) `"release"`: `true` if this call
     /// actually cleared `Run.flags.policyQuarantined`, `false` if a
     /// *different*, still-unresolved violation on the run kept it held
-    /// (R75) -- the run then still refuses `message/send`/`workspace/apply`
+    /// -- the run then still refuses `message/send`/`workspace/apply`
     /// until that other violation is also decided. The field is absent for
     /// a `"cancel"` resolution (the run is ending; quarantine state is
     /// moot) and for an idempotent `"alreadyDecided"` replay (no clearing
@@ -2914,7 +2914,7 @@ impl OrchestrationService {
     /// `plan/decide`: approves or rejects a previously proposed plan for a
     /// run, appending a `PlanDecided` event. Ownership and the
     /// already-decided guard both live inside the domain op's guarded write
-    /// (R71) -- this handler only forwards the authenticated principal.
+    /// -- this handler only forwards the authenticated principal.
     async fn plan_decide(
         &self,
         principal: &crate::ipc::ClientPrincipal,
@@ -3172,7 +3172,7 @@ impl OrchestrationService {
     }
 
     /// `policy/violation/list`: the discovery surface for which violation
-    /// still holds a quarantine (R80). Project-wide like the other read
+    /// still holds a quarantine. Project-wide like the other read
     /// ops (`run/list`, `approval/list`) -- the documented read-side
     /// policy; optionally narrowed to one run. An undecided row
     /// (`resolution` null) on a quarantined run is the holder.
@@ -3191,7 +3191,7 @@ impl OrchestrationService {
 
     /// Rebinds a task from a disconnected OMP client instance to the
     /// connected `principal`, only when task ID and monotonic OMP revision
-    /// match -- enforced inside the guarded write itself (R74); journals
+    /// match -- enforced inside the guarded write itself; journals
     /// the old/new owner IDs. The stored revision is not changed, so
     /// reclaim stays idempotent across retries and restarts.
     async fn reconcile_omp(
@@ -3203,7 +3203,7 @@ impl OrchestrationService {
         let revision = u64_field(params, "revision")?;
 
         // The revision match is arbitrated inside `reconcile_ownership`'s
-        // guarded write (R74): a caller-side pre-check read in a separate
+        // guarded write: a caller-side pre-check read in a separate
         // round trip could be interleaved with a write to the same task.
 
         let new_owner = principal.instance_id.clone();
@@ -3283,7 +3283,7 @@ impl OrchestrationService {
     /// a reason and also returns the parent to `working`.
     ///
     /// `principal` arbitrates ownership the same way `run/submit` does
-    /// (R77), against `decide_child`'s own guarded write. Every caller of
+    /// against `decide_child`'s own guarded write. Every caller of
     /// this method is `ompExtension` (`coordination/child/decide` is not
     /// in `workerMcp`'s `allowed_methods` -- `coordination/requestChild`
     /// is the distinct, worker-scoped method that raises the request this

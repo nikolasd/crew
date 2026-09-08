@@ -12,7 +12,7 @@ import type { ApplyStrategy, IsolationKind, LeaseMode } from "@nikolasd/crew-pro
 import type { OrchestrationToolContext } from "./shared";
 import { callOrchestration } from "./shared";
 
-// Hand-written token lists tied to the generated wire unions (R17):
+// Hand-written token lists tied to the generated wire unions:
 // `satisfies` fails the compile when a Rust variant is removed, and the
 // `_Exhaustive` checks fail it when one is added, so drift in either
 // direction breaks `bun run typecheck` instead of silently shipping.

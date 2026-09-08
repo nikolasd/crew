@@ -1,7 +1,7 @@
 // Tests for the monitor controller's session lifecycle: the widget shows
 // when the journal has runs and stays hidden when it doesn't (R56,
 // revised), and a `session_shutdown` followed by a new session must
-// resubscribe rather than early-return into a dead monitor (R39). Both
+// resubscribe rather than early-return into a dead monitor. Both
 // drive `registerMonitor` through a fake ExtensionAPI, mirroring
 // tools.test.ts's fake-API pattern.
 
@@ -308,7 +308,7 @@ function runEventEnvelopeFor(sequence: number, runId: string, workerId: string):
   };
 }
 
-test("a session_shutdown followed by a new session_start resubscribes instead of early-returning into a dead monitor (R39)", async () => {
+test("a session_shutdown followed by a new session_start resubscribes instead of early-returning into a dead monitor", async () => {
   const { api, handlers } = createFakeApi();
   const fake = createFakeClient();
   registerMonitor(api, { getClient: async () => fake.client });

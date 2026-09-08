@@ -262,7 +262,7 @@ test("an inbound frame exceeding the negotiated cap is rejected before dispatch 
   }
 });
 
-test("a malformed artifact/fetch result (missing contentBase64) is rejected by schema validation (R55)", async () => {
+test("a malformed artifact/fetch result (missing contentBase64) is rejected by schema validation", async () => {
   const fakeSocketPath = mkdtempSync("/tmp/bat-ts-f-") + "/fake.sock";
   let requestCount = 0;
 
@@ -323,7 +323,7 @@ test("a malformed artifact/fetch result (missing contentBase64) is rejected by s
   }
 });
 
-test("a malformed run/result result (runId not a string) is rejected by schema validation (R55)", async () => {
+test("a malformed run/result result (runId not a string) is rejected by schema validation", async () => {
   const fakeSocketPath = mkdtempSync("/tmp/bat-ts-f-") + "/fake.sock";
   let requestCount = 0;
 
@@ -438,7 +438,7 @@ test("a malformed message/list result (a message with a misspelled field name) i
   }
 });
 
-test("a null result for a validator-less method is rejected by the structural object guard (R55)", async () => {
+test("a null result for a validator-less method is rejected by the structural object guard", async () => {
   const fakeSocketPath = mkdtempSync("/tmp/bat-ts-f-") + "/fake.sock";
   let requestCount = 0;
 

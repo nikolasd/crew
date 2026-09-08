@@ -531,7 +531,7 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
     controller.stop();
     // Drop the client reference too, exactly as the dead-subscription repair
     // path in connect() does -- otherwise a later connect() early-returns
-    // into a monitor whose subscription no longer exists (R39).
+    // into a monitor whose subscription no longer exists.
     subscribedClient = undefined;
     // Cancel any retry already pending.
     if (reconnectTimer !== undefined) {

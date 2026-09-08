@@ -1,4 +1,4 @@
-//! Policy-violation listing contracts (R80).
+//! Policy-violation listing contracts.
 //!
 //! `policy/violation/decide` reports `quarantineCleared: false` when a
 //! different violation on the same run is still open; this listing is how

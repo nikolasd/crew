@@ -412,7 +412,7 @@ impl RunDriver for ViolationTriggeringRunDriver {
 
 /// Like [`ViolationTriggeringRunDriver`], but its `cancel_run` outcome is
 /// configurable: `Err` simulates a real kill failure, `Ok(NoRunningAdapter)`
-/// simulates a run whose adapter already exited (R13).
+/// simulates a run whose adapter already exited.
 struct ConfigurableCancelViolationDriver {
     outcome: Result<crew_runtime::service::CancelOutcome, String>,
 }
@@ -2098,7 +2098,7 @@ impl RunDriver for KillFailingRunDriver {
     }
 }
 
-/// RED (R93): since R13, `cancel_run`'s `Err` always means a live vendor
+/// RED: since R13, `cancel_run`'s `Err` always means a live vendor
 /// process a kill actually failed against -- the policy-violation path
 /// raises `flags.degradedControl` on that condition, but `run/cancel`
 /// only warns and reports unqualified success. The kill failure must
@@ -3481,7 +3481,7 @@ async fn reconcile_omp_rebinds_task_ownership_on_matching_revision() {
     assert_eq!(get["result"]["ownerClientInstanceId"], "omp-2");
 }
 
-/// The resume path survives a rebind (R74): a rebind matches the stored
+/// The resume path survives a rebind: a rebind matches the stored
 /// revision but does not consume it, so a later `task/upsert` presenting
 /// the same revision -- how the extension re-registers a task after a
 /// restart -- still succeeds, while a lower revision stays refused by the
@@ -3579,7 +3579,7 @@ async fn reconcile_omp_rejects_mismatched_revision() {
 }
 
 /// R76: `task/upsert`'s guarded write has no ownership predicate -- it
-/// only enforces revision monotonicity (R74), never that the caller's
+/// only enforces revision monotonicity, never that the caller's
 /// `ownerClientInstanceId` matches whoever currently owns the row. A
 /// second OMP-extension client that never reconciled can therefore
 /// present the *stored* revision together with its own instance id and
@@ -4740,7 +4740,7 @@ async fn run_cancel_against_another_instances_run_is_refused() {
 
     // W3 precedence pin: the owner now genuinely cancels, reaching a
     // terminal state -- the observable contract of the reordering in
-    // `transition_run` (R77) is that a *non-owner's* cancel of that
+    // `transition_run` is that a *non-owner's* cancel of that
     // terminal run still classifies as `NotOwner` (-32602), not
     // `ILLEGAL_TRANSITION` (-32100), because authorization is now
     // checked before `check_transition` runs. Contrast the *owner's*
@@ -5075,7 +5075,7 @@ async fn owner_accepting_a_child_request_journals_the_child_ids_and_returns_the_
         .clone();
     // `seed_pending_child_request` above already journaled one
     // `childEvent` (the request itself, kind `childWorkerRequested`, with
-    // no child ids yet). The accept must journal its OWN kind (R83): a
+    // no child ids yet). The accept must journal its OWN kind: a
     // consumer must never have to infer "accepted" from whether the child
     // ids happen to be populated.
     assert_eq!(
@@ -5332,7 +5332,7 @@ async fn workspace_release_against_another_instances_lease_is_refused() {
     );
 }
 
-/// RED (R89): the request side speaks the closed vocabulary
+/// RED: the request side speaks the closed vocabulary
 /// shared|isolated|copy, but the response side collapses `copy` to
 /// `"isolated"` in both `run/submit`'s echo and `run/get`'s lease
 /// projection. A caller submitting `workspaceMode: "copy"` must read
@@ -5654,7 +5654,7 @@ async fn workspace_inspect_against_another_instances_lease_is_refused() {
 /// and only then failed resolving the artifact -- a mutation reached the
 /// journal from an unauthorized caller before the request was refused at
 /// all. The gate now refuses first; the quarantine read lives inside the
-/// same domain op (R78).
+/// same domain op.
 #[tokio::test]
 async fn workspace_apply_against_another_instances_lease_is_refused() {
     let harness = Harness::start(|c| {

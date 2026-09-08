@@ -3,7 +3,7 @@
 // only if it was the *last* unresolved violation on the run -- a
 // different, still-open violation on the same run keeps it quarantined
 // even though this one was decided. Use op: 'list' to find which
-// violation still holds a quarantine (R80). A "cancel" ends the run
+// violation still holds a quarantine. A "cancel" ends the run
 // outright. `decide` is tier `exec` -- a decision resumes or kills real
 // work; `list` is a read.
 

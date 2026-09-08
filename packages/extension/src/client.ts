@@ -2,7 +2,7 @@
 //
 // `CrewClient` connects to the runtime's per-repository Unix domain socket,
 // performs the `initialize` handshake, and correlates requests to responses by
-// a monotonically increasing string id. Validation boundary (R55): the
+// a monotonically increasing string id. Validation boundary: the
 // JSON-RPC envelope of every inbound message and every event notification is
 // schema-validated (Ajv) before it reaches caller code. Result payloads are
 // schema-validated for every method with a canonical protocol result type

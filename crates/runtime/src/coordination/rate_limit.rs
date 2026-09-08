@@ -46,7 +46,7 @@ impl RateLimiter {
             .expect("rate limiter mutex is never poisoned");
         // Sweep every sender while we hold the lock: evict expired
         // timestamps and drop entries that drained empty, so a retired
-        // worker's key does not leak for the life of the process (R65).
+        // worker's key does not leak for the life of the process.
         // Self-limiting: after one sweep the map only holds senders
         // active within the trailing window.
         sent_at.retain(|_, timestamps| {

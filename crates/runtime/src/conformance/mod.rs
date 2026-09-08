@@ -66,7 +66,7 @@ pub fn vendor_cli_invocation_disabled() -> bool {
 /// a real vendor-CLI spawn, for use when [`vendor_cli_invocation_disabled`]
 /// is set. The outcome is [`ScenarioOutcome::Skipped`]: neither proof nor
 /// disproof. So a development kill switch can never downgrade the capability
-/// a scenario gates (R68) and never fabricates one (R52).
+/// a scenario gates and never fabricates one.
 #[must_use]
 pub fn vendor_cli_required_scenario(name: &'static str) -> ScenarioResult {
     ScenarioResult::skip(

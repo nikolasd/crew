@@ -421,7 +421,7 @@ test("an approvalRequested event increments pendingApprovalCount and a decided o
 
 // ----------------------------------------- secret/thinking content never enters the model
 
-test("a protocol-health event renders its detail, not a constant label (R91)", () => {
+test("a protocol-health event renders its detail, not a constant label", () => {
   const state = reduceEvent(
     EMPTY_MONITOR_STATE,
     envelope({
@@ -474,7 +474,7 @@ test("only the sanitized fields the RuntimeEvent union carries ever reach a row 
 
 // ------------------------------------------------- open violation tracking
 
-test("a policyViolationRecorded event appears in openViolations and a decided one removes it (R80)", () => {
+test("a policyViolationRecorded event appears in openViolations and a decided one removes it", () => {
   const recorded = envelope({
     runId: "run-1",
     event: {

@@ -84,8 +84,8 @@ pub enum DecidedBy {
 impl DecidedBy {
     /// The bare wire token (`human`/`model`) -- exactly the string the
     /// serde `rename_all = "camelCase"` produces, without JSON quoting.
-    /// Used wherever the token is persisted as a scalar column value
-    /// (R34): `serde_json::to_string` would store `"human"` with quotes.
+    /// Used wherever the token is persisted as a scalar column value:
+    /// `serde_json::to_string` would store `"human"` with quotes.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {

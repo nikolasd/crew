@@ -673,7 +673,7 @@ fn check_version_coherence(root: &Path) -> Result<()> {
     // The OMP marketplace catalog is what users actually install from; a
     // stale version here ships silently because nothing else reads it.
     // Both `metadata.version` and the `crew` plugin entry's `version`
-    // must equal the extension version (R64).
+    // must equal the extension version.
     let marketplace_path = root.join(".claude-plugin/marketplace.json");
     let raw = fs::read_to_string(&marketplace_path)
         .with_context(|| format!("reading {}", marketplace_path.display()))?;
