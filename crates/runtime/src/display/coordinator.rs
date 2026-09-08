@@ -3,12 +3,14 @@
 //! attach socket, and journals `DisplayPaneAttached`/`DisplayPaneDetached`
 //! with the *real* pane reference the backend returned.
 //!
-//! Not yet wired into any production call site. `start_queued_run`
-//! (`crate::service::orchestration`) still journals the empty-pane-ref
-//! placeholder for every run today (headless included) -- WP11's TUI
-//! adapter is what will call [`PaneCoordinator::attach`]/[`PaneCoordinator::detach`],
-//! once a PTY and an [`super::AttachServer`] exist for a run's pane
-//! command to actually point at. This module is fully exercised here
+//! Wired into every TUI-mode run: `TuiAdapter::run_pipeline`
+//! (`crate::adapter::tui::adapter`) calls [`PaneCoordinator::attach`] once
+//! its PTY and [`super::AttachServer`] exist for the pane command to
+//! actually point at, and [`PaneCoordinator::detach`] once the run
+//! settles. `start_queued_run` (`crate::service::orchestration`) itself
+//! journals no submit-time placeholder attach event (CREW-11) -- the only
+//! honest attach event is the real one, journaled here by whatever
+//! component actually performs it. This module is fully exercised here
 //! against a fake [`super::DisplayBackendTrait`].
 
 use std::collections::HashSet;
@@ -256,6 +258,7 @@ impl PaneCoordinator {
                     backend,
                     req.placement,
                     DisplayBackend::Hidden,
+                    selection.attempts,
                     format!("pane creation on {backend} failed, falling back to hidden: {err}"),
                 )
                 .await;
@@ -518,6 +521,7 @@ impl PaneCoordinator {
         requested_backend: DisplayBackend,
         requested_placement: DisplayPlacement,
         actual_backend: DisplayBackend,
+        attempted: Vec<DisplayBackend>,
         reason: String,
     ) {
         // `reason` is subprocess stderr (tmux/herdr's own error text), not
@@ -549,6 +553,7 @@ impl PaneCoordinator {
                     requested_backend,
                     requested_placement,
                     actual_backend,
+                    attempted,
                     reason,
                 )
                 .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
@@ -862,12 +867,23 @@ mod tests {
                 requested_backend,
                 requested_placement,
                 actual_backend,
+                attempted,
                 reason,
             } => {
                 assert_eq!(run_id, expected_run_id);
                 assert_eq!(requested_backend, DisplayBackend::Herdr);
                 assert_eq!(requested_placement, DisplayPlacement::SplitRight);
                 assert_eq!(actual_backend, DisplayBackend::Hidden);
+                // CREW-73: the attach-time resolve() stops at the first
+                // AVAILABLE candidate -- herdr here -- so it never walks
+                // as far as tmux/os_window/hidden. This is the sequence a
+                // listener needs to see why herdr, specifically, lost.
+                assert_eq!(
+                    attempted,
+                    vec![DisplayBackend::Herdr],
+                    "attempted must carry the backends resolve() actually walked before \
+                     create_pane was tried on the selected one"
+                );
                 assert!(
                     reason.as_str().contains("herdr exploded"),
                     "reason must carry the underlying create_pane error: {reason:?}"

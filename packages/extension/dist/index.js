@@ -8798,6 +8798,14 @@ failed.`,
                   description: "The backend actually used instead.",
                   $ref: "#/$defs/DisplayBackend"
                 },
+                attempted: {
+                  description: "The backends this attach tried, in order, before settling on\n`actualBackend`.",
+                  type: "array",
+                  items: {
+                    $ref: "#/$defs/DisplayBackend"
+                  },
+                  default: []
+                },
                 reason: {
                   description: `Why creation failed, redacted. The typed fields above are what
 a listener should act on; this is operator-facing detail only.`,
@@ -10742,7 +10750,7 @@ child at all (a cost ceiling does not).`,
       type: "string"
     },
     RunUsage: {
-      description: "Token usage folded from a run's journaled `adapterUsageEvent`s.\n\nThe runtime applies the adapter-correct fold before this leaves the\ndaemon: Claude journals per-invocation deltas (summed); every other\nreporting adapter journals cumulative totals (last one wins). Codex\nnever reports cost, so `cost_usd` is `null` there.",
+      description: "Token usage folded from a run's journaled `adapterUsageEvent`s.\n\nThe runtime applies the adapter-correct fold before this leaves the\ndaemon: Claude journals per-invocation deltas (summed); every other\nreporting adapter journals cumulative totals (last one wins). Codex\nnever reports cost, so `costUsd` is `null` there.",
       type: "object",
       properties: {
         inputTokens: {
@@ -10856,7 +10864,7 @@ child at all (a cost ceiling does not).`,
       ]
     },
     RetentionCleanResult: {
-      description: "Result of `retention/clean`: what one on-demand prune pass removed.\n\n`deleted_events` counts journal rows removed by BOTH policies (age\ncutoff and `maxRuns` recency cap). `runs_pruned` counts distinct\nterminal runs beyond `retention.maxRuns` whose events were removed by\nthe recency cap alone; age-based deletions are not attributed to runs.",
+      description: "Result of `retention/clean`: what one on-demand prune pass removed.\n\n`deletedEvents` counts journal rows removed by BOTH policies (age\ncutoff and `maxRuns` recency cap). `runsPruned` counts distinct\nterminal runs beyond `retention.maxRuns` whose events were removed by\nthe recency cap alone; age-based deletions are not attributed to runs.",
       type: "object",
       properties: {
         deletedEvents: {
@@ -10877,7 +10885,7 @@ child at all (a cost ceiling does not).`,
       ]
     },
     PaneReopenResult: {
-      description: "Result of `pane/reopen`: the pane freshly created for a live run's\nattach socket. `pane_ref` is empty exactly when the resolved backend\nwas `hidden` (nothing visible to reopen onto) -- not an error, mirroring\nthe submit-time pane semantics.",
+      description: "Result of `pane/reopen`: the pane freshly created for a live run's\nattach socket. `paneRef` is empty exactly when the resolved backend\nwas `hidden` (nothing visible to reopen onto) -- not an error, mirroring\nthe submit-time pane semantics.",
       type: "object",
       properties: {
         runId: {

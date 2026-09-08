@@ -374,6 +374,7 @@ impl<'c> DomainRepository<'c> {
         requested_backend: crew_protocol::DisplayBackend,
         requested_placement: crew_protocol::DisplayPlacement,
         actual_backend: crew_protocol::DisplayBackend,
+        attempted: Vec<crew_protocol::DisplayBackend>,
         reason: crew_protocol::Redacted,
     ) -> Result<Committed, DomainError> {
         self.append_and_apply(
@@ -382,6 +383,7 @@ impl<'c> DomainRepository<'c> {
                 requested_backend,
                 requested_placement,
                 actual_backend,
+                attempted,
                 reason,
             },
             None,

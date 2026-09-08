@@ -64,6 +64,11 @@ requestedPlacement: DisplayPlacement,
  */
 actualBackend: DisplayBackend, 
 /**
+ * The backends this attach tried, in order, before settling on
+ * `actualBackend`.
+ */
+attempted: Array<DisplayBackend>, 
+/**
  * Why creation failed, redacted. The typed fields above are what
  * a listener should act on; this is operator-facing detail only.
  */
