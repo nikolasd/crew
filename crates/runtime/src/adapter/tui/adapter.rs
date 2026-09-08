@@ -276,9 +276,11 @@ pub struct TuiTimings {
 /// full escalation failed the scenario on an idle machine.
 ///
 /// 20 seconds is chosen to dominate every bound a scenario can sit behind
-/// — the 10s escalation total being the largest — and the assertions in
-/// `the_observation_deadline_dominates_every_production_bound` are what
-/// keep that true if a production bound is ever raised. Like any failure
+/// — the 10s escalation total being the largest a scenario waits behind —
+/// and the assertions in
+/// `the_observation_deadline_dominates_every_bound_a_scenario_waits_behind`
+/// are what keep that true if a production bound is ever raised. That test
+/// also records why `paste_write_timeout` (90s) is not among them. Like any failure
 /// bound it costs wall-clock time only when it fires, so its size buys
 /// nothing and its generosity costs nothing.
 pub(crate) const SCENARIO_OBSERVATION_DEADLINE: Duration = Duration::from_secs(20);
@@ -2030,8 +2032,26 @@ mod tests {
     /// CREW-76: the constant is derived from the bounds it must dominate,
     /// not chosen. If a production bound is ever raised past it, this fails
     /// rather than a scenario becoming quietly flaky.
+    ///
+    /// **`paste_write_timeout` is deliberately excluded, and the exclusion
+    /// is conditional on a property of the call sites rather than of the
+    /// bound.** At 90s it is the largest failure bound in the struct, so if
+    /// a scenario ever waited behind it this deadline would be inverted.
+    /// None does: every harness awaits `adapter.start(spec, sink)`
+    /// **unwrapped**, so a stalled paste is consumed inside `start()` and
+    /// surfaces as an `Err` carrying CREW-70's byte-count message — never
+    /// as an expired observation deadline. The only call any harness wraps
+    /// in a deadline is `adapter.cancel(..)`, which sits behind the
+    /// escalation total, and that total *is* asserted below.
+    ///
+    /// **What would falsify this:** wrapping `start()` or `send()` in
+    /// `SCENARIO_OBSERVATION_DEADLINE` — a natural-looking change, to stop
+    /// a hung start from hanging the suite. Do that and the inversion is
+    /// immediate (20s against 90s), and the right fix is then to raise this
+    /// deadline above the paste bound and add it to the list below, never
+    /// to shorten the paste bound.
     #[test]
-    fn the_observation_deadline_dominates_every_production_bound() {
+    fn the_observation_deadline_dominates_every_bound_a_scenario_waits_behind() {
         let production = TuiTimings::default();
         let escalation_total =
             production.escalation.sigint_to_sigterm + production.escalation.sigterm_to_sigkill;
