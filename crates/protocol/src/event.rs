@@ -980,6 +980,28 @@ pub enum RuntimeEvent {
         requested_placement: DisplayPlacement,
         /// The backend actually used instead.
         actual_backend: DisplayBackend,
+        // CREW-73: D28's third channel ("extend `DisplaySelection.attempts`
+        // to record post-selection pane-creation failures") named a field
+        // with no consumer -- `DisplaySelection` never reaches a wire
+        // message or `RuntimeEvent`, so extending it would have built a
+        // channel with no far end. This is the actual, journaled home for
+        // the same intent: the sequence a listener needs to see why the
+        // preferred backend lost is exactly the one this event already
+        // fires for. Recorded at attach time (`PaneCoordinator::attach`'s
+        // own `resolve()` call), not threaded down from `run/submit`'s
+        // earlier resolve -- availability can change between the two, and
+        // the attach-time sequence is the honest record of what was
+        // actually tried: the same sequence resolution walked to pick the
+        // requested backend.
+        //
+        // `#[serde(default)]` is required because the journal is
+        // append-only: `PaneDowngraded` payloads written before this field
+        // existed (this event has shipped since #88) must still
+        // deserialize on replay.
+        /// The backends this attach tried, in order, before settling on
+        /// `actualBackend`.
+        #[serde(default)]
+        attempted: Vec<DisplayBackend>,
         // This is subprocess stderr (tmux/herdr's own error output),
         // never runtime-authored text -- `pane_ref` on the sibling
         // `DisplayEvent` above draws the identical line ("never terminal
@@ -1357,6 +1379,38 @@ mod tests {
                 let _: Option<Redacted> = question;
             }
             _ => panic!("expected WorkerQuestion"),
+        }
+    }
+
+    /// CREW-73: mirrors `RunFlags.turn_settled`'s own `#[serde(default)]`
+    /// guarantee (event.rs, ADR-0027/CREW-45) -- the journal is
+    /// append-only, so a `PaneDowngraded` payload journaled before
+    /// `attempted` existed must still deserialize, as an empty sequence
+    /// rather than a hard replay failure.
+    #[test]
+    fn a_pane_downgraded_payload_predating_attempted_deserializes_to_an_empty_sequence() {
+        let (run_id, ..) = fixture_ids();
+        let value = serde_json::json!({
+            "type": "paneDowngraded",
+            "payload": {
+                "runId": run_id.to_string(),
+                "requestedBackend": "tmux",
+                "requestedPlacement": "splitDown",
+                "actualBackend": "hidden",
+                "reason": "tmux exploded"
+            }
+        });
+        let event: RuntimeEvent = serde_json::from_value(value)
+            .expect("a pre-CREW-73 PaneDowngraded payload must still deserialize");
+        match event {
+            RuntimeEvent::PaneDowngraded { attempted, .. } => {
+                assert_eq!(
+                    attempted,
+                    Vec::new(),
+                    "an absent `attempted` must default to empty"
+                );
+            }
+            other => panic!("expected PaneDowngraded, got {other:?}"),
         }
     }
 }

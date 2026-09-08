@@ -165,7 +165,7 @@ test("CREW-60: a paneDowngraded event is always a milestone", () => {
     t.isMilestone(
       envelope({
         runId: "run-1",
-        event: { type: "paneDowngraded", payload: { runId: "run-1", requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", reason: "tmux exploded" } },
+        event: { type: "paneDowngraded", payload: { runId: "run-1", requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", attempted: ["tmux"], reason: "tmux exploded" } },
       }),
     ),
   ).toBe(true);
@@ -175,7 +175,7 @@ test("CREW-60: paneDowngraded digest names the requested/actual backends and the
   const digest = formatDigest(
     envelope({
       runId: "run-1",
-      event: { type: "paneDowngraded", payload: { runId: "run-1", requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", reason: "tmux exploded" } },
+      event: { type: "paneDowngraded", payload: { runId: "run-1", requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", attempted: ["tmux"], reason: "tmux exploded" } },
     }),
     ROWS,
   );
@@ -324,7 +324,7 @@ test("CREW-60/CREW-51: a replayed paneDowngraded never injects a digest either",
       runId: "run-1",
       event: {
         type: "paneDowngraded",
-        payload: { runId: "run-1", requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", reason: "tmux exploded" },
+        payload: { runId: "run-1", requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", attempted: ["tmux"], reason: "tmux exploded" },
       },
     });
 

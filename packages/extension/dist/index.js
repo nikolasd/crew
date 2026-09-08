@@ -8798,6 +8798,14 @@ failed.`,
                   description: "The backend actually used instead.",
                   $ref: "#/$defs/DisplayBackend"
                 },
+                attempted: {
+                  description: "The backends this attach tried, in order, before settling on\n`actualBackend`.",
+                  type: "array",
+                  items: {
+                    $ref: "#/$defs/DisplayBackend"
+                  },
+                  default: []
+                },
                 reason: {
                   description: `Why creation failed, redacted. The typed fields above are what
 a listener should act on; this is operator-facing detail only.`,
