@@ -54,6 +54,24 @@ fn ordered_candidates(forced: Option<DisplayBackend>) -> Vec<DisplayBackend> {
     }
 }
 
+/// One redacted sentence summarizing every failed `create_pane` attempt
+/// in a `PaneCoordinator::attach` walk -- CREW-74: concatenating each
+/// candidate's own stderr would multiply the CREW-60 leak shape by the
+/// number of candidates tried. The typed `attempted` field on
+/// `PaneDowngraded` already says WHICH backends were tried and in what
+/// order; this says only how many create_pane calls failed and shows the
+/// LAST one's own text, never every one's.
+fn summarize_pane_creation_failures(failures: &[String]) -> String {
+    match failures {
+        [] => String::new(), // unreachable: only called after >=1 failure
+        [only] => only.clone(),
+        [.., last] => format!(
+            "{} attempts failed pane creation; last: {last}",
+            failures.len()
+        ),
+    }
+}
+
 /// Everything [`PaneCoordinator::attach`] needs to name, place, and
 /// point one run's pane at its own attach socket.
 #[derive(Debug, Clone)]
@@ -75,9 +93,11 @@ pub struct PaneAttachRequest {
 }
 
 /// What a run's pane resolved to. `backend` is `Hidden` whenever every
-/// real candidate was unavailable or a `create_pane` call itself failed
-/// -- never an error on its own; `pane_ref` is empty in exactly that
-/// case. Pass this to [`PaneCoordinator::detach`] once the run settles.
+/// real candidate was either unavailable or its own `create_pane` call
+/// failed (CREW-74: `attach` retries the remaining candidates in order
+/// before giving up) -- never an error on its own; `pane_ref` is empty
+/// in exactly that case. Pass this to [`PaneCoordinator::detach`] once
+/// the run settles.
 #[derive(Debug, Clone)]
 pub struct PaneAttachOutcome {
     run_id: RunId,
@@ -182,87 +202,161 @@ impl PaneCoordinator {
 
     /// Resolves a backend (forced backend first, then herdr/tmux/
     /// os-window/hidden by availability), opens a pane running `crewd
-    /// attach <run-id> ...` at `req.placement`, and journals
-    /// `DisplayPaneAttached` with the real pane reference. A
-    /// `create_pane` failure on the resolved backend is never fatal to
-    /// the run: it is journaled as a diagnostic and this falls back to
-    /// `Hidden` (an empty `pane_ref`) instead of propagating the error.
+    /// attach <run-id> ...`, and journals `DisplayPaneAttached` with the
+    /// real pane reference. A `create_pane` failure on the resolved
+    /// backend is never fatal to the run: it retries the remaining
+    /// candidates in order (CREW-74) before falling all the way back to
+    /// `Hidden` (an empty `pane_ref`), which never fails.
+    ///
+    /// `req.placement` is honored as-is only for the FIRST candidate --
+    /// it is a concrete, previously-resolved value (see
+    /// `crate::adapter::registry`'s own earlier `resolve()` call), and
+    /// `resolve()` only falls back to a backend's `natural_placement()`
+    /// for a caller that never specified one in the first place. Every
+    /// retry passes no explicit placement, so `resolve()` re-derives the
+    /// NEW candidate's own natural form instead: the caller's placement
+    /// was only ever meaningful for the backend that just failed, and an
+    /// explicit request (e.g. `Workspace`, valid for herdr) carried
+    /// verbatim into a backend that refuses it (tmux refuses
+    /// `Workspace`/`Window` outright) would reproduce the exact backend/
+    /// placement mismatch ADR-0029 exists to prevent.
     pub async fn attach(&self, req: PaneAttachRequest) -> PaneAttachOutcome {
-        let candidates = ordered_candidates(req.forced_backend);
-        // `req.placement` is already a concrete, previously-resolved value
-        // (see `crate::adapter::registry`'s own earlier `resolve()` call) --
-        // wrapping it in `Some` here just carries it through unchanged;
-        // `resolve()` only falls back to a backend's `natural_placement()`
-        // for a caller that never specified one in the first place.
-        let selection = self.registry.resolve(&crew_protocol::DisplayPreference {
-            ordered: candidates,
-            placement: Some(req.placement),
-            launch_program: req.launch_program,
-        });
+        let mut candidates = ordered_candidates(req.forced_backend);
+        let mut attempted: Vec<DisplayBackend> = Vec::new();
+        let mut requested_backend: Option<DisplayBackend> = None;
+        let mut requested_placement = req.placement;
+        let mut failures: Vec<String> = Vec::new();
+        let mut reserved = false;
 
-        let Some(backend) = selection.selected else {
-            // Reachable only with a hand-built registry that never
-            // registered `Hidden` (a test); production registries built
-            // by `DisplayRegistry::with_default_backends` always do.
-            return self.attach_hidden(req.run_id, req.placement).await;
-        };
+        loop {
+            let is_first_attempt = requested_backend.is_none();
+            let selection = self.registry.resolve(&crew_protocol::DisplayPreference {
+                ordered: candidates.clone(),
+                placement: if is_first_attempt {
+                    Some(req.placement)
+                } else {
+                    None
+                },
+                launch_program: req.launch_program,
+            });
+            attempted.extend(selection.attempts.iter().copied());
 
-        let Some(display) = self.registry.find(backend) else {
-            return self.attach_hidden(req.run_id, req.placement).await;
-        };
-
-        // ADR-0027 wave 3's pane cap, applied only once a REAL backend is
-        // resolved. Hidden is not a pane: it occupies no screen, so it
-        // neither consumes the cap nor is refused by it -- and this cap is
-        // purely about screen real estate. The bound on concurrent turns is
-        // the registry's live-SESSION cap, which exists whether or not the
-        // user wants windows; conflating the two would have left a
-        // hidden-display setup unbounded.
-        if backend != DisplayBackend::Hidden && !self.reserve_pane(req.run_id) {
-            self.journal_diagnostic(
-                req.run_id,
-                // The only interpolation is a configured integer, so no
-                // caller or vendor text can reach this sentence.
-                crew_protocol::Redacted::assert_runtime_authored(format!(
-                    "live pane cap of {} reached, attaching hidden instead; close a finished \
-                     worker's pane to free one",
-                    self.max_live_panes
-                )),
-            )
-            .await;
-            return self.attach_hidden(req.run_id, req.placement).await;
-        }
-
-        let pane_request = self.pane_request(&req);
-        match display.create_pane(pane_request).await {
-            Ok(handle) => {
-                let pane_ref = handle.pane_ref.clone();
-                // The actual placement, not the requested one (CREW-9):
-                // OsWindowDisplay may report `Window` for a `Tab` request.
-                let placement = handle.placement;
-                self.journal_attach(req.run_id, backend, placement, pane_ref.clone())
-                    .await;
-                PaneAttachOutcome {
-                    run_id: req.run_id,
-                    backend,
-                    placement,
-                    pane_ref,
-                    handle: Some(handle),
-                }
+            let Some(backend) = selection.selected else {
+                // No candidate left to try. Reachable only with a
+                // hand-built registry that never registered `Hidden` (a
+                // test); production registries built by
+                // `DisplayRegistry::with_default_backends` always do, so
+                // this can only be hit before any real backend was ever
+                // reserved.
+                debug_assert!(!reserved, "Hidden always succeeds in production registries");
+                return self.attach_hidden(req.run_id, req.placement).await;
+            };
+            if is_first_attempt {
+                requested_backend = Some(backend);
+                requested_placement = selection.placement;
             }
-            Err(err) => {
-                // No real pane exists, so the reservation must not be held.
-                self.release_pane(req.run_id);
-                self.journal_pane_downgraded(
-                    req.run_id,
-                    backend,
-                    req.placement,
-                    DisplayBackend::Hidden,
-                    selection.attempts,
-                    format!("pane creation on {backend} failed, falling back to hidden: {err}"),
-                )
-                .await;
-                self.attach_hidden(req.run_id, req.placement).await
+
+            let Some(display) = self.registry.find(backend) else {
+                if reserved {
+                    self.release_pane(req.run_id);
+                }
+                return self.attach_hidden(req.run_id, req.placement).await;
+            };
+
+            // ADR-0027 wave 3's pane cap: reserved ONCE for the whole
+            // attach, before the first REAL (non-Hidden) candidate is
+            // tried, and released only if every candidate ultimately
+            // fails -- at most one pane ever results from an attach, so
+            // one reservation is the honest model. Hidden is not a pane:
+            // it occupies no screen, so it neither consumes the cap nor
+            // is refused by it. The bound on concurrent turns is the
+            // registry's live-SESSION cap, which exists whether or not
+            // the user wants windows; conflating the two would have left
+            // a hidden-display setup unbounded.
+            if backend != DisplayBackend::Hidden && !reserved {
+                if !self.reserve_pane(req.run_id) {
+                    self.journal_diagnostic(
+                        req.run_id,
+                        // The only interpolation is a configured integer,
+                        // so no caller or vendor text can reach this
+                        // sentence.
+                        crew_protocol::Redacted::assert_runtime_authored(format!(
+                            "live pane cap of {} reached, attaching hidden instead; close a \
+                             finished worker's pane to free one",
+                            self.max_live_panes
+                        )),
+                    )
+                    .await;
+                    // Cap-reached is a distinct, unretried short-circuit:
+                    // nothing was attempted, so nothing to journal as a
+                    // downgrade -- straight to hidden, exactly as before.
+                    return self.attach_hidden(req.run_id, req.placement).await;
+                }
+                reserved = true;
+            }
+
+            let pane_request = self.pane_request(&req, selection.placement);
+            match display.create_pane(pane_request).await {
+                Ok(handle) => {
+                    let pane_ref = handle.pane_ref.clone();
+                    // The actual placement, not the requested one (CREW-9):
+                    // OsWindowDisplay may report `Window` for a `Tab` request.
+                    let placement = handle.placement;
+                    let requested_backend =
+                        requested_backend.expect("set on the first loop iteration");
+                    // A `PaneDowngraded` whenever the actual backend
+                    // diverges from the one first requested, even though
+                    // THIS attempt succeeded -- an operator needs to see
+                    // that the preferred backend lost, not just a total
+                    // failure (D28's whole intent: requested vs. actual).
+                    // Journaled BEFORE the attach event, matching the
+                    // single-attempt shape this replaces: "why" precedes
+                    // "what happened".
+                    if backend != requested_backend {
+                        self.journal_pane_downgraded(
+                            req.run_id,
+                            requested_backend,
+                            requested_placement,
+                            backend,
+                            attempted.clone(),
+                            summarize_pane_creation_failures(&failures),
+                        )
+                        .await;
+                    }
+                    self.journal_attach(req.run_id, backend, placement, pane_ref.clone())
+                        .await;
+                    if backend == DisplayBackend::Hidden && reserved {
+                        // Landed on hidden after every real candidate
+                        // failed -- no real pane exists, so the
+                        // reservation must not be held.
+                        self.release_pane(req.run_id);
+                    }
+                    return PaneAttachOutcome {
+                        run_id: req.run_id,
+                        backend,
+                        placement,
+                        pane_ref,
+                        handle: Some(handle),
+                    };
+                }
+                Err(err) => {
+                    failures.push(format!("{backend} failed: {err}"));
+                    let idx = candidates
+                        .iter()
+                        .position(|b| *b == backend)
+                        .expect("backend was just selected from this exact list");
+                    candidates = candidates[idx + 1..].to_vec();
+                    if backend == DisplayBackend::Hidden {
+                        // Hidden's `create_pane` is a documented no-op
+                        // that always succeeds; if it somehow returned
+                        // Err, do not loop forever retrying an empty
+                        // candidate list.
+                        if reserved {
+                            self.release_pane(req.run_id);
+                        }
+                        return self.attach_hidden(req.run_id, req.placement).await;
+                    }
+                }
             }
         }
     }
@@ -316,7 +410,10 @@ impl PaneCoordinator {
                 handle: None,
             });
         };
-        match display.create_pane(self.pane_request(&req)).await {
+        match display
+            .create_pane(self.pane_request(&req, req.placement))
+            .await
+        {
             Ok(handle) => {
                 let pane_ref = handle.pane_ref.clone();
                 // The actual placement, not the requested one (CREW-9):
@@ -391,7 +488,12 @@ impl PaneCoordinator {
         .await;
     }
 
-    fn pane_request(&self, req: &PaneAttachRequest) -> PaneRequest {
+    /// `placement` is passed explicitly, not read from `req.placement`
+    /// directly: CREW-74's retry loop asks each candidate for a placement
+    /// re-derived per-candidate (see [`Self::attach`]'s own doc comment),
+    /// so the caller picks which value applies -- `attach_owned`, which
+    /// never retries, always passes `req.placement` unchanged.
+    fn pane_request(&self, req: &PaneAttachRequest, placement: DisplayPlacement) -> PaneRequest {
         PaneRequest {
             title: format!("crew: {} ({})", req.worker_id, req.adapter),
             command: vec![
@@ -403,7 +505,7 @@ impl PaneCoordinator {
                 "--state-dir".to_string(),
                 self.state_dir.to_string_lossy().into_owned(),
             ],
-            placement: req.placement,
+            placement,
             launch_program: req.launch_program,
         }
     }
@@ -618,9 +720,29 @@ mod tests {
         name: &'static str,
         wire_backend: DisplayBackend,
         available: bool,
-        create_result: Mutex<Option<Result<PaneHandle, String>>>,
+        /// `Arc` so a test can hold its own handle and change the
+        /// outcome BETWEEN `attach()` calls on the same coordinator --
+        /// needed to prove a released reservation is actually reusable
+        /// (the same coordinator, same cap, a later call that must now
+        /// succeed), rather than comparing against an unrelated fresh
+        /// coordinator whose own cap was never at risk.
+        create_result: Arc<Mutex<Option<Result<PaneHandle, String>>>>,
         create_calls: AtomicUsize,
+        /// Every `PaneRequest` this backend's `create_pane` actually
+        /// received, in call order -- CREW-74's retry test needs this to
+        /// prove which PLACEMENT a candidate was asked for, not just that
+        /// it was asked. `Arc` so a test can hold its own handle to read
+        /// this back AFTER the backend itself has been boxed and moved
+        /// into the registry.
+        create_requests: Arc<Mutex<Vec<PaneRequest>>>,
         close_calls: Mutex<Vec<PaneHandle>>,
+        /// What [`DisplayBackendTrait::natural_placement`] reports for
+        /// this fake -- defaults to the trait's own default (`SplitRight`)
+        /// so existing tests are unaffected; CREW-74's retry test sets
+        /// this to something else on the SECOND candidate to prove a
+        /// retry re-derives placement per-candidate rather than carrying
+        /// the first candidate's requested value forward.
+        natural_placement: DisplayPlacement,
     }
 
     impl FakeBackend {
@@ -629,9 +751,11 @@ mod tests {
                 name,
                 wire_backend,
                 available,
-                create_result: Mutex::new(None),
+                create_result: Arc::new(Mutex::new(None)),
                 create_calls: AtomicUsize::new(0),
+                create_requests: Arc::new(Mutex::new(Vec::new())),
                 close_calls: Mutex::new(Vec::new()),
+                natural_placement: DisplayPlacement::SplitRight,
             }
         }
 
@@ -655,6 +779,27 @@ mod tests {
             *self.create_result.lock() = Some(Err(message.to_string()));
             self
         }
+
+        /// Overrides this fake's `natural_placement()` away from the
+        /// trait default.
+        fn with_natural_placement(mut self, placement: DisplayPlacement) -> Self {
+            self.natural_placement = placement;
+            self
+        }
+
+        /// A handle to this fake's received-request log, cloneable BEFORE
+        /// the fake itself is boxed and moved into a [`DisplayRegistry`].
+        fn create_requests_handle(&self) -> Arc<Mutex<Vec<PaneRequest>>> {
+            Arc::clone(&self.create_requests)
+        }
+
+        /// A handle to this fake's create-pane outcome, cloneable BEFORE
+        /// the fake is boxed and moved into a [`DisplayRegistry`], so a
+        /// test can flip a backend from failing to succeeding (or back)
+        /// between `attach()` calls on the SAME coordinator.
+        fn create_result_handle(&self) -> Arc<Mutex<Option<Result<PaneHandle, String>>>> {
+            Arc::clone(&self.create_result)
+        }
     }
 
     impl DisplayBackendTrait for FakeBackend {
@@ -674,8 +819,13 @@ mod tests {
             DisplayStatus::new(self.wire_backend, self.available, false)
         }
 
-        fn create_pane(&self, _req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
+        fn natural_placement(&self) -> DisplayPlacement {
+            self.natural_placement
+        }
+
+        fn create_pane(&self, req: PaneRequest) -> DisplayFuture<'_, PaneHandle> {
             self.create_calls.fetch_add(1, Ordering::Relaxed);
+            self.create_requests.lock().push(req);
             let result =
                 self.create_result.lock().clone().unwrap_or_else(|| {
                     Err("FakeBackend has no create_result configured".to_string())
@@ -833,13 +983,76 @@ mod tests {
         db.shutdown().await.expect("shutdown database");
     }
 
+    /// CREW-74's own trap, caught before it shipped: `req.placement` is a
+    /// concrete value already resolved for the FIRST candidate (herdr's
+    /// natural form here, `SplitRight`, and irrelevant to this test only
+    /// because we never ask herdr to honor it). A naive retry that just
+    /// carries `req.placement` into the next candidate would ask tmux for
+    /// a placement that was never really tmux's -- exactly the backend/
+    /// placement mismatch ADR-0029 exists to prevent. The fix re-derives
+    /// placement from EACH candidate's own `natural_placement()` on every
+    /// retry, so tmux is asked for its own natural form (`Tab`, forced
+    /// here to differ from both the trait default and the request),
+    /// never the value that was only ever meaningful for herdr.
     #[tokio::test]
-    async fn a_create_pane_failure_journals_a_typed_pane_downgraded_event_and_falls_back_to_hidden()
-    {
+    async fn a_retry_re_derives_placement_from_the_next_candidates_own_natural_form() {
+        let (db, _dir) = harness().await;
+        let (events_tx, _events_rx) = broadcast::channel(16);
+        let mut registry = DisplayRegistry::new();
+        registry.register(Box::new(
+            FakeBackend::new("herdr", DisplayBackend::Herdr, true).failing("herdr exploded"),
+        ));
+        let tmux = FakeBackend::new("tmux", DisplayBackend::Tmux, true)
+            .with_natural_placement(DisplayPlacement::Tab)
+            .succeeding("%7");
+        let tmux_requests = tmux.create_requests_handle();
+        registry.register(Box::new(tmux));
+        registry.register(Box::new(super::super::HiddenDisplay::new(
+            DisplayConfig::default(),
+        )));
+        let coordinator = coordinator(registry, Arc::clone(&db), events_tx);
+
+        let mut req = attach_request(None);
+        // Explicit and deliberately unlike either candidate's natural
+        // form, so a leaked value is unmistakable in the assertion below.
+        req.placement = DisplayPlacement::Workspace;
+        let outcome = coordinator.attach(req).await;
+
+        assert_eq!(outcome.backend, DisplayBackend::Tmux);
+        {
+            let received = tmux_requests.lock();
+            assert_eq!(
+                received.len(),
+                1,
+                "tmux's create_pane must have been tried exactly once"
+            );
+            assert_eq!(
+                received[0].placement,
+                DisplayPlacement::Tab,
+                "a retry must ask the new candidate for ITS OWN natural placement, never the \
+                 value carried from the failed first candidate's request"
+            );
+        }
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    #[tokio::test]
+    async fn every_candidate_failing_journals_a_typed_pane_downgraded_event_and_falls_back_to_hidden()
+     {
         // CREW-60/D28: this used to journal a free-text `Diagnostic` --
         // the exact "durable condition on an ephemeral channel" bug the
         // design note named. A listener now gets typed fields instead of
         // a message meant for a human to read.
+        //
+        // CREW-74: renamed from "a create_pane failure ... falls back to
+        // hidden" -- a single failure no longer falls back to hidden, it
+        // retries the next candidate (see
+        // `a_retry_re_derives_placement_from_the_next_candidates_own_natural_form`
+        // and `a_later_candidate_succeeding_still_journals_the_downgrade`).
+        // This registry has only herdr and hidden, so tmux/os_window are
+        // simply never available -- every REAL candidate fails or is
+        // unavailable, which is exactly the "hidden is the last resort"
+        // case this test now covers.
         let (db, _dir) = harness().await;
         let (events_tx, mut events_rx) = broadcast::channel(16);
         let mut registry = DisplayRegistry::new();
@@ -874,15 +1087,20 @@ mod tests {
                 assert_eq!(requested_backend, DisplayBackend::Herdr);
                 assert_eq!(requested_placement, DisplayPlacement::SplitRight);
                 assert_eq!(actual_backend, DisplayBackend::Hidden);
-                // CREW-73: the attach-time resolve() stops at the first
-                // AVAILABLE candidate -- herdr here -- so it never walks
-                // as far as tmux/os_window/hidden. This is the sequence a
-                // listener needs to see why herdr, specifically, lost.
+                // CREW-74: herdr fails, so the retry walks the rest of
+                // the default chain -- tmux and os_window are never
+                // registered here, so resolve() finds them unavailable
+                // and keeps walking, landing on hidden. `attempted` is
+                // the FULL sequence, not just herdr.
                 assert_eq!(
                     attempted,
-                    vec![DisplayBackend::Herdr],
-                    "attempted must carry the backends resolve() actually walked before \
-                     create_pane was tried on the selected one"
+                    vec![
+                        DisplayBackend::Herdr,
+                        DisplayBackend::Tmux,
+                        DisplayBackend::OsWindow,
+                        DisplayBackend::Hidden,
+                    ],
+                    "attempted must carry every backend the retry walked, not just the first"
                 );
                 assert!(
                     reason.as_str().contains("herdr exploded"),
@@ -896,6 +1114,121 @@ mod tests {
             &attached.event,
             crew_protocol::RuntimeEventKind::DisplayPaneAttached
         ));
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// CREW-74 ruling 2: a `PaneDowngraded` fires whenever the actual
+    /// backend diverges from the one first requested, EVEN THOUGH a
+    /// later candidate succeeded -- a run landing in tmux when herdr was
+    /// preferred is a divergence an operator needs to see, and staying
+    /// silent on it (because the run technically got a real pane) would
+    /// hide exactly the case D28 exists to surface.
+    #[tokio::test]
+    async fn a_later_candidate_succeeding_still_journals_the_downgrade() {
+        let (db, _dir) = harness().await;
+        let (events_tx, mut events_rx) = broadcast::channel(16);
+        let mut registry = DisplayRegistry::new();
+        registry.register(Box::new(
+            FakeBackend::new("herdr", DisplayBackend::Herdr, true).failing("herdr exploded"),
+        ));
+        registry.register(Box::new(
+            FakeBackend::new("tmux", DisplayBackend::Tmux, true).succeeding("%3"),
+        ));
+        registry.register(Box::new(super::super::HiddenDisplay::new(
+            DisplayConfig::default(),
+        )));
+        let coordinator = coordinator(registry, Arc::clone(&db), events_tx);
+
+        let outcome = coordinator.attach(attach_request(None)).await;
+
+        // The second candidate actually gets the pane.
+        assert_eq!(outcome.backend, DisplayBackend::Tmux);
+        assert_eq!(outcome.pane_ref, "%3");
+
+        // A PaneDowngraded still fires, naming herdr as requested and
+        // tmux as actual -- not silence just because SOMETHING succeeded.
+        let downgraded = events_rx
+            .try_recv()
+            .expect("a PaneDowngraded must broadcast even though attach ultimately succeeded");
+        match downgraded.event {
+            crew_protocol::RuntimeEvent::PaneDowngraded {
+                requested_backend,
+                actual_backend,
+                attempted,
+                reason,
+                ..
+            } => {
+                assert_eq!(requested_backend, DisplayBackend::Herdr);
+                assert_eq!(actual_backend, DisplayBackend::Tmux);
+                assert_eq!(attempted, vec![DisplayBackend::Herdr, DisplayBackend::Tmux]);
+                assert!(reason.as_str().contains("herdr exploded"));
+            }
+            other => panic!("expected PaneDowngraded, got {other:?}"),
+        }
+        let attached = events_rx
+            .try_recv()
+            .expect("the successful tmux attach must also broadcast");
+        assert!(is_display_event(
+            &attached.event,
+            crew_protocol::RuntimeEventKind::DisplayPaneAttached
+        ));
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// CREW-74 ruling 3: the reservation is held once for the whole
+    /// attach and released only if EVERY candidate fails -- proven here
+    /// by two REAL candidates (not just one, as
+    /// `a_failed_pane_creation_does_not_hold_a_slot` already covers)
+    /// both failing, landing on hidden, and a fresh attach against the
+    /// same cap still finding it entirely free.
+    #[tokio::test]
+    async fn no_slot_is_held_when_every_real_candidate_fails() {
+        // Deliberately the SAME coordinator (and so the same cap state)
+        // for both attaches: a second, independently-constructed
+        // coordinator has its own fresh `live_panes` set regardless of
+        // what the first one reserved or released, so comparing against
+        // one would prove nothing about release actually happening --
+        // exactly the shape that made this test vacuous before this
+        // fix (mutation-caught: deleting the release-on-hidden-landing
+        // line left this assertion passing anyway).
+        let (db, _dir) = harness().await;
+        let (events_tx, _events_rx) = broadcast::channel(16);
+        let mut registry = DisplayRegistry::new();
+        registry.register(Box::new(
+            FakeBackend::new("herdr", DisplayBackend::Herdr, true).failing("herdr exploded"),
+        ));
+        let tmux = FakeBackend::new("tmux", DisplayBackend::Tmux, true).failing("tmux exploded");
+        let tmux_result = tmux.create_result_handle();
+        registry.register(Box::new(tmux));
+        registry.register(Box::new(super::super::HiddenDisplay::new(
+            DisplayConfig::default(),
+        )));
+        let coordinator = coordinator(registry, Arc::clone(&db), events_tx).with_max_live_panes(1);
+
+        let first = coordinator.attach(attach_request(None)).await;
+        assert_eq!(
+            first.backend,
+            DisplayBackend::Hidden,
+            "both real candidates fail, so the first attach lands on hidden"
+        );
+
+        // Let tmux succeed now, on the SAME coordinator/cap: if the first
+        // attach's reservation was released, this attach (a different
+        // run) still has room for a real pane.
+        *tmux_result.lock() = Some(Ok(PaneHandle {
+            backend: DisplayBackend::Tmux,
+            pane_ref: "%9".to_string(),
+            placement: DisplayPlacement::SplitRight,
+        }));
+        let second = coordinator.attach(attach_request(None)).await;
+        assert_eq!(
+            second.backend,
+            DisplayBackend::Tmux,
+            "the cap must have room for a real pane -- the all-failed first attach must not \
+             have left its reservation held"
+        );
 
         db.shutdown().await.expect("shutdown database");
     }
@@ -1156,26 +1489,39 @@ mod tests {
     /// reservation behind for a pane that does not exist.
     #[tokio::test]
     async fn a_failed_pane_creation_does_not_hold_a_slot() {
+        // Deliberately the SAME coordinator (and so the same cap state)
+        // for both attaches -- a second, independently-constructed
+        // coordinator has its own fresh `live_panes` set regardless of
+        // what the first one reserved or released, so comparing against
+        // one proves nothing about release actually happening. Found via
+        // CREW-74 mutation testing (a sibling test had the identical
+        // shape); fixed here rather than left standing next to it.
         let (db, _dir) = harness().await;
         let (events_tx, _events_rx) = broadcast::channel(64);
         let mut registry = DisplayRegistry::new();
-        registry.register(Box::new(
-            FakeBackend::new("tmux", DisplayBackend::Tmux, true).failing("tmux exploded"),
-        ));
+        let tmux = FakeBackend::new("tmux", DisplayBackend::Tmux, true).failing("tmux exploded");
+        let tmux_result = tmux.create_result_handle();
+        registry.register(Box::new(tmux));
         registry.register(Box::new(super::super::HiddenDisplay::new(
             DisplayConfig::default(),
         )));
-        let failing = coordinator(registry, Arc::clone(&db), events_tx).with_max_live_panes(1);
+        let coordinator = coordinator(registry, Arc::clone(&db), events_tx).with_max_live_panes(1);
 
-        let failed = failing.attach(attach_request(None)).await;
+        let failed = coordinator.attach(attach_request(None)).await;
         assert_eq!(failed.backend, DisplayBackend::Hidden);
 
-        // The cap of 1 must still be entirely free.
-        let (tx2, _rx2) = broadcast::channel(64);
-        let second = coordinator(working_registry(), Arc::clone(&db), tx2).with_max_live_panes(1);
+        // The cap of 1 must still be entirely free on this SAME
+        // coordinator: let tmux succeed now, and a different run gets a
+        // real pane.
+        *tmux_result.lock() = Some(Ok(PaneHandle {
+            backend: DisplayBackend::Tmux,
+            pane_ref: "%4".to_string(),
+            placement: DisplayPlacement::SplitRight,
+        }));
         assert_eq!(
-            second.attach(attach_request(None)).await.backend,
-            DisplayBackend::Tmux
+            coordinator.attach(attach_request(None)).await.backend,
+            DisplayBackend::Tmux,
+            "the failed attach's reservation must not still be held"
         );
 
         db.shutdown().await.expect("shutdown database");
