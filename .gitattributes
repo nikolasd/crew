@@ -1,0 +1,6 @@
+# Vendor TUI screen captures are byte-exact PTY recordings, not text. They
+# carry carriage returns the vendor emitted for cursor positioning, and the
+# tests that read them assert on the exact byte stream. Without this, git's
+# eol normalisation rewrites those CRs on checkout and the fixtures quietly
+# stop being what was captured.
+fixtures/adapters/tui-screens/*.raw -text
