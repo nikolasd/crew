@@ -283,6 +283,16 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
             state_dir: subprocess_state_dir(opts),
             close_on_exit: crew_config.display.close_on_exit,
             forced_backend: crate::config::protocol_display_backend(crew_config.display.backend),
+            // The ONE place this environment variable is ever
+            // read. `.cargo/config.toml` sets it for every process cargo
+            // launches (a test binary and anything it spawns, including
+            // `Command::new(CARGO_BIN_EXE_crewd)`), so every integration
+            // test gets real backends forced to `Hidden` with no test
+            // change required; a `crewd` binary launched by the extension
+            // or run by hand inherits nothing and is unaffected. See
+            // `TuiSupport::force_hidden_displays`'s own doc comment for
+            // why this is a plain bool from here on, never read again.
+            force_hidden_displays: std::env::var_os("CREW_FORCE_HIDDEN_DISPLAYS").is_some(),
             adapters: crew_config.adapters.clone(),
             timings: crate::adapter::tui::TuiTimings::default(),
             org_security_patterns: org_security_patterns.clone(),

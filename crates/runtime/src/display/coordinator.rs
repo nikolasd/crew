@@ -142,6 +142,13 @@ pub struct PaneCoordinator {
     // `security.patterns`) every other journal-text crossing uses, never
     // a built-ins-only instance.
     redactor: crate::security::redaction::Redactor,
+    /// Forces every `attach` on this coordinator to `Hidden`,
+    /// regardless of `PaneAttachRequest.forced_backend`, when set by
+    /// [`Self::with_force_hidden_displays`]. Default `false` (today's
+    /// behavior). Never read from the environment here -- see that
+    /// method's own doc comment for why the read happens exactly once,
+    /// at the single production construction site.
+    force_hidden_displays: bool,
 }
 
 impl PaneCoordinator {
@@ -168,6 +175,7 @@ impl PaneCoordinator {
             live_panes: Arc::new(Mutex::new(HashSet::new())),
             max_live_panes: DEFAULT_MAX_LIVE_PANES,
             redactor,
+            force_hidden_displays: false,
         }
     }
 
@@ -176,6 +184,27 @@ impl PaneCoordinator {
     #[must_use]
     pub fn with_max_live_panes(mut self, max: usize) -> Self {
         self.max_live_panes = max;
+        self
+    }
+
+    /// Forces every subsequent `attach` to `Hidden`, regardless
+    /// of what `PaneAttachRequest.forced_backend` asks for.
+    ///
+    /// **The env var is read exactly once, by `lifecycle.rs`'s real
+    /// `serve()` at daemon startup, and passed in here as a plain
+    /// `bool`** -- never read inside this struct or inside `attach`
+    /// itself. That is deliberate, not an arbitrary style choice: reading
+    /// `std::env::var` from code a unit test calls directly would make
+    /// that test's outcome depend on whatever the *test process's*
+    /// environment happens to hold, which is shared and mutable across
+    /// every test in the binary (`cargo test` runs them concurrently by
+    /// default) -- a classic hidden-shared-state hazard. Taking a `bool`
+    /// here instead makes both states directly constructible in a unit
+    /// test with no environment mutation at all (see
+    /// `attach_forces_hidden_when_visible_displays_are_disabled` below).
+    #[must_use]
+    pub fn with_force_hidden_displays(mut self, force: bool) -> Self {
+        self.force_hidden_displays = force;
         self
     }
 
@@ -221,6 +250,24 @@ impl PaneCoordinator {
     /// `Workspace`/`Window` outright) would reproduce the exact backend/
     /// placement mismatch ADR-0029 exists to prevent.
     pub async fn attach(&self, req: PaneAttachRequest) -> PaneAttachOutcome {
+        // A daemon built with visible displays disabled never
+        // even tries a real backend -- checked before anything else in
+        // this method, using `req.forced_backend` (still the TRUE
+        // config/caller value; nothing upstream of this coordinator
+        // rewrites it) to report what was actually being asked for.
+        // Config that already says `Hidden` is not a downgrade -- there
+        // is nothing being overridden, so nothing is journaled.
+        if self.force_hidden_displays {
+            let would_have_tried = ordered_candidates(req.forced_backend)
+                .into_iter()
+                .next()
+                .unwrap_or(DisplayBackend::Hidden);
+            if would_have_tried != DisplayBackend::Hidden {
+                self.journal_visible_displays_disabled(req.run_id, would_have_tried, req.placement)
+                    .await;
+            }
+            return self.attach_hidden(req.run_id, req.placement).await;
+        }
         let mut candidates = ordered_candidates(req.forced_backend);
         let mut attempted: Vec<DisplayBackend> = Vec::new();
         let mut requested_backend: Option<DisplayBackend> = None;
@@ -652,6 +699,58 @@ impl PaneCoordinator {
                 crew_protocol::Redacted::from_sanitized(String::new())
             }
         };
+        self.commit_pane_downgraded(
+            run_id,
+            requested_backend,
+            requested_placement,
+            actual_backend,
+            attempted,
+            reason,
+        )
+        .await;
+    }
+
+    /// A policy decision this daemon made itself (visible
+    /// displays disabled), never subprocess stderr -- `reason` is
+    /// authored here, verbatim, with no caller- or vendor-supplied
+    /// content interpolated, so it goes straight to
+    /// `Redacted::assert_runtime_authored` rather than through
+    /// [`Self::journal_pane_downgraded`]'s sanitize-fragment path, which
+    /// exists for text this runtime did not write itself.
+    async fn journal_visible_displays_disabled(
+        &self,
+        run_id: RunId,
+        would_have_tried: DisplayBackend,
+        placement: DisplayPlacement,
+    ) {
+        let reason = crew_protocol::Redacted::assert_runtime_authored(format!(
+            "visible displays disabled by CREW_FORCE_HIDDEN_DISPLAYS; would have tried {would_have_tried:?}"
+        ));
+        self.commit_pane_downgraded(
+            run_id,
+            would_have_tried,
+            placement,
+            DisplayBackend::Hidden,
+            Vec::new(),
+            reason,
+        )
+        .await;
+    }
+
+    /// The shared append-and-broadcast tail for a `PaneDowngraded` event,
+    /// once its `reason` has already crossed the redaction boundary by
+    /// whichever route its caller's content requires (subprocess stderr
+    /// via [`Self::journal_pane_downgraded`]'s sanitizer, or a fixed
+    /// runtime-authored sentence via [`Self::journal_visible_displays_disabled`]).
+    async fn commit_pane_downgraded(
+        &self,
+        run_id: RunId,
+        requested_backend: DisplayBackend,
+        requested_placement: DisplayPlacement,
+        actual_backend: DisplayBackend,
+        attempted: Vec<DisplayBackend>,
+        reason: crew_protocol::Redacted,
+    ) {
         let project_id = self.project_id;
         let committed = self
             .db
@@ -987,6 +1086,99 @@ mod tests {
 
         assert_eq!(outcome.backend, DisplayBackend::Tmux);
         assert_eq!(outcome.pane_ref, "%7");
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// Protects the mechanism `with_force_hidden_displays` implements,
+    /// not any particular caller. A real, available, WOULD-succeed
+    /// herdr backend is
+    /// registered specifically so this test can prove `create_pane` was
+    /// never even called on it -- not just that the outcome happened to
+    /// be `Hidden` (which a coincidentally-failing candidate could also
+    /// produce). This is the "one unit test on the threading itself"
+    /// staff asked for: if a future `attach()` refactor drops this
+    /// check, this is what goes red, rather than every caller quietly
+    /// resuming real pane creation with nothing failing.
+    #[tokio::test]
+    async fn attach_forces_hidden_when_visible_displays_are_disabled() {
+        let (db, _dir) = harness().await;
+        let (events_tx, mut events_rx) = broadcast::channel(16);
+        let mut registry = DisplayRegistry::new();
+        let herdr = FakeBackend::new("herdr", DisplayBackend::Herdr, true).succeeding("w1:p2");
+        let herdr_requests = herdr.create_requests_handle();
+        registry.register(Box::new(herdr));
+        registry.register(Box::new(super::super::HiddenDisplay::new(
+            DisplayConfig::default(),
+        )));
+        let coordinator =
+            coordinator(registry, Arc::clone(&db), events_tx).with_force_hidden_displays(true);
+
+        // Auto (`None`) would normally try herdr first; an explicit
+        // request for herdr must be overridden just as hard.
+        for forced in [None, Some(DisplayBackend::Herdr)] {
+            let outcome = coordinator.attach(attach_request(forced)).await;
+            assert_eq!(outcome.backend, DisplayBackend::Hidden);
+            assert!(
+                herdr_requests.lock().is_empty(),
+                "a disabled display must never even be asked to create a pane"
+            );
+        }
+
+        // The first attach (forced=None, i.e. Auto) must have journaled a
+        // typed PaneDowngraded naming herdr as what it would have tried --
+        // never silent, per invariant 5.
+        let mut saw_downgrade = false;
+        while let Ok(envelope) = events_rx.try_recv() {
+            if let crew_protocol::RuntimeEvent::PaneDowngraded {
+                requested_backend,
+                actual_backend,
+                reason,
+                ..
+            } = &envelope.event
+            {
+                saw_downgrade = true;
+                assert_eq!(*requested_backend, DisplayBackend::Herdr);
+                assert_eq!(*actual_backend, DisplayBackend::Hidden);
+                assert!(
+                    reason.as_str().contains("CREW_FORCE_HIDDEN_DISPLAYS"),
+                    "reason must name the actual cause, not just say something failed: {}",
+                    reason.as_str()
+                );
+            }
+        }
+        assert!(
+            saw_downgrade,
+            "expected a PaneDowngraded event to be broadcast"
+        );
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// A daemon whose config already says `Hidden` is not being
+    /// overridden by anything -- no downgrade to report.
+    #[tokio::test]
+    async fn attach_with_hidden_already_configured_journals_no_downgrade_when_forced() {
+        let (db, _dir) = harness().await;
+        let (events_tx, mut events_rx) = broadcast::channel(16);
+        let registry = DisplayRegistry::new();
+        let coordinator =
+            coordinator(registry, Arc::clone(&db), events_tx).with_force_hidden_displays(true);
+
+        let outcome = coordinator
+            .attach(attach_request(Some(DisplayBackend::Hidden)))
+            .await;
+        assert_eq!(outcome.backend, DisplayBackend::Hidden);
+
+        while let Ok(envelope) = events_rx.try_recv() {
+            assert!(
+                !matches!(
+                    envelope.event,
+                    crew_protocol::RuntimeEvent::PaneDowngraded { .. }
+                ),
+                "config already asked for Hidden -- nothing was overridden, nothing to report"
+            );
+        }
+
         db.shutdown().await.expect("shutdown database");
     }
 
