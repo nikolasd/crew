@@ -85,7 +85,7 @@ pub trait AdapterAuthorization: Send + Sync {
     /// never silently stripped (that would be a fabricated disproof, R52)
     /// and never silently granted (that would let an unattempted scenario
     /// pass as proof). `effective_capabilities` already carries `Skipped`
-    /// scenarios as undowngraded (R68) precisely so this function can tell
+    /// scenarios as undowngraded precisely so this function can tell
     /// "proved" apart from "merely never disproved" -- collapsing that
     /// distinction back into a bare grant/deny here would silently reopen
     /// the skip-grants-declared hazard the R68/R52 invariants exist to
@@ -729,7 +729,7 @@ impl RunDriver for AdapterRegistry {
         Box::pin(async move {
             // An absent adapter is not a kill failure: the run settled or
             // never started one. Report the typed clean outcome so callers
-            // never mistake it for a failed kill (R13).
+            // never mistake it for a failed kill.
             let Some(adapter) = running.lock().get(&run_id).cloned() else {
                 return Ok(crate::service::CancelOutcome::NoRunningAdapter);
             };
@@ -1046,7 +1046,7 @@ async fn gate_profile(
         // `false` and this function proceeds -- a kill-switch daemon is
         // never denied here. The fixture suite run below then reports
         // every scenario it cannot attempt under the switch as `Skipped`
-        // too, and a skip strips no capability (R68/R52, see
+        // too, and a skip strips no capability (see
         // `conformance::vendor_cli_required_scenario`'s doc comment), so
         // `effective_capabilities` comes back equal to the adapter's full
         // *declared* set. This is by design, not a gap: `authorize()`
@@ -2188,7 +2188,7 @@ mod settlement_tests {
         );
         authorization
             .authorize(&profile, &capabilities, None)
-            .expect("the settled slot must be free again (R67)");
+            .expect("the settled slot must be free again");
         db.shutdown().await.expect("shutdown database");
     }
 }

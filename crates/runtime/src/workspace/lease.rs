@@ -282,7 +282,7 @@ impl LeaseService {
 
         // "No rows" is a real, expected outcome (`None`); every other
         // rusqlite error (locked/corrupted DB, schema mismatch) must
-        // surface instead of masquerading as "no lease" (R62).
+        // surface instead of masquerading as "no lease".
         use rusqlite::OptionalExtension;
         let result: Option<(String, String, String, String, String, String)> = conn
             .query_row(
@@ -395,7 +395,7 @@ impl LeaseService {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
         ).map_err(|e| match e {
             // An unknown lease id is the typed NotFound, never a generic
-            // Db error -- callers classify NotFound as a caller error (R84).
+            // Db error -- callers classify NotFound as a caller error.
             rusqlite::Error::QueryReturnedNoRows => LeaseError::NotFound {
                 lease_id: lease_id.clone(),
             },

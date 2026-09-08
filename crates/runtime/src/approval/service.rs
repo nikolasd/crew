@@ -146,7 +146,7 @@ impl ApprovalService {
     /// `owner_client_instance_id` at any time via
     /// [`crate::domain::DomainRepository::reconcile_ownership`], including
     /// in the window between this call and the guarded write -- so it is
-    /// **not** pre-checked here (R71). It is arbitrated exclusively inside
+    /// **not** pre-checked here. It is arbitrated exclusively inside
     /// [`DomainRepository::decide_approval`]'s guarded transaction, along
     /// with whether a different decision is already on record (a losing
     /// call is refused with [`ApprovalError::Conflict`]), whether this is
@@ -154,7 +154,7 @@ impl ApprovalService {
     /// re-applies nothing), and whether the run has already settled
     /// ([`ApprovalError::RunSettled`]). The database actor interleaves
     /// whole `run_domain_op` round trips, so none of these can be
-    /// caller-side pre-checks (R70, R71): the guarded write is the sole
+    /// caller-side pre-checks: the guarded write is the sole
     /// arbiter, exactly one `ApprovalDecided` event is journaled per
     /// approval, and only the deciding call fires side effects.
     ///

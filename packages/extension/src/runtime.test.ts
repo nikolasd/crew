@@ -265,7 +265,7 @@ test("a non-executable OMP_CREW_BINARY override fails before spawn", async () =>
   ).rejects.toMatchObject({ code: "not-executable" });
 });
 
-test("an async spawn failure is logged by the error listener and surfaces as an unreachable runtime, not a crash (R18)", async () => {
+test("an async spawn failure is logged by the error listener and surfaces as an unreachable runtime, not a crash", async () => {
   const stateDir = newStateDir();
   const repository = newRepo();
   // Passes every selectBinary check (absolute, regular, executable) but

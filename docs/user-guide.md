@@ -359,7 +359,7 @@ from one instance to another is `reconcile/omp`, which arbitrates the rebind by 
 
 The same connection-bound identity check -- never a caller-presented value -- also gates six
 run-lifecycle methods once a task has an owner: `run/submit`, `run/retry`, `run/cancel`,
-`message/send`, `workspace/acquire`, and `child/decide` (R77). Each is refused `-32602` if the
+`message/send`, `workspace/acquire`, and `child/decide`. Each is refused `-32602` if the
 connected instance does not own the run's task; `run/retry` and `message/send` derive the task to
 check from the *target run's own stored row* (the prior run's `taskId`, or the message's `runId`'s
 owning task), never from a client-supplied field, so a caller cannot launder ownership by asserting
@@ -373,11 +373,11 @@ R81 extended the same connection-bound-identity gate to the workspace-lease surf
 `workspace/get`, `workspace/release`, `workspace/inspect`, and `workspace/apply` all resolve their
 target purely from a caller-supplied `leaseId`, so each now re-derives the lease's owning task and
 refuses `-32602` unless the connected instance owns it -- before any teardown, materialization, or
-artifact resolution runs. Only `workspace/acquire` (R77) and these four (R81) are lease-scoped this
+artifact resolution runs. Only `workspace/acquire` and these four are lease-scoped this
 way; `run/get`'s `workspacePath` field and `events/replay`'s `LeaseAcquired` payload remain open to
 any same-user client by design, not by oversight -- they're the discovery route a legitimate owner
 uses to find its own lease id in the first place, and gating them would just move the disclosure
-problem rather than remove it (R85).
+problem rather than remove it.
 
 ### `task/get`
 

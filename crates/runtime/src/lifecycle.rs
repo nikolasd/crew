@@ -962,7 +962,7 @@ fn apply_and_render(
         } => {
             // R12/R42/R57 invest in a precise detail (the vendor's error
             // subtype, the raw stop reason); surface it instead of a
-            // constant label (R91).
+            // constant label.
             let label = if *healthy {
                 "protocol healthy"
             } else {
@@ -1210,8 +1210,8 @@ pub enum StopError {
 /// live, sends `SIGTERM`, and waits for the socket to disappear (which the
 /// daemon does only after its journal shutdown completes).
 ///
-/// Deliberately unarbitrated, unlike the in-band `runtime/shutdown` RPC
-/// (R82): this is the operator path -- whoever can signal the process can
+/// Deliberately unarbitrated, unlike the in-band `runtime/shutdown` RPC:
+/// this is the operator path -- whoever can signal the process can
 /// stop it -- while the RPC path refuses when other work is live unless
 /// forced.
 ///
@@ -1257,7 +1257,7 @@ pub async fn stop(opts: &StopOptions) -> Result<StopOutcome, StopError> {
 /// the socket file alone is not one -- an unclean crash (SIGKILL, machine
 /// crash) leaves `runtime.sock` on disk, and only the graceful shutdown
 /// path removes it. Used by `crewd lease release` to refuse out-of-band
-/// writes only when a daemon is genuinely serving (R86 review W1).
+/// writes only when a daemon is genuinely serving.
 #[must_use]
 pub fn runtime_is_live(lock_path: &Path) -> bool {
     read_lock(lock_path).is_some() && !lock_file_is_free(lock_path)

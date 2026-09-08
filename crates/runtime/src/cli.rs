@@ -488,7 +488,7 @@ async fn run_stop(state_dir: Option<PathBuf>, repo: PathBuf) -> ExitCode {
 /// released lease's materialized path (when one exists) so the operator
 /// can remove a leaked worktree the runtime will no longer tear down.
 ///
-/// Guarded (R86 review E1-E3): refused while a runtime serves this
+/// Guarded: refused while a runtime serves this
 /// repository (its socket exists; the daemon's monitors could never see
 /// this out-of-band write); an `active` lease needs `--yes`; the intent
 /// is persisted to the audited `operations` table before the release

@@ -221,7 +221,7 @@ export function renderRowDetails(row: MonitorRow): string {
     lines.push("Children: active -- list and decide with crew_child");
   }
   // An open (undecided) violation on a quarantined run is the one
-  // holding the quarantine (R80): name each so the operator can decide
+  // holding the quarantine: name each so the operator can decide
   // it with crew_violation instead of diffing the event stream.
   const openViolations = Object.entries(row.openViolations);
   if (openViolations.length > 0) {

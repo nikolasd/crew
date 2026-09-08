@@ -204,7 +204,7 @@ impl DomainAdapterEventSink {
     /// validates `policy.org_security_patterns` and refuses to serve --
     /// but a future path (config reload, an alternate constructor) that
     /// feeds unvalidated patterns must get an error, not a silently
-    /// weaker built-in-rules-only redactor (R14).
+    /// weaker built-in-rules-only redactor.
     ///
     /// # Errors
     /// Returns the pattern-compilation error verbatim.

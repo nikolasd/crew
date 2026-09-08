@@ -257,7 +257,7 @@ const NOT_WIRE_MESSAGE_ROOTS: &[&str] = &[
 /// below, alongside all of their transitive dependencies. This list — not
 /// `#[ts(export)]` — decides what is generated: a type carrying the derive
 /// but absent from this list (and unreferenced by anything in it) emits
-/// nothing (R60's root cause). Idempotent and order independent: `ts-rs`
+/// nothing. Idempotent and order independent: `ts-rs`
 /// merges declarations into their target files sorted by type name
 /// regardless of call order.
 ///
@@ -673,7 +673,7 @@ fn check_version_coherence(root: &Path) -> Result<()> {
     // The OMP marketplace catalog is what users actually install from; a
     // stale version here ships silently because nothing else reads it.
     // Both `metadata.version` and the `crew` plugin entry's `version`
-    // must equal the extension version (R64).
+    // must equal the extension version.
     let marketplace_path = root.join(".claude-plugin/marketplace.json");
     let raw = fs::read_to_string(&marketplace_path)
         .with_context(|| format!("reading {}", marketplace_path.display()))?;

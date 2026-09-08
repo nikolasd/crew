@@ -207,7 +207,7 @@ impl ScopeTokenStore {
             .tokens
             .lock()
             .expect("scope token mutex is never poisoned");
-        // Sweep here too (R96): `verify` sweeps, but a workload that
+        // Sweep here too: `verify` sweeps, but a workload that
         // binds tokens for runs whose MCP client never calls verify
         // would still grow monotonically.
         tokens.retain(|_, record| now <= record.expires_at);
@@ -255,7 +255,7 @@ impl ScopeTokenStore {
                 .expect("scope token mutex is never poisoned");
             // Sweep every expired record while we hold the lock: a run
             // whose adapter died before its settlement hook would
-            // otherwise leak its record for the process lifetime (R96) --
+            // otherwise leak its record for the process lifetime --
             // `revoke_for_run` only fires from settlement paths. Mirrors
             // `RateLimiter::check`'s sweep; self-limiting the same way.
             tokens.retain(|_, record| now <= record.expires_at);
@@ -410,7 +410,7 @@ mod tests {
     /// R96: a run whose adapter died before its settlement hook never
     /// gets `revoke_for_run`, so its expired record would leak for the
     /// process lifetime. Any later `verify` -- for any token -- must
-    /// sweep drained records, mirroring `RateLimiter::check` (R65).
+    /// sweep drained records, mirroring `RateLimiter::check`.
     #[test]
     fn an_expired_record_is_swept_by_any_later_verify() {
         let store = store_with(vec![]);

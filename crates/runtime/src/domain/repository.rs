@@ -38,7 +38,7 @@ pub enum DomainError {
     /// transaction as the write it protects -- not as a caller-side
     /// pre-check -- so a `reconcile/omp` ownership rebind landing between a
     /// caller's snapshot read and the write cannot let a stale owner's
-    /// decision through (R71).
+    /// decision through.
     #[error("task {task_id} is not owned by {instance_id}")]
     NotOwner {
         task_id: String,
@@ -49,7 +49,7 @@ pub enum DomainError {
     /// stale intent. Checked inside [`DomainRepository::upsert_task`]'s own
     /// guarded write, not a caller-side pre-check read from a separate
     /// `run_domain_op` round trip the database actor could interleave with
-    /// another write to the same task (R74, applying R70-R72's doctrine to
+    /// another write to the same task (applying the same ownership doctrine to
     /// task writes).
     #[error("task {task_id} revision {presented} is lower than stored revision {stored}")]
     RevisionTooLow {
@@ -61,7 +61,7 @@ pub enum DomainError {
     /// revision does not match the revision currently stored -- the
     /// caller's snapshot of the task is stale. Checked inside
     /// [`DomainRepository::reconcile_ownership`]'s own guarded write, for
-    /// the same reason as [`Self::RevisionTooLow`] (R74).
+    /// the same reason as [`Self::RevisionTooLow`].
     #[error("task {task_id} revision {presented} does not match stored revision {stored}")]
     RevisionMismatch {
         task_id: String,
@@ -87,7 +87,7 @@ pub enum DomainError {
     /// by an undecided policy violation. Checked inside the same guarded
     /// transaction as the write it protects -- not as a caller-side
     /// pre-check round trip the database actor could interleave with a
-    /// quarantine landing on the same run (R78, applying R70-R81's
+    /// quarantine landing on the same run (applying the same
     /// doctrine to the quarantine gates).
     #[error("run {run_id} is quarantined by an undecided policy violation")]
     PolicyQuarantined { run_id: String },
@@ -126,7 +126,7 @@ pub struct Committed {
 /// quarantined or already terminal -- immediately *before* this
 /// violation's commit. That flag is read inside the same atomic
 /// `run_domain_op` closure as the journal write itself, not a separate,
-/// earlier round trip (R75): [`crate::policy::ViolationService::apply_action`]
+/// earlier round trip: [`crate::policy::ViolationService::apply_action`]
 /// uses it in place of a caller-held snapshot to decide whether to
 /// (re)apply the configured [`crate::config::NestedViolationAction`], so a
 /// concurrent `decide("release")` committing between an earlier snapshot
@@ -141,7 +141,7 @@ pub struct PolicyViolationRecordOutcome {
 /// `worker_id` -- for [`crate::policy::ViolationService`] to thread
 /// through to [`DomainRepository::resolve_policy_violation`] and its
 /// follow-up commits. It carries no ownership or resolution state:
-/// whether a decision may commit at all -- including ownership (R72) --
+/// whether a decision may commit at all -- including ownership --
 /// is decided inside [`DomainRepository::resolve_policy_violation`], not
 /// by any field read here.
 #[derive(Debug, Clone)]
@@ -154,7 +154,7 @@ pub struct PolicyViolationSnapshot {
 /// Names one boolean field on [`RunFlags`], so
 /// [`DomainRepository::set_run_flag`] can arbitrate a single flag change
 /// inside its own guarded write instead of taking a whole
-/// caller-computed [`RunFlags`] struct on trust (R73). It is `pub`,
+/// caller-computed [`RunFlags`] struct on trust. It is `pub`,
 /// re-exported from `domain` (a `pub mod` of this crate), and integration
 /// tests construct it directly as `crew_runtime::domain::RunFlag` -- it
 /// is not internal to this crate. What is true is narrower: it is not a
@@ -292,7 +292,7 @@ impl<'c> DomainRepository<'c> {
     }
 
     /// Like [`Self::record_workspace_event`], but refuses inside the same
-    /// append transaction if the run is policy-quarantined (R78). Used for
+    /// append transaction if the run is policy-quarantined. Used for
     /// `workspace/apply`'s `ApplyStarted` append, so the journal can never
     /// record an apply start for a run quarantined at that instant -- the
     /// residue is exactly the append-to-working-tree-mutation gap, which
@@ -522,10 +522,10 @@ impl<'c> DomainRepository<'c> {
     /// Upserts an OMP-owned task. Idempotent for an identical revision.
     /// Both guards live inside the write itself: the `ON CONFLICT` arm
     /// applies only when the presented revision is not lower than the
-    /// stored one (R74) AND the presented owner matches the task's
+    /// stored one AND the presented owner matches the task's
     /// current owner -- an existing task may only be re-upserted by its
     /// current owner; transferring ownership goes through
-    /// `reconcile/omp`, never through `task/upsert` (R76), so a second
+    /// `reconcile/omp`, never through `task/upsert`, so a second
     /// OMP-extension client cannot seize a task it never reconciled by
     /// presenting the stored revision with its own instance id. A refused
     /// write is classified inside the same transaction -- nothing else
@@ -725,7 +725,7 @@ impl<'c> DomainRepository<'c> {
     ///
     /// `principal_instance_id` is the connected `ompExtension` instance to
     /// arbitrate ownership against, re-read from `tasks` inside this same
-    /// guarded write (R77) -- not from a caller-side snapshot a
+    /// guarded write -- not from a caller-side snapshot a
     /// `reconcile/omp` rebind could invalidate between read and write.
     /// `None` for callers with no external principal to check: every
     /// internal, adapter-, and recovery-driven submission (retries staged
@@ -760,7 +760,7 @@ impl<'c> DomainRepository<'c> {
             move |tx| {
                 let now = Timestamp::now();
                 // Ownership is arbitrated here, inside the guarded write,
-                // not by a caller-side snapshot (R70-R77 doctrine): the
+                // not by a caller-side snapshot: the
                 // database actor interleaves whole `run_domain_op`
                 // closures, so only a re-read from inside this same
                 // transaction can observe a `reconcile/omp` rebind that
@@ -826,9 +826,9 @@ impl<'c> DomainRepository<'c> {
     ///
     /// Authorization precedes validity: a non-owning caller sees
     /// [`DomainError::NotOwner`], never `ILLEGAL_TRANSITION`, regardless
-    /// of whether the edge it asked for would otherwise be legal (R77).
+    /// of whether the edge it asked for would otherwise be legal.
     /// This is the opposite precedence from [`Self::upsert_task`]'s
-    /// revision-before-ownership check (R76): there, the only way to
+    /// revision-before-ownership check: there, the only way to
     /// present a stale revision is to already be the task's actual
     /// owner racing itself, so disclosing staleness first tells a
     /// legitimate caller something it is entitled to know. Here the
@@ -843,7 +843,7 @@ impl<'c> DomainRepository<'c> {
     /// [`check_transition`], so a non-owner's illegal-edge attempt still
     /// classifies as `NotOwner`; and again -- the authoritative,
     /// race-safe check -- re-read from `tasks` inside this guarded
-    /// write, immediately before the mutating `UPDATE` (R77). Only the
+    /// write, immediately before the mutating `UPDATE`. Only the
     /// second read runs inside the `run_domain_op` closure the database
     /// actor executes as one indivisible unit, so only it can observe a
     /// concurrent `reconcile/omp` rebind that commits between the first
@@ -886,7 +886,7 @@ impl<'c> DomainRepository<'c> {
                 id: task_id_str.clone(),
             })?;
 
-        // Authorization precedes validity (R77) -- see the doc comment
+        // Authorization precedes validity -- see the doc comment
         // above. This is a plain snapshot read, not inside the
         // closure-granular boundary `run_domain_op` gives the guarded
         // write below; the race-safe re-check that actually protects
@@ -954,7 +954,7 @@ impl<'c> DomainRepository<'c> {
                 // `submit_run`'s doc comment for why a re-read from inside
                 // this same closure, not a caller-side snapshot, is what
                 // makes this safe against a concurrent `reconcile/omp`
-                // rebind (R70-R77 doctrine).
+                // rebind.
                 if let Some(principal_instance_id) = principal_instance_id {
                     let owner: Option<String> = tx
                         .query_row(
@@ -1007,7 +1007,7 @@ impl<'c> DomainRepository<'c> {
     /// [`Self::release_quarantine`] so both flag-mutating entry points
     /// read from the identical query. See [`Self::set_run_flag`]'s doc
     /// comment for why a plain, pre-transaction read is still atomic with
-    /// respect to concurrent writers (R73): [`crate::db::DatabaseHandle`]'s
+    /// respect to concurrent writers: [`crate::db::DatabaseHandle`]'s
     /// single-owner actor thread, not a transaction, is what closes the
     /// gap.
     ///
@@ -1132,7 +1132,7 @@ impl<'c> DomainRepository<'c> {
     /// [`crate::db::DatabaseHandle`]'s actor interleaves whole
     /// `run_domain_op` closures, never a caller's async steps, so that
     /// snapshot-then-write-back shape could silently revert a concurrent
-    /// flag change: a lost update neither side detects (R73). Reading and
+    /// flag change: a lost update neither side detects. Reading and
     /// writing inside this one call removes the gap -- R70-R72's
     /// guarded-write doctrine applied to a flag flip rather than a
     /// decision.
@@ -1182,7 +1182,7 @@ impl<'c> DomainRepository<'c> {
     /// `policy_violations` count) and the write they gate run on
     /// `self.conn`/inside this one call, before [`Self::append_and_apply`]
     /// opens its transaction -- the same closure-granularity boundary
-    /// [`Self::set_run_flag`] uses (R73): [`crate::db::DatabaseHandle`]'s
+    /// [`Self::set_run_flag`] uses: [`crate::db::DatabaseHandle`]'s
     /// single-owner actor thread runs one whole `run_domain_op` closure to
     /// completion before starting the next, so a fresh violation's own
     /// [`Self::record_policy_violation`] commit and this method's
@@ -1241,13 +1241,13 @@ impl<'c> DomainRepository<'c> {
     /// When `enforce_quarantine` is set, the write also refuses (inside
     /// the same guarded transaction, after the owner re-read so a
     /// non-owner cannot probe quarantine state) if the run is
-    /// policy-quarantined (R78). Callers that must deliver even from a
+    /// policy-quarantined. Callers that must deliver even from a
     /// quarantined run (`coordination/send`, `reportBlocked`, `askPolicy`
     /// -- everything routed through the broker's `send_internal`; the
     /// quarantine gate is `publishArtifact`-only by design) pass `false`.
     ///
     /// When `enforce_live` is set, the write refuses (same transaction,
-    /// same ordering rationale) if the run has already settled (R94):
+    /// same ordering rationale) if the run has already settled:
     /// the broker's `require_live_run` is a caller-side pre-check in its
     /// own round trip, so a run settling between that check and this
     /// write would otherwise journal a message against a terminal run.
@@ -1314,7 +1314,7 @@ impl<'c> DomainRepository<'c> {
                 }
                 if enforce_live {
                     // Re-read the run's state inside this same
-                    // transaction (R94): the broker's require_live_run
+                    // transaction: the broker's require_live_run
                     // pre-check reads a snapshot the database actor can
                     // interleave a settling transition behind.
                     let state: String = tx.query_row(
@@ -1336,7 +1336,7 @@ impl<'c> DomainRepository<'c> {
                 if enforce_quarantine {
                     // Read the flag inside this same transaction -- a
                     // caller-side pre-check reads a snapshot the database
-                    // actor can interleave a quarantine behind (R78).
+                    // actor can interleave a quarantine behind.
                     // Deliberately AFTER the owner re-read above, so a
                     // non-owner cannot distinguish a quarantined run from
                     // a healthy one by error code.
@@ -2015,7 +2015,7 @@ impl<'c> DomainRepository<'c> {
     /// This is the **only** authority on whether an approval may be decided.
     /// The database actor interleaves whole `run_domain_op` closures, never
     /// a service's sequence of round trips, so any caller-side pre-check is
-    /// advisory only (R70, R71): ownership, conflict, and the terminal-run
+    /// advisory only: ownership, conflict, and the terminal-run
     /// state are all re-checked from inside this one guarded transaction,
     /// never from a snapshot a caller read earlier. `principal_instance_id`
     /// is checked against `tasks.owner_client_instance_id` first, before the
@@ -2086,7 +2086,7 @@ impl<'c> DomainRepository<'c> {
             // interleaves whole `run_domain_op` closures, so a
             // `reconcile_ownership` rebind can commit between a caller's
             // snapshot read and this write. Only a re-read from inside this
-            // same transaction can observe that rebind (R71).
+            // same transaction can observe that rebind.
             let owner: Option<String> = tx
                 .query_row(
                     "SELECT owner_client_instance_id FROM tasks WHERE task_id = ?1",
@@ -2115,7 +2115,7 @@ impl<'c> DomainRepository<'c> {
                 rusqlite::params![
                     decision,
                     now.as_str(),
-                    // The bare wire token, never the JSON-quoted form (R34).
+                    // The bare wire token, never the JSON-quoted form.
                     decided_by.as_str(),
                     reason,
                     approval_id.to_string(),
@@ -2287,7 +2287,7 @@ impl<'c> DomainRepository<'c> {
         let run_id_str = run_id.to_string();
         // The run row is stable for a run, so reading task_id/worker_id here
         // (outside the guarded transaction) is safe; only the `plans` row's
-        // owner/status guard must live inside the writing transaction (R71).
+        // owner/status guard must live inside the writing transaction.
         let (task_id_str, worker_id_str): (String, String) = self
             .conn
             .query_row(
@@ -2327,7 +2327,7 @@ impl<'c> DomainRepository<'c> {
             Some(run_id),
             move |tx| {
                 // Race-safe owner + status re-read inside the writing
-                // transaction (R71): a `reconcile/omp` rebind cannot land
+                // transaction: a `reconcile/omp` rebind cannot land
                 // between a caller snapshot and this write because the
                 // database actor serializes whole `run_domain_op` closures.
                 let row: Option<(String, String)> = tx
@@ -2443,7 +2443,7 @@ impl<'c> DomainRepository<'c> {
     /// The `already_actioned` read (`self.conn.query_row`, immediately
     /// below) executes *before* [`Self::append_and_apply`] opens its SQL
     /// transaction, not inside it -- the same closure-granularity pattern
-    /// [`Self::set_run_flag`] uses (R73), for the identical reason: this
+    /// [`Self::set_run_flag`] uses, for the identical reason: this
     /// method's event is built from plain parameters, not from the read
     /// result, so nothing forces the read into the transaction, but
     /// nothing needs to. What guards it is not a transaction but
@@ -2456,7 +2456,7 @@ impl<'c> DomainRepository<'c> {
     /// read was a separate, earlier `run_domain_op` round trip
     /// (`ViolationService::load_run_state_and_flags`), one full command
     /// apart from the write that mattered -- exactly the gap a concurrent
-    /// release's quarantine-clear could land in and go unnoticed (R75).
+    /// release's quarantine-clear could land in and go unnoticed.
     ///
     /// `code` is the machine-readable violation code (`nested_worker_denied`
     /// or `cost_ceiling_exceeded`). `vendor_child_id`/`vendor_parent_ref` are
@@ -2552,7 +2552,7 @@ impl<'c> DomainRepository<'c> {
     /// [`crate::policy::ViolationService`] to thread through to
     /// [`DomainRepository::resolve_policy_violation`] and its follow-up
     /// commits. It does not carry ownership, `resolution`, or the run's
-    /// state: gating on those -- including ownership (R72) -- happens
+    /// state: gating on those -- including ownership -- happens
     /// inside [`DomainRepository::resolve_policy_violation`], where it
     /// cannot race the write.
     ///
@@ -2590,7 +2590,7 @@ impl<'c> DomainRepository<'c> {
     /// This is the **only** authority on whether a violation may be
     /// resolved. The database actor interleaves whole `run_domain_op`
     /// closures, never a service's sequence of round trips, so any
-    /// caller-side pre-check is advisory only (R54, R72): ownership,
+    /// caller-side pre-check is advisory only: ownership,
     /// conflict, and the terminal-run state are all re-checked from inside
     /// this one guarded transaction, never from a snapshot a caller read
     /// earlier. `principal_instance_id` is checked against
@@ -2656,7 +2656,7 @@ impl<'c> DomainRepository<'c> {
                 // closures, so a `reconcile_ownership` rebind can commit
                 // between a caller's snapshot read and this write. Only a
                 // re-read from inside this same transaction can observe
-                // that rebind (R72, mirroring R71's `decide_approval`).
+                // that rebind (mirroring `decide_approval`).
                 let owner: Option<String> = tx
                     .query_row(
                         "SELECT owner_client_instance_id FROM tasks WHERE task_id = ?1",
@@ -2736,12 +2736,12 @@ impl<'c> DomainRepository<'c> {
     /// ?`): a reconcile whose presented revision is stale at write time --
     /// e.g. an upsert advanced the task after the caller read its
     /// correlation -- is refused, classified in the same transaction as
-    /// [`DomainError::RevisionMismatch`] (R74). The stored revision is NOT
+    /// [`DomainError::RevisionMismatch`]. The stored revision is NOT
     /// consumed: reclaim stays idempotent (a retried or repeated reconcile
     /// presenting the same revision succeeds, last reconciler wins), and a
     /// usurped owner is still refused at decision time by the in-tx
     /// ownership arbitration in `decide_approval`/`resolve_policy_violation`
-    /// (R71/R72). Emits a `ReconcileOwnershipChanged` event carrying
+    /// Emits a `ReconcileOwnershipChanged` event carrying
     /// old/new owner ids and the (unchanged) stored revision.
     pub fn reconcile_ownership(
         &mut self,
@@ -2860,7 +2860,7 @@ impl<'c> DomainRepository<'c> {
             Some(worker_id),
             Some(parent_run_id),
             move |tx| {
-                // Re-read and re-check inside this guarded write (R94):
+                // Re-read and re-check inside this guarded write:
                 // the plain-connection read above fixes error-code
                 // precedence for the ordinary case, but only this read
                 // can observe a transition the database actor interleaved
@@ -2894,7 +2894,7 @@ impl<'c> DomainRepository<'c> {
     /// either ground appends nothing.
     ///
     /// Authorization precedes validity, the same way and for the same
-    /// reason as [`Self::transition_run`] (R77): a non-owning caller sees
+    /// reason as [`Self::transition_run`]: a non-owning caller sees
     /// [`DomainError::NotOwner`], never `ILLEGAL_TRANSITION`, regardless
     /// of whether the parent run happens to be in a state that could
     /// legally return to `working`. `principal_instance_id` is checked
@@ -2940,7 +2940,7 @@ impl<'c> DomainRepository<'c> {
             id: task_id_str.clone(),
         })?;
 
-        // Authorization precedes validity (R77) -- see the doc comment
+        // Authorization precedes validity -- see the doc comment
         // above. This is a plain snapshot read, not inside the
         // closure-granular boundary `run_domain_op` gives the guarded
         // write below; the race-safe re-check that actually protects

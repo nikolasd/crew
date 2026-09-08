@@ -1,4 +1,4 @@
-//! Integration tests for `crewd lease release` (R86): the operator
+//! Integration tests for `crewd lease release`: the operator
 //! remedy for a lease whose owning session correlation was never
 //! persisted. Such a lease is unreleasable over RPC -- `workspace/release`
 //! is owner-gated and a new session is a different principal -- so the

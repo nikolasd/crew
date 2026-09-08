@@ -38,7 +38,7 @@
 //! above as real and reproducible, not hypothetical.
 //!
 //! Ownership is now arbitrated exclusively inside `decide_approval`'s
-//! guarded transaction (R71), alongside the conflict, idempotent-replay,
+//! guarded transaction, alongside the conflict, idempotent-replay,
 //! and settled-run checks R70 already moved there: the write itself
 //! re-reads `tasks.owner_client_instance_id` and refuses a caller that no
 //! longer owns the task. That makes the `biased` enqueue ordering this
@@ -187,7 +187,7 @@ fn service(
 /// [`DomainRepository::reconcile_ownership`] -- the same repo method
 /// `reconcile/omp` calls (`service/orchestration.rs::reconcile_omp`) --
 /// directly, presenting the task's current stored revision so its guarded
-/// revision match (R74) admits the rebind.
+/// revision match admits the rebind.
 async fn rebind_owner(
     db: &DatabaseHandle,
     project_id: ProjectId,

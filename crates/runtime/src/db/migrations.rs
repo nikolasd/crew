@@ -213,7 +213,7 @@ DROP TABLE policy_violations;
 ALTER TABLE policy_violations_new RENAME TO policy_violations;
 ";
 
-/// Migration 9: persists the approval decision's rationale (R59) and
+/// Migration 9: persists the approval decision's rationale and
 /// repairs rows R34 left behind: `decided_by` was written via
 /// `serde_json::to_string`, storing the JSON-quoted token (`"human"` with
 /// quotes), so equality against the bare token matched nothing. The

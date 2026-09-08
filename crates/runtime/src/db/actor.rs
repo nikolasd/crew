@@ -288,7 +288,7 @@ impl DatabaseHandle {
         // Never short-circuit past the join below: a dropped ack channel
         // means the actor died abnormally (panic), which is precisely when
         // the join must still run -- it reaps the thread and surfaces the
-        // panic instead of leaking the JoinHandle (R66). Mirrors the
+        // panic instead of leaking the JoinHandle. Mirrors the
         // `sent.is_err()` branch, which already falls through.
         let result = if sent.is_ok() {
             match rx.await {

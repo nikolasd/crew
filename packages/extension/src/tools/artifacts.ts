@@ -9,7 +9,7 @@ import type { ArtifactKind } from "@nikolasd/crew-protocol";
 import type { OrchestrationToolContext } from "./shared";
 import { callOrchestration } from "./shared";
 
-// Tied to the generated `ArtifactKind` wire union (R17/R60): `satisfies`
+// Tied to the generated `ArtifactKind` wire union: `satisfies`
 // fails the compile when a Rust variant is removed, and the `_Exhaustive`
 // check fails it when one is added.
 const ARTIFACT_KINDS = ["patch", "commitList", "conflictReport", "workspaceManifest"] as const satisfies readonly ArtifactKind[];

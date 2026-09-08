@@ -134,3 +134,9 @@ failure.
   [ADR-0015](0015-omp-native-facts-as-non-owning-mirror-lost-on-omission.md)
 * Commits alongside the per-mutation broadcast invariant from
   [ADR-0020](0020-per-mutation-event-broadcast-is-not-optional.md)
+* `REVIEW.md` R69 (cited in "Context and Problem Statement") — **cited a register that no longer
+  exists.** `REVIEW.md` was a maintainer-local, gitignored findings register; it is gone, so the
+  number cannot be resolved by anyone. What it indexed is stated in the sentence that cites it: every
+  reader of `run/get`, `run/list`, the monitor and the approval flow saw a value that was wrong for
+  every real run, and only a daemon restart terminalized anything. The citation is left as written —
+  an ADR records what it cited when it was written.

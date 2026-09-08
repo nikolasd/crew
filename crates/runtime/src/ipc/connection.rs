@@ -436,7 +436,7 @@ async fn dispatch(
                 running: true,
                 protocol: negotiated_version,
                 project_id: shared.project_id,
-                // The live adapter count from the run driver (R87) -- never
+                // The live adapter count from the run driver -- never
                 // a placeholder: /crew-status and crewd status report
                 // this, and the idle-shutdown decision consumes the same
                 // source.
@@ -477,7 +477,7 @@ async fn dispatch(
         }
         CrewMethod::RuntimeShutdown => {
             // Role-gated to ompExtension (see `ClientPrincipal::allowed_methods`).
-            // Arbitrated (R82): stopping the daemon stops it for every
+            // Arbitrated: stopping the daemon stops it for every
             // connected instance, so refuse while other work is live unless
             // the caller explicitly forces it. `active_connections` includes
             // this connection, hence `> 1`.

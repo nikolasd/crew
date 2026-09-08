@@ -16,7 +16,7 @@ import { callOrchestration } from "./shared";
 
 // The nine coordination kinds, tied to the generated MessageKind union so
 // either direction of drift breaks `bun run typecheck` instead of burning
-// a model round trip on a runtime refusal (R88).
+// a model round trip on a runtime refusal.
 const MESSAGE_KINDS = ["assign", "steer", "followUp", "question", "answer", "peerMessage", "approvalDecision", "cancel", "shutdown"] as const satisfies readonly MessageKind[];
 type _MessageKindExhaustive = Exclude<MessageKind, (typeof MESSAGE_KINDS)[number]> extends never ? true : never;
 // The assignment is what makes the check bite: when a variant is added in

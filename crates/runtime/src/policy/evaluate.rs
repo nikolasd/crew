@@ -9,12 +9,23 @@
 //! evaluator used to also apply -- model/adapter allowlists, a
 //! required-capability list, per-run/daily cost ceilings, and the
 //! `native_discovery_reviewed` rollout gate -- is retired along with the
-//! YAML org config layer that was its only source (`crew.json`, spec §10,
-//! has no equivalent surface; see `docs/superpowers/specs/2026-08-22-crew-v2-design.md`
-//! §2.2/§12). That layer was never actually wired up end to end (the
-//! extension passed no config-path flags), so this changes nothing about
-//! production behavior. See `docs/future-features.md` for the decision
-//! trigger if org governance returns.
+//! YAML org config layer that was its only source. `CrewConfig`
+//! ([`crate::config::crew::CrewConfig`]) carries no equivalent surface --
+//! its fields are `approval`, `limits`, `display`, `adapters`,
+//! `workspace`, `dashboard`, `retention`, `security`, none of which
+//! expresses an allowlist, a cost ceiling, or a required-capability list.
+//! That layer was never actually wired up end to end (the extension
+//! passed no config-path flags), so this changes nothing about production
+//! behavior. See `docs/future-features.md` for the decision trigger if org
+//! governance returns.
+//!
+//! Reconstructed reference (2026-09-09): the ruling above cited
+//! `docs/superpowers/specs/2026-08-22-crew-v2-design.md` §10 and §2.2/§12
+//! for the "no equivalent surface" claim. That specification was an
+//! ephemeral working document under a gitignored path and no longer
+//! exists, so the citation could not be followed. The claim is restated
+//! above against `CrewConfig` itself, where it is checkable. The
+//! specification's own wording is not recoverable and is not reproduced.
 //!
 //! Nested-worker *safety* does not regress: the per-child
 //! record-intent-until-accepted/denied flow (`coordination`'s child

@@ -58,7 +58,7 @@ pub struct RunDriverContext {
 /// not a kill failure. `Cancelled` means a live adapter acknowledged the
 /// cancel; `NoRunningAdapter` means there was nothing to kill (the run
 /// settled, or never started an adapter) -- a clean outcome, not an error
-/// (R13: stringifying `NoRunningAdapter` into the `Err` channel made it
+/// (stringifying `NoRunningAdapter` into the `Err` channel made it
 /// indistinguishable from a real kill failure).
 ///
 /// `Cancelled` means the vendor was *signalled*, not that teardown has
@@ -112,7 +112,7 @@ pub trait RunDriver: Send + Sync {
 
     /// Cancels a running adapter at the given scope. An absent adapter is
     /// the clean [`CancelOutcome::NoRunningAdapter`], never an `Err`;
-    /// `Err` means a live adapter's kill actually failed (R13).
+    /// `Err` means a live adapter's kill actually failed.
     fn cancel_run(
         &self,
         run_id: RunId,
@@ -121,7 +121,7 @@ pub trait RunDriver: Send + Sync {
 
     /// The number of runs this driver is actively driving right now.
     /// Consumed by `runtime/status`'s `activeRuns` and the idle-shutdown
-    /// decision (R87): a daemon with in-flight adapter work must never
+    /// decision: a daemon with in-flight adapter work must never
     /// self-terminate as idle. Required, not defaulted: a driver that
     /// silently reported `0` would reintroduce R87 into a safety
     /// decision. Deliberately counts live adapters only -- a

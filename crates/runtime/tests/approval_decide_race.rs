@@ -469,7 +469,7 @@ async fn deciding_an_approval_whose_run_has_already_settled_is_refused() {
 
     // Settle the run out from under the approval *before* calling decide --
     // sequentially, with no join! and no dependence on actor-reply timing.
-    // `ApprovalSnapshot` no longer carries `run_state` (R70): the only thing
+    // `ApprovalSnapshot` no longer carries `run_state`: the only thing
     // that can still catch this is the guard's own live read of `runs.state`
     // inside `decide_approval`'s transaction. This proves that read is
     // correct on its own terms, deterministically, rather than relying on a

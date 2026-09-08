@@ -118,8 +118,8 @@ async fn seed_task(
 
 /// Mirrors `OrchestrationService::task_upsert`'s post-R74/R76 shape: one
 /// guarded write round trip via [`DomainRepository::upsert_task`], whose
-/// `ON CONFLICT` arm refuses a lower revision (R74) or a mismatched
-/// owner (R76) inside its own transaction. No caller-side pre-check
+/// `ON CONFLICT` arm refuses a lower revision or a mismatched
+/// owner inside its own transaction. No caller-side pre-check
 /// remains.
 async fn task_upsert_round_trips(
     db: &DatabaseHandle,

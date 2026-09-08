@@ -412,7 +412,7 @@ impl RunDriver for ViolationTriggeringRunDriver {
 
 /// Like [`ViolationTriggeringRunDriver`], but its `cancel_run` outcome is
 /// configurable: `Err` simulates a real kill failure, `Ok(NoRunningAdapter)`
-/// simulates a run whose adapter already exited (R13).
+/// simulates a run whose adapter already exited.
 struct ConfigurableCancelViolationDriver {
     outcome: Result<crew_runtime::service::CancelOutcome, String>,
 }
@@ -2098,7 +2098,7 @@ impl RunDriver for KillFailingRunDriver {
     }
 }
 
-/// RED (R93): since R13, `cancel_run`'s `Err` always means a live vendor
+/// RED: since R13, `cancel_run`'s `Err` always means a live vendor
 /// process a kill actually failed against -- the policy-violation path
 /// raises `flags.degradedControl` on that condition, but `run/cancel`
 /// only warns and reports unqualified success. The kill failure must
@@ -3481,7 +3481,7 @@ async fn reconcile_omp_rebinds_task_ownership_on_matching_revision() {
     assert_eq!(get["result"]["ownerClientInstanceId"], "omp-2");
 }
 
-/// The resume path survives a rebind (R74): a rebind matches the stored
+/// The resume path survives a rebind: a rebind matches the stored
 /// revision but does not consume it, so a later `task/upsert` presenting
 /// the same revision -- how the extension re-registers a task after a
 /// restart -- still succeeds, while a lower revision stays refused by the
@@ -3579,7 +3579,7 @@ async fn reconcile_omp_rejects_mismatched_revision() {
 }
 
 /// R76: `task/upsert`'s guarded write has no ownership predicate -- it
-/// only enforces revision monotonicity (R74), never that the caller's
+/// only enforces revision monotonicity, never that the caller's
 /// `ownerClientInstanceId` matches whoever currently owns the row. A
 /// second OMP-extension client that never reconciled can therefore
 /// present the *stored* revision together with its own instance id and
@@ -3844,7 +3844,7 @@ async fn run_submit_rejects_an_unrecognized_workspace_mode() {
     );
 }
 
-// -------------------------------------------- lease leak on failed run start (R41 / R50)
+// -------------------------------------------- lease leak on failed run start
 
 /// R50: `materialize()` failing after `LeaseService::acquire` succeeded must
 /// release the lease, not leak it. The harness repository has an empty
@@ -4491,7 +4491,7 @@ async fn artifact_isolation_enforces_task_ownership_scoping() {
         "Client A should NOT see Client B's artifact, got: {artifacts_a:?}"
     );
     // Pin the result envelope and each `Artifact` element's exact wire key
-    // set (R55 review W3): the handler serializes the canonical
+    // set: the handler serializes the canonical
     // `ArtifactListResult`, and a serde attribute change would silently
     // change the wire under a green suite.
     let mut list_keys: Vec<&str> = list_a["result"]
@@ -4740,7 +4740,7 @@ async fn run_cancel_against_another_instances_run_is_refused() {
 
     // W3 precedence pin: the owner now genuinely cancels, reaching a
     // terminal state -- the observable contract of the reordering in
-    // `transition_run` (R77) is that a *non-owner's* cancel of that
+    // `transition_run` is that a *non-owner's* cancel of that
     // terminal run still classifies as `NotOwner` (-32602), not
     // `ILLEGAL_TRANSITION` (-32100), because authorization is now
     // checked before `check_transition` runs. Contrast the *owner's*
@@ -5075,7 +5075,7 @@ async fn owner_accepting_a_child_request_journals_the_child_ids_and_returns_the_
         .clone();
     // `seed_pending_child_request` above already journaled one
     // `childEvent` (the request itself, kind `childWorkerRequested`, with
-    // no child ids yet). The accept must journal its OWN kind (R83): a
+    // no child ids yet). The accept must journal its OWN kind: a
     // consumer must never have to infer "accepted" from whether the child
     // ids happen to be populated.
     assert_eq!(
@@ -5178,9 +5178,9 @@ async fn owner_can_perform_every_guarded_run_lifecycle_mutation_on_its_own_task(
     assert_ne!(new_run_id, run_id_str, "retry must create a distinct RunId");
 }
 
-// -------------------------------------------------------- R81: workspace lease authority
+// -------------------------------------------------------- workspace lease authority
 //
-// ReviewR77's N1 finding: `workspace_acquire` (R77, above) is owner-gated,
+// `workspace_acquire` (above) is owner-gated,
 // but its four siblings -- `workspace_get`, `workspace_release`,
 // `workspace_inspect`, `workspace_apply` (`orchestration.rs` ~1403, ~1421,
 // ~1476, ~1533) -- take no `principal` and resolve their target purely
@@ -5197,15 +5197,15 @@ async fn owner_can_perform_every_guarded_run_lifecycle_mutation_on_its_own_task(
 // reproducible from that same already-ungated `events/replay` (see
 // `OrchestrationService::workspace_get`'s doc comment). It is gated
 // anyway, through the same `Self::require_lease_owner` the three
-// mutating siblings below share, and ReviewR81's W4 flagged it as the
-// one lease-scoped gate with no test in either direction: deleting it
+// mutating siblings below share. It was the one lease-scoped gate with
+// no test in either direction: deleting it
 // left the whole suite green. The RED test below pins the gate itself,
 // not a new disclosure; owner-success for all four methods is pinned in
 // `workspace_release_by_the_owning_instance_succeeds` below.
 
 /// RED: `workspace_get` resolves its response purely from a
 /// caller-supplied `leaseId`, with no check that `principal` owns the
-/// run it belongs to (ReviewR81 W4).
+/// run it belongs to.
 #[tokio::test]
 async fn workspace_get_against_another_instances_lease_is_refused() {
     let harness = Harness::start(|c| {
@@ -5242,7 +5242,7 @@ async fn workspace_get_against_another_instances_lease_is_refused() {
     );
     // The refusal message must be byte-identical to the unknown-lease
     // refusal (see the test below), so message text is not an existence
-    // oracle and never leaks the owning task/instance ids (R84 review E1).
+    // oracle and never leaks the owning task/instance ids.
     assert_eq!(
         get["error"]["message"], "leaseId is not a lease on a run you own",
         "{get:?}"
@@ -5274,7 +5274,7 @@ async fn workspace_get_with_an_unknown_lease_id_is_invalid_params_not_internal()
     );
     // Byte-identical to the unowned-lease refusal above: neither the code
     // nor the message distinguishes "exists but not yours" from "does not
-    // exist" (R84 review E1).
+    // exist".
     assert_eq!(
         get["error"]["message"], "leaseId is not a lease on a run you own",
         "{get:?}"
@@ -5332,7 +5332,7 @@ async fn workspace_release_against_another_instances_lease_is_refused() {
     );
 }
 
-/// RED (R89): the request side speaks the closed vocabulary
+/// RED: the request side speaks the closed vocabulary
 /// shared|isolated|copy, but the response side collapses `copy` to
 /// `"isolated"` in both `run/submit`'s echo and `run/get`'s lease
 /// projection. A caller submitting `workspaceMode: "copy"` must read
@@ -5424,7 +5424,7 @@ async fn workspace_release_by_the_owning_instance_succeeds() {
     );
     assert_eq!(get["result"]["leaseId"], lease_id);
     assert_eq!(get["result"]["state"], "active");
-    // Pin the exact wire key set (R55 review W3): the handler serializes the
+    // Pin the exact wire key set: the handler serializes the
     // canonical `WorkspaceInfo`, and a `skip_serializing_if`/rename/added
     // field would silently change the wire and fail the extension's
     // additionalProperties:false validation with CI otherwise green.
@@ -5457,7 +5457,7 @@ async fn workspace_release_by_the_owning_instance_succeeds() {
     );
     assert_eq!(inspect["result"]["commitCount"], 1);
     assert_eq!(inspect["result"]["dirtyFileCount"], 0);
-    // Pin `InspectResult`'s exact wire key set (R55 review W3).
+    // Pin `InspectResult`'s exact wire key set.
     let mut inspect_keys: Vec<&str> = inspect["result"]
         .as_object()
         .unwrap()
@@ -5654,7 +5654,7 @@ async fn workspace_inspect_against_another_instances_lease_is_refused() {
 /// and only then failed resolving the artifact -- a mutation reached the
 /// journal from an unauthorized caller before the request was refused at
 /// all. The gate now refuses first; the quarantine read lives inside the
-/// same domain op (R78).
+/// same domain op.
 #[tokio::test]
 async fn workspace_apply_against_another_instances_lease_is_refused() {
     let harness = Harness::start(|c| {
@@ -5702,7 +5702,7 @@ async fn workspace_apply_against_another_instances_lease_is_refused() {
     );
     assert_eq!(
         apply["error"]["message"], "leaseId is not a lease on a run you own",
-        "the refusal must be the uniform lease refusal (R84 review E1) -- an ownership \
+        "the refusal must be the uniform lease refusal -- an ownership \
          refusal that named the owning task would leak it, and artifact-not-found would \
          prove artifact resolution ran before the gate: {apply:?}"
     );

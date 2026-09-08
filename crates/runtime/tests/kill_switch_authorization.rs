@@ -3,7 +3,7 @@
 //! capabilities a conformance report proves. An unattempted scenario is
 //! reported [`crew_runtime::conformance::ScenarioOutcome::Skipped`] --
 //! neither proof nor disproof -- so `effective_capabilities` equals
-//! `declared_capabilities`. Before the fix (REVIEW.md R68), an unattempted
+//! `declared_capabilities`. Before the fix, an unattempted
 //! scenario was reported `Fail`, which a capability gate read as a
 //! disproof and stripped `steering`/`resume`.
 //!
@@ -85,7 +85,7 @@ async fn the_kill_switch_never_shrinks_effective_capabilities() {
         assert_eq!(
             report.effective_capabilities, report.declared_capabilities,
             "{kind}: a skipped (unattempted) scenario must never downgrade a \
-             capability (R68); declared={:?} effective={:?} skipped={skipped:?}",
+             capability; declared={:?} effective={:?} skipped={skipped:?}",
             report.declared_capabilities, report.effective_capabilities
         );
         if !skipped.is_empty() {

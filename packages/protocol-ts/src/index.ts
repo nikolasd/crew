@@ -2,7 +2,7 @@
 // `cargo run -p crew-xtask -- generate`. `src/generated/` is fully owned
 // by that generator; do not hand-edit anything under it.
 //
-// This list is the complete contents of `src/generated/` (R17): every
+// This list is the complete contents of `src/generated/`: every
 // generated file is re-exported, so a type that exists on the wire is
 // always importable from the barrel. Enforced by `bun run generate --check`
 // (xtask's check_barrel_completeness), which fails CI on any omission.

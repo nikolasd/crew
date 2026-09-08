@@ -192,7 +192,7 @@ jobs:
 
       # `strict: true` was declared from day one but never enforced: no local
       # script and no CI job ran `tsc`, so real compile errors shipped in
-      # tracked source (R37, R61). This gate makes the declaration true.
+      # tracked source. This gate makes the declaration true.
       - name: Type-check the TypeScript workspace
         run: bun run typecheck
 

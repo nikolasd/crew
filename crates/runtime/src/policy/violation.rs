@@ -18,7 +18,7 @@
 //! for the quarantine flag: a run already quarantined or already terminal
 //! still gets a durable `PolicyViolationRecorded` event (so OMP sees every
 //! subsequent unexpected child), but the flag is applied at most once
-//! (R75) -- see [`ViolationService::record_nested_worker`] for why the
+//! -- see [`ViolationService::record_nested_worker`] for why the
 //! cancellation side effects of `Cancel`/`QuarantineAndCancel` do not
 //! share that guarantee.
 //!
@@ -33,10 +33,10 @@
 //! `owner_client_instance_id` (the owning `ompExtension` client). That
 //! ownership check is arbitrated exclusively inside the guarded
 //! transaction in
-//! [`crate::domain::repository::DomainRepository::resolve_policy_violation`]
-//! (R72), the same pattern
+//! [`crate::domain::repository::DomainRepository::resolve_policy_violation`],
+//! the same pattern
 //! [`crate::approval::ApprovalService::decide`] uses in
-//! [`crate::domain::repository::DomainRepository::decide_approval`] (R71):
+//! [`crate::domain::repository::DomainRepository::decide_approval`]:
 //! a `reconcile/omp` ownership rebind landing in the window between a
 //! caller-side snapshot read and the write could otherwise slip past a
 //! pre-check and leave a stale owner's decision unrefused, so neither
@@ -44,13 +44,13 @@
 //! decision may commit at all -- ownership, conflict, idempotent replay,
 //! settled run -- is enforced inside that same guarded write, so two
 //! concurrent `decide` calls cannot both journal a decision or both fire
-//! side effects (R54, R72). Releasing quarantine on an
+//! side effects. Releasing quarantine on an
 //! already-terminal/cancelled run is refused in that same transaction; it
 //! must never be revived.
 //!
 //! `apply_action`'s idempotency check and `decide`'s release-time
 //! un-quarantine are both arbitrated inside guarded writes rather than
-//! caller-held snapshots (R75), the same doctrine applied to ownership
+//! caller-held snapshots, the same doctrine applied to ownership
 //! above: [`crate::domain::repository::DomainRepository::record_policy_violation`]
 //! re-reads `Run.flags.policyQuarantined` and run state immediately
 //! before the same call's journal commit -- not a separate, earlier
@@ -178,7 +178,7 @@ impl ViolationService {
     /// [`DomainRepository::record_policy_violation`]'s own call, re-read
     /// immediately before that same commit rather than a round trip
     /// earlier -- a stale value here could no longer be trusted once a
-    /// concurrent `decide("release")` could commit in the gap (R75).
+    /// concurrent `decide("release")` could commit in the gap.
     ///
     /// The fingerprint is `None` for runs created before migration 6; it is
     /// journaled as an empty string rather than a fabricated value.
@@ -213,7 +213,7 @@ impl ViolationService {
     /// sees every subsequent unexpected child -- but does not re-apply
     /// the flag. That `already_actioned` judgment comes back from
     /// [`DomainRepository::record_policy_violation`] itself, read inside
-    /// the same call as the journal commit (R75), not from a caller-side
+    /// the same call as the journal commit, not from a caller-side
     /// snapshot taken a round trip earlier -- see
     /// [`DomainRepository::release_quarantine`] for why that is enough to
     /// keep the flag exactly-once even against a racing release.
@@ -226,7 +226,7 @@ impl ViolationService {
     /// cancellation intent and attempt [`Self::cancel_and_transition`];
     /// the losing transition simply fails and is only logged. That
     /// residue is pre-existing, outside this fix's mechanism, and tracked
-    /// as its own `REVIEW.md` finding rather than fixed here.
+    /// as CREW-105 rather than fixed here.
     ///
     /// # Errors
     /// Returns [`ViolationError::Domain`] if `run_id` does not exist.
@@ -344,12 +344,12 @@ impl ViolationService {
     /// call -- no caller-held snapshot is read-modified-written across an
     /// `await`, so a concurrent mutation of a *different* flag on the same
     /// run (e.g. `ApprovalService::decide`'s callback-failure path setting
-    /// `protocolUnhealthy`) cannot be silently reverted by this call (R73).
+    /// `protocolUnhealthy`) cannot be silently reverted by this call.
     ///
     /// Always sets the flag `true`: the one call that used to clear it,
     /// `decide`'s release path, now calls
     /// [`ViolationService::release_quarantine`] instead, which can refuse
-    /// to clear the flag (R75) -- a decision this method has no reason to
+    /// to clear the flag -- a decision this method has no reason to
     /// make.
     async fn quarantine(&self, run_id: RunId) -> Result<(), ViolationError> {
         let project_id = self.project_id;
@@ -413,7 +413,7 @@ impl ViolationService {
     /// `cancel(CancelScope::Worker)` if one is running (mirrors
     /// `OrchestrationService::run_cancel`'s subprocess termination).
     ///
-    /// Idempotent against a racing sibling observation (R79): two
+    /// Idempotent against a racing sibling observation: two
     /// concurrent violations with a cancelling action both persist an
     /// audited intent (invariant 4 keeps the intent BEFORE the transition)
     /// and both reach this method; the loser's transition fails with
@@ -461,7 +461,7 @@ impl ViolationService {
         let (outcome_result, ack) = match result {
             Ok(_) => (Ok(()), Some(json!({ "outcome": "cancelled" }))),
             // A sibling observation already terminalized the run: the
-            // idempotent success path (R79). Only intent-backed callers
+            // idempotent success path. Only intent-backed callers
             // get this classification; the operator path stays strict.
             Err(ViolationError::Domain(crate::domain::DomainError::Transition(_)))
                 if operation_id.is_some() =>
@@ -490,7 +490,7 @@ impl ViolationService {
             // `CancelOutcome::NoRunningAdapter`, not an `Err`): the run is
             // journaled `cancelled` but a vendor process may still be
             // live. Make that visible to `run/get` and the monitor via
-            // `degradedControl` instead of only the log (R13). The flag
+            // `degradedControl` instead of only the log. The flag
             // write uses the same guarded single-call `set_run_flag`
             // `quarantine` uses, so it journals and broadcasts.
             tracing::warn!(
@@ -549,8 +549,7 @@ impl ViolationService {
     /// (`crate::service::orchestration::OrchestrationService::policy_violation_decide`)
     /// so an operator who just released a violation can tell, in the same
     /// response, whether the run actually left quarantine or a different,
-    /// still-open violation kept it held (R75 follow-up, `agent://ReviewR75`
-    /// W4) -- without a second `run/get` and without the response's
+    /// still-open violation kept it held -- without a second `run/get` and without the response's
     /// `"decided"` outcome silently meaning either.
     ///
     /// Ownership is not pre-checked here: `reconcile/omp` can rebind a
@@ -558,8 +557,8 @@ impl ViolationService {
     /// [`DomainRepository::reconcile_ownership`], including in the window
     /// between this call and the guarded write, so it is arbitrated
     /// exclusively inside [`DomainRepository::resolve_policy_violation`]'s
-    /// guarded transaction (R72, mirroring
-    /// [`crate::approval::ApprovalService::decide`]'s R71 fix). The rest is
+    /// guarded transaction (mirroring
+    /// [`crate::approval::ApprovalService::decide`]'s fix). The rest is
     /// decided by that same transaction: whether a different resolution is
     /// already on record (a losing call is refused with
     /// [`ViolationError::Conflict`]), whether this is an idempotent replay
@@ -567,14 +566,14 @@ impl ViolationService {
     /// -- for `"release"` -- whether the run has already settled
     /// ([`ViolationError::RunSettled`]). The database actor interleaves
     /// whole `run_domain_op` round trips, so none of these can be
-    /// caller-side pre-checks (R54, R72): the guarded write is the sole
+    /// caller-side pre-checks: the guarded write is the sole
     /// arbiter, exactly one `PolicyViolationDecided` event is journaled per
     /// violation, and only the deciding call fires side effects.
     ///
     /// A `"release"` that wins this arbitration still may not clear
     /// `flags.policyQuarantined`: [`ViolationService::release_quarantine`]
     /// refuses to if a *different* policy violation on the run is still
-    /// unresolved (R75), so `DecideOutcome::Decided` here means the
+    /// unresolved, so `DecideOutcome::Decided` here means the
     /// resolution was recorded, not that the run necessarily left
     /// quarantine -- that is exactly what the returned `Option<bool>`
     /// disambiguates.
@@ -677,7 +676,7 @@ impl ViolationService {
     /// [`DomainRepository::release_quarantine`] -- which refuses to clear
     /// the flag if a *different* policy violation on this run is still
     /// unresolved, so a release targeting one violation can never silently
-    /// un-quarantine a run for another, still-open one (R75). Called only
+    /// un-quarantine a run for another, still-open one. Called only
     /// after [`Self::decide_and_release_status`]'s
     /// [`DomainRepository::resolve_policy_violation`] commit has already
     /// resolved the violation being released, so that row is never the
@@ -688,7 +687,7 @@ impl ViolationService {
     /// open -- unlike the pre-R75 `set_quarantined(run_id, false)` this
     /// replaced, a release is no longer guaranteed to change the flag it
     /// targets, and [`Self::decide_and_release_status`] reports that back
-    /// to its caller instead of discarding it (R75 follow-up).
+    /// to its caller instead of discarding it.
     async fn release_quarantine(&self, run_id: RunId) -> Result<bool, ViolationError> {
         let project_id = self.project_id;
         let mut result = self

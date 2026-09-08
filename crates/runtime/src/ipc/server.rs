@@ -60,7 +60,7 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    /// The number of runs the injected driver is actively driving (R87):
+    /// The number of runs the injected driver is actively driving:
     /// the adapter registry's live-adapter count in production, `0` when
     /// no driver is wired. Consumed by `runtime/status` and the
     /// idle-shutdown decision, so both always agree. Two deliberate
