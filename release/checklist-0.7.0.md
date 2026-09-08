@@ -36,11 +36,10 @@ Also merged, supporting but not wave-2-numbered: #94 (3a77aac, three documentati
 - **CREW-55** (P2, cosmetic): dashboard missing adapter/vendor logos. In progress, reported PR-ready pending one force-push. Not required for 0.7.0 functionally; maintainer has ruled it in scope for this cut if it lands in time.
 - **CREW-64**: inventory of every `Redacted`-typed protocol field's construction site, confirming each is genuinely sanitized or genuinely runtime-authored. Audit complete (one finding, folded into CREW-66 below); the durable write-up of the audit itself is pending as a separate docs PR.
 - **CREW-65** (P2, possibly P1): the CREW-4 bracketed-paste guard fails intermittently on the macOS CI runner. In progress, not a 0.7.0 code change.
-- **CREW-66** (P2, redaction boundary): `PolicyViolationDecided.resolved_by` and `plans.owner_client_instance_id` carry the connecting client's self-declared `instance_id`, asserted runtime-authored but never validated in shape or content at the protocol boundary. In progress, not fixed in this release — a known, tracked gap, not a regression from 0.7.0's changes.
-- **CREW-67** (P2, pending): the CREW-46 schema-hygiene guard resolves a backticked sibling-field reference globally against the whole schema when the actual requirement is local to one variant — root cause of the `vendorParentRef` doc bug fixed in PR #100. Docs/tooling only, not a release blocker.
-- **CREW-68** (P2, pending): `ALLOWED_UNRESOLVED_BACKTICKED_NAMES` (and its siblings, `NOT_WIRE_MESSAGE_ROOTS` from CREW-44 and `NON_REDACTED_STRING_FIELDS` from CREW-61) has no reverse-staleness check and matches by bare name only. Tooling hardening, not a release blocker.
+- **CREW-66** — fixed in #106: `instanceId` is now bounded at the handshake, and the four guard reasons that assumed an unvalidated client identity were corrected.
+- **CREW-67/68** — fixed in #107: backticked property references are now scoped to their own object instead of resolving globally against the whole schema, and `ALLOWED_UNRESOLVED_BACKTICKED_NAMES`/its siblings gained the reverse-staleness check they lacked.
 - **CREW-69** (P2, pending, unassigned): `EscalationRaised.question` ships as an optional field that no code path populates — surfaced by the CREW-64 sweep. Maintainer has ruled escalations must carry the worker's actual question. Not fixed in this release.
-- **CREW-70** (P2, pending): the paste-write bound (`PASTE_CHUNK_WRITE_TIMEOUT`, `pty.rs:270-289`) measures elapsed time rather than write progress, so a starved-but-still-advancing write can fail a `start()` the vendor never actually saw fail. See "Breaking changes and operational notes" below — this is release-relevant even unfixed, because it can surface during the supervised E2E on a loaded host.
+- **CREW-70** — fixed in #109: the paste-write bound now measures write progress (`PASTE_STALL_WINDOW`, 2s with no bytes accepted) rather than elapsed time, with `PASTE_CHUNK_WRITE_TIMEOUT` (now 90s, up from 10s) as the absolute backstop behind it. See "Breaking changes and operational notes" below — a paste failure is still worth a host-load check during the supervised E2E, since that run is the fix's first live exercise.
 
 ### Breaking changes and operational notes
 
@@ -51,7 +50,7 @@ Also merged, supporting but not wave-2-numbered: #94 (3a77aac, three documentati
   - `d2190c4` → **`0c10f62`** (PR #95, CREW-54/56): the squash-merge commit's message carried the `Claude-Session:` trailer twice (GitHub concatenated two source commit messages); the maintainer force-pushed-with-lease a rewrite removing both lines. Verified independently: `git show -s --format=%T d2190c4` and `...0c10f62` both print `f1f880d…` (identical tree); `d2190c4`'s message contains `Claude-Session` twice, `0c10f62`'s contains it zero times; `d2190c4` is no longer an ancestor of `origin/main`, `0c10f62` is.
   - Standing check adopted from here forward, run after every merge: `git show -s --format=%B origin/main | grep -c Claude-Session` → must print `0`.
 - **Model-name resolution (CREW-53, #96)** changes adapter behavior for `crew_profile`/model selection: names now resolve through omp's own catalogue (exact match → known alias → unique provider-scoped substring → ambiguous refuses and lists candidates → unknown passes through with a visible note), not a hardcoded table.
-- **A large-prompt run start can fail loudly on a loaded host (CREW-70, not yet fixed).** The paste-write bound that guards against a genuinely deaf vendor measures elapsed time, not write progress — under host oversubscription (observed ~21% failure rate at ~2× load in testing), a starved-but-still-advancing write can trip the same timeout a truly hung vendor would. The error text already names host load as a possible cause; the underlying fix (a progress-based bound) is still pending. **If a large-prompt start fails during the supervised E2E below, check host load before treating it as a vendor or adapter regression.**
+- **A large-prompt run start failing on a loaded host is now much less likely (CREW-70, fixed in #109).** The paste-write bound previously measured elapsed time, not write progress — under host oversubscription (observed ~21% failure rate at ~2× load in testing), a starved-but-still-advancing write could trip the same timeout a truly hung vendor would. It now measures progress directly (no bytes accepted for 2 seconds is the primary signal; a 90-second absolute backstop, up from 10 seconds, still covers a genuinely hung vendor). The supervised E2E is this fix's first live run. **If a large-prompt start still fails, check host load before treating it as a vendor or adapter regression.**
 
 ## Version
 
@@ -115,7 +114,7 @@ baked into the binary.
       `RuntimeEvent`
 - [ ] **Live end-to-end test (supervised) — NOT YET RUN against this `main`.** The wave-2 fixes
       (CREW-47 through CREW-62) and the CREW-52 breaking change are gated on a supervised live E2E
-      re-run before tagging. The runbook is `handoff/live-e2e-runbook.html` (companion to
+      re-run before tagging. The runbook is `release/live-e2e-runbook-0.7.0.md` (companion to
       `docs/manual-testing.md`), phases **P0 through P10** — P0 is preflight (no model call,
       cross-references `docs/manual-testing.md` §Prerequisites and §Owning what you test); the
       later phases exercise cold start, the dashboard's no-cookie token gate, a real billed run,
