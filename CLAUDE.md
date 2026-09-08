@@ -152,7 +152,9 @@ These are enforced in review, not just style preference:
 ## Conventions worth knowing before editing
 
 - **Rust**: edition 2024, toolchain tracks `stable` (`rust-toolchain.toml`, always the latest stable
-  release — no fixed version, matches CI's `dtolnay/rust-toolchain@stable`). Workspace deps live in
+  release — no fixed version, matches CI's `dtolnay/rust-toolchain@stable`; a local `rustup update`
+  is how a point release actually arrives, so print `rustc --version` in any gate report and see
+  AGENTS.md's "Working in This Repo as an Agent" for update coordination). Workspace deps live in
   root `Cargo.toml`, referenced via `.workspace = true`. `thiserror` for typed errors, `anyhow` at
   the application boundary. `tokio` multi-thread runtime. A single-thread actor owns the one
   `rusqlite::Connection` (`crates/runtime/src/db/actor.rs`) — don't reach for a connection pool.

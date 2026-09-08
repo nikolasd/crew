@@ -172,11 +172,48 @@ crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/aud
 - **Runtime:** Bun 1.3.14+ (pinned via `packageManager` field). NOT Node.js.
 - **Package manager:** Bun workspaces. `bun install` for deps, `bun run <script>` for commands.
 - **Exact install mode:** `bunfig.toml` sets `exact = true` — lockfile is strict.
-- **Rust toolchain:** tracks `stable` via `rust-toolchain.toml` — always the latest stable release, no fixed version. Use `rustup` so this is picked up automatically per-directory.
+- **Rust toolchain:** tracks `stable` via `rust-toolchain.toml` — always the latest stable release, no fixed version. Use `rustup` so this is picked up automatically per-directory. CI picks up a new stable point release the day it ships; a local checkout only picks it up on `rustup update` — coordinate toolchain updates rather than running them ad hoc mid-effort on a machine shared with other automated work, since the update changes what "clean gate" means for everyone building there. Print `rustc --version` alongside test/lint results in any gate report, so a toolchain gap between two runs is visible instead of inferred from a run that was green in one place and red in another. Run one full-workspace `cargo clippy --all-targets --all-features -- -D warnings` after any toolchain update — a point release can start flagging a lint shape it previously missed.
 - **Formatter:** Biome for TS/JS (`bun run format`), `cargo fmt` for Rust. Linting disabled in Biome; use `cargo clippy` for Rust.
 - **Distribution:** Extension + skills install via the OMP marketplace (`.claude-plugin/marketplace.json`, git clone of this repo — public, cloned over HTTPS, no authentication required). The `crewd` binary downloads on demand as a GitHub Release asset via `/crew-install`, verified by SHA-256; a `GITHUB_TOKEN`/`GH_TOKEN` or a local `gh auth login` session is optional but recommended — it raises GitHub's unauthenticated rate limit (60/hour) to 5,000/hour, and is not a permission gate.
 - **Test environment:** Set `CREW_DISABLE_VENDOR_CLI=1` to skip live vendor CLI calls (required in CI to avoid billed model calls).
 - **Cross-platform:** macOS (arm64/x64) and glibc Linux (arm64/x64). Everything else rejected with typed error.
+
+---
+
+## Working in This Repo as an Agent
+
+- **Isolate your work in a worktree.** Do changes in a git worktree under a sibling directory (e.g.
+  `../<repo>-worktrees/<branch>`), never directly in a primary checkout that other work depends on
+  staying clean. Confirm placement before any mutating git command: `pwd && git branch
+  --show-current`. If more than one automated session can be working in this repo at once, create
+  your own worktree and never write into one you didn't create — nothing about a worktree's name
+  marks it as exclusively someone's, so the convention is the only thing that keeps sessions from
+  colliding.
+- **Branch off local `main`, not `origin/main`.** `git worktree add -b <branch> <path> origin/main`
+  sets the new branch's upstream tracking to `main` itself, which can make branch-management
+  tooling refuse to push or sync on the mismatch. Branch off the local ref.
+- **Don't stack branches.** This repository squash-merges every PR into one new commit with no
+  ancestry match to the branch it came from, so a branch stacked on an unmerged parent loses the
+  ability to detect that the parent shipped — tooling that infers "merged" from commit ancestry
+  can't see it, and the child keeps trying to sync against a branch that no longer exists on the
+  far side. Branch every PR off `main`. Stack only when a change genuinely cannot compile without
+  an unmerged dependency, and expect a rebuild once the parent lands.
+- **Push a branch once, when it's actually ready** — rebased onto current `main`, tests and lint
+  green, commit history the way you want it to land — then open the PR in the same motion. An
+  early "just in case" push isn't safety; it's a future forced push. **Once a branch is pushed,
+  don't rebase it.** If `main` moves under an open PR, merge `main` into the branch instead — the
+  squash merge on landing flattens either shape the same way.
+- **No AI-attribution of any kind in commits or PR descriptions** — no trailers, no agent or
+  session identifiers, technical content only. A real build automation's own `Co-authored-by:` on
+  a commit it generated is not a precedent for adding anything else.
+- **Scratch work goes to a scratch location, not the home directory.** Logs, temporary state
+  directories, and one-off scripts created for manual reproduction belong in a scratchpad or
+  somewhere clearly named for cleanup (e.g. `/tmp/crew-<ticket>-<purpose>`) — not loose in a home
+  directory, and not inside a worktree that isn't the one you made for this change.
+- **PR authorship is not a reliable way to find "your own" open PRs** when more than one automated
+  session can push under the same account — `gh pr list --author` returns every PR pushed under
+  that identity. The head branch name is the discriminator: `gh pr list --state open --json
+  number,headRefName`.
 
 ---
 
