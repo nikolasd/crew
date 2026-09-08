@@ -1,38 +1,28 @@
 # Crew live E2E runbook — v0.7.0
 
-Supervised live test of crew at `main @ a39e15a` or later (both wave-2 fix waves complete) — the
-gate before the v0.7.0 cut. This is the third full attempt. The first attempt failed end to end and
-produced fix wave 1; the second got a real answer out of a real worker, but the run never surfaced
-`waitingUser` — that produced fix wave 2, whose settlement fixes are now merged. Every phase below
-either re-runs what failed on an earlier attempt, or exercises what a wave changed.
+Supervised live test of crew, gating the v0.7.0 cut — the exact commit under test is recorded in
+[`release/checklist-0.7.0.md`](checklist-0.7.0.md), which is also what gets ticked off during this
+run. Every phase below either verifies a specific class of regression an earlier run surfaced, or
+exercises what has changed since.
 
 **The gate is open and no P1 remains.** CREW-52 made panes work under tmux and herdr for the first
 time and added state root + socket to `/crew health`; CREW-61 closed the redaction class with a
-compile-time guard and fixed four live leaks on the way. Open tickets at the time this was last
-revised: CREW-66 through CREW-69 (redaction-boundary and escalation follow-ups, none blocking).
-None blocks the test.
+compile-time guard and fixed four live leaks on the way. The one open ticket at the time this was
+last revised is CREW-69 (escalations carrying the worker's question, deferred to post-E2E by
+ruling); it does not block the test.
 
-The v0.7.0 release checklist is [`release/checklist-0.7.0.md`](checklist-0.7.0.md) — that is what
-gets ticked off during this run. Results from the run go under
-[`release/live-conformance/`](live-conformance/) once it completes.
+Results from the run go under [`release/live-conformance/`](live-conformance/) once it completes.
 
 P0 through P2 (the no-model-call phases) have already been dry-run against a recent `main` with no
-model calls: zero product defects found; two runbook cells were corrected from that pass (already
-folded into the text below); the interactive widget and health rows could not be exercised without
-a real terminal session and remain unverified claims, not passes — see them called out individually
-below.
+model calls: zero product defects found; the interactive widget and health rows could not be
+exercised without a real terminal session and remain unverified claims, not passes — see them
+called out individually below.
 
 Canonical procedures: `docs/manual-testing.md` (§ references on each phase). Debugging playbook:
 `docs/code-walkthrough.md` §4.
 
-## Roles
-
-| Role | Responsibility |
-|---|---|
-| Maintainer | Drives the session; makes all merge/release decisions |
-| Coordinator | Coordinates the run, captures evidence, keeps this document and the tracking board current |
-| Engineer (standby) | Rapid-fix standby, worktree ready |
-| Reviewer (standby) | Diagnosis standby |
+Whoever drives the session makes every merge and release decision; keep a second person ready for
+diagnosis and a rapid fix.
 
 ## Stop conditions
 
@@ -104,7 +94,7 @@ no model call · see `docs/manual-testing.md` §1
 |---|---|
 | First after relaunch: `omp --extension "$EXT" --print "/crew health"` | `Binary source: override` answers — this is the one thing the skills probe does not prove: that the directory form also loads the extension module (entry-point resolution is a separate code path from skills discovery). Health answering settles it. |
 | `omp --extension "$EXT" --print "/crew doctor"` | Config, state dir, and gates all pass — cheapest break-detector, no daemon spawn |
-| `omp --extension "$EXT"` then `/crew health` | Daemon spawns; `Binary source: override` (proves the local build is under test, not a downloaded release); no Dashboard line yet — the dashboard is opt-in (default off, port 4747); it appears after P2's enable step, then in full with a token |
+| `omp --extension "$EXT"` then `/crew health` | Daemon spawns; `Binary source: override` (proves the local build is under test, not a downloaded release); no Dashboard line yet — the dashboard is opt-in (default off, port 4747); it appears after P2's enable step, then in full with a token. Also verifies the socket path fits `sun_path` under the default state root. |
 | Widget check (no command needed) | The Crew box appears on session start showing "Crew active, waiting for task submissions" — the healthy empty state, rendered immediately when the runtime connects; `/crew` just re-renders it on demand. Old failed runs appearing instead means you're on the default state root, not the fresh one. |
 
 ## P2 — Dashboard
@@ -114,7 +104,7 @@ no model call
 | Step | Expect / verifies |
 |---|---|
 | Enable it (opt-in): `mkdir -p .omp && printf '{"dashboard": {"enabled": true}}' > .omp/crew.json` (repo-level, gitignored), then `./target/debug/crewd stop --repo "$PWD"` and rerun `/crew health` | Daemon restarts with the config; health now prints the Dashboard URL with a token — config is strict JSON, keys exactly `enabled`/`port` (unknown keys refuse startup); default port 4747 |
-| Open the printed URL in a browser | Loads; the token disappears from the address bar — a valid `?token=` on the URL is exchanged for a session cookie via a 303 redirect so the secret leaves the URL, browser history, and any Referer. That exchange is the design, not a leak; a reload now works via the cookie, which is correct, not a gate failure. |
+| Open the printed URL in a browser | Loads; the token disappears from the address bar — a valid `?token=` on the URL is exchanged for the `crew_dashboard` cookie via a 303 redirect so the secret leaves the URL, browser history, and any Referer. That exchange is the design, not a leak; a reload now works via the cookie, which is correct, not a gate failure. |
 | No-cookie check (the real gate): `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:<port>/` and again with `?token=bad` | `401` both times — an unauthorized request reaches no handler at all, not even a 404 |
 
 ## P3 — First live run: small prompt
@@ -127,10 +117,10 @@ Register a task and a claude worker, submit a short run (a one-paragraph questio
 |---|---|
 | Model selection on first use | Asked once, then persisted to the repository's config; silent on later runs — the ask must appear if no model is configured yet for this adapter |
 | Pane attach | Pane opens in the chosen host — note the pane reference in `/crew` ("pane attached: `<backend>`") |
-| **If no pane opens** | The fallback is typed and journaled, not silent: a `paneDowngraded` event carries `requestedBackend`, `requestedPlacement`, `actualBackend` (always `hidden` today), and a redacted `reason`; the monitor shows a sticky downgrade flag a later unrelated event cannot overwrite. Grep the export for `paneDowngraded` (camelCase, the wire form). A missing pane *without* this event is the finding; a missing pane *with* it is the mechanism working, and `reason` says why. |
-| **Run completion** — the headline check | On the worker's turn end, the run moves to `waitingUser` with the pane still open, and stays there. Only a delivered follow-up or a genuine user turn may resume it, and a thinking-only turn end is not a boundary at all. **Watch for any return to `working` you did not cause — that is a regression, and it is the single most important observation of the run.** |
-| `crew_run` op `"result"` on the parked run | Returns the full answer text and usage — a `null` result with a visible answer already in the pane is a regression |
-| `crew_transcript` op `"replay"` on the same run | Returns a normalized digest array — free to check, and the tool to reach for if anything else goes wrong |
+| **If no pane opens** (CREW-60) | The fallback is typed and journaled, not silent: a `paneDowngraded` event carries `requestedBackend`, `requestedPlacement`, `actualBackend` (always `hidden` today), and a redacted `reason`; the monitor shows a sticky downgrade flag a later unrelated event cannot overwrite. Grep the export for `paneDowngraded` (camelCase, the wire form). A missing pane *without* this event is the finding; a missing pane *with* it is the mechanism working, and `reason` says why. |
+| **Run completion** — the headline check (CREW-47/48) | On the worker's turn end, the run moves to `waitingUser` with the pane still open, and stays there. Only a delivered follow-up or a genuine user turn may resume it, and a thinking-only turn end is not a boundary at all. **Watch for any return to `working` you did not cause — that is a regression, and it is the single most important observation of the run.** |
+| `crew_run` op `"result"` on the parked run (CREW-49) | Returns the full answer text and usage — a `null` result with a visible answer already in the pane is a regression |
+| `crew_transcript` op `"replay"` on the same run (CREW-50) | Returns a normalized digest array — free to check, and the tool to reach for if anything else goes wrong |
 | Journal | Full submit prompt journaled, redacted; check via `/crew run <runId>` or `crewd audit export` — the dashboard shows runs/usage, a prompt column is future work |
 | Widget | Row shows state transitions plus `usage … in / … out ($…)` |
 
@@ -141,7 +131,7 @@ billed · CREW-4
 | Step | Expect / verifies |
 |---|---|
 | Submit a run whose prompt is >8 KB (e.g. paste a long file with an instruction at the end: "reply with the last word of this prompt and its byte length") | The worker sees the whole prompt — its answer proves the tail arrived. Journal carries the full redacted text. |
-| **If the run fails to start with a paste error** | The error text names a chunk-consumption timeout. Read that as "the write acknowledgement did not arrive within the bound," not as a vendor fact — the budget covers the local writer thread, its channel, and the ack round-trip, so a starved host can trip it while the vendor itself reads fine. Look locally first (host load, other daemon processes, a stalled writer) before treating it as a vendor defect. **Before this phase, close other heavy local processes; if a paste failure still fires, check host load before treating it as a finding.** |
+| **If the run fails to start with a paste error** | The bound is now on progress, not elapsed time: the error reports how many bytes of the prompt had already been accepted and how long was actually waited. A failure means either no byte was accepted for 2 seconds (the primary, progress-based signal), or the 90-second absolute backstop fired even while bytes kept advancing. Either can mean the vendor stopped reading its stdin, or that this host is too loaded to run the writer thread promptly — check host load first. **Before this phase, close other heavy local processes; if a paste failure still fires, check host load before treating it as a finding.** This is the fix's first live exercise. |
 
 ## P5 — Subagent dispatch: the isSidechain gate (required)
 
@@ -154,7 +144,7 @@ yourself and finish."*
 | Watch for | Expect / verifies |
 |---|---|
 | While subagents run and finish their turns | Run stays `working` (two guards apply here: the isSidechain rule, plus the content guard, since a thinking-only entry no longer ends a turn either) — a subagent's turn end must never settle the parent run. Premature `succeeded` mid-dispatch is a finding, not a pass. |
-| `/crew` activity | An adapter-observed nested-worker event appears — the sidechains are seen, classified, and not misattributed |
+| `/crew` activity | `adapterNestedWorkerObserved` appears — the sidechains are seen, classified, and not misattributed |
 | Parent finishes combining | Run settles to `waitingUser` exactly once, on the parent's turn end; `run/result` then returns the combined answer, not a subagent fragment; `op finish` closes it |
 
 ## P6 — Lifecycle honesty: stop, follow-up, finish
@@ -164,7 +154,7 @@ billed · ADR-0027 surface
 | Step | Expect / verifies |
 |---|---|
 | Start a run, then cancel it mid-work: `crew_run` op `"cancel"` (there is no `crew_stop` tool) | Honest acknowledgement (no fabricated ok), run moves to `cancelled`, pane cleaned up |
-| Send a follow-up message to a run in `waitingUser` | Accepted under the follow-up allowance; run resumes and re-settles, journaled as a resume event with the cause recorded as the follow-up message. Seeing the *other* cause value (a genuine user turn) when *you* sent a follow-up, or seeing neither, is a finding — resumption is supposed to be caused, not inferred. |
+| Send a follow-up message to a run in `waitingUser` | Accepted under the follow-up allowance; run resumes and re-settles, journaled as `runResumed` with `cause: "followUpMessage"`. Seeing the other value, `realUserTurn`, when *you* sent a follow-up, or seeing neither, is a finding — resumption is supposed to be caused, not inferred. |
 | Close a `waitingUser` run: `crew_run` op `"finish"` | Run terminalizes; journal shows the finish with its actor — a run is a conversation the leader closes |
 
 ## P7 — Resilience: daemon restart, reopen, replay
@@ -182,7 +172,7 @@ no model call · see `docs/manual-testing.md` §3c; CREWATTACH1
 stretch, billed · see `docs/manual-testing.md` §5
 
 Two workers, two isolated workspaces, submitted together: leases don't collide, both settle
-independently, cross-workspace review reads across. Run if P1 through P7 were clean and time
+independently, `crew_peer_workspace` reads across. Run if P1 through P7 were clean and time
 allows.
 
 ## P9 — Result chaining (stretch)
