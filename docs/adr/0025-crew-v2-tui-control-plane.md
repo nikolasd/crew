@@ -7,7 +7,25 @@
 
 Crew v2 introduces durable plans, multi-worker leader tools, TUI-backed adapters, panes, milestone digests, budgets, and timeout facts. A visible vendor terminal is useful evidence, but it must not become an unjournaled control plane that competes with OMP's task graph or Crew's durable message semantics.
 
-The design specification §2.2/§2.3 therefore needs a durable ownership boundary: who decides, who executes, and which channel carries an instruction.
+A durable ownership boundary is therefore needed: who decides, who executes, and which channel carries an instruction.
+
+> **Reconstructed reference — added 2026-09-08.** This section originally cited
+> `docs/superpowers/specs/2026-08-22-crew-v2-design.md` §2.2/§2.3 for that requirement. That
+> specification was an ephemeral working document under a gitignored path and no longer exists, so
+> the citation could not be followed. What the requirement was is reconstructed here from this ADR's
+> own text and from the shipped implementation, so that the decision stands without it. This is not a
+> quotation: the specification's wording and section structure are not recoverable, and no attempt is
+> made to reproduce them.
+>
+> The requirement it carried was that every surface crew v2 adds must resolve to one owner and one
+> instruction channel. Those surfaces, each verifiable in the shipped code rather than in the lost
+> document: durable plans (`plan/propose`, `plan/decide`, `plan/get`); leader-facing tools for
+> multi-worker work (`crew_plan`, `crew_spawn`, `crew_send`, `crew_status`, `crew_transcript`,
+> `crew_stop`, `crew_finish`); TUI-backed adapters driving a real vendor CLI on a PTY; visible attach
+> panes with `pane/reopen`; milestone digests delivered to the leader; per-subtask turn budgets; and
+> `WorkerTimeout` as a reported fact. Each of those could plausibly have been given its own control
+> path — a pane that steers, a budget that resends, a timeout that kills — and the boundary below is
+> what refuses that, once, for all of them.
 
 ## Decision Drivers
 
@@ -48,4 +66,7 @@ The leader proposes a plan, passes its approval gate, spawns approved subtasks, 
 * ADR-0011 — OMP retains task graph authority
 * ADR-0020 — every durable mutation broadcasts its committed event
 * ADR-0024 — project-scoped reads are open; ownership gates writes
-* `docs/superpowers/specs/2026-08-22-crew-v2-design.md` §2.2, §2.3
+* `docs/superpowers/specs/2026-08-22-crew-v2-design.md` §2.2, §2.3 — **no longer exists** (an
+  ephemeral working document under a gitignored path). Its requirement is reconstructed in "Context
+  and Problem Statement" above; this entry is left in place rather than deleted, because an ADR
+  records what it cited when it was written.

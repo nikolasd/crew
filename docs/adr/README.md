@@ -10,6 +10,12 @@ since been removed; the lessons worth keeping from it were absorbed into `engine
 Those citations are left as written — an ADR records what was decided when it was decided, and is
 never edited to read as though it always agreed with what came later.
 
+There is no ADR-0033: the number was reserved along with 0031–0035, and the decision it was meant to
+carry turned out to be already recorded in [0027](0027-turn-end-settles-a-run.md), so the number went
+unused. It is left as a gap for the same reason the `docs/journal.md` citations are left in place —
+the numbers below record what was written when it was written, and renumbering them to close a gap
+would make every reference written before today wrong.
+
 | ID | Title | Status |
 |---|---|---|
 | [0001](0001-omp-extension-with-separate-rust-daemon.md) | External OMP extension with a separate Rust daemon | Accepted |
