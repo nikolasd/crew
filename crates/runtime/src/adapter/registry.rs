@@ -1434,16 +1434,19 @@ fn build_tui_adapter<V: TuiVendor>(
     // config can only be a bug.
     let redactor = crate::security::redaction::Redactor::with_org_rules(&tui.org_security_patterns)
         .expect("org_security_patterns already validated at startup");
-    let pane_coordinator = Arc::new(PaneCoordinator::new(
-        Arc::clone(&tui.display_registry),
-        db,
-        project_id,
-        events_tx,
-        tui.crewd_path.clone(),
-        tui.state_dir.clone(),
-        repo_root.to_path_buf(),
-        redactor,
-    ));
+    let pane_coordinator = Arc::new(
+        PaneCoordinator::new(
+            Arc::clone(&tui.display_registry),
+            db,
+            project_id,
+            events_tx,
+            tui.crewd_path.clone(),
+            tui.state_dir.clone(),
+            repo_root.to_path_buf(),
+            redactor,
+        )
+        .with_force_hidden_displays(tui.force_hidden_displays),
+    );
     let placement = display
         .as_ref()
         .map(|selection| selection.placement)
@@ -1892,6 +1895,7 @@ mod build_adapter_tests {
             crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
             state_dir: tmp.path().to_path_buf(),
             close_on_exit: crate::config::crew::CloseOnExit::OnSuccess,
+            force_hidden_displays: false,
             forced_backend: None,
             adapters,
             timings: crate::adapter::tui::TuiTimings::default(),
@@ -1957,6 +1961,7 @@ mod build_adapter_tests {
             crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
             state_dir: std::env::temp_dir(),
             close_on_exit: crate::config::crew::CloseOnExit::OnSuccess,
+            force_hidden_displays: false,
             forced_backend: None,
             adapters: BTreeMap::new(),
             timings: crate::adapter::tui::TuiTimings::default(),

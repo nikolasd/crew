@@ -1,0 +1,19 @@
+# Every process `cargo` launches (a `cargo test` binary, and
+# anything that binary spawns via `Command::new(env!("CARGO_BIN_EXE_crewd"))`,
+# since a spawned child inherits its parent's environment by default) gets
+# this set. `crewd serve` reads it exactly once, at startup
+# (`crates/runtime/src/lifecycle.rs`), and forces every pane it would
+# otherwise create onto the `Hidden` display backend regardless of
+# `display.backend` config -- so the test suite can never open a real herdr
+# pane or OS window, without any test needing to know this variable exists.
+#
+# A `crewd` binary NOT launched by `cargo` (a prebuilt `./target/debug/crewd`
+# run by hand, or the one the OMP extension spawns) inherits nothing here and
+# behaves exactly as configured -- this is a test-environment safeguard, not
+# a product default. Cargo does not override an already-exported value of
+# the same name (the default, since `force` is omitted below), so an
+# operator who explicitly sets this in their own shell -- e.g. to keep a
+# headless host's `crewd serve --foreground` display-less -- is respected,
+# not fought.
+[env]
+CREW_FORCE_HIDDEN_DISPLAYS = "1"

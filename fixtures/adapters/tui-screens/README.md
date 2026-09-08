@@ -31,11 +31,34 @@ behind it is not reviewable.
 | `codex-signin.raw` | codex-cli 0.153.4 | Sign-in method selection |
 | `codex-directory-trust.raw` | codex-cli 0.153.4 | Directory trust |
 | `codex-composer-then-trust.raw` | codex-cli 0.153.4 | Composer painted, prompt accepted, **then** the trust gate |
+| `claude-trust-to-composer.raw` | claude 2.1.265 | Trust gate **answered**, then the alternate-screen switch and the composer |
 
-The last one is not a duplicate. Codex paints its composer first, accepts a
-pasted prompt into it, and only then raises its trust gate, so a single
-capture holds both surfaces. Any predicate of the form "the composer is up and
-no gate is up" has to be correct against it.
+The codex composer-then-trust capture is not a duplicate. Codex paints its
+composer first, accepts a pasted prompt into it, and only then raises its trust
+gate, so a single capture holds both surfaces. Any predicate of the form "the
+composer is up and no gate is up" has to be correct against it.
+
+The last row is the only capture in which a gate is *answered*. It was taken by
+driving the dialog the way a person does — a Down keystroke to move the
+selection onto the accepting option, then Enter, delivered as keystrokes rather
+than as a paste, so it does not double as a prompt-delivery recording. It holds
+the sequence a resume path depends on: gate up, gate answered, the vendor
+switching to the alternate screen, and the composer painted in its place. It is
+also the only capture containing the alternate-screen switch at all, so a screen
+model scoped to the other six will need widening for it.
+
+It is the capture that makes the screen-matching primitive's stated limitation
+concrete rather than argued. After the gate has been answered and replaced, the
+primitive still reports the gate's phrase as on screen, because it accumulates
+rather than models a terminal. Any screen model that replaces it must reverse
+that specific assertion — the test says so in as many words, so the acceptance
+criterion is a test to flip rather than a description to interpret.
+
+That file is a prefix of its capture, truncated immediately before the first
+account-specific content the vendor drew and backed off to the preceding line
+boundary. Truncation is safe here in a way that editing would not be: a terminal
+processes a prefix of a byte stream correctly, whereas substituting bytes inside
+one produces a recording of something that never happened.
 
 ## How they were captured
 
@@ -75,3 +98,18 @@ argv the adapter actually builds. Record the vendor version in the table.
 Check the bytes for machine- and account-identifying strings before committing
 — these files are keystroke-level recordings of a real terminal, and the
 things worth redacting are not visible when the capture is rendered.
+
+Keep the probe's own prompt text neutral. Whatever is pasted into a vendor's
+composer is drawn to the screen and lands in the recording, permanently: a
+capture cannot be edited afterwards without destroying the property that makes
+it evidence. Anything that would be unwelcome in the repository forever —
+identifiers tied to a tracker or a person, paths, anything topical that will
+read as stale — must not be in the prompt in the first place. Two captures here
+carry an internal identifier for exactly this reason, and they are the reason
+the repository's identifier rules exempt this directory.
+
+Verify the staged blob's hash against the source capture before committing
+(`git cat-file blob :<path> | shasum -a 256` against `shasum -a 256 < <source>`).
+The `-text` attribute prevents end-of-line rewriting, but the hash comparison is
+what proves it worked; see the fixture-integrity entry in
+`docs/engineering-lessons.md`.

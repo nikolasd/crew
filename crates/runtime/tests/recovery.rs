@@ -922,6 +922,7 @@ async fn resume_registry(
             state_dir: dir.path().to_path_buf(),
             close_on_exit: CloseOnExit::Always,
             forced_backend: None,
+            force_hidden_displays: false,
             adapters,
             timings: fast_timings(),
             org_security_patterns: Vec::new(),
