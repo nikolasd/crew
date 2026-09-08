@@ -480,6 +480,7 @@ where
 ///   this paste the vendor accepted before it stopped, so a partial
 ///   delivery is stated rather than merely failed. That count is what
 ///   the explicit write loop in `PtyProcess` exists to make knowable.
+///
 /// The submit byte is never part of this: callers deliver the vendor's own
 /// submit convention separately, once the TUI is idle.
 async fn write_paste(
