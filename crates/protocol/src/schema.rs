@@ -138,10 +138,13 @@ mod tests {
         (
             "id",
             "no `id`, for",
-            "JsonRpcNotification's own doc deliberately names `id` to say this \
-             type does NOT have one (unlike JsonRpcRequest/JsonRpcResponse) -- \
-             the sentence's whole point is the field's absence, the same \
-             shape as `Terminal` above.",
+            "Different mechanism from `Terminal` above, not the same shape: \
+             `Terminal` is irreducible because the name resolves NOWHERE, so \
+             rewording it would make the sentence false. `id` resolves fine \
+             -- it's a real property of JsonRpcRequest/JsonRpcResponse -- and \
+             JsonRpcNotification's own doc names it deliberately to state ITS \
+             OWN absence of that property, on an object where the same name \
+             is legitimately in scope elsewhere in the schema.",
         ),
         (
             "role",
@@ -540,6 +543,26 @@ mod tests {
     /// silently ready to exempt whatever uses that word next. Mirrors
     /// `crates/xtask/src/main.rs`'s `NOT_WIRE_MESSAGE_ROOTS` reverse
     /// check. `list_name` is only for the failure message.
+    /// Proves the assertion in `assert_no_stale_allowlist_entries` can
+    /// actually fire, not just that its call sites happen to pass an
+    /// all-true `entry_used` every real run (which every real run does,
+    /// since every current entry is genuinely used -- so nothing here
+    /// ever exercised the failure path without this test). Pure function,
+    /// no schema involved, so this cannot drift when the real allowlists
+    /// change shape.
+    #[test]
+    #[should_panic(expected = "stale-entry-name")]
+    fn a_stale_allowlist_entry_is_reported_by_name() {
+        assert_no_stale_allowlist_entries(
+            "TEST_ALLOWLIST",
+            &[
+                ("used-entry-name", "irrelevant", "irrelevant"),
+                ("stale-entry-name", "irrelevant", "irrelevant"),
+            ],
+            &[true, false],
+        );
+    }
+
     fn assert_no_stale_allowlist_entries(
         list_name: &str,
         allowlist: &[(&str, &str, &str)],
