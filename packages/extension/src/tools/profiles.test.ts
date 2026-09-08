@@ -104,7 +104,7 @@ function writeRepoConfig(repository: string, contents: string): string {
 
 // ------------------------------------------------------- resolution order
 
-// CREW-53 changed what these two assert. `sonnet` is claude's own alias, so
+// Resolution changed what these two assert. `sonnet` is claude's own alias, so
 // what reaches the daemon is now the canonical id it names -- the adapter
 // gets an unambiguous model, and the value crew records is one whose meaning
 // cannot move (claude's config carries an `alias_migration` map).
@@ -135,7 +135,7 @@ test("crew_profile treats an explicit model matching the configured one as a no-
   expect((register!.params as { model: string }).model).toBe("claude-opus-5");
 });
 
-// CREW-8's original symptom: a hallucinating leader invents a model name.
+// The original symptom: a hallucinating leader invents a model name.
 // An explicit param that conflicts with an already-stored model must be
 // refused, not silently applied and not silently dropped -- either would
 // hide the disagreement from whoever is supposed to resolve it.
@@ -284,9 +284,9 @@ test("injectTuiMode preserves other keys already present on the reserved adapter
   expect(injectTuiMode("claude", { claude: { permissionMode: "max" } })).toEqual({ claude: { permissionMode: "max", mode: "tui" } });
 });
 
-// ---------------------------------------------------- CREW-53: resolution
+// ------------------------------------------------------------- resolution
 
-test("CREW-53: `sol` reaches the daemon as gpt-5.6-sol -- the maintainer's example, end to end", async () => {
+test("`sol` reaches the daemon as gpt-5.6-sol -- the maintainer's example, end to end", async () => {
   // No alias table entry exists for bare `sol`. It resolves because it is
   // the only openai-codex id containing it, which is why crew does not own
   // a mapping for the shorthand that motivated the ticket.
@@ -301,7 +301,7 @@ test("CREW-53: `sol` reaches the daemon as gpt-5.6-sol -- the maintainer's examp
   expect(JSON.parse(readFileSync(join(repository, ".omp", "crew.json"), "utf8")).adapters.codex.model).toBe("gpt-5.6-sol");
 });
 
-test("CREW-53: a stored shorthand and an explicit canonical id are one model, not a conflict", async () => {
+test("a stored shorthand and an explicit canonical id are one model, not a conflict", async () => {
   // Resolution has to precede the conflict check for this to pass. Compare
   // the spellings and a correct call is refused with an error telling the
   // user to go edit a crew.json that is already right.
@@ -316,7 +316,7 @@ test("CREW-53: a stored shorthand and an explicit canonical id are one model, no
   expect((calls.find((c) => c.method === "profile/register")!.params as { model: string }).model).toBe("claude-opus-5");
 });
 
-test("CREW-53: an ambiguous model is refused by name, and never registered", async () => {
+test("an ambiguous model is refused by name, and never registered", async () => {
   const repository = tempRepo();
   const { client, calls } = fakeClient();
   const { tool } = setupProfileTool(client);
@@ -330,7 +330,7 @@ test("CREW-53: an ambiguous model is refused by name, and never registered", asy
   expect(calls.map((c) => c.method)).not.toContain("profile/register");
 });
 
-test("CREW-53: an unverified model registers but is NOT written to crew.json, and says so", async () => {
+test("an unverified model registers but is NOT written to crew.json, and says so", async () => {
   // This is the ticket's actual symptom: an invented dated id became the
   // repository's durable answer. It may run this once -- the vendor is the
   // second line of defence -- but nothing confirmed it, so nothing records it.
@@ -348,7 +348,7 @@ test("CREW-53: an unverified model registers but is NOT written to crew.json, an
   expect(text.some((t) => t.includes("Not persisted"))).toBe(true);
 });
 
-test("CREW-53: an unreachable catalogue still registers -- an absent validator never refuses everything", async () => {
+test("an unreachable catalogue still registers -- an absent validator never refuses everything", async () => {
   const repository = tempRepo();
   const { client, calls } = fakeClient();
   const { tool } = setupProfileTool(client, NO_CATALOGUE);
@@ -362,7 +362,7 @@ test("CREW-53: an unreachable catalogue still registers -- an absent validator n
   expect(() => readFileSync(join(repository, ".omp", "crew.json"), "utf8")).toThrow();
 });
 
-test("CREW-53: a local alias still resolves when the catalogue is unreachable, and is persisted", async () => {
+test("a local alias still resolves when the catalogue is unreachable, and is persisted", async () => {
   const repository = tempRepo();
   const { client, calls } = fakeClient();
   const { tool } = setupProfileTool(client, NO_CATALOGUE);
@@ -373,7 +373,7 @@ test("CREW-53: a local alias still resolves when the catalogue is unreachable, a
   expect(JSON.parse(readFileSync(join(repository, ".omp", "crew.json"), "utf8")).adapters.claude.model).toBe("claude-haiku-4-5");
 });
 
-test("CREW-53: an adapter omp does not catalogue behaves exactly as it did before", async () => {
+test("an adapter omp does not catalogue behaves exactly as it did before", async () => {
   // ompRpc has no provider and no alias source, so resolution could only
   // annotate a name nothing checked. Withholding persistence there would
   // make the adapter unusable across sessions for no gain.
@@ -392,7 +392,7 @@ test("CREW-53: an adapter omp does not catalogue behaves exactly as it did befor
   expect(result.content.some((c) => "text" in c && c.text.includes("UNVERIFIED"))).toBe(false);
 });
 
-test("CREW-53: a model taken from crew.json is used exactly as recorded, not re-resolved", async () => {
+test("a model taken from crew.json is used exactly as recorded, not re-resolved", async () => {
   // Deliberate: re-resolving a stored value would turn a shorthand that has
   // always worked into an ambiguity error on a call that passed no model at
   // all -- a call the leader cannot correct by changing its own input.

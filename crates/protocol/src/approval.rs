@@ -47,7 +47,7 @@ pub struct ApprovalRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decision: Option<String>,
     /// Who produced the decision (`"human"` or `"model"`), when decided.
-    // R92: persisted since MIGRATION_7, carried on `ApprovalDecided`
+    // Persisted since MIGRATION_7, carried on `ApprovalDecided`
     // events, and projected by `approval/list`.
     /// Who decided this approval, when that provenance was recorded.
     #[serde(rename = "decidedBy", skip_serializing_if = "Option::is_none")]

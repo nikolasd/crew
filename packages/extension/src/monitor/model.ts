@@ -74,7 +74,7 @@ export interface MonitorRow {
    *  ref rather than clearing them, so a detail view can still say what
    *  was there. */
   readonly pane?: MonitorPane;
-  /** Sticky once set (CREW-60/D28), like `openViolations`: a resolved
+  /** Sticky once set, like `openViolations`: a resolved
    *  backend's pane creation failed and this run fell back to a
    *  different one. Never cleared by an unrelated patch -- the ephemeral
    *  `latestActivity` field held this before and was overwritten by the
@@ -253,7 +253,7 @@ function eventPatch(envelope: EventEnvelope): EventPatch | undefined {
       // No `runId` in the payload itself -- like message/approval/child
       // events, it travels on the envelope. A diagnostic before any row
       // exists (e.g. a resolve-time failure) has nothing to attach to and
-      // is correctly a no-op; CREW-10's `lastSubmitError` is the
+      // is correctly a no-op; `lastSubmitError` is the
       // dedicated surface for that pre-row case.
       if (runId === null || runId === undefined) {
         return undefined;
@@ -344,7 +344,7 @@ function eventPatch(envelope: EventEnvelope): EventPatch | undefined {
       };
     }
     case "adapterProtocolHealthEvent": {
-      // R91: R12/R42/R57 invest in a precise detail (the vendor's error
+      // The neighbouring cases invest in a precise detail (the vendor's error
       // subtype, the raw stop reason) -- render it, not a constant label.
       const { healthy, detail } = event.payload;
       const label = healthy ? "protocol healthy" : "protocol unhealthy";

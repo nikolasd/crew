@@ -1,4 +1,4 @@
-// End-to-end test for extension identity and task ownership (TODO #68).
+// End-to-end test for extension identity and task ownership.
 //
 // Proves the sessionId → instanceId → ownerClientInstanceId chain holds:
 // when the extension connects with a sessionId, creates a task owned by
