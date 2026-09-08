@@ -801,6 +801,26 @@ mod tests {
 
         let mut all_property_keys = HashSet::new();
         collect_all_property_keys(&schema, &mut all_property_keys);
+        // A floor, not a non-empty check -- the same "nothing to iterate" trap
+        // CREW-61's `every_reachable_string_field_is_redacted_or_allowlisted`
+        // and the wire-contract drift test both close with a minimum-carriers
+        // assertion, applied here to a walk this check depends on just as
+        // completely. If `collect_all_property_keys` ever returned an empty
+        // (or badly shrunken) set -- a schemars shape change, a bug in the
+        // walk itself -- EVERY reference below would classify `NotAProperty`
+        // (nothing to match against), so both `wrong_object` and
+        // `snake_case_leak` would report empty while the check had inspected
+        // nothing at all. 211 real property keys exist in the schema as of
+        // this writing; the floor is set at roughly half that, comfortably
+        // below normal schema growth/shrinkage but nowhere near zero.
+        assert!(
+            all_property_keys.len() >= 100,
+            "found only {} property keys across the whole schema -- the walk is broken, not the \
+             surface clean; a collapsed all_property_keys silently disables both the \
+             wrong-object and the snake-case-leak checks below, since every reference would \
+             classify NotAProperty with nothing to match against",
+            all_property_keys.len()
+        );
 
         let mut descriptions = Vec::new();
         collect_descriptions_with_scope(&schema, &mut descriptions);
