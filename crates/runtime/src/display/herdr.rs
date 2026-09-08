@@ -1,8 +1,13 @@
 //! Herdr display backend: real client/server protocol compatibility
 //! gating (via `herdr status --json`) and pane-level operations
 //! (split/run/move/close/report-agent) over Herdr's own socket-backed
-//! CLI, grounded against the installed `herdr 0.7.5` binary's real
-//! `--help` output and `status --json` shape.
+//! CLI, grounded against the installed `herdr 0.8.2` binary's real
+//! `--help` output and `status --json` shape (CREW-82; previously
+//! verified against 0.7.5). Argv shapes below are additionally gated by
+//! [`MIN_SUPPORTED_PROTOCOL`]: a herdr whose protocol predates the
+//! version these shapes were checked against is never assumed
+//! compatible merely because its own client and server agree with each
+//! other.
 
 use crew_protocol::{DisplayBackend, DisplayConfig, DisplayPlacement, DisplayStatus};
 use parking_lot::Mutex;
@@ -16,7 +21,7 @@ use super::{
 
 /// Herdr's own `herdr status --json` result, parsed into the fields this
 /// adapter needs for compatibility gating. Field names/nesting verified
-/// against the installed `herdr 0.7.5` binary's real output:
+/// against the installed `herdr 0.8.2` binary's real output:
 /// `{"client":{"version","protocol",...},"server":{"running","version","protocol","compatible",...}}`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HerdrStatus {
@@ -60,10 +65,19 @@ impl HerdrStatus {
         // never claim compatibility it doesn't report -- fall back to
         // exact protocol number equality only when the server is
         // running and reported a protocol at all.
-        let compatible = server
+        let mutually_compatible = server
             .get("compatible")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| server_running && server_protocol == Some(client_protocol));
+        // Client/server agreeing with each other is not the same claim
+        // as "this crew build knows how to speak this protocol" -- a
+        // herdr install that upgraded both sides together past what
+        // this backend's argv shapes were last verified against would
+        // otherwise pass silently. Require the floor on both sides that
+        // reported a protocol at all.
+        let below_min_protocol = client_protocol < MIN_SUPPORTED_PROTOCOL
+            || server_protocol.is_some_and(|p| p < MIN_SUPPORTED_PROTOCOL);
+        let compatible = mutually_compatible && !below_min_protocol;
         Ok(Self {
             client_version,
             client_protocol,
@@ -82,6 +96,23 @@ impl HerdrStatus {
             return "herdr server is not running; start it or run `herdr` to launch one"
                 .to_string();
         }
+        if self.client_protocol < MIN_SUPPORTED_PROTOCOL {
+            return format!(
+                "herdr client protocol {} (client {}) predates the minimum protocol {} this crew \
+                 build's herdr command shapes were verified against; upgrade the herdr client",
+                self.client_protocol, self.client_version, MIN_SUPPORTED_PROTOCOL,
+            );
+        }
+        if let Some(server_protocol) = self.server_protocol
+            && server_protocol < MIN_SUPPORTED_PROTOCOL
+        {
+            return format!(
+                "herdr server protocol {server_protocol} (server {}) predates the minimum \
+                 protocol {MIN_SUPPORTED_PROTOCOL} this crew build's herdr command shapes were \
+                 verified against; upgrade the herdr server",
+                self.server_version.as_deref().unwrap_or("unknown"),
+            );
+        }
         match self.server_protocol {
             Some(server_protocol) if server_protocol != self.client_protocol => format!(
                 "herdr client protocol {} does not match server protocol {} (client {}, server {}); \
@@ -95,6 +126,16 @@ impl HerdrStatus {
         }
     }
 }
+
+/// The lowest herdr wire protocol number this backend's argv shapes have
+/// been verified against (herdr 0.8.2, CREW-82). A herdr client or
+/// server reporting a protocol below this is never treated as
+/// compatible, even when its own `status --json` reports `compatible:
+/// true` -- that field only promises the client and server agree with
+/// each other, not that this crew build's command syntax still applies.
+/// Bump this only after re-verifying every `herdr pane ...` invocation
+/// in this file against the new minimum version's real `--help` output.
+const MIN_SUPPORTED_PROTOCOL: u64 = 20;
 
 /// Herdr display backend.
 ///
@@ -239,17 +280,23 @@ impl HerdrDisplay {
             run_args.extend(req.command.iter().map(String::as_str));
             self.execute_or_err(&run_args, "run")?;
 
+            // herdr 0.8.2's usage line puts PANE_ID first:
+            // `herdr pane report-agent <pane_id> --source ID --agent
+            // LABEL --state ...`. Passing it last (the previous shape
+            // here) fails against a live 0.8.2 herdr with `unknown
+            // option: crew` (CREW-82, reproduced directly against both
+            // a nonexistent pane id and a real live pane).
             self.execute_or_err(
                 &[
                     "pane",
                     "report-agent",
+                    &pane_id,
                     "--source",
                     "crew",
                     "--agent",
                     &req.title,
                     "--state",
                     "working",
-                    &pane_id,
                 ],
                 "report-agent",
             )?;
@@ -447,24 +494,68 @@ mod tests {
         }
     }
 
-    const COMPATIBLE_STATUS: &str = r#"{"client":{"version":"0.7.5","channel":"stable","protocol":17},"server":{"status":"running","running":true,"version":"0.7.5","protocol":17,"compatible":true,"socket":"/tmp/herdr.sock"}}"#;
-    const MISMATCH_STATUS: &str = r#"{"client":{"version":"0.7.5","channel":"stable","protocol":17},"server":{"status":"running","running":true,"version":"0.7.4","protocol":16,"compatible":false,"socket":"/tmp/herdr.sock"}}"#;
+    const COMPATIBLE_STATUS: &str = r#"{"client":{"version":"0.8.2","channel":"stable","protocol":20},"server":{"status":"running","running":true,"version":"0.8.2","protocol":20,"compatible":true,"socket":"/tmp/herdr.sock"}}"#;
+    // Both sides are at or above MIN_SUPPORTED_PROTOCOL but disagree
+    // with each other -- this must hit the mismatch/restart guidance,
+    // not the minimum-protocol guidance (kept distinct from
+    // BELOW_MINIMUM_STATUS below, which exercises that other branch).
+    const MISMATCH_STATUS: &str = r#"{"client":{"version":"0.8.3","channel":"stable","protocol":21},"server":{"status":"running","running":true,"version":"0.8.2","protocol":20,"compatible":false,"socket":"/tmp/herdr.sock"}}"#;
+    // Both sides agree with each other (the server itself reports
+    // `compatible: true`) but on a protocol older than this backend's
+    // verified minimum -- CREW-82's floor must override that self-report.
+    const BELOW_MINIMUM_STATUS: &str = r#"{"client":{"version":"0.7.5","channel":"stable","protocol":17},"server":{"status":"running","running":true,"version":"0.7.5","protocol":17,"compatible":true,"socket":"/tmp/herdr.sock"}}"#;
 
     #[test]
     fn parses_the_real_compatible_status_shape() {
         let status = HerdrStatus::parse(COMPATIBLE_STATUS).unwrap();
-        assert_eq!(status.client_protocol, 17);
-        assert_eq!(status.server_protocol, Some(17));
+        assert_eq!(status.client_protocol, 20);
+        assert_eq!(status.server_protocol, Some(20));
         assert!(status.compatible);
     }
 
     #[test]
     fn parses_the_real_mismatch_status_shape() {
         let status = HerdrStatus::parse(MISMATCH_STATUS).unwrap();
-        assert_eq!(status.client_protocol, 17);
-        assert_eq!(status.server_protocol, Some(16));
+        assert_eq!(status.client_protocol, 21);
+        assert_eq!(status.server_protocol, Some(20));
         assert!(!status.compatible);
         assert!(status.remediation().contains("restart"));
+    }
+
+    #[test]
+    fn protocol_below_minimum_is_incompatible_even_when_client_and_server_agree() {
+        let status = HerdrStatus::parse(BELOW_MINIMUM_STATUS).unwrap();
+        assert_eq!(status.client_protocol, 17);
+        assert_eq!(status.server_protocol, Some(17));
+        assert!(
+            !status.compatible,
+            "client/server self-agreement must not override the verified-minimum floor"
+        );
+        let remediation = status.remediation();
+        assert!(
+            remediation.contains("minimum protocol"),
+            "remediation should name the minimum-protocol gate, got: {remediation}"
+        );
+        assert!(remediation.contains("upgrade the herdr client"));
+    }
+
+    #[tokio::test]
+    async fn below_minimum_protocol_issues_no_pane_command() {
+        let executor =
+            Arc::new(FixtureExecutor::new().with("herdr status --json", ok(BELOW_MINIMUM_STATUS)));
+        let display = HerdrDisplay::with_executor(DisplayConfig::default(), executor);
+        assert!(!display.is_available());
+
+        let result = display
+            .create_pane(pane_request(
+                &["crewd", "monitor"],
+                DisplayPlacement::SplitRight,
+                "display-1",
+            ))
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("minimum protocol"));
+        assert!(display.owned_pane_ids().is_empty());
     }
 
     fn pane_request(command: &[&str], placement: DisplayPlacement, title: &str) -> PaneRequest {
@@ -507,7 +598,7 @@ mod tests {
                 )
                 .with("herdr pane run w1:p2 crewd monitor", ok("{}"))
                 .with(
-                    "herdr pane report-agent --source crew --agent display-1 --state working w1:p2",
+                    "herdr pane report-agent w1:p2 --source crew --agent display-1 --state working",
                     ok("{}"),
                 ),
         );
