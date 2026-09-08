@@ -86,10 +86,9 @@ worker's terminal ⇒ the run is recorded succeeded"* — not an unattended fail
 `runWorking` is a transition-table artefact (`waitingUser → succeeded` is not a legal direct edge, so
 `walk_to` hops through `working`); the artefact is benign, the `succeeded` it reaches is not.
 
-Open decision for the maintainer (still open — see the rulings addendum at the end): **`failed` or
-`lost`?** The recommendation on record is `failed` —
-`lost` means the supervisor could not observe *how* the process exited, and here it observed a clean
-exit perfectly well.
+Decided after the run — see the rulings addendum at the end: **`failed`.** `lost` means the
+supervisor could not observe *how* the process exited, and here it observed a clean exit perfectly
+well.
 
 ### 2. First-run vendor prompts are invisible, and crew types into them (F10, F13 → CREW-79)
 
@@ -294,8 +293,11 @@ state must not be `lost`; `cancelled` is the candidate.
 **CREW-99 — documentation follows code, never leads it.** A behaviour is documented once it ships.
 This closes the class of finding F1 belongs to.
 
-**CREW-78 — pending.** The maintainer's position is that a cleanly exited run which did no work
-should be `failed`, with `lost` reserved for genuine unobservability — i.e. the case where the
-supervisor could not see how the process exited. He asked to review the meaning of `lost` before
-settling it and has not yet confirmed, so this is recorded as his stated position and **not** as a
-ruling. Do not treat it as decided until he confirms.
+**CREW-78 — a cleanly exited run that did no work is `failed`.** `lost` is reserved for genuine
+unobservability: the case where the supervisor could not see how the process exited. It follows that
+`lost` should stop carrying the second meaning it has today, where `settle_abandoned_turn` uses it
+for an abandoned turn whose process was perfectly observable.
+
+*Provenance:* confirmed by the maintainer to the architect, 2026-09-08 night, after being asked to
+confirm each of the four rulings by name. Recorded first as his stated position while he was still
+weighing it, and promoted here once confirmed.
