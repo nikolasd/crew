@@ -125,15 +125,30 @@ mod tests {
     )];
 
     /// Same shape and discipline as `ALLOWED_UNRESOLVED_BACKTICKED_NAMES`
-    /// (name, required_substring, reason) -- CREW-67's own check flags a
-    /// backticked lowercase name that IS a real property somewhere but
-    /// not of the object its description belongs to. Two shapes of
-    /// legitimate exception, neither a sibling-reference bug: a
-    /// deliberate cross-type mention (the description is explaining an
-    /// effect on, or relationship to, a DIFFERENT type's field, not
-    /// claiming the name as its own) and a deliberate-absence sentence
-    /// (the same pattern `Terminal` already covers above, applied to a
-    /// property name instead of a type name).
+    /// (name, required_substring, reason) -- flags a backticked lowercase
+    /// name that is either a real property somewhere but not of the object
+    /// its description belongs to (CREW-67's bare-reference check), or a
+    /// name that no reachable object has as a property at all but is still
+    /// referenced in dotted form because the type it actually belongs to
+    /// isn't itself reachable from `ProtocolDocument` (CREW-71's dotted
+    /// check, e.g. `policyQuarantined` below -- `RunFlags` has no `$defs`
+    /// entry, so nothing in the shipped schema's own properties will ever
+    /// contain this name, and that's exactly why it needs an entry here
+    /// rather than resolving on its own). Three shapes of legitimate
+    /// exception in total, none a sibling-reference bug: a deliberate
+    /// cross-type mention naming a property that DOES exist elsewhere in
+    /// the schema, a deliberate cross-type mention naming a property that
+    /// exists NOWHERE in the schema because its owning type isn't
+    /// reachable, and a deliberate-absence sentence (the same pattern
+    /// `Terminal` already covers above, applied to a property name instead
+    /// of a type name).
+    ///
+    /// This file used to carry a `role` entry for `ClientAuth`
+    /// (internally tagged, `#[serde(tag = "role")]`): CREW-72 found that
+    /// was papering over a real gap in `collect_block`'s scope tracking,
+    /// not a genuine cross-object mention, and fixed the walk itself
+    /// (`shared_branch_properties`) instead -- see `#100`'s precedent:
+    /// fix the mechanism, don't exempt around it.
     const ALLOWED_CROSS_OBJECT_PROPERTY_REFERENCES: &[(&str, &str, &str)] = &[
         (
             "id",
@@ -147,14 +162,15 @@ mod tests {
              is legitimately in scope elsewhere in the schema.",
         ),
         (
-            "role",
-            "The `role` tag",
-            "ClientAuth is internally tagged (#[serde(tag = \"role\")]); schemars \
-             places the enum's own doc on the wrapper, one level above where \
-             `role` actually lands as a property (folded into each `oneOf` \
-             branch by internal tagging). The doc is naming its own shared \
-             discriminant, not a foreign field -- it just lives one block \
-             down from where the doc is attached.",
+            "policyQuarantined",
+            "flags.policyQuarantined",
+            "PolicyViolationRecorded's own doc deliberately names the run's \
+             RunFlags.policyQuarantined (via the dotted `flags.policyQuarantined` \
+             form, since RunFlags isn't itself reachable from ProtocolDocument -- \
+             see the // comment above PolicyViolationRecorded) to explain where \
+             quarantine/cancel state is actually tracked. It's a genuine \
+             cross-type mention, not a sibling-reference bug: PolicyViolationRecorded \
+             has no field of its own by that name and never claims to.",
         ),
     ];
 
@@ -251,6 +267,27 @@ mod tests {
                     match key.as_str() {
                         "oneOf" | "anyOf" => {
                             if let serde_json::Value::Array(items) = v {
+                                // CREW-72: internal tagging (`#[serde(tag =
+                                // "role")]`, e.g. `ClientAuth`) folds the
+                                // shared tag property into EVERY branch's
+                                // own `properties`, and puts the enum's
+                                // own doc as a sibling of this `oneOf` --
+                                // one block UP from where `role` actually
+                                // lands once each branch resets to a fresh
+                                // scope below. A property every branch
+                                // shares is the wrapper's own shared
+                                // discriminant, not a foreign field, so it
+                                // belongs in THIS block's scope too. Only
+                                // counts when every branch is itself an
+                                // object with its own `properties` --
+                                // adjacent tagging's branches all trivially
+                                // share `{"type","payload"}` this way too,
+                                // which is harmless (both really are the
+                                // wrapper's own keys), but a branch with no
+                                // `properties` at all (e.g. a bare `$ref`)
+                                // means "every branch shares this" can't be
+                                // claimed, so the intersection is empty.
+                                keys.extend(shared_branch_properties(items));
                                 boundaries.extend(items);
                             }
                         }
@@ -269,6 +306,39 @@ mod tests {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// The property keys common to EVERY branch's own `properties` map --
+    /// empty if any branch lacks a `properties` object of its own (nothing
+    /// can be claimed shared then). See the call site's comment in
+    /// `collect_block` for why this is the internal-tagging fix (CREW-72).
+    ///
+    /// That "any branch without `properties` -> empty" rule is also what
+    /// makes reusing this for `anyOf` safe, not merely uniform with
+    /// `oneOf`: every `anyOf` in the shipped schema is an `Option<T>`
+    /// shape, whose `null` branch is a bare `{"type": "null"}` with no
+    /// `properties` of its own. That branch alone zeroes the intersection,
+    /// so an optional field's wrapper never inherits its inner type's
+    /// whole property set. Simplifying this rule away (e.g. skipping
+    /// branches with no `properties` instead of zeroing out) would make
+    /// exactly that silently possible.
+    fn shared_branch_properties(items: &[serde_json::Value]) -> HashSet<String> {
+        let mut branch_keys = Vec::new();
+        for item in items {
+            match item.get("properties").and_then(|p| p.as_object()) {
+                Some(properties) => {
+                    branch_keys.push(properties.keys().cloned().collect::<HashSet<String>>());
+                }
+                None => return HashSet::new(),
+            }
+        }
+        let mut iter = branch_keys.into_iter();
+        match iter.next() {
+            Some(first) => iter.fold(first, |acc, next| {
+                acc.intersection(&next).cloned().collect()
+            }),
+            None => HashSet::new(),
         }
     }
 
@@ -425,6 +495,56 @@ mod tests {
                 .collect();
             if name.chars().next().is_some_and(&starts_with) {
                 out.push(name);
+            }
+        }
+        out
+    }
+
+    /// Every backticked span in `text` shaped like a dotted path -- e.g.
+    /// `` `payload.vendor_child_id` `` or `` `RunFlags.needsReconciliation` ``
+    /// -- as its first segment paired with its last segment. Every segment
+    /// must itself be a bare identifier (alnum/underscore only) and there
+    /// must be at least two of them, or the whole span is not a candidate
+    /// (e.g. `` `Redactor::redact_text` `` has no `.` at all;
+    /// `` `message/send` `` has a `/`, not a `.`).
+    ///
+    /// CREW-71: `backticked_lower_case_identifiers`'s whole-span-bare-
+    /// identifier rule (needed to keep RPC method names and `TypeName.field`
+    /// mentions like `` `DisplayEvent.pane_ref` `` out of its own,
+    /// different check) had the side effect of excluding EVERY dotted span
+    /// from the sibling-property check entirely, including ones that only
+    /// LOOK like the `TypeName.field` convention -- `` `payload.vendor_child_id` ``
+    /// reads the same way but `payload` is a wrapper's own FIELD name, not
+    /// a type, so nothing ever validated the `vendor_child_id` half. The
+    /// caller tells the two shapes apart by checking the first segment
+    /// against `$defs`: present, it's the established convention and
+    /// genuinely type-scoped (exempt outright); absent, it's either a
+    /// dotted path notation (a table.column-style mention, a version
+    /// format) or a fabrication wearing the convention's clothes, so the
+    /// last segment gets checked against the enclosing scope exactly like
+    /// any other backticked property reference.
+    fn backticked_dotted_identifiers(text: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let mut rest = text;
+        while let Some(open) = rest.find('`') {
+            rest = &rest[open + 1..];
+            let Some(close) = rest.find('`') else {
+                break;
+            };
+            let inner = &rest[..close];
+            rest = &rest[close + 1..];
+            let segments: Vec<&str> = inner.split('.').collect();
+            let is_dotted_bare_path = segments.len() >= 2
+                && segments.iter().all(|segment| {
+                    !segment.is_empty()
+                        && segment
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                });
+            if is_dotted_bare_path {
+                let first = segments[0].to_string();
+                let last = segments[segments.len() - 1].to_string();
+                out.push((first, last));
             }
         }
         out
@@ -641,6 +761,13 @@ mod tests {
         let schema: serde_json::Value =
             serde_json::from_slice(&schema_bytes).expect("schema parses as JSON");
 
+        let defs_keys: HashSet<String> = schema["$defs"]
+            .as_object()
+            .expect("schema has $defs")
+            .keys()
+            .cloned()
+            .collect();
+
         let mut all_property_keys = HashSet::new();
         collect_all_property_keys(&schema, &mut all_property_keys);
 
@@ -664,6 +791,31 @@ mod tests {
                     | PropertyReferenceResolution::NotAProperty => {}
                     PropertyReferenceResolution::WrongObject => {
                         wrong_object.push((name, desc.to_string()));
+                    }
+                }
+            }
+            // CREW-71: a dotted span whose first segment is not a real
+            // `$defs` key is not actually using the `TypeName.field`
+            // convention, however much it looks like it -- check what it
+            // really names (its last segment) the same way a bare
+            // reference would be checked.
+            for (first, last) in backticked_dotted_identifiers(desc) {
+                if defs_keys.contains(&first) {
+                    continue;
+                }
+                if allowlist_permits(
+                    ALLOWED_CROSS_OBJECT_PROPERTY_REFERENCES,
+                    &last,
+                    desc,
+                    &mut entry_used,
+                ) {
+                    continue;
+                }
+                match resolve_property_reference(&last, scope, &all_property_keys) {
+                    PropertyReferenceResolution::ResolvedLocally
+                    | PropertyReferenceResolution::NotAProperty => {}
+                    PropertyReferenceResolution::WrongObject => {
+                        wrong_object.push((last, desc.to_string()));
                     }
                 }
             }
@@ -745,6 +897,167 @@ mod tests {
                 &all_property_keys
             ),
             PropertyReferenceResolution::NotAProperty
+        );
+    }
+
+    /// CREW-71's exact evasion, reproduced directly: a dotted span whose
+    /// first segment is NOT a real `$defs` key reads exactly like the
+    /// established `TypeName.field` convention but isn't one -- before the
+    /// fix, `backticked_lower_case_identifiers`'s whole-span-bare-identifier
+    /// rule excluded every dotted span unconditionally, so
+    /// `` `payload.vendor_child_id` `` never reached
+    /// `resolve_property_reference` at all and a wrong-object reference
+    /// hiding behind a dotted prefix sailed through undetected.
+    #[test]
+    fn a_dotted_span_whose_first_segment_is_not_a_real_type_still_checks_its_last_segment() {
+        let text = "Passed through, on the same terms as `payload.vendor_child_id`.";
+        assert_eq!(
+            backticked_dotted_identifiers(text),
+            vec![("payload".to_string(), "vendor_child_id".to_string())],
+            "the dotted extractor must still find the span even though it isn't the \
+             TypeName.field convention"
+        );
+
+        let camel_case_object_scope: HashSet<String> = ["vendorChildId", "vendorParentRef"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let all_property_keys: HashSet<String> =
+            ["vendorChildId", "vendorParentRef", "vendor_child_id"]
+                .into_iter()
+                .map(String::from)
+                .collect();
+
+        // "payload" is not a $defs key, so the caller must fall through to
+        // checking the LAST segment against the enclosing scope -- same
+        // wrong-object shape CREW-67 already catches for a bare reference.
+        assert_eq!(
+            resolve_property_reference(
+                "vendor_child_id",
+                &camel_case_object_scope,
+                &all_property_keys
+            ),
+            PropertyReferenceResolution::WrongObject,
+            "a dotted span's last segment must resolve exactly like a bare reference once its \
+             first segment fails to name a real type"
+        );
+    }
+
+    /// The established, legitimate convention this whole check must leave
+    /// alone: a dotted span whose FIRST segment genuinely IS a `$defs` key
+    /// (e.g. `` `RunFlags.needsReconciliation` ``) is type-scoped by
+    /// construction -- the caller exempts it outright without ever
+    /// consulting `resolve_property_reference`, regardless of what the
+    /// last segment is or which object's description it appears in.
+    #[test]
+    fn a_dotted_span_whose_first_segment_is_a_real_type_is_exempt_outright() {
+        let text = "Sets the run's `RunFlags.needsReconciliation` flag.";
+        let (first, last) = backticked_dotted_identifiers(text)
+            .into_iter()
+            .next()
+            .expect("one dotted span");
+        assert_eq!(first, "RunFlags");
+        assert_eq!(last, "needsReconciliation");
+
+        let defs_keys: HashSet<String> = ["RunFlags".to_string()].into_iter().collect();
+        assert!(
+            defs_keys.contains(&first),
+            "a real $defs key must short-circuit before the last segment is ever checked"
+        );
+    }
+
+    /// Non-dotted backtick shapes that must never be mistaken for the
+    /// dotted-path convention: `` `Redactor::redact_text` `` (Rust path
+    /// syntax, no `.` at all) and `` `message/send` `` (an RPC method
+    /// name, `/`-separated). Neither should produce a candidate.
+    #[test]
+    fn non_dot_separated_backtick_spans_are_not_dotted_identifiers() {
+        let text = "See `Redactor::redact_text` and `message/send` for background.";
+        assert_eq!(
+            backticked_dotted_identifiers(text),
+            Vec::<(String, String)>::new(),
+            "neither `::` nor `/` is the dotted-path separator this check looks for"
+        );
+    }
+
+    /// CREW-72's exact bug, reproduced directly against
+    /// `shared_branch_properties`: an internally-tagged enum
+    /// (`#[serde(tag = "role")]`, e.g. `ClientAuth`) folds the shared tag
+    /// property into EVERY branch's own `properties` -- before the fix,
+    /// `collect_block` reset scope to empty at every `oneOf`/`anyOf`
+    /// boundary unconditionally, so the enum's own doc (a sibling of the
+    /// `oneOf`, one block above where `role` actually lands) never had
+    /// `role` in scope, and the check could only be satisfied with a
+    /// standing allowlist entry.
+    #[test]
+    fn a_property_shared_by_every_branch_is_claimed_for_the_wrapper_scope() {
+        let branches = vec![
+            serde_json::json!({
+                "properties": {"role": {"const": "worker"}, "workerField": {"type": "string"}}
+            }),
+            serde_json::json!({
+                "properties": {"role": {"const": "operator"}, "operatorField": {"type": "string"}}
+            }),
+        ];
+        assert_eq!(
+            shared_branch_properties(&branches),
+            ["role".to_string()]
+                .into_iter()
+                .collect::<HashSet<String>>(),
+            "role is the only property every branch shares -- the branch-specific fields must \
+             not leak into the wrapper's scope"
+        );
+    }
+
+    /// A genuinely disjoint `oneOf` (ordinary adjacent tagging, no shared
+    /// discriminant beyond what schemars puts on every variant trivially)
+    /// must not fabricate sharing that isn't there, and a branch with no
+    /// `properties` object at all (a bare `$ref` or a non-object variant)
+    /// must zero out the whole claim rather than silently skip that branch.
+    #[test]
+    fn branches_with_nothing_in_common_share_nothing() {
+        let disjoint = vec![
+            serde_json::json!({"properties": {"a": {}, "b": {}}}),
+            serde_json::json!({"properties": {"c": {}, "d": {}}}),
+        ];
+        assert_eq!(shared_branch_properties(&disjoint), HashSet::new());
+
+        let one_branch_has_no_properties = vec![
+            serde_json::json!({"properties": {"role": {}}}),
+            serde_json::json!({"$ref": "#/$defs/SomeOtherType"}),
+        ];
+        assert_eq!(
+            shared_branch_properties(&one_branch_has_no_properties),
+            HashSet::new(),
+            "a branch with no properties of its own means \"every branch shares this\" can't be \
+             claimed, even if every OTHER branch happens to agree"
+        );
+    }
+
+    /// The single-branch case: nothing in the shipped schema actually
+    /// produces a `oneOf`/`anyOf` with exactly one item (every real
+    /// `oneOf` has 2-35 branches, every real `anyOf` exactly 2), but the
+    /// function must still behave sensibly if one ever did. With one
+    /// branch, "the properties common to EVERY branch" is trivially that
+    /// branch's entire property set, so the wrapper's scope ends up
+    /// admitting every field of its sole branch. That's a deliberate
+    /// consequence of the definition, not a bug: this check only ever
+    /// widens scope (a false negative risk, never a false positive one),
+    /// and with exactly one branch the wrapper and the branch are
+    /// effectively the same object anyway, so there is nothing left for
+    /// the wrapper's own description to be "wrong" about.
+    #[test]
+    fn a_single_branch_shares_its_entire_property_set_with_the_wrapper() {
+        let single = vec![serde_json::json!({
+            "properties": {"onlyField": {}, "anotherField": {}}
+        })];
+        assert_eq!(
+            shared_branch_properties(&single),
+            ["onlyField".to_string(), "anotherField".to_string()]
+                .into_iter()
+                .collect::<HashSet<String>>(),
+            "one branch's entire property set is trivially \"shared\" -- deliberate, since it \
+             only widens the wrapper's scope rather than narrowing it"
         );
     }
 
