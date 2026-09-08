@@ -110,6 +110,8 @@ append-only log — pruning it is separate work from writing this rule down, and
   - [A fail-closed assertion whose failure path is never exercised is indistinguishable from an absent one](#a-fail-closed-assertion-whose-failure-path-is-never-exercised-is-indistinguishable-from-an-absent-one)
 - [Deletion Sweeps](#deletion-sweeps)
   - [A deletion sweep must sweep claims, not just references](#a-deletion-sweep-must-sweep-claims-not-just-references)
+- [Fixture Integrity](#fixture-integrity)
+  - [A byte-exact fixture is not text, and git will rewrite it](#a-byte-exact-fixture-is-not-text-and-git-will-rewrite-it)
 
 ---
 
@@ -1643,3 +1645,33 @@ of them were claims a grep-based inventory has no way to catch.
 **Regression tests:** N/A -- this is a review-process lesson, not a single code path. The concrete
 instance this WP left behind is fixed (`OmpTuiVendor::preflight` restores the enforcement `base_args`
 claims, with its own tests); the transferable practice is the takeaway.
+
+## Fixture Integrity
+
+### A byte-exact fixture is not text, and git will rewrite it
+
+**Location:** `fixtures/adapters/tui-screens/` and the repository's `.gitattributes` (CREW-79
+slice 1)
+
+**The bug:** The first `git add` of the vendor TUI screen captures printed
+`warning: ... CRLF will be replaced by LF the next time Git touches it`. These files are
+keystroke-level PTY recordings whose carriage returns are cursor positioning emitted by the vendor,
+and the tests read them as an exact byte stream. Left alone, git's end-of-line normalisation would
+have rewritten those bytes on the next checkout, so the committed fixtures would have stopped being
+what was measured — and **every test would still have passed**, because the tests assert on
+phrases that survive the rewrite, not on the bytes that were captured. The evidence would have
+degraded silently while continuing to look like evidence.
+
+**The lesson:** a fixture whose value is that it is byte-exact must be declared to git as not-text
+(`*.raw -text` here), and the warning is the only notice you get. Do not treat the absence of a
+second warning as proof the fix worked: the check that makes it a fact is comparing the **staged
+blob's** hash against the source file's, `git cat-file blob :<path> | shasum -a 256` against
+`shasum -a 256 < <source>`, for every file. That compares what the repository will actually hand
+the next reader with what was recorded, which is the only comparison that answers the question.
+The same applies to any future binary-ish fixture: a recording, a compiled artifact, anything where
+"it renders the same" is not the property being preserved.
+
+**Regression tests:** none possible for the `.gitattributes` itself — a test would read the working
+tree, which is the copy that looks correct either way. The protection is the attribute plus the
+staged-blob hash check at the time of adding, recorded in
+`fixtures/adapters/tui-screens/README.md`.

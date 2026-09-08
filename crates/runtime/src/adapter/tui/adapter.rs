@@ -1262,6 +1262,16 @@ impl<V: TuiVendor> TuiAdapter<V> {
     /// tailing state, journals the typed failure as a `ProcessExited`
     /// evidence so `RunLifecycleSink` settles the run as failed/lost
     /// rather than leaving it stuck, and returns `err` to the caller.
+    ///
+    /// CREW-78: the `ProcessExited` this emits is never bare. `err` is
+    /// the actual reason the start failed (discovery timeout, a
+    /// truncation failure, ...) and, before terminate()'s own exit
+    /// status is journaled, this records it as its own durable
+    /// `ProtocolHealthChanged{healthy: false}` diagnostic -- the same
+    /// event `resume_from` already uses for a healthy diagnostic. Before
+    /// this, the only place `err` was visible was the RPC response to
+    /// the leader, which is never journaled: a replay of the run showed
+    /// only a clean exit, indistinguishable from one that did real work.
     #[allow(clippy::too_many_arguments)]
     async fn fail_start(
         &self,
@@ -1274,6 +1284,21 @@ impl<V: TuiVendor> TuiAdapter<V> {
         worker_id: WorkerId,
         err: AdapterError,
     ) -> Result<(), AdapterError> {
+        emit(
+            &sink,
+            run_id,
+            task_id,
+            worker_id,
+            AdapterEventPayload::ProtocolHealthChanged {
+                healthy: false,
+                detail: Classified {
+                    class: ContentClass::Visible,
+                    value: format!("start failed: {err}"),
+                },
+            },
+            None,
+        )
+        .await;
         let outcome = pty.terminate().await;
         attach.stop();
         self.pane_coordinator

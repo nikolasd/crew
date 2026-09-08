@@ -34,6 +34,13 @@ So: "discovery now works" is accurate for what those reports measured — the
 conformance harness, in a workspace the harness itself pre-checked. It is not
 a statement about the shipped product.
 
+What the shipped product does at an untrusted workspace was measured directly
+on 2026-09-09 and is recorded in `2026-09-09-vendor-first-run-gates.md`: on
+claude the prompt-delivery sequence selects "No, exit" and the worker exits,
+and on codex it selects the accepting option and directory trust is granted.
+The captures behind that record are committed as
+`fixtures/adapters/tui-screens/`.
+
 ## Erratum — `session_resume` detail
 
 Each raw report's `session_resume` scenario carries the detail:

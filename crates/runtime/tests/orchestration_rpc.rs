@@ -4069,12 +4069,16 @@ async fn start_queued_run_releases_the_lease_and_worktree_when_driver_start_fail
         .call(5, "run/list", json!({ "taskId": task_id }))
         .await;
     let runs = list["result"]["runs"].as_array().unwrap();
-    assert_eq!(
-        runs.len(),
-        1,
-        "the queued run row must be preserved: {runs:?}"
-    );
-    assert_eq!(runs[0]["state"], "queued");
+    assert_eq!(runs.len(), 1, "the run row must be preserved: {runs:?}");
+    // CREW-78: `FailingRunDriver` never touches the adapter event sink at
+    // all, so nothing durable would otherwise record that this start
+    // failed -- exactly the fabricated-success gap the 2026-09-08
+    // attempt-3 conformance run found. `start_queued_run`'s own
+    // belt-and-braces backstop (`ensure_failed_after_start_error`) now
+    // forces the run terminal here, since `driver.start`'s error path
+    // left it stuck at `queued` with no way for the leader or `run/retry`
+    // to tell the start had failed.
+    assert_eq!(runs[0]["state"], "failed");
     let run_id = runs[0]["runId"].as_str().unwrap().to_string();
 
     let replay = client

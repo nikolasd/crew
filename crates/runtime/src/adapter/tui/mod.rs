@@ -29,6 +29,7 @@ pub use copilot::CopilotTuiVendor;
 pub use omp::OmpTuiVendor;
 mod discovery;
 mod input;
+mod screen;
 mod tailer;
 mod verify;
 

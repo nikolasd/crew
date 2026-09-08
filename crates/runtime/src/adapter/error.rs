@@ -57,9 +57,24 @@ impl AdapterErrorCode {
 /// conformance report) never has to guess which adapter or call failed.
 ///
 /// `detail` must never contain a secret value or raw hidden-reasoning
-/// content -- adapters are responsible for redacting `detail` themselves
-/// (typically by using a short, static description rather than echoing
-/// vendor output verbatim).
+/// content -- adapters are responsible for redacting `detail` themselves.
+///
+/// **This is a stated requirement, not a style preference: `detail` MUST
+/// be a short, static description, and MUST NOT echo captured vendor
+/// bytes (PTY output, transcript text, subprocess stderr) verbatim.**
+/// CREW-78 made this load-bearing where it previously was not --
+/// `fail_start` (`adapter/tui/adapter.rs`) now journals a TUI start
+/// failure's `AdapterError::to_string()` as a durable
+/// `ProtocolHealthChanged` diagnostic. Before that, `detail` reached only
+/// the RPC response to the caller, which the journal's own redaction
+/// boundary never has to answer for; now it crosses that boundary like
+/// any other adapter-sourced text (`DomainAdapterEventSink::sanitize`
+/// still runs the built-in and org secret-pattern scrubber over it even
+/// though `Visible` content is kept, not dropped -- see
+/// `crate::security::redaction::Redactor`), so a `detail` built by
+/// interpolating raw vendor bytes would durably leak whatever the vendor
+/// had just written, scrubber or not, if that text happened to contain
+/// no secret-shaped substring the scrubber recognizes.
 #[derive(Debug, Clone)]
 pub struct AdapterError {
     code: AdapterErrorCode,
