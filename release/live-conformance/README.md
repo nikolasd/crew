@@ -15,6 +15,25 @@ WP29 run harness output (no fields altered — provenance preserved).
 "runnable" = every scenario except `session_resume`, which is skipped by
 design (see below).
 
+## Erratum — "the untrusted-workspace problem #15 fixed" (added 2026-09-08)
+
+Two entries below describe the untrusted-workspace trust-modal problem as
+**fixed**. Scope that claim before relying on it: the fix
+(`ensure_copilot_workspace_trusted`,
+`crates/runtime/src/adapter/tui/copilot_conformance.rs:913`) lives entirely
+inside the Copilot **conformance harness** and has **zero production call
+sites**, for Copilot or any other vendor. Nothing in a real `crew_run` path
+checks workspace trust, and no other adapter has an equivalent at all.
+
+The 2026-09-08 live E2E hit the same class of failure against the **claude**
+adapter in a brand-new target repository, and it cost the run: see
+`2026-09-08-live-e2e-attempt-3.md`. `docs/compatibility.md:148` carries the
+same overstatement and is corrected by the same record.
+
+So: "discovery now works" is accurate for what those reports measured — the
+conformance harness, in a workspace the harness itself pre-checked. It is not
+a statement about the shipped product.
+
 ## Erratum — `session_resume` detail
 
 Each raw report's `session_resume` scenario carries the detail:

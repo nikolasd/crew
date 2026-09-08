@@ -8,9 +8,27 @@ under one dispatcher with subcommands (`health`, `run`, `runs`, `export`, `clean
 (`/crew status <runId>` → `/crew run <runId>`; `/crew-status` → `/crew health`), the monitor
 handler's two standing bugs are fixed (silent unknown-subcommand fallthrough, missing headless
 output), and `/crew-status`/`/crew-doctor`/`/crew-config` become one-release deprecation
-forwarders. `/crew-install` is unchanged and permanent. See
-`docs/superpowers/specs/2026-08-27-crew-command-normalization.md` for the full design and decision
-record.
+forwarders. `/crew-install` is unchanged and permanent.
+
+> **Reconstructed reference — added 2026-09-08.** This paragraph cited
+> `docs/superpowers/specs/2026-08-27-crew-command-normalization.md` for "the full design and decision
+> record". That specification was an ephemeral working document under a gitignored path and no longer
+> exists, so the citation could not be followed. What survives of it is reconstructed here; this is
+> not a quotation.
+>
+> **The outcome is recorded above and is verifiable in shipped code**, not in the lost document:
+> `packages/extension/src/index.ts:1-12` documents the resulting surface — one `/crew` dispatcher with
+> the eight subcommands, `/crew-install` separate and permanent, and `/crew-status`, `/crew-doctor`,
+> `/crew-config` as deprecation forwarders it describes as "removed in the release after next". The
+> problem being solved is also recorded above: `/crew status <runId>` and `/crew-status` were two
+> different commands one hyphen apart, and the monitor handler silently fell through on an unknown
+> subcommand.
+>
+> **What is not recoverable is the deliberation** — which alternative namings were weighed, and why a
+> one-release forwarder window was chosen over an immediate break or a permanent alias. No attempt is
+> made to reconstruct that, because inventing a rationale is worse than recording its absence. If the
+> forwarder removal is still outstanding, the schedule to check against is the code comment above,
+> not this line.
 
 **No Rust behavior changes since v0.5.0.** `crates/runtime` and `crates/protocol` are rebuilt at
 0.6.0 purely for version coherence (`crewd --version` must match the npm package); their code is

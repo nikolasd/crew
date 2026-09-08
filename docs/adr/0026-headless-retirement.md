@@ -14,8 +14,23 @@ conformance suite, with no operator depending on it specifically.
 
 Carrying two adapter implementations per vendor doubles the code, the fixtures, and the
 conformance surface that must be kept correct — for a path crew-v2 gap-closure's audit found no
-real deployment reaching. The design spec (§4.6) calls for retiring it outright rather than
-leaving it permanently inert and untested.
+real deployment reaching. The choice was to retire it outright rather than
+leave it permanently inert and untested.
+
+> **Reconstructed reference — added 2026-09-08.** This paragraph originally attributed that call to
+> `docs/superpowers/specs/2026-08-22-crew-v2-design.md` §4.6. That specification was an ephemeral
+> working document under a gitignored path and no longer exists, so the citation could not be
+> followed. The reasoning is reconstructed here from this ADR's own text and the shipped code, so the
+> decision stands without it. This is not a quotation; the specification's wording is not recoverable.
+>
+> The directive it carried was *retire, do not flag off*. The distinction: a feature-flagged path
+> still compiles, still has to be maintained, and still reports coverage it does not have, while
+> nothing exercises it. That reasoning is set out in full in "Decision Drivers" below and does not
+> depend on the lost document. What the specification did **not** settle, and what this ADR decided
+> on its own, is the harder half — that the retired mode stays *deserializable* so old journals and
+> configs still parse, while every path that would act on it returns a typed refusal. That shape is
+> verifiable in `ConfigError::HeadlessModeRetired` and `RegistryError::HeadlessControlPlaneRetired`,
+> not in any specification.
 
 ## Decision Drivers
 
@@ -89,5 +104,12 @@ adapters are now the entire adapter layer.
 
 * ADR-0025 — crew v2 TUI control plane (this ADR amends one sentence of it)
 * `docs/future-features.md` — "Headless Control Plane" (decision trigger to revisit)
-* `docs/superpowers/specs/2026-08-22-crew-v2-design.md` §4.6
-* `.superpowers/sdd/2026-08-22-crew-v2-gap-closure/wp-c.md`, `wp-c-report.md`
+* `docs/superpowers/specs/2026-08-22-crew-v2-design.md` §4.6 — **no longer exists** (an ephemeral
+  working document under a gitignored path). Its directive is reconstructed in "Context and Problem
+  Statement" above; this entry is left in place rather than deleted, because an ADR records what it
+  cited when it was written.
+* `.superpowers/sdd/2026-08-22-crew-v2-gap-closure/wp-c.md`, `wp-c-report.md` — **no longer exist**
+  (same gitignored ephemeral tree). These were the work-package notes behind the two references to
+  "crew-v2 gap-closure" above: the audit that found no real deployment reaching the headless path,
+  and the process rule that adapter deletions are a same-commit, all-call-sites operation. Both are
+  stated in full in this ADR and need no external source.
