@@ -77,6 +77,17 @@ pub struct TuiSupport {
     /// `crate::config::protocol_display_backend`; `None` for `Auto`,
     /// meaning "try the default chain").
     pub forced_backend: Option<crew_protocol::DisplayBackend>,
+    /// Forces every `PaneCoordinator` built from this
+    /// `TuiSupport` to `Hidden`, regardless of `forced_backend` above.
+    /// Set exactly once, by `lifecycle.rs`'s real `serve()`, from whether
+    /// `CREW_FORCE_HIDDEN_DISPLAYS` is present in this process's own
+    /// environment at startup -- never read anywhere else, so a test
+    /// constructing this struct directly states the value explicitly
+    /// (`false` for every non-production construction today, since none
+    /// of them register a real backend in the first place) rather than
+    /// depending on whatever the test binary's environment happens to
+    /// hold at the moment it runs.
+    pub force_hidden_displays: bool,
     /// `CrewConfig.adapters`, keyed by vendor name (`"claude"`, ...) --
     /// each vendor's own `TuiVendor` impl reads its own entry for `bin`/
     /// `permissionMode`/`model`/`sessionDir`/`extraArgs`.

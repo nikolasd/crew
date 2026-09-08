@@ -788,6 +788,36 @@ async fn real_daemon_survives_serve_stop_serve_with_ipc_transcript() {
         "run {run_id} must journal at least one event before restart"
     );
 
+    // This test's own `crew.json` never sets `display.backend`
+    // (defaults to `Auto`), which is exactly the shape that used to walk
+    // the real herdr/tmux/osWindow chain on a developer machine -- the
+    // nine orphaned `crewd attach` processes this ticket exists to stop.
+    // `.cargo/config.toml` sets `CREW_FORCE_HIDDEN_DISPLAYS` for this
+    // test binary and everything it spawns (this `crewd` child included),
+    // so the pane this run's TUI adapter attaches must have been forced
+    // to `Hidden`, with a typed `paneDowngraded` naming the cause -- never
+    // silently, and never a real backend. Checked the same
+    // string-contains way `wait_for_run_event` above already does,
+    // rather than depending on the envelope's exact nesting shape.
+    let replay = client
+        .call(9, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    let events = replay["result"]
+        .as_array()
+        .expect("events/replay must return an array");
+    let saw_forced_downgrade = events.iter().any(|e| {
+        serde_json::to_string(e).is_ok_and(|s| {
+            s.contains("\"paneDowngraded\"")
+                && s.contains("\"actualBackend\":\"hidden\"")
+                && s.contains("CREW_FORCE_HIDDEN_DISPLAYS")
+        })
+    });
+    assert!(
+        saw_forced_downgrade,
+        "expected a paneDowngraded event naming CREW_FORCE_HIDDEN_DISPLAYS with \
+         actualBackend hidden; got: {events:?}"
+    );
+
     // Graceful stop of the first daemon (genuine daemon restart). `shutdown`
     // clears/reaps it before these assertions can panic.
     let (stop_status, exit_code) = server.shutdown().expect("first daemon must still be live");
