@@ -175,7 +175,7 @@ crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/aud
 - **Rust toolchain:** tracks `stable` via `rust-toolchain.toml` — always the latest stable release, no fixed version. Use `rustup` so this is picked up automatically per-directory. CI picks up a new stable point release the day it ships; a local checkout only picks it up on `rustup update` — coordinate toolchain updates rather than running them ad hoc mid-effort on a machine shared with other automated work, since the update changes what "clean gate" means for everyone building there. Print `rustc --version` alongside test/lint results in any gate report, so a toolchain gap between two runs is visible instead of inferred from a run that was green in one place and red in another. Run one full-workspace `cargo clippy --all-targets --all-features -- -D warnings` after any toolchain update — a point release can start flagging a lint shape it previously missed.
 - **Formatter:** Biome for TS/JS (`bun run format`), `cargo fmt` for Rust. Linting disabled in Biome; use `cargo clippy` for Rust.
 - **Distribution:** Extension + skills install via the OMP marketplace (`.claude-plugin/marketplace.json`, git clone of this repo — public, cloned over HTTPS, no authentication required). The `crewd` binary downloads on demand as a GitHub Release asset via `/crew-install`, verified by SHA-256; a `GITHUB_TOKEN`/`GH_TOKEN` or a local `gh auth login` session is optional but recommended — it raises GitHub's unauthenticated rate limit (60/hour) to 5,000/hour, and is not a permission gate.
-- **Test environment:** Set `CREW_DISABLE_VENDOR_CLI=1` to skip live vendor CLI calls (required in CI to avoid billed model calls).
+- **Test environment:** Set `CREW_DISABLE_VENDOR_CLI=1` to skip live vendor CLI calls made by the conformance harness and test suite (required in CI to avoid billed model calls). It does not gate a running daemon — `run/submit` against a live `crewd` spawns the real vendor CLI regardless, so any live run through the daemon is a real, possibly billed, vendor launch.
 - **Cross-platform:** macOS (arm64/x64) and glibc Linux (arm64/x64). Everything else rejected with typed error.
 
 ---
@@ -206,6 +206,8 @@ crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/aud
 - **No AI-attribution of any kind in commits or PR descriptions** — no trailers, no agent or
   session identifiers, technical content only. A real build automation's own `Co-authored-by:` on
   a commit it generated is not a precedent for adding anything else.
+- **A citation must point at something that survives** — an in-repo path, an ADR, a PR number, or a
+  URL, never a local or gitignored file.
 - **Scratch work goes to a scratch location, not the home directory.** Logs, temporary state
   directories, and one-off scripts created for manual reproduction belong in a scratchpad or
   somewhere clearly named for cleanup (e.g. `/tmp/crew-<ticket>-<purpose>`) — not loose in a home

@@ -8,6 +8,109 @@ should be discovered by reading documentation, not by trial and error.
 
 **Reference:** These lessons are cross-referenced by file/ADR, not by `architecture.md` section number — that document was later rewritten onto the C4 model and no longer has numbered `§N` sections.
 
+## How to use this document
+
+1. **Adding a lesson:** append a new entry under the relevant heading (or a new heading, if none
+   fits) once a bug, incident, or debugging session teaches something that should have been
+   discoverable by reading rather than by trial and error. Cite the file/ADR the lesson attaches to,
+   as the existing entries do.
+2. **Revisiting:** when a later fix or a design change makes an entry's specific mechanism no longer
+   the way the system can fail, fold it into the entry that superseded it rather than leaving both to
+   be read side by side — a lesson that no longer describes a live failure mode is noise, not history.
+3. **Retiring:** when a lesson no longer applies and nothing here supersedes it (the subsystem it
+   was about was itself retired), remove it from this document and record why in an ADR, so the
+   retirement itself has a citation the way the original lesson did.
+
+This document is a catalog of lessons that still describe a way the system can fail, not an
+append-only log — pruning it is separate work from writing this rule down, and has not happened yet.
+
+## Topic index
+
+- [IPC and Client Management](#ipc-and-client-management)
+  - [Cached client must authenticate with the union of all roles](#cached-client-must-authenticate-with-the-union-of-all-roles)
+- [Extension Loading and Module Resolution](#extension-loading-and-module-resolution)
+  - [Never use `with { type: "json" }` imports at extension-load time](#never-use-with-type-json-imports-at-extension-load-time)
+- [Persistence and Event Broadcasting](#persistence-and-event-broadcasting)
+  - [Durable mutations must broadcast the same event they just committed](#durable-mutations-must-broadcast-the-same-event-they-just-committed)
+- [Run Lifecycle](#run-lifecycle)
+  - [A state edge driven by evidence must identify the cause, not merely correlate with it](#a-state-edge-driven-by-evidence-must-identify-the-cause-not-merely-correlate-with-it)
+  - [A documented state machine with no production writer is inert](#a-documented-state-machine-with-no-production-writer-is-inert)
+- [Workspace Leases and Resource Cleanup](#workspace-leases-and-resource-cleanup)
+  - [A resource acquired before a fallible step must be released on every path out of it](#a-resource-acquired-before-a-fallible-step-must-be-released-on-every-path-out-of-it)
+- [Security and Redaction](#security-and-redaction)
+  - [A redaction denylist is only as good as the shapes it was actually tested against](#a-redaction-denylist-is-only-as-good-as-the-shapes-it-was-actually-tested-against)
+- [Claims and Their Evidence](#claims-and-their-evidence)
+  - [A provenance claim is load-bearing only where it licenses skipping the guard](#a-provenance-claim-is-load-bearing-only-where-it-licenses-skipping-the-guard)
+  - [A parameter type is not a provenance claim in either direction](#a-parameter-type-is-not-a-provenance-claim-in-either-direction)
+  - [A reason must name the property that makes the field safe, not the intent behind it](#a-reason-must-name-the-property-that-makes-the-field-safe-not-the-intent-behind-it)
+  - [Put the reason beside the entry it justifies, and check the list against itself](#put-the-reason-beside-the-entry-it-justifies-and-check-the-list-against-itself)
+  - [A mechanism does not get to answer its own question](#a-mechanism-does-not-get-to-answer-its-own-question)
+- [Coordination Bounds](#coordination-bounds)
+  - [A bound enforced at one call site is not an enforced policy](#a-bound-enforced-at-one-call-site-is-not-an-enforced-policy)
+- [Domain Writes and Concurrency](#domain-writes-and-concurrency)
+  - [A check in one database round trip cannot guard a write in the next](#a-check-in-one-database-round-trip-cannot-guard-a-write-in-the-next)
+  - [An entire-struct write built on a stale read silently discards a concurrent field update](#an-entire-struct-write-built-on-a-stale-read-silently-discards-a-concurrent-field-update)
+  - [A root-cause lesson attaches to a pattern, not to the service the fix landed in](#a-root-cause-lesson-attaches-to-a-pattern-not-to-the-service-the-fix-landed-in)
+- [Recovery and Startup Sweeps](#recovery-and-startup-sweeps)
+  - [A startup sweep and a periodic sweep have different risk models](#a-startup-sweep-and-a-periodic-sweep-have-different-risk-models)
+- [Determinism and Content Addressing](#determinism-and-content-addressing)
+  - [A dependency feature enabled for one tool silently redefines every hash in the workspace](#a-dependency-feature-enabled-for-one-tool-silently-redefines-every-hash-in-the-workspace)
+- [Verification Discipline](#verification-discipline)
+  - [A promise about behavior is only tested by running it](#a-promise-about-behavior-is-only-tested-by-running-it)
+  - [A type checker is a gate only if it is run to failure](#a-type-checker-is-a-gate-only-if-it-is-run-to-failure)
+  - [A payload crosses several boundaries, and clearing the one you are thinking about tells you nothing about the others](#a-payload-crosses-several-boundaries-and-clearing-the-one-you-are-thinking-about-tells-you-nothing-about-the-others)
+  - [A citation establishes that a mechanism exists, not that your use of it is safe](#a-citation-establishes-that-a-mechanism-exists-not-that-your-use-of-it-is-safe)
+  - [Finding an instance's call site is not the same as enumerating the write's call sites](#finding-an-instances-call-site-is-not-the-same-as-enumerating-the-writes-call-sites)
+  - [A measurement can be wrong in a way that looks like an answer](#a-measurement-can-be-wrong-in-a-way-that-looks-like-an-answer)
+  - [An instrument you do not read against your own conclusion is not a check](#an-instrument-you-do-not-read-against-your-own-conclusion-is-not-a-check)
+  - [Thresholds calibrated on an idle machine are not thresholds](#thresholds-calibrated-on-an-idle-machine-are-not-thresholds)
+  - [`any` and `all` disagree on the empty set, and the flip that looks stricter is the one that opens](#any-and-all-disagree-on-the-empty-set-and-the-flip-that-looks-stricter-is-the-one-that-opens)
+  - [A test's name is a claim, and it is the claim people trust](#a-tests-name-is-a-claim-and-it-is-the-claim-people-trust)
+- [Instruments and Their Blind Spots](#instruments-and-their-blind-spots)
+  - [Reading from the ref is not reading the current ref](#reading-from-the-ref-is-not-reading-the-current-ref)
+  - [A filter over serialised text must normalise whitespace, and a hit count is a free self-check](#a-filter-over-serialised-text-must-normalise-whitespace-and-a-hit-count-is-a-free-self-check)
+  - [Enumerate by wire form, not by Rust type](#enumerate-by-wire-form-not-by-rust-type)
+  - [A scan that returns zero needs a positive control](#a-scan-that-returns-zero-needs-a-positive-control)
+  - [A finding about the baseline needs the baseline's conditions](#a-finding-about-the-baselines-conditions)
+  - [Not installed is not unreadable, and writing the caveat is not performing the check](#not-installed-is-not-unreadable-and-writing-the-caveat-is-not-performing-the-check)
+  - [File shape is not provenance](#file-shape-is-not-provenance)
+  - [Name-resolves-globally is not name-resolves-here](#name-resolves-globally-is-not-name-resolves-here)
+  - [Agreement is not verification](#agreement-is-not-verification)
+- [Health Checks (`doctor`)](#health-checks-doctor)
+  - [A check scoped to the Crew source tree must not run against `--repo`](#a-check-scoped-to-the-crew-source-tree-must-not-run-against---repo)
+- [Live Adapter Prompting](#live-adapter-prompting)
+  - [A prompt injected as one atomic write is at the mercy of the vendor's render loop](#a-prompt-injected-as-one-atomic-write-is-at-the-mercy-of-the-vendors-render-loop)
+  - [An unframed prompt's own newlines are submit keystrokes](#an-unframed-prompts-own-newlines-are-submit-keystrokes)
+  - [A nonce appended to a prompt cannot prove the prompt arrived](#a-nonce-appended-to-a-prompt-cannot-prove-the-prompt-arrived)
+  - [Two writers to one WAL file must both set a busy timeout](#two-writers-to-one-wal-file-must-both-set-a-busy-timeout)
+  - [A backstop must be far above the primary signal, or it is the primary signal](#a-backstop-must-be-far-above-the-primary-signal-or-it-is-the-primary-signal)
+  - [A progress bound cannot distinguish starvation from a deaf vendor, and does not need to](#a-progress-bound-cannot-distinguish-starvation-from-a-deaf-vendor-and-does-not-need-to)
+- [Reported Outcomes](#reported-outcomes)
+  - [A success report must describe what happened, not what was requested](#a-success-report-must-describe-what-happened-not-what-was-requested)
+  - [A status string is a claim, and needs the same evidence a state edge does](#a-status-string-is-a-claim-and-needs-the-same-evidence-a-state-edge-does)
+  - [A protocol type's doc comment is a shipped artifact, not an internal note](#a-protocol-types-doc-comment-is-a-shipped-artifact-not-an-internal-note)
+  - [Cite the source, do not copy it — a lifted quote is a second copy with no guard](#cite-the-source-do-not-copy-it-a-lifted-quote-is-a-second-copy-with-no-guard)
+- [Structural Limits and Long-Lived Consumers](#structural-limits-and-long-lived-consumers)
+  - [A path-length limit is a property of the layout, not an edge case](#a-path-length-limit-is-a-property-of-the-layout-not-an-edge-case)
+  - [A subscription that heals only on user action is not self-healing](#a-subscription-that-heals-only-on-user-action-is-not-self-healing)
+- [Build Determinism](#build-determinism)
+  - [A committed build artifact can depend on the build host's platform](#a-committed-build-artifact-can-depend-on-the-build-hosts-platform)
+  - [A toolchain that tracks `stable` moves under a local gate, and a lint change is detection rather than severity](#a-toolchain-that-tracks-stable-moves-under-a-local-gate-and-a-lint-change-is-detection-rather-than-severity)
+  - [Cargo trusts mtimes, so a restore-by-move can build stale](#cargo-trusts-mtimes-so-a-restore-by-move-can-build-stale)
+- [Protocol Evolution](#protocol-evolution)
+  - [Retiring a journaled wire value is three rules, not one](#retiring-a-journaled-wire-value-is-three-rules-not-one)
+- [Composition and Defaults](#composition-and-defaults)
+  - [A default trait-method body is permission to say nothing, and in a wrapper chain silence is wrong](#a-default-trait-method-body-is-permission-to-say-nothing-and-in-a-wrapper-chain-silence-is-wrong)
+- [Test Suite Integrity](#test-suite-integrity)
+  - [A mechanical type-level fix can compile clean while leaving a test's evidence invalid](#a-mechanical-type-level-fix-can-compile-clean-while-leaving-a-tests-evidence-invalid)
+  - [A semantics change needs two tests: one that distinguishes, one that preserves](#a-semantics-change-needs-two-tests-one-that-distinguishes-one-that-preserves)
+  - [Changing a doc comment's sigil is a test-suite edit when that comment holds a code fence](#changing-a-doc-comments-sigil-is-a-test-suite-edit-when-that-comment-holds-a-code-fence)
+  - [Ask what would make this test pass while the thing it names is broken](#ask-what-would-make-this-test-pass-while-the-thing-it-names-is-broken)
+  - [A fourth variant: the thing compared against was never at risk](#a-fourth-variant-the-thing-compared-against-was-never-at-risk)
+  - [A fail-closed assertion whose failure path is never exercised is indistinguishable from an absent one](#a-fail-closed-assertion-whose-failure-path-is-never-exercised-is-indistinguishable-from-an-absent-one)
+- [Deletion Sweeps](#deletion-sweeps)
+  - [A deletion sweep must sweep claims, not just references](#a-deletion-sweep-must-sweep-claims-not-just-references)
+
 ---
 
 ## IPC and Client Management

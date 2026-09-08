@@ -6,12 +6,11 @@ Everything is delivered through the OMP marketplace (extension + skills, git-clo
 
 ## Why Crew?
 
-Multiagent automation is hard. Most frameworks either:
-
-- **Put all the intelligence in the agent** (risky, hard to debug, no recovery)
-- **Put all the intelligence in your code** (complex, brittle, no replay)
-
-Crew splits the difference: **OMP decides what to do, Crew ensures it happens and can be replayed.**
+OMP already decides what to do: task intake, scheduling, worker selection, approvals, merge decisions,
+synthesis. Crew is the part of that system that makes sure it happens and can be replayed — it
+supervises the worker processes OMP spawns, persists a durable event journal, recovers after crashes,
+and feeds display backends, so an OMP session's decisions come with an audit trail instead of a lost
+terminal.
 
 Key benefits:
 
@@ -21,7 +20,7 @@ Key benefits:
 - **Adapter-agnostic.** Claude, Codex, Copilot, OMP-RPC — plug in any worker.
 - **No model calls required for monitoring.** Check runtime status, task state, or run history without spending a token.
 
-If you're building multiagent systems that need to be auditable, recoverable, and debuggable, Crew is your foundation.
+If your OMP-driven work needs to be auditable, recoverable, and debuggable, Crew is the extension that gives OMP those properties.
 
 ## Installation
 
@@ -115,7 +114,7 @@ This project is licensed under the [MIT License](LICENSE). See the LICENSE file 
 
 ## Known Limitations
 
-This is a pre-1.0 project. The review backlog is empty — the one open item is an unreproduced test-flake watch, tracked in the maintainer's local, gitignored `REVIEW.md` (engineering lessons from closed reviews live in [`docs/engineering-lessons.md`](docs/engineering-lessons.md)). What remains below are environment and protocol walls, verified against the current codebase. Every adapter is installed and authenticated here, and live TUI conformance runs against all four — claude, codex, and omp-rpc are fully green, while copilot alone is blocked on a confirmed vendor monthly-quota wall (raw reports under [`release/live-conformance/`](release/live-conformance/) with an erratum). None of the below is a "requires a vendor CLI" caveat.
+This is a pre-1.0 project. What gates the next release is recorded in `release/checklist-<version>.md` (currently [`release/checklist-0.7.0.md`](release/checklist-0.7.0.md)); engineering lessons from past incidents live in [`docs/engineering-lessons.md`](docs/engineering-lessons.md). What remains below are environment and protocol walls, verified against the current codebase. Every adapter is installed and authenticated here, and live TUI conformance runs against all four — claude, codex, and omp-rpc are fully green, while copilot alone is blocked on a confirmed vendor monthly-quota wall (raw reports under [`release/live-conformance/`](release/live-conformance/) with an erratum). None of the below is a "requires a vendor CLI" caveat.
 
 - **ACP v1 has no durable session handle, so Copilot cannot resume across processes.** A session
   that completed a real turn answers `session/load` with `Resource not found`, which fails
