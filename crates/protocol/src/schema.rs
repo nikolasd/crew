@@ -125,15 +125,23 @@ mod tests {
     )];
 
     /// Same shape and discipline as `ALLOWED_UNRESOLVED_BACKTICKED_NAMES`
-    /// (name, required_substring, reason) -- CREW-67's own check flags a
-    /// backticked lowercase name that IS a real property somewhere but
-    /// not of the object its description belongs to. Two shapes of
-    /// legitimate exception, neither a sibling-reference bug: a
-    /// deliberate cross-type mention (the description is explaining an
-    /// effect on, or relationship to, a DIFFERENT type's field, not
-    /// claiming the name as its own) and a deliberate-absence sentence
-    /// (the same pattern `Terminal` already covers above, applied to a
-    /// property name instead of a type name).
+    /// (name, required_substring, reason) -- flags a backticked lowercase
+    /// name that is either a real property somewhere but not of the object
+    /// its description belongs to (CREW-67's bare-reference check), or a
+    /// name that no reachable object has as a property at all but is still
+    /// referenced in dotted form because the type it actually belongs to
+    /// isn't itself reachable from `ProtocolDocument` (CREW-71's dotted
+    /// check, e.g. `policyQuarantined` below -- `RunFlags` has no `$defs`
+    /// entry, so nothing in the shipped schema's own properties will ever
+    /// contain this name, and that's exactly why it needs an entry here
+    /// rather than resolving on its own). Three shapes of legitimate
+    /// exception in total, none a sibling-reference bug: a deliberate
+    /// cross-type mention naming a property that DOES exist elsewhere in
+    /// the schema, a deliberate cross-type mention naming a property that
+    /// exists NOWHERE in the schema because its owning type isn't
+    /// reachable, and a deliberate-absence sentence (the same pattern
+    /// `Terminal` already covers above, applied to a property name instead
+    /// of a type name).
     ///
     /// This file used to carry a `role` entry for `ClientAuth`
     /// (internally tagged, `#[serde(tag = "role")]`): CREW-72 found that
@@ -302,6 +310,16 @@ mod tests {
     /// empty if any branch lacks a `properties` object of its own (nothing
     /// can be claimed shared then). See the call site's comment in
     /// `collect_block` for why this is the internal-tagging fix (CREW-72).
+    ///
+    /// That "any branch without `properties` -> empty" rule is also what
+    /// makes reusing this for `anyOf` safe, not merely uniform with
+    /// `oneOf`: every `anyOf` in the shipped schema is an `Option<T>`
+    /// shape, whose `null` branch is a bare `{"type": "null"}` with no
+    /// `properties` of its own. That branch alone zeroes the intersection,
+    /// so an optional field's wrapper never inherits its inner type's
+    /// whole property set. Simplifying this rule away (e.g. skipping
+    /// branches with no `properties` instead of zeroing out) would make
+    /// exactly that silently possible.
     fn shared_branch_properties(items: &[serde_json::Value]) -> HashSet<String> {
         let mut branch_keys = Vec::new();
         for item in items {
@@ -990,6 +1008,33 @@ mod tests {
             HashSet::new(),
             "a branch with no properties of its own means \"every branch shares this\" can't be \
              claimed, even if every OTHER branch happens to agree"
+        );
+    }
+
+    /// The single-branch case: nothing in the shipped schema actually
+    /// produces a `oneOf`/`anyOf` with exactly one item (every real
+    /// `oneOf` has 2-35 branches, every real `anyOf` exactly 2), but the
+    /// function must still behave sensibly if one ever did. With one
+    /// branch, "the properties common to EVERY branch" is trivially that
+    /// branch's entire property set, so the wrapper's scope ends up
+    /// admitting every field of its sole branch. That's a deliberate
+    /// consequence of the definition, not a bug: this check only ever
+    /// widens scope (a false negative risk, never a false positive one),
+    /// and with exactly one branch the wrapper and the branch are
+    /// effectively the same object anyway, so there is nothing left for
+    /// the wrapper's own description to be "wrong" about.
+    #[test]
+    fn a_single_branch_shares_its_entire_property_set_with_the_wrapper() {
+        let single = vec![serde_json::json!({
+            "properties": {"onlyField": {}, "anotherField": {}}
+        })];
+        assert_eq!(
+            shared_branch_properties(&single),
+            ["onlyField".to_string(), "anotherField".to_string()]
+                .into_iter()
+                .collect::<HashSet<String>>(),
+            "one branch's entire property set is trivially \"shared\" -- deliberate, since it \
+             only widens the wrapper's scope rather than narrowing it"
         );
     }
 
