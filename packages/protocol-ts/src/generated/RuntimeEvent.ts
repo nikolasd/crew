@@ -64,6 +64,11 @@ requestedPlacement: DisplayPlacement,
  */
 actualBackend: DisplayBackend, 
 /**
+ * The backends tried, in order, before this downgrade -- the
+ * same sequence resolution walked to pick `requested_backend`.
+ */
+attempted: Array<DisplayBackend>, 
+/**
  * Why creation failed, redacted. The typed fields above are what
  * a listener should act on; this is operator-facing detail only.
  */

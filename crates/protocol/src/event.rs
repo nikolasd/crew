@@ -980,6 +980,21 @@ pub enum RuntimeEvent {
         requested_placement: DisplayPlacement,
         /// The backend actually used instead.
         actual_backend: DisplayBackend,
+        // CREW-73: D28's third channel ("extend `DisplaySelection.attempts`
+        // to record post-selection pane-creation failures") named a field
+        // with no consumer -- `DisplaySelection` never reaches a wire
+        // message or `RuntimeEvent`, so extending it would have built a
+        // channel with no far end. This is the actual, journaled home for
+        // the same intent: the sequence a listener needs to see why the
+        // preferred backend lost is exactly the one this event already
+        // fires for. Recorded at attach time (`PaneCoordinator::attach`'s
+        // own `resolve()` call), not threaded down from `run/submit`'s
+        // earlier resolve -- availability can change between the two, and
+        // the attach-time sequence is the honest record of what was
+        // actually tried.
+        /// The backends tried, in order, before this downgrade -- the
+        /// same sequence resolution walked to pick `requested_backend`.
+        attempted: Vec<DisplayBackend>,
         // This is subprocess stderr (tmux/herdr's own error output),
         // never runtime-authored text -- `pane_ref` on the sibling
         // `DisplayEvent` above draws the identical line ("never terminal
