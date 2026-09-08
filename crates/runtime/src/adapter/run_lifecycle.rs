@@ -9,9 +9,14 @@
 //! | `ProcessStarted` | `queued -> starting` |
 //! | `TurnEnded` | up to `waitingUser` (non-terminal -- ADR-0027) |
 //! | any other payload except `ProcessExited`/`TurnEnded` | up to `working` |
-//! | `ProcessExited { exit_code: Some(0), signal: None }` | `-> succeeded` |
-//! | `ProcessExited` with a non-zero code or a signal | `-> failed` |
+//! | `ProcessExited` with an observed exit code (0 or otherwise) or a signal | `-> failed` |
 //! | `ProcessExited` with no code and no signal | `-> lost` |
+//!
+//! CREW-78: a TUI vendor process exiting cleanly is never itself evidence of
+//! success -- only the leader's own `run/finish` call judges that
+//! (`OrchestrationService::run_finish`'s doc comment). A zero exit means the
+//! process (or its terminal) closed, nothing more; `lost` stays reserved for
+//! an exit the supervisor could not observe at all.
 //!
 //! Four properties this shape depends on:
 //!
@@ -601,16 +606,18 @@ fn next_hop(from: &RunState, target: &RunState) -> Option<RunState> {
 }
 
 /// The terminal state an exit status is evidence of. A signalled death is
-/// `failed` even when a code is present (the code is not trustworthy once a
-/// signal is); a clean zero exit is `succeeded`; any other code is `failed`;
-/// and an exit whose status the supervisor could not observe at all is
-/// `lost` -- ADR-0023 names the uncertainty rather than guessing.
+/// `failed`; any observed exit code is `failed`, including zero -- CREW-78:
+/// a cleanly-exited-but-did-nothing run is `failed`, never a guessed
+/// `succeeded` (that judgment belongs to the leader's own `run/finish`,
+/// ADR-0027). An exit whose status the supervisor could not observe at all
+/// is `lost` -- ADR-0023 names that uncertainty rather than guessing, and
+/// it is the ONLY case `lost` now covers: a `ProcessExited` with an actual
+/// code or signal was, by definition, something the supervisor observed.
 fn terminal_state_for(exit_code: Option<i32>, signal: Option<&str>) -> RunState {
     if signal.is_some() {
         return state("failed");
     }
     match exit_code {
-        Some(0) => state("succeeded"),
         Some(_) => state("failed"),
         None => state("lost"),
     }
@@ -1444,8 +1451,15 @@ mod tests {
         db.shutdown().await.expect("shutdown database");
     }
 
+    /// CREW-78: a bare zero exit is never itself evidence of success -- a
+    /// TUI vendor process exiting is not the leader closing the
+    /// conversation via `run/finish` (ADR-0027). This is the "process
+    /// exit 0 with no turn on a parked run" shape from the 2026-09-08
+    /// attempt-3 conformance run (`01a08253`, minus the `waitingUser`
+    /// detour -- see `an_exit_while_waiting_on_a_user_routes_through_working_to_failed`
+    /// for that one) exercised straight from `working`.
     #[tokio::test]
-    async fn a_zero_exit_settles_the_run_as_succeeded() {
+    async fn a_zero_exit_settles_the_run_as_failed() {
         let (_dir, db) = open_db().await;
         let project_id = ProjectId::new();
         let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
@@ -1473,14 +1487,14 @@ mod tests {
         .await
         .expect("emit");
 
-        assert_eq!(run_state(&db, run_id).await, "succeeded");
+        assert_eq!(run_state(&db, run_id).await, "failed");
         assert_eq!(
             run_states(&db, run_id).await,
             vec![
                 "queued".to_string(),
                 "starting".to_string(),
                 "working".to_string(),
-                "succeeded".to_string()
+                "failed".to_string()
             ]
         );
         assert!(
@@ -1655,8 +1669,18 @@ mod tests {
         db.shutdown().await.expect("shutdown database");
     }
 
+    /// CREW-78: a human closing a parked worker's terminal must not read as
+    /// success. This reproduces the 2026-09-08 attempt-3 conformance run's
+    /// F17 (`01a08253`): the run reached `waitingUser` with no real
+    /// `TurnEnded` ever journaled through this sink (`drive_to_state`
+    /// force-writes the state, exactly like the leftover watcher on a
+    /// closed pane observed a clean exit with no new turn of its own), and
+    /// a bare zero exit arrived. Unlike the old `succeeded` target,
+    /// `waitingUser -> failed` is a direct, legal edge (`RunState::
+    /// can_transition_to`), so no forced intermediate hop is needed here --
+    /// the walk lands on `failed` in one commit.
     #[tokio::test]
-    async fn an_exit_while_waiting_on_a_user_routes_through_working_to_succeeded() {
+    async fn an_exit_while_waiting_on_a_user_settles_the_run_as_failed() {
         let (_dir, db) = open_db().await;
         let project_id = ProjectId::new();
         let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
@@ -1684,9 +1708,9 @@ mod tests {
         .await
         .expect("emit");
 
-        // `waitingUser -> succeeded` is illegal, so the walk commits the
-        // forced intermediate hop before the terminal edge.
-        assert_eq!(run_state(&db, run_id).await, "succeeded");
+        // `waitingUser -> failed` is a legal direct edge, unlike the old
+        // `waitingUser -> succeeded` target -- no forced `working` hop.
+        assert_eq!(run_state(&db, run_id).await, "failed");
         assert_eq!(
             run_states(&db, run_id).await,
             vec![
@@ -1694,8 +1718,7 @@ mod tests {
                 "starting".to_string(),
                 "working".to_string(),
                 "waitingUser".to_string(),
-                "working".to_string(),
-                "succeeded".to_string()
+                "failed".to_string()
             ]
         );
         db.shutdown().await.expect("shutdown database");

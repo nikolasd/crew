@@ -867,10 +867,82 @@ impl OrchestrationService {
                 )
                 .await?;
             }
+            self.ensure_failed_after_start_error(run_id).await;
             return Err(err);
         }
 
         Ok(workspace_path)
+    }
+
+    /// CREW-78 belt-and-braces, not the primary mechanism: `RunDriver::
+    /// start` failing is normally already durable on its own -- the TUI
+    /// adapter's `fail_start` journals a `ProcessExited` before returning
+    /// `Err`, and `RunLifecycleSink` settles that as `failed`
+    /// (`adapter/run_lifecycle.rs`). This exists for the start error path
+    /// that returns before ever reaching the adapter's own sink (or a
+    /// future adapter that forgets to route through one) -- without it,
+    /// such a run would sit non-terminal forever with no way for the
+    /// leader or `run/retry` to tell. A no-op on the common path: it only
+    /// ever commits when the primary mechanism did not already reach a
+    /// terminal state, and the warning below flags exactly that case as
+    /// worth investigating rather than silently compensating for it.
+    async fn ensure_failed_after_start_error(&self, run_id: RunId) {
+        let project_id = self.project_id;
+        let run = match self.db.run_domain_op(query::run_get_op(run_id)).await {
+            Ok(run) => run,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    run_id = %run_id,
+                    "CREW-78 backstop: failed to read run state after a start error"
+                );
+                return;
+            }
+        };
+        let Some(current) = run["state"]
+            .as_str()
+            .and_then(|s| RunState::try_from(s).ok())
+        else {
+            return;
+        };
+        if current.is_terminal() {
+            return;
+        }
+        tracing::warn!(
+            run_id = %run_id,
+            from = %current,
+            "run/submit's start error left the run non-terminal; forcing it to failed \
+             (CREW-78 backstop -- the adapter's own failure path should already have done \
+             this)"
+        );
+        // Unlike `succeeded` (`run_finish`'s walk), `failed` is a legal
+        // direct edge from every non-terminal state (`RunState::
+        // can_transition_to`), so this is always a single hop.
+        let outcome = self
+            .db
+            .run_domain_op(Box::new(move |conn| {
+                let mut repo = DomainRepository::new(conn, project_id);
+                repo.transition_run(
+                    run_id,
+                    &RunState::try_from("failed").expect("valid state"),
+                    None,
+                )
+                .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+            }))
+            .await;
+        match outcome {
+            Ok(mut committed) => self.broadcast(&mut committed),
+            Err(err) => {
+                // Benign: something else (the primary mechanism, a
+                // concurrent cancel) already won the race to a terminal
+                // state.
+                tracing::debug!(
+                    error = %err,
+                    run_id = %run_id,
+                    "CREW-78 backstop transition did not apply"
+                );
+            }
+        }
     }
 
     /// The `workspaceMode` string a run response echoes for a resolved
