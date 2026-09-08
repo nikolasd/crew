@@ -249,7 +249,7 @@ fn lease_release_proceeds_past_a_stale_socket_left_by_a_crash() {
     );
 }
 
-/// CREW-61: `crewd lease release`'s own teardown-failure path
+/// `crewd lease release`'s own teardown-failure path
 /// (`cli.rs`'s `CleanupFailed` construction, distinct from the three
 /// `OrchestrationService` sites `orchestration_rpc.rs` covers) is the
 /// fourth site whose `error` field was made `Redacted`. This drives a

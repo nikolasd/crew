@@ -361,7 +361,7 @@ impl<'c> DomainRepository<'c> {
     }
 
     /// Journals a resolved backend's pane creation failure and the
-    /// fallback backend used instead (CREW-60/D28). Typed fields, not the
+    /// fallback backend used instead. Typed fields, not the
     /// generic `Diagnostic` channel: a listener (the monitor's sticky
     /// row flag) needs `actual_backend`/`requested_backend` directly,
     /// never a free-text message meant for a human.
@@ -394,8 +394,8 @@ impl<'c> DomainRepository<'c> {
     }
 
     /// Reads a run's current stored state, fresh, on this same connection.
-    /// The one intended caller is a `RunResumed`-journaling call site
-    /// (CREW-58): read this immediately before attempting the transition
+    /// The one intended caller is a `RunResumed`-journaling call site:
+    /// read this immediately before attempting the transition
     /// to `working`, in the SAME `run_domain_op` closure -- the daemon's
     /// single-actor-owns-the-connection design means no other closure can
     /// interleave between this read and that attempt, so the two are
@@ -422,7 +422,7 @@ impl<'c> DomainRepository<'c> {
         })
     }
 
-    /// Journals why a settled run resumed to `working` (CREW-58/D30).
+    /// Journals why a settled run resumed to `working`.
     ///
     /// The caller is responsible for calling this ONLY when its own
     /// `transition_run` call to `working` actually landed the edge, and
@@ -1432,7 +1432,7 @@ impl<'c> DomainRepository<'c> {
         run_id: RunId,
         level: crew_protocol::DiagnosticLevel,
         code: impl Into<String>,
-        // CREW-61: `Redacted`, deliberately not `impl Into<String>`. Taking
+        // `Redacted`, deliberately not `impl Into<String>`. Taking
         // a bare string here would absorb the decision on every caller's
         // behalf -- the compiler would be satisfied and no producer would
         // ever be asked whether its message carries third-party text. Two
@@ -1536,9 +1536,9 @@ impl<'c> DomainRepository<'c> {
             worker_id,
             answered_by,
             // Read back out of `escalations.answer`, which is written from a
-            // `message/send` payload -- already redacted at that boundary
-            // (CREW-28). The claim is that it came out of the redactor,
-            // which it did, one write earlier.
+            // `message/send` payload -- already redacted at that boundary.
+            // The claim is that it came out of the redactor, which it did,
+            // one write earlier.
             answer: answer.map(crew_protocol::Redacted::from_sanitized),
         };
         self.append_and_apply(
@@ -2627,8 +2627,8 @@ impl<'c> DomainRepository<'c> {
                 violation_id,
                 resolution: resolution.to_string(),
                 // The resolver is by definition the authorized principal:
-                // the guarded write below refuses anyone else. CREW-61
-                // types this `Redacted`; the claim made here is
+                // the guarded write below refuses anyone else. This field
+                // is typed `Redacted`; the claim made here is
                 // runtime-authored because the value that lands is the one
                 // the guarded write just authorized, not free text a caller
                 // chose -- if that guard ever loosens, this claim becomes

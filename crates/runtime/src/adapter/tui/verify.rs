@@ -1,22 +1,22 @@
-//! Post-submit verification that the vendor recorded the whole prompt
-//! (CREW-13).
+//! Post-submit verification that the vendor recorded the whole prompt.
 //!
-//! CREW-4 fixed the mechanism that corrupted long prompts — they now
-//! travel as one bracketed paste in paced chunks, and a vendor that stops
-//! reading its stdin fails the write loudly. What neither of those covers
-//! is the vendor accepting every byte and then truncating in its own
-//! composer: a paste-size cap, an input-length limit, a render bug. From
-//! the adapter's side that is indistinguishable from success.
+//! Long prompts used to arrive corrupted when submitted line-by-line.
+//! That's fixed now: they travel as one bracketed paste in paced chunks,
+//! and a vendor that stops reading its stdin fails the write loudly. What
+//! neither of those covers is the vendor accepting every byte and then
+//! truncating in its own composer: a paste-size cap, an input-length
+//! limit, a render bug. From the adapter's side that is indistinguishable
+//! from success.
 //!
 //! Nonce presence does not answer it. The discovery nonce is *appended*
 //! to the prompt as a self-describing, ASCII-only tag
 //! (`"<prompt>\n\n[crew:<nonce> run-correlation id; ...]"`, built by
-//! `adapter::compose_injected_prompt`; the wording is CREW-83, the shape
-//! and position are unchanged from CREW-13's original), so a transcript
-//! containing it proves only that the tail arrived — which is precisely
-//! the half that survived the original CREW-4 corruption. The head is
-//! what goes missing, so the check has to compare the recorded text
-//! itself.
+//! `adapter::compose_injected_prompt`; the wording was later made
+//! self-describing, but the shape and position are unchanged from the
+//! original), so a transcript containing it proves only that the tail
+//! arrived — which is precisely the half that survived the original
+//! line-by-line corruption. The head is what goes missing, so the
+//! check has to compare the recorded text itself.
 //!
 //! Read once, straight off the discovered transcript, rather than through
 //! the event pipeline: a user entry produces no `TuiEvent` and must not
@@ -35,7 +35,8 @@ pub(crate) enum PromptVerdict {
     Intact,
     /// The vendor recorded a *different* prompt: it accepted the bytes and
     /// then truncated or altered them. The run must fail — this is the
-    /// silent fragment CREW-4 exists to prevent, arriving by another road.
+    /// silent fragment the chunked bracketed-paste write exists to
+    /// prevent, arriving by another road.
     Corrupted {
         expected_len: usize,
         recorded_len: usize,
@@ -146,9 +147,10 @@ mod tests {
         );
     }
 
-    /// The CREW-4 shape, arriving by a different road: the nonce is
-    /// appended, so a truncated head still carries it and still passes
-    /// discovery. Only comparing the text catches this.
+    /// The truncation shape this module exists to catch, arriving by a
+    /// different road: the nonce is appended, so a truncated head still
+    /// carries it and still passes discovery. Only comparing the text
+    /// catches this.
     #[test]
     fn a_prompt_whose_head_was_lost_is_corrupted_not_intact() {
         let injected = "line one\nline two\nline three [crew:n1]";
@@ -178,7 +180,7 @@ mod tests {
 
     #[test]
     fn a_carriage_return_difference_is_not_corruption() {
-        // `paste_chunks` folds CR to LF on the way out (CREW-4), so a
+        // `paste_chunks` folds CR to LF on the way out, so a
         // vendor recording LF where the caller wrote CRLF is agreement,
         // not disagreement.
         let injected = "first\r\nsecond [crew:n1]";

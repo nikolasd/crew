@@ -196,7 +196,7 @@ pub struct RecoveryCoordinator {
     /// The resume-first seam. `None` keeps the pre-WP15 behavior exactly;
     /// `Some` makes every non-terminal run a resume candidate first.
     resume: Option<ResumeSeam>,
-    /// CREW-61: `resume_failed` journals the resume attempt's own error, and
+    /// `resume_failed` journals the resume attempt's own error, and
     /// that error comes from the adapter registry -- third-party text that
     /// can name a transcript path. Built-ins-only in the test constructors;
     /// production passes the org-configured instance from `lifecycle.rs`.
@@ -813,7 +813,7 @@ impl RecoveryCoordinator {
     /// or `resume_failed`) through the domain repository and broadcasts the
     /// very envelope it committed -- the same commit-and-broadcast-equal rule
     /// every other domain mutation follows.
-    /// CREW-61: `message` is `Redacted`, so each caller states where its
+    /// `message` is `Redacted`, so each caller states where its
     /// text came from -- `resume_attempted`/`resume_succeeded` are
     /// runtime-authored sentences, `resume_failed` carries the registry's
     /// own error and goes through the redactor.

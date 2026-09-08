@@ -529,7 +529,7 @@ async fn events_replay_returns_committed_events_after_sequence() {
     assert_eq!(events[0]["event"]["type"], "runtimeStarted");
 }
 
-/// CREW-52: a journal row that fails to deserialize (a deleted variant like
+/// A journal row that fails to deserialize (a deleted variant like
 /// `DisplayPlacement::Embedded`, or any other protocol drift) must produce
 /// a legible error naming the remedy, not a bare serde message. Seeds a
 /// malformed row directly via a raw connection to the same database file
@@ -557,10 +557,10 @@ async fn events_replay_reports_a_legible_error_for_a_journal_that_predates_this_
     }
     {
         let conn = rusqlite::Connection::open(&paths.database).unwrap();
-        // A REAL journal row, not a fabricated unknown type: staff's review
-        // on #87 -- the case this feature exists for is exactly this one,
-        // a valid event carrying a retired inner enum value (`Embedded`,
-        // deleted this same ticket), not an unrecognized top-level `type`.
+        // A REAL journal row, not a fabricated unknown type -- the case
+        // this feature exists for is exactly this one, a valid event
+        // carrying a retired inner enum value (`Embedded`, deleted
+        // alongside this feature), not an unrecognized top-level `type`.
         // Whoever debugs an actual "journal predates this binary" error
         // will be looking at a row shaped like this, not a made-up type
         // string.
@@ -1076,7 +1076,7 @@ async fn omp_agent_directory_must_be_absolute_existing_and_owned() {
     );
 }
 
-/// CREW-66: `instanceId` lands verbatim in `tasks.owner_client_instance_id`,
+/// `instanceId` lands verbatim in `tasks.owner_client_instance_id`,
 /// `plans.owner_client_instance_id` and `policy_violations.resolved_by` --
 /// durable TEXT columns that no redactor inspects -- so the handshake must
 /// bound it. The unit tests in `ipc::connection` prove the validator

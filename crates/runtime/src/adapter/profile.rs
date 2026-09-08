@@ -317,7 +317,7 @@ pub enum ProfileError {
         "permissionEnvelope contains a secret-shaped value; use environmentAllowlist for credentials instead"
     )]
     SecretShapedPermissionEnvelope,
-    /// CREW-7: `mode: "headless"` (explicit, or omitted and defaulted by
+    /// `mode: "headless"` (explicit, or omitted and defaulted by
     /// [`AdapterMode`]'s own wire-compat `#[default]`) was given at
     /// `profile/register` time. Rejected here, at registration, rather
     /// than only at dispatch (`RegistryError::HeadlessControlPlaneRetired`)
@@ -523,7 +523,7 @@ mod retired_headless_registration_tests {
         }
     }
 
-    /// CREW-7: a *new* `profile/register` request must be rejected up
+    /// A *new* `profile/register` request must be rejected up
     /// front for a reserved adapter kind whose mode is explicitly the
     /// retired `Headless` -- not accepted only to fail later, at first
     /// submit, with a confusing delay (the existing

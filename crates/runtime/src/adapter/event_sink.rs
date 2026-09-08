@@ -149,7 +149,7 @@ pub enum AdapterEventPayload {
 pub trait AdapterEventSink: Send + Sync {
     fn emit(&self, event: AdapterEvent) -> AdapterFuture<'_, u64>;
 
-    /// A genuine new user-authored transcript entry (CREW-47 D1) --
+    /// A genuine new user-authored transcript entry --
     /// evidence for a TUI adapter to resume a run a finished turn parked,
     /// on the same terms a delivered follow-up does
     /// (`OrchestrationService::message_send`'s own resume), not something
@@ -233,7 +233,7 @@ impl DomainAdapterEventSink {
     /// redaction-scanned and kept; `Thinking`/`Secret` fragments are
     /// dropped to `None`, never coerced to an empty string.
     ///
-    /// Returns [`Redacted`] rather than `String` (CREW-29), so every
+    /// Returns [`Redacted`] rather than `String`, so every
     /// vendor-text field on a `RuntimeEvent` can only be filled from the
     /// redactor's own output. That is what makes this the single blessed
     /// route for vendor content: a new field cannot be populated by
@@ -584,16 +584,16 @@ impl AdapterEventSink for DomainAdapterEventSink {
     /// The practical cost is real -- the `waitingUser -> working` edge this
     /// causes (in `RunLifecycleSink`, downstream of this sink in the
     /// production chain) has no journaled cause of its own. During the
-    /// live E2E that found CREW-47, the reversal was visible in the
-    /// sequence (adjacent seq 75/76) but nothing in the journal said why
-    /// it happened -- exactly this gap. The cause is still recoverable
+    /// live E2E where this exact gap was first observed, the reversal was
+    /// visible in the sequence (adjacent seq 75/76) but nothing in the
+    /// journal said why it happened. The cause is still recoverable
     /// today, indirectly: the message row `message_send` created (if
     /// resumption came from a follow-up) or the vendor's own transcript
     /// (if it came from a real user turn) -- but not from the run's own
     /// event stream. Journaling the cause directly is a proposed follow-up
     /// (flagged to the maintainer), not solved here: it would need its own
     /// `RuntimeEvent`/`AdapterEventPayload` variant, a `crates/protocol`
-    /// change outside what CREW-47/48 should absorb.
+    /// change outside this sink's own scope.
     fn note_real_user_turn(&self, run_id: RunId) -> AdapterFuture<'_, ()> {
         let _ = run_id;
         Box::pin(async { Ok(()) })

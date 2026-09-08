@@ -1,4 +1,4 @@
-//! Prompt delivery framing for vendor TUIs (CREW-4).
+//! Prompt delivery framing for vendor TUIs.
 //!
 //! Every reserved TUI vendor's `compose_input` is "the message bytes plus
 //! one trailing CR" -- the CR is the submit keystroke, and the adapter
@@ -184,7 +184,7 @@ mod tests {
         assert_eq!(delivered_payload(&chunks), prompt);
     }
 
-    /// The CREW-4 size matrix. Multi-line at every size, since embedded
+    /// This module's paste-corruption size matrix. Multi-line at every size, since embedded
     /// newlines -- not length -- are the mechanism that corrupted the
     /// prompt; plus a single-line control at the largest size, which is
     /// the shape that would have passed even before the fix.

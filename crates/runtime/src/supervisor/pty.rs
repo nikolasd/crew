@@ -104,7 +104,7 @@ pub struct PtyProcess {
     master: SyncMasterPty,
     input_tx: mpsc::Sender<WriteJob>,
     /// Cumulative bytes the pty master has accepted over this process's
-    /// lifetime, published by the writer thread (CREW-70). Monotonic and
+    /// lifetime, published by the writer thread. Monotonic and
     /// never reset: callers compare two reads, they never interpret the
     /// absolute value.
     accepted: Arc<AtomicU64>,
@@ -213,7 +213,7 @@ impl PtyProcess {
             .spawn(move || {
                 let accepted = accepted_writer;
                 while let Some(job) = input_rx.blocking_recv() {
-                    // CREW-70: an explicit write loop rather than
+                    // An explicit write loop rather than
                     // `write_all`, so the bytes the vendor has actually
                     // accepted are observable from outside this thread.
                     // `write_all` loops over `write()` internally, which
@@ -335,7 +335,7 @@ impl PtyProcess {
     }
 
     /// Cumulative bytes the pty master has accepted since this process
-    /// started (CREW-70).
+    /// started.
     ///
     /// Only ever meaningful as a *difference* between two reads: it says
     /// whether a write is advancing, never how far along one job is. A

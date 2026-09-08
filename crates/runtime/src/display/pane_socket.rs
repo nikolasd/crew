@@ -1,5 +1,4 @@
-//! Pane-socket liveness, and the sweep that removes the dead ones
-//! (CREW-3 wave 3 / CREW-15).
+//! Pane-socket liveness, and the sweep that removes the dead ones.
 //!
 //! Two consumers needed the same question answered — "is there really a
 //! pane behind this socket?" — and both were getting it wrong in the same
@@ -16,7 +15,7 @@
 //!
 //! ## Why the sweep is safe across repositories
 //!
-//! Since CREW-1 the pane directory is per-*user*, not per-repository: one
+//! The pane directory is per-*user*, not per-repository: one
 //! `$XDG_RUNTIME_DIR/crew` (or `/tmp/crew-<uid>`) holds the attach sockets
 //! of every repository this user runs Crew against. So a daemon starting
 //! for one repository sees another repository's live sockets sitting beside
@@ -54,7 +53,7 @@ const LIVENESS_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 /// Whether a pane attach socket has a real `AttachServer` behind it right
 /// now.
 ///
-/// CREW-30: a completed `connect()` alone is not enough. It proves a
+/// A completed `connect()` alone is not enough. It proves a
 /// listening fd exists at the path; it does not prove the process behind
 /// it is `AttachServer` rather than, say, a `fork()`'d child that
 /// inherited the fd without close-on-exec (macOS has no atomic
@@ -71,9 +70,11 @@ const LIVENESS_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 /// closes, deliberately.** A real `AttachServer` whose accept loop is
 /// somehow slow enough to miss the timeout makes `pane/reopen` refuse a
 /// pane that actually is live -- recoverable (retry, or `pane/reopen`
-/// again) and honest. Claiming a dead pane is live is the lie CREW-15
-/// existed to kill, and this fix exists because it turned out CREW-15
-/// had not fully killed it. Anyone tempted to "fix" a false negative here
+/// again) and honest. Claiming a dead pane is live is the lie the
+/// connect()-based check above was written to kill, and the
+/// `LIVENESS_MARKER` requirement exists because that check had not fully
+/// killed it. Anyone
+/// tempted to "fix" a false negative here
 /// by loosening this check should read this paragraph first.
 pub async fn is_live(socket: &Path) -> bool {
     let Ok(mut stream) = UnixStream::connect(socket).await else {
@@ -95,7 +96,7 @@ pub async fn is_live(socket: &Path) -> bool {
 /// than [`SWEEP_MIN_AGE`]. A missing directory is not an error: there is
 /// simply nothing to sweep.
 ///
-/// CREW-30: `is_live` now waits up to [`LIVENESS_PROBE_TIMEOUT`] for a
+/// `is_live` now waits up to [`LIVENESS_PROBE_TIMEOUT`] for a
 /// real protocol response instead of returning the instant a bare
 /// connect refuses, so probing candidates one at a time here would let N
 /// stale sockets left behind by a crash add up to N times that timeout
@@ -107,7 +108,7 @@ pub async fn is_live(socket: &Path) -> bool {
 /// A live probe also now costs one `snapshot_and_subscribe()` on the
 /// `AttachServer` side (a ring-buffer clone plus a broadcast subscription,
 /// both dropped microseconds later when the probe's connection closes) --
-/// before CREW-30 a probe cost only a connect and a refused SYN. A pane
+/// previously a probe cost only a connect and a refused SYN. A pane
 /// snapshot today is a screen buffer, not scrollback, so N concurrent
 /// probes doing N concurrent snapshot clones at startup is not a real
 /// concern; re-check this the moment a snapshot ever grows to include
@@ -194,7 +195,7 @@ mod tests {
     }
 
     /// Binds a real (tokio) `UnixListener` at `path` and spawns a task
-    /// that accepts exactly one connection and writes CREW-30's liveness
+    /// that accepts exactly one connection and writes the liveness
     /// marker to it -- the minimal stand-in for a real `AttachServer`
     /// these tests need to exercise `is_live`'s positive leg. Kept
     /// running for the test's lifetime by the spawned task itself, not
@@ -223,7 +224,7 @@ mod tests {
     }
 
     /// The floor: a bare accepting listener that completes a connect but
-    /// never speaks the marker protocol at all (the exact shape CREW-30's
+    /// never speaks the marker protocol at all (the exact shape the
     /// fork-inheritance false positive takes: something answers, nothing
     /// ever responds) must never read as live. Deterministic and cheap,
     /// so it always runs -- the fork-load reproducer in

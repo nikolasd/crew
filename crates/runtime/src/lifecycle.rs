@@ -124,7 +124,7 @@ pub enum ServeError {
 /// from `--state-dir` + `--repo` (see `cli.rs`'s `resolve_state_dir`,
 /// `run_attach`, `run_coordination_mcp`), so handing it `paths.root` here
 /// would make it re-append `repos/<repository_id>` onto an already-descended
-/// path -- `<root>/repos/<id>/repos/<id>/...`, which never exists (CREW-2).
+/// path -- `<root>/repos/<id>/repos/<id>/...`, which never exists.
 fn subprocess_state_dir(opts: &ServeOptions) -> PathBuf {
     opts.state_dir.clone()
 }
@@ -147,12 +147,12 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
 
     init_logging(opts.foreground, &paths.log)?;
 
-    // CREW-15: remove attach sockets left behind by a daemon that died
+    // Remove attach sockets left behind by a daemon that died
     // without cleaning up. Nothing else ever did, and `pane/reopen` treats
     // a live socket as proof of a reopenable pane -- so a stale file used
     // to make it claim a pane that was not there. Runs after the lock is
     // won (only one daemon per repository sweeps at a time) and keyed on
-    // liveness, never ownership: since CREW-1 this directory is per-user
+    // liveness, never ownership: this directory is per-user
     // and shared across every repository, so another repository's live
     // sockets sit beside ours and must survive.
     let swept = crate::display::pane_socket::sweep_stale(&paths.panes).await;
@@ -191,7 +191,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     // exactly the text the org asked never to be written, and would do so
     // behind a warning nobody reads. Refusing to start is recoverable
     // (fix the pattern); a leaked secret in an append-only journal is not.
-    // CREW-61: `Arc` so the recovery coordinator shares this ORG-CONFIGURED
+    // `Arc` so the recovery coordinator shares this ORG-CONFIGURED
     // instance rather than building a built-ins-only one of its own -- a
     // fallback there would silently drop every org pattern in exactly the
     // deployments that configured them.
@@ -551,7 +551,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
                     dashboard.token()
                 );
                 tracing::info!(addr = %dashboard.local_addr(), url = %url, "dashboard_started");
-                // CREW-35: also recorded for `runtime/status` to report
+                // Also recorded for `runtime/status` to report
                 // (`/crew health`'s dashboard-discoverability gap) -- the
                 // maintainer explicitly chose token-in-output over the
                 // narrower "point at the daemon log" alternative; see
@@ -1339,7 +1339,7 @@ mod tests {
     use super::*;
     use crew_protocol::{EventSource, ProjectId, RunId, RuntimeEvent, TaskId, Timestamp, WorkerId};
 
-    /// CREW-2 regression: `subprocess_state_dir` must return the real state
+    /// Regression test: `subprocess_state_dir` must return the real state
     /// root (`opts.state_dir`), not `RuntimePaths::root` -- the per-repo
     /// directory `RuntimePaths::resolve` derives from it. Every subprocess
     /// `--state-dir` is fed to (pane attach, pane reopen, coordination-mcp)
@@ -1348,8 +1348,8 @@ mod tests {
     /// daemon itself opened -- not a bogus, double-nested
     /// `repos/<id>/repos/<id>/runtime.db` that `RuntimePaths::resolve` would
     /// happily create anyway (`ensure_private_dir` doesn't know it's wrong).
-    /// Asserted against `database` rather than `panes` because CREW-1 moved
-    /// `panes` off the per-repo tree entirely (it no longer varies with
+    /// Asserted against `database` rather than `panes` because `panes` moved
+    /// off the per-repo tree entirely (it no longer varies with
     /// `state_dir` at all, by design) -- `database` is the field this
     /// regression's actual victim, `coordination-mcp`, still depends on.
     #[test]
@@ -1385,12 +1385,12 @@ mod tests {
 
         // Pin the bug this guards against: `paths.root` is NOT a valid
         // `--state-dir` value. Feeding it back through `RuntimePaths::resolve`
-        // (what the CREW-2 bug did, transitively, via the CLI) double-nests
+        // (what happened, transitively, via the CLI) double-nests
         // `repos/<repository_id>` a second time instead of erroring.
         let double_nested = RuntimePaths::resolve(&paths.root, &opts.repo).unwrap();
         assert_ne!(
             double_nested.database, paths.database,
-            "paths.root must never be passed as --state-dir -- this is the exact CREW-2 regression"
+            "paths.root must never be passed as --state-dir -- this double-nests the repos directory"
         );
     }
 
