@@ -258,12 +258,10 @@ impl PaneCoordinator {
         // Config that already says `Hidden` is not a downgrade -- there
         // is nothing being overridden, so nothing is journaled.
         if self.force_hidden_displays {
-            let would_have_tried = ordered_candidates(req.forced_backend)
-                .into_iter()
-                .next()
-                .unwrap_or(DisplayBackend::Hidden);
-            if would_have_tried != DisplayBackend::Hidden {
-                self.journal_visible_displays_disabled(req.run_id, would_have_tried, req.placement)
+            let chain = ordered_candidates(req.forced_backend);
+            let first = chain.first().copied().unwrap_or(DisplayBackend::Hidden);
+            if first != DisplayBackend::Hidden {
+                self.journal_visible_displays_disabled(req.run_id, first, chain, req.placement)
                     .await;
             }
             return self.attach_hidden(req.run_id, req.placement).await;
@@ -710,25 +708,41 @@ impl PaneCoordinator {
         .await;
     }
 
-    /// A policy decision this daemon made itself (visible
-    /// displays disabled), never subprocess stderr -- `reason` is
-    /// authored here, verbatim, with no caller- or vendor-supplied
-    /// content interpolated, so it goes straight to
-    /// `Redacted::assert_runtime_authored` rather than through
-    /// [`Self::journal_pane_downgraded`]'s sanitize-fragment path, which
-    /// exists for text this runtime did not write itself.
+    /// A policy decision this daemon made itself (visible displays
+    /// disabled), never subprocess stderr -- `reason` is authored here.
+    /// The only interpolated values are `DisplayBackend` variants, a
+    /// closed protocol enum with every byte ours; that is what makes
+    /// `Redacted::assert_runtime_authored` the correct call here rather
+    /// than [`Self::journal_pane_downgraded`]'s sanitize-fragment path,
+    /// which exists for text this runtime did not write itself. Adding
+    /// any interpolation that is not a `DisplayBackend` must revisit
+    /// that choice.
     async fn journal_visible_displays_disabled(
         &self,
         run_id: RunId,
-        would_have_tried: DisplayBackend,
+        first: DisplayBackend,
+        chain: Vec<DisplayBackend>,
         placement: DisplayPlacement,
     ) {
+        // Names the whole chain, not just `first`: under `Auto` (the
+        // configuration that actually produced the orphaned processes
+        // this exists to prevent) the daemon would have walked every
+        // candidate in order, and this sentence is the only diagnostic
+        // an operator gets for a pane that silently never appeared --
+        // understating it to "would have tried Herdr" would send them
+        // looking at herdr alone when tmux or the OS window backend was
+        // equally in play.
+        let chain_desc = chain
+            .iter()
+            .map(|b| format!("{b:?}"))
+            .collect::<Vec<_>>()
+            .join(" -> ");
         let reason = crew_protocol::Redacted::assert_runtime_authored(format!(
-            "visible displays disabled by CREW_FORCE_HIDDEN_DISPLAYS; would have tried {would_have_tried:?}"
+            "visible displays disabled by CREW_FORCE_HIDDEN_DISPLAYS; would have tried {chain_desc}"
         ));
         self.commit_pane_downgraded(
             run_id,
-            would_have_tried,
+            first,
             placement,
             DisplayBackend::Hidden,
             Vec::new(),
@@ -1142,6 +1156,16 @@ mod tests {
                 assert!(
                     reason.as_str().contains("CREW_FORCE_HIDDEN_DISPLAYS"),
                     "reason must name the actual cause, not just say something failed: {}",
+                    reason.as_str()
+                );
+                // The whole chain, not just the first candidate: under
+                // `Auto` every one of these would actually have been
+                // tried, and an operator reading only "Herdr" would look
+                // in the wrong place if tmux or the OS window backend
+                // was really what mattered here.
+                assert!(
+                    reason.as_str().contains("Tmux") && reason.as_str().contains("OsWindow"),
+                    "reason must name the whole candidate chain, not just the first: {}",
                     reason.as_str()
                 );
             }
