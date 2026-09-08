@@ -1530,9 +1530,12 @@ async fn run_attach(
     // pty-backed repro, killing the daemon never ends the process, but
     // closing the pty (simulating the terminal window itself closing)
     // does. `std::process::exit` terminates immediately without waiting
-    // for that thread, which is safe here -- `pump` has already
-    // returned, so there is no in-flight I/O left to lose, only a
-    // stdin-reader thread that will never complete on its own.
+    // for that thread, which is safe here because `pump` flushes stdout
+    // after every write and returns `SocketClosed` on a zero-byte read
+    // -- by the time it resolves, the only things left running are a
+    // stdin thread that will never finish on its own and a socket the
+    // OS closes regardless. This stops being true the day anything in
+    // this scope buffers output without flushing it before returning.
     match outcome {
         Ok(_) => std::process::exit(0),
         Err(err) => {
