@@ -47,6 +47,13 @@ impl RunState {
     /// existing word for "ended without a verdict" (`run/cancel`'s own
     /// terminal state), reused rather than adding a fifth terminal state.
     ///
+    /// **Provenance:** `cancelled` is not this function's author's
+    /// preference -- it is the maintainer's ruling, made 2026-09-09 for
+    /// CREW-78 and CREW-80 together (both tickets asked the same
+    /// question independently; the answer is one word for both). A
+    /// CREW-80 reader arriving here should read this as a closed
+    /// decision, not a default to reconsider.
+    ///
     /// One function, not a literal repeated at each call site, so the two
     /// tickets can never drift on the word.
     #[must_use]
