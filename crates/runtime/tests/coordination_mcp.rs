@@ -228,6 +228,16 @@ impl McpSubprocess {
             .env_clear()
             .env("HOME", std::env::var("HOME").unwrap_or_default())
             .env("PATH", std::env::var("PATH").unwrap_or_default())
+            // `env_clear()` drops the `CREW_FORCE_HIDDEN_DISPLAYS`
+            // `.cargo/config.toml` sets for this test binary itself, so it
+            // must be re-passed explicitly rather than relied on to survive
+            // the clear. Defense-in-depth: `coordination-mcp` proxies MCP
+            // calls to an already-running daemon's socket and never calls
+            // `serve()`/constructs a `PaneCoordinator` itself, so today this
+            // has no actual display-visibility consequence -- but the next
+            // person to extend this subcommand should not have to
+            // rediscover that by opening a pane.
+            .env("CREW_FORCE_HIDDEN_DISPLAYS", "1")
             .env("CREW_WORKER_SCOPE_TOKEN", token)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -253,6 +263,16 @@ impl McpSubprocess {
             .env_clear()
             .env("HOME", std::env::var("HOME").unwrap_or_default())
             .env("PATH", std::env::var("PATH").unwrap_or_default())
+            // `env_clear()` drops the `CREW_FORCE_HIDDEN_DISPLAYS`
+            // `.cargo/config.toml` sets for this test binary itself, so it
+            // must be re-passed explicitly rather than relied on to survive
+            // the clear. Defense-in-depth: `coordination-mcp` proxies MCP
+            // calls to an already-running daemon's socket and never calls
+            // `serve()`/constructs a `PaneCoordinator` itself, so today this
+            // has no actual display-visibility consequence -- but the next
+            // person to extend this subcommand should not have to
+            // rediscover that by opening a pane.
+            .env("CREW_FORCE_HIDDEN_DISPLAYS", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

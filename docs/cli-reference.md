@@ -75,6 +75,16 @@ crewd serve --repo <path> [--state-dir <path>] [--idle-seconds <n>] [--foregroun
 | `--foreground` | no | `false` | Log structured records to stderr instead of `runtime.log` |
 | `--config` | no (repeatable) | none | A crew.json config layer file, lowest precedence first (e.g. the user file before the project file); later occurrences deep-merge over earlier ones, `security.patterns` additive. A path that doesn't exist is an absent layer, not an error. |
 
+**`CREW_FORCE_HIDDEN_DISPLAYS` (env var).** When present in `serve`'s own environment, every pane
+this runtime instance would otherwise attach uses the `hidden` display backend regardless of
+`display.backend` config, and a typed `paneDowngraded` event names the cause. The repo's own
+`.cargo/config.toml` sets this for the whole test suite (and anything a test spawns), which is what
+keeps `cargo test` from opening real herdr panes or OS windows on a developer machine — the value it
+reads is exactly this variable. It is also a genuine operator override: set it by hand to keep a
+headless host's `crewd serve --foreground` display-less regardless of config, without needing to
+change `display.backend` itself. A `crewd` process launched by the OMP extension, or a prebuilt
+binary run by hand outside `cargo`, inherits nothing here and behaves exactly as configured.
+
 **Single-instance enforcement:** `serve` takes an exclusive, non-blocking advisory `flock(2)` on
 `<runtime-dir>/runtime.lock` (not an `O_EXCL` create — the lock file itself is never deleted, only
 the kernel-held `flock` is released, on clean shutdown or process death). If another `crewd serve`

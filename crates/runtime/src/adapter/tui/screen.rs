@@ -52,10 +52,11 @@
 //! re-classified as ready. That is the resume path, and it is the reason this
 //! primitive cannot carry the classifier on its own.
 //!
-//! None of the committed captures exercise that reverse transition — none of
-//! them answered a gate — so the above is reasoned from what an accumulator
-//! can represent, not proven by a fixture. A capture that answers a gate and
-//! returns to the composer is the thing to record when the screen model lands.
+//! `claude-trust-to-composer` proves it rather than leaving it argued: the
+//! gate is answered, the vendor switches to the alternate screen and paints
+//! its composer, and `shows("Yes, I trust this folder")` is *still* true
+//! afterwards. The gate is gone from the terminal and present in the
+//! accumulator, which is the whole of the limitation in one capture.
 //!
 //! Memory is bounded in practice by how long a caller accumulates output --
 //! the readiness cap for a startup poll. It is worth knowing that this is not
@@ -371,6 +372,40 @@ mod tests {
         assert!(
             screen.shows("Do you trust the contents of this directory?"),
             "and the gate arrived after it"
+        );
+    }
+
+    /// The limitation, made concrete instead of argued. This capture answers
+    /// claude's trust gate (Down, then Enter — keystrokes, not a paste), the
+    /// vendor switches to the alternate screen and paints its composer, and
+    /// the gate's own phrase is *still* reported as on screen afterwards.
+    ///
+    /// That is the reverse transition the resume path depends on: after a
+    /// human answers a gate, a classifier built on this primitive could never
+    /// decide the run had become ready again. Any screen model replacing it
+    /// must fail this test's second assertion and pass the other two.
+    #[test]
+    fn an_answered_gate_is_gone_from_the_terminal_but_not_from_the_accumulator() {
+        let bytes = fixture("claude-trust-to-composer.raw");
+        let screen = TuiScreen::from_bytes(&bytes);
+
+        // The vendor really did leave the dialog for its main UI: the
+        // alternate-screen switch is in the raw bytes, and the composer's
+        // own banner is on screen after it.
+        assert!(
+            bytes.windows(8).any(|w| w == b"\x1b[?1049h"),
+            "the capture must contain the alternate-screen switch"
+        );
+        assert!(
+            screen.shows("Claude Code"),
+            "the composer must have painted after the gate was answered"
+        );
+
+        // And yet -- the point of the test.
+        assert!(
+            screen.shows("Yes, I trust this folder"),
+            "the answered gate is still 'on screen' to an accumulator; this \
+             is the limitation the screen model exists to remove"
         );
     }
 

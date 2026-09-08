@@ -225,6 +225,14 @@ Two invariants worth knowing before you touch either area — full detail in
 
 ## Testing
 
+The repo's `.cargo/config.toml` sets `CREW_FORCE_HIDDEN_DISPLAYS` for every process `cargo` runs
+(including a `crewd` subprocess a test spawns), so every test daemon uses the `hidden` display
+backend regardless of config — the test suite never opens a real herdr pane or OS window, even on a
+machine that has herdr or a supported terminal installed. This is a test-only safeguard, not a
+product default: a `crewd` process launched by the OMP extension, or a prebuilt binary run outside
+`cargo`, is unaffected. See `docs/cli-reference.md`'s `crewd serve` entry for the variable itself,
+which is also a real operator override for a headless host.
+
 ### Run All Tests
 
 ```bash
