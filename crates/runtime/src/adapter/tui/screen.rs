@@ -39,10 +39,23 @@
 //!
 //! That is sufficient for detecting a gate that is blocking startup, which is
 //! what CREW-79 needs first. It is **not** sufficient for a predicate of the
-//! form "the composer is up *and* no gate is up", because the gate half of
-//! that test would stay true forever once the gate had appeared. A vendor
-//! needing that shape needs a real screen model; `codex-composer-then-trust`
-//! in the fixture set is the capture that proves the case is real.
+//! form "the composer is up *and* no gate is up". The reason is worth stating
+//! precisely, because the obvious version of it is wrong:
+//!
+//! It is *not* that the two are on screen together. In
+//! `codex-composer-then-trust` the gate erases the screen before drawing
+//! itself, so the composer text is already gone — there is a genuine
+//! "composer, no gate" window earlier in the capture. What an accumulator
+//! cannot do is the **reverse** transition: once the gate's text has appeared,
+//! nothing can make that observation false again, so after a human answers the
+//! gate and the vendor redraws its composer, the run could never be
+//! re-classified as ready. That is the resume path, and it is the reason this
+//! primitive cannot carry the classifier on its own.
+//!
+//! None of the committed captures exercise that reverse transition — none of
+//! them answered a gate — so the above is reasoned from what an accumulator
+//! can represent, not proven by a fixture. A capture that answers a gate and
+//! returns to the composer is the thing to record when the screen model lands.
 //!
 //! Memory is bounded in practice by how long a caller accumulates output --
 //! the readiness cap for a startup poll. It is worth knowing that this is not
@@ -160,11 +173,18 @@ enum EscapeScan {
 
 /// The length of the escape sequence starting at `bytes[0] == 0x1b`.
 ///
-/// Covers the three forms a vendor TUI actually emits: CSI (`ESC [` … final
-/// byte in `@`–`~`), OSC (`ESC ]` … `BEL` or `ESC \`), and the two-byte
-/// escapes used for charset and keypad mode. Anything else is treated as a
-/// two-byte escape, which drops the introducer and one byte rather than
-/// letting a stray `ESC` leak into the text.
+/// Covers the forms a vendor TUI actually emits: CSI (`ESC [` … final byte in
+/// `@`–`~`), OSC (`ESC ]` … `BEL` or `ESC \`), the nF sequences that carry an
+/// intermediate byte before their final (`ESC ( B` for charset selection is
+/// the one these fixtures contain), and the bare two-byte escapes (`ESC 7`,
+/// `ESC 8`, `ESC M`, `ESC =`).
+///
+/// The intermediate-byte case is split out rather than folded into the
+/// two-byte fallback because folding it is wrong in a way that is easy to
+/// miss: `ESC ( B` is three bytes, so consuming two leaves the `B` to be
+/// emitted as literal text. `claude-workspace-trust.raw` ends with exactly
+/// that sequence, and the stray character landed at the end of the screen
+/// where no assertion happened to span it.
 fn escape_len(bytes: &[u8]) -> EscapeScan {
     if bytes.len() < 2 {
         return EscapeScan::Incomplete;
@@ -200,6 +220,19 @@ fn escape_len(bytes: &[u8]) -> EscapeScan {
             }
             EscapeScan::Incomplete
         }
+        // nF sequences: one or more intermediate bytes, then a final byte.
+        0x20..=0x2f => {
+            let mut i = 1;
+            while i < bytes.len() && (0x20..=0x2f).contains(&bytes[i]) {
+                i += 1;
+            }
+            if i < bytes.len() {
+                EscapeScan::Complete(i + 1)
+            } else {
+                EscapeScan::Incomplete
+            }
+        }
+        // Everything else is a bare two-byte escape.
         _ => EscapeScan::Complete(2),
     }
 }
@@ -323,11 +356,16 @@ mod tests {
 
     /// The capture behind the module's stated limitation: codex paints its
     /// composer, accepts a pasted prompt into it, and only *then* raises its
-    /// trust gate. Both are present in one capture, which is why a
-    /// "composer up and no gate up" predicate cannot be built on this
-    /// primitive alone.
+    /// trust gate, so one capture's output contains both.
+    ///
+    /// Note what this does and does not say. It asserts both phrases appear in
+    /// the *accumulated output*; it does NOT assert they were ever on screen
+    /// together, and they were not — the gate erases the screen before drawing
+    /// itself. That distinction is the whole limitation: an accumulator cannot
+    /// tell "both appeared" from "both are showing", which is why the
+    /// classifier needs a screen model rather than this.
     #[test]
-    fn the_codex_capture_holds_the_composer_and_the_gate_at_once() {
+    fn the_codex_capture_contains_both_the_composer_and_the_later_gate() {
         let screen = TuiScreen::from_bytes(&fixture("codex-composer-then-trust.raw"));
         assert!(screen.shows("Ask Codex to do anything"), "composer painted");
         assert!(
@@ -383,6 +421,41 @@ mod tests {
         assert_eq!(screen.normalized(), "onetwothreefour");
         assert!(screen.shows("one two"));
         assert!(screen.shows("  three\tfour  "));
+    }
+
+    /// `ESC ( B` is three bytes, not two. Consuming two leaves the `B` to be
+    /// emitted as literal text -- and `claude-workspace-trust.raw` ends with
+    /// exactly that sequence, so the bug was live against a committed fixture
+    /// and invisible to every phrase assertion, none of which spanned the end
+    /// of the screen.
+    #[test]
+    fn an_escape_with_an_intermediate_byte_does_not_leak_its_final() {
+        let screen = TuiScreen::from_bytes(b"before\x1b(Bafter");
+        assert_eq!(screen.normalized(), "beforeafter");
+
+        let real = TuiScreen::from_bytes(&fixture("claude-workspace-trust.raw"));
+        assert!(
+            real.normalized().ends_with("cancel"),
+            "the screen must end at the vendor's last visible word, not at a \
+             charset-selection final byte; ends with: {:?}",
+            &real.normalized()[real.normalized().len().saturating_sub(20)..]
+        );
+    }
+
+    #[test]
+    fn an_intermediate_byte_escape_split_across_reads_is_held() {
+        let mut screen = TuiScreen::default();
+        screen.push(b"before\x1b(");
+        screen.push(b"Bafter");
+        assert_eq!(screen.normalized(), "beforeafter");
+    }
+
+    #[test]
+    fn bare_two_byte_escapes_are_still_two_bytes() {
+        // ESC M (reverse index), ESC 7 / ESC 8 (save/restore cursor): no
+        // intermediate byte, so the fallback must not swallow the next char.
+        let screen = TuiScreen::from_bytes(b"a\x1bMb\x1b7c\x1b8d");
+        assert_eq!(screen.normalized(), "abcd");
     }
 
     #[test]
