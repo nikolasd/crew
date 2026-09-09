@@ -9,9 +9,9 @@
       "KEEP ALL FOUR" stance on the headless adapters (see the "Conformance evidence" section
       below, written under that now-superseded stance): the headless control plane
       (`adapter::{claude,codex,copilot,omp_rpc}`, one implementation per vendor, driving each
-      vendor's own non-interactive/JSON protocol directly) is retired outright per the crew-v2
-      design spec §4.6, in favor of `adapter::tui::*` as the sole control plane
-      (see `docs/adr/0026-headless-retirement.md`).
+      vendor's own non-interactive/JSON protocol directly) is retired outright, in favor of
+      `adapter::tui::*` as the sole control plane (see `docs/adr/0026-headless-retirement.md`,
+      which reconstructs the retired design's requirement and records the retirement itself).
 - [x] `mode: "headless"` is deserializable but typed-rejected: an old config/profile/journal entry
       naming it still parses (never a hard crash on history), but every path that would act on it
       -- config validation, adapter-registry dispatch, `crewd conformance --mode headless`, live
