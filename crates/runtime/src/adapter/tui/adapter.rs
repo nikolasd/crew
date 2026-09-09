@@ -1770,7 +1770,7 @@ async fn wait_for_readiness(
     sink: &Arc<dyn AdapterEventSink>,
     cancel_token: &CancellationToken,
 ) -> Result<(), AdapterError> {
-    let deadline = tokio::time::Instant::now() + cap;
+    let mut deadline = tokio::time::Instant::now() + cap;
     // Set once this poll journals `FirstRunGateDetected` +
     // `EscalationRaised` for the gate currently blocking the run --
     // exactly once per distinct gate, even though the loop below keeps
@@ -1778,6 +1778,18 @@ async fn wait_for_readiness(
     // resolves. A vendor that swaps from one gate to another (observed
     // nowhere yet, but not ruled out) re-escalates for the new one.
     let mut escalated_gate: Option<GateKind> = None;
+    // Set on every tick the Gate arm runs, consumed the next time the
+    // surface is classified `Undecided`: it marks that `deadline` (fixed
+    // at this function's entry) is now stale, because a gate can park
+    // for arbitrarily long -- a human answering it is the whole point of
+    // escalating -- and `deadline` was never advanced during that park.
+    // Without this, the very next `Undecided` tick after a gate resolves
+    // to something this module doesn't yet recognize fails instantly,
+    // punishing the human for the progress they just made rather than
+    // giving the new screen a fair readiness window. See the `Undecided`
+    // arm for why this re-arms the deadline exactly once per transition,
+    // never on every `Undecided` tick.
+    let mut just_left_gate = false;
 
     // Wait for the first output (a single check, not a loop: every
     // outcome below either proceeds past this point or returns). This
@@ -1824,6 +1836,10 @@ async fn wait_for_readiness(
         match classified {
             None | Some(Surface::PromptReady) => break,
             Some(Surface::Gate(gate)) => {
+                // Marks `deadline` stale for the next `Undecided` tick,
+                // however long this gate ends up parking for -- see this
+                // flag's own declaration above.
+                just_left_gate = true;
                 // A recognized first-run gate does not fail the run: it
                 // parks it and hands the human the decision, journaling
                 // exactly once per distinct gate even though this arm
@@ -1889,13 +1905,34 @@ async fn wait_for_readiness(
                 continue;
             }
             Some(Surface::Undecided) => {
+                // The screen just changed away from a gate we recognized
+                // and parked on -- evidence of real progress (a human
+                // answered it, or the vendor advanced on its own), not
+                // "never became readable". Re-arm a fresh cap-length
+                // window from THIS transition rather than checking
+                // against the original spawn-anchored `deadline`, which
+                // may have long since elapsed while this poll was
+                // correctly parked with no deadline of its own. Exactly
+                // once per transition, via `just_left_gate` -- re-arming
+                // on every `Undecided` tick instead would mean a screen
+                // that is genuinely, permanently unrecognizable after a
+                // gate never fails closed at all.
+                if just_left_gate {
+                    deadline = tokio::time::Instant::now() + cap;
+                    just_left_gate = false;
+                }
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
                 if remaining.is_zero() {
                     return Err(AdapterError::process(
                         kind,
                         "start",
-                        "no recognizable prompt or first-run gate appeared before the readiness \
-                         cap elapsed",
+                        if escalated_gate.is_some() {
+                            "no recognizable prompt appeared within a fresh readiness window \
+                             after a first-run gate was left"
+                        } else {
+                            "no recognizable prompt or first-run gate appeared before the \
+                             readiness cap elapsed"
+                        },
                     ));
                 }
                 // Raced against `pty.exit_watcher()`, not detected via
@@ -2699,6 +2736,64 @@ mod tests {
             let n = self.calls.fetch_add(1, Ordering::SeqCst);
             if n < self.clear_after {
                 Some(Surface::Gate(self.gate))
+            } else {
+                Some(Surface::PromptReady)
+            }
+        }
+    }
+
+    /// A test-only vendor whose `classify_surface` reports `Gate` for its
+    /// first `gate_ticks` calls, then `Undecided` for the next
+    /// `undecided_ticks` calls, then `PromptReady` forever after --
+    /// exercises the Gate -> Undecided transition `CountingGateVendor`
+    /// cannot (that one only ever clears to `PromptReady` directly). Same
+    /// "every other `TuiVendor` method is unreachable" shape.
+    struct GateThenUndecidedVendor {
+        gate: GateKind,
+        gate_ticks: u32,
+        undecided_ticks: u32,
+        calls: AtomicU32,
+    }
+
+    impl TuiVendor for GateThenUndecidedVendor {
+        fn kind(&self) -> &'static str {
+            "gate-then-undecided"
+        }
+        fn launch(&self, _spec: &StartSpec, _cfg: &AdapterConfig) -> LaunchSpec {
+            unreachable!("wait_for_readiness never calls TuiVendor::launch")
+        }
+        fn resume_launch(
+            &self,
+            _session: &VendorSessionRef,
+            _spec: &StartSpec,
+            _cfg: &AdapterConfig,
+        ) -> LaunchSpec {
+            unreachable!("wait_for_readiness never calls TuiVendor::resume_launch")
+        }
+        fn transcript_root(&self, _spec: &StartSpec, _cfg: &AdapterConfig) -> PathBuf {
+            unreachable!("wait_for_readiness never calls TuiVendor::transcript_root")
+        }
+        fn format(&self) -> Arc<dyn TranscriptFormat> {
+            unreachable!("wait_for_readiness never calls TuiVendor::format")
+        }
+        fn compose_input(&self, _message: &str) -> Vec<u8> {
+            unreachable!("wait_for_readiness never calls TuiVendor::compose_input")
+        }
+        fn interrupt_sequence(&self) -> Vec<u8> {
+            unreachable!("wait_for_readiness never calls TuiVendor::interrupt_sequence")
+        }
+        fn permission_args(&self, _mode: crate::config::crew::PermissionMode) -> Vec<String> {
+            unreachable!("wait_for_readiness never calls TuiVendor::permission_args")
+        }
+        fn version_gate(&self, _probed: &str) -> VersionVerdict {
+            unreachable!("wait_for_readiness never calls TuiVendor::version_gate")
+        }
+        fn classify_surface(&self, _grid: &TerminalGrid) -> Option<Surface> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n < self.gate_ticks {
+                Some(Surface::Gate(self.gate))
+            } else if n < self.gate_ticks.saturating_add(self.undecided_ticks) {
+                Some(Surface::Undecided)
             } else {
                 Some(Surface::PromptReady)
             }
@@ -3611,6 +3706,175 @@ mod tests {
                  it on every tick until it clears: {other:?}"
             ),
         }
+    }
+
+    /// The deadline-re-arm regression control, positive half: a gate that
+    /// parks long enough for the ORIGINAL entry-time `deadline` to elapse,
+    /// then resolves to a briefly-`Undecided` screen before `PromptReady`,
+    /// must still succeed. Before the re-arm fix, the very first
+    /// `Undecided` tick after such a park failed instantly (`remaining`
+    /// was already zero, computed against a deadline that was never
+    /// advanced during the park) -- punishing exactly the case escalation
+    /// exists for: a human took real time to answer the gate.
+    #[tokio::test]
+    async fn wait_for_readiness_survives_an_undecided_screen_after_a_long_gate_park() {
+        let pty = Arc::new(
+            PtyProcess::spawn(
+                &crate::supervisor::SpawnSpec {
+                    program: PathBuf::from("/bin/sh"),
+                    args: vec!["-c".to_string(), "printf hi && sleep 30".to_string()],
+                    ..crate::supervisor::SpawnSpec::minimal()
+                },
+                EscalationTimings::default(),
+            )
+            .expect("spawn the double"),
+        );
+
+        let mut readiness_rx = pty.subscribe_output();
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        {
+            let mut grid_rx = pty.subscribe_output();
+            let grid = Arc::clone(&grid);
+            tokio::spawn(async move {
+                loop {
+                    match grid_rx.recv().await {
+                        Ok(bytes) => grid
+                            .lock()
+                            .expect("terminal-grid mutex never poisoned")
+                            .push(&bytes),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        // 20 gate ticks * 15ms quiet ~= 300ms of parking, comfortably
+        // past the 150ms `cap` below -- the original entry-time deadline
+        // is long dead by the time this clears. 3 undecided ticks
+        // (~45ms) is comfortably inside a FRESH 150ms window but would
+        // instantly fail against the stale one.
+        let vendor = GateThenUndecidedVendor {
+            gate: GateKind::ClaudeWorkspaceTrust,
+            gate_ticks: 20,
+            undecided_ticks: 3,
+            calls: AtomicU32::new(0),
+        };
+        let sink: Arc<dyn AdapterEventSink> = GateRecordingSink::new();
+        let cancel_token = CancellationToken::new();
+
+        let result = wait_for_readiness(
+            &mut readiness_rx,
+            "gate-then-undecided",
+            &vendor,
+            &grid,
+            Duration::from_millis(15),
+            Duration::from_millis(150),
+            &pty,
+            None,
+            tokio::time::Instant::now(),
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            &sink,
+            &cancel_token,
+        )
+        .await;
+
+        let _ = pty.terminate().await;
+
+        result.expect(
+            "an Undecided screen reached only after a long gate park must get a fresh readiness \
+             window, not fail against the stale entry-time deadline",
+        );
+    }
+
+    /// The deadline-re-arm regression control, negative half: the re-arm
+    /// must still fail closed. A screen that stays `Undecided` forever
+    /// after leaving a gate must fail once the FRESH window elapses, not
+    /// hang forever (which is what re-arming on every `Undecided` tick,
+    /// rather than once per transition, would produce) and not later than
+    /// that fresh window either. The outer `tokio::time::timeout` is the
+    /// actual proof: if the fix re-armed unconditionally, this call would
+    /// still be waiting well past it.
+    #[tokio::test]
+    async fn wait_for_readiness_still_fails_closed_after_the_rearmed_window_elapses() {
+        let pty = Arc::new(
+            PtyProcess::spawn(
+                &crate::supervisor::SpawnSpec {
+                    program: PathBuf::from("/bin/sh"),
+                    args: vec!["-c".to_string(), "printf hi && sleep 30".to_string()],
+                    ..crate::supervisor::SpawnSpec::minimal()
+                },
+                EscalationTimings::default(),
+            )
+            .expect("spawn the double"),
+        );
+
+        let mut readiness_rx = pty.subscribe_output();
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        {
+            let mut grid_rx = pty.subscribe_output();
+            let grid = Arc::clone(&grid);
+            tokio::spawn(async move {
+                loop {
+                    match grid_rx.recv().await {
+                        Ok(bytes) => grid
+                            .lock()
+                            .expect("terminal-grid mutex never poisoned")
+                            .push(&bytes),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        let vendor = GateThenUndecidedVendor {
+            gate: GateKind::ClaudeSignIn,
+            gate_ticks: 20,
+            undecided_ticks: u32::MAX,
+            calls: AtomicU32::new(0),
+        };
+        let sink: Arc<dyn AdapterEventSink> = GateRecordingSink::new();
+        let cancel_token = CancellationToken::new();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            wait_for_readiness(
+                &mut readiness_rx,
+                "gate-then-undecided",
+                &vendor,
+                &grid,
+                Duration::from_millis(15),
+                Duration::from_millis(100),
+                &pty,
+                None,
+                tokio::time::Instant::now(),
+                RunId::new(),
+                TaskId::new(),
+                WorkerId::new(),
+                &sink,
+                &cancel_token,
+            ),
+        )
+        .await
+        .expect(
+            "must fail well within the fresh 100ms window, not hang toward the 3s outer bound -- \
+             a hang here means the fix re-armed on every Undecided tick instead of once per \
+             transition",
+        );
+
+        let _ = pty.terminate().await;
+
+        let message = result
+            .expect_err("a screen that never resolves after a gate must still fail closed")
+            .to_string();
+        assert!(
+            message.contains("after a first-run gate was left"),
+            "the failure text must say a gate was left first, not read as though nothing ever \
+             appeared: {message}"
+        );
     }
 
     /// Requirement (d): a run parked at a gate is cancellable. This is
