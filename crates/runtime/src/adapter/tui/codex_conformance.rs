@@ -352,10 +352,21 @@ async fn harness() -> Harness {
 /// to a rollout file under `session_dir`, and on any further line another
 /// acknowledging assistant message. Never traps signals, so default
 /// termination works exactly like a real, well-behaved CLI.
+///
+/// The second echoed line matters now, not just as flavor text:
+/// `wait_for_readiness` polls `classify_surface` before pasting, and
+/// codex's own predicate looks for its composer's real banner text (see
+/// `classify.rs`'s `CODEX_PROMPT_READY`) -- without this line the double
+/// never reaches `PromptReady` and every scenario using it times out at
+/// `readiness_cap`. (Claude's sibling double happens to say "Welcome to
+/// Claude Code!", which already contains that vendor's banner text by
+/// coincidence; this one needs its own line because "Welcome to Codex!"
+/// does not.)
 fn write_double(scripts_dir: &std::path::Path, session_dir: &std::path::Path) -> PathBuf {
     let script = format!(
         r#"#!/bin/sh
 echo "Welcome to Codex!"
+echo "Ask Codex to do anything"
 SESSION_ID="33333333-3333-4333-8333-000000000042"
 ROLLOUT="{session_dir}/rollout-2026-01-01T00-00-00-$SESSION_ID.jsonl"
 CREW_ESC=$(printf '\033')

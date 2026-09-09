@@ -15,12 +15,10 @@
 //! why entering one is a no-op rather than a real buffer swap), no tab
 //! stops (none of the captures use HT).
 //!
-//! Ships with no production caller, same as `screen.rs`'s own first slice:
-//! the matching layer that would call this (a later slice's
-//! `classify_surface`) is not built yet, so `#[allow(dead_code)]` below is
-//! deliberate, not an oversight -- delete it the same slice that adds a
-//! real caller.
-#![allow(dead_code)]
+//! `wait_for_readiness` (`adapter.rs`) is this module's real production
+//! caller, via `TuiVendor::classify_surface`: it builds one of these per
+//! run, fed from the PTY's own output as it arrives, and polls
+//! `classify_surface` on it instead of treating any output as ready.
 
 use super::screen::TuiScreen;
 
@@ -36,8 +34,16 @@ pub(crate) const GRID_HEIGHT: usize = 40;
 
 /// A rectangular grid of cells, with a cursor and a scroll region, folded
 /// from raw PTY bytes.
+///
+/// `pub`, not `pub(crate)`: `TuiVendor::classify_surface`, this type's
+/// real caller, is itself `pub`, and a `pub` trait method cannot
+/// reference a less-visible type in its signature.
+/// The `tui` module's own privacy still bounds this to the crate in
+/// practice -- nothing outside it can reach `TuiVendor` at all -- this
+/// widening only satisfies that per-item consistency check, not an
+/// intent to expose the grid beyond this crate.
 #[derive(Debug, Clone)]
-pub(crate) struct TerminalGrid {
+pub struct TerminalGrid {
     cells: Vec<Vec<char>>,
     cursor_row: usize,
     cursor_col: usize,
@@ -69,7 +75,7 @@ impl Default for TerminalGrid {
 }
 
 impl TerminalGrid {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             cells: vec![vec![' '; GRID_WIDTH]; GRID_HEIGHT],
             cursor_row: 0,
@@ -117,7 +123,7 @@ impl TerminalGrid {
     /// already recognizes OSC's own variable-length terminator, correctly,
     /// via the same one function it uses for everything else. What is
     /// actually new here is extracting content, not detecting boundaries.
-    pub(crate) fn push(&mut self, bytes: &[u8]) {
+    pub fn push(&mut self, bytes: &[u8]) {
         let mut buf = std::mem::take(&mut self.pending);
         buf.extend_from_slice(bytes);
 
