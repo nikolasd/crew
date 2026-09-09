@@ -95,8 +95,23 @@ const MAX_SEQUENCE_LEN: usize = 32;
 /// caller's own unfiltered path -- this only delays the
 /// journaling/reconciliation decision for it, never delivery.
 ///
+/// Holding back is driven by volume (more bytes arriving), not time --
+/// on its own, a lone `ESC` with nothing after it (a human pressing
+/// Escape once, alone, and then doing nothing else -- in a claude TUI,
+/// Escape interrupts the turn, about as consequential an out-of-band
+/// action as exists) would be held forever, since nothing ever arrives
+/// to age it out. The caller MUST also poll [`ReplyFilter::has_pending`]
+/// on an idle tick (`serve_viewer` uses the same window
+/// `adapter::tui::oob_coalescer::IDLE_WINDOW` coalescing already ticks
+/// on) and release whatever [`ReplyFilter::take_pending`] returns as
+/// content once that tick fires with no intervening read -- a real
+/// terminal answers within milliseconds, so anything still held after a
+/// full idle window was never going to complete.
+///
 /// One instance per viewer connection: `serve_viewer` owns one, for the
-/// lifetime of that connection's read loop.
+/// lifetime of that connection's read loop -- never shared across
+/// connections, or one viewer's partial sequence could swallow another
+/// viewer's keystroke.
 #[derive(Default)]
 pub struct ReplyFilter {
     pending: Vec<u8>,
@@ -117,6 +132,21 @@ impl ReplyFilter {
         let residue = strip_terminal_replies(&self.pending[..split_at]);
         self.pending.drain(..split_at);
         residue
+    }
+
+    /// Whether this filter is currently holding back any bytes. The
+    /// caller checks this on its idle tick to decide whether
+    /// [`Self::take_pending`] has anything worth releasing.
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// Drains and returns whatever this filter is currently holding
+    /// back, unconditionally treating it as content -- called only after
+    /// an idle window has passed with no further read, per this
+    /// struct's own doc comment on why that must happen at all.
+    pub fn take_pending(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.pending)
     }
 
     /// The length of `buf`'s prefix that is safe to filter and release
@@ -276,20 +306,49 @@ mod tests {
     }
 
     #[test]
-    fn a_lone_trailing_esc_is_held_back_then_released_once_it_ages_out_unresolved() {
+    fn a_lone_trailing_esc_is_held_back_then_released_once_enough_more_data_arrives() {
         let mut filter = ReplyFilter::new();
         // A bare ESC with nothing after it yet: held back, not leaked as
         // a spurious single-byte "keystroke".
         assert_eq!(filter.filter(b"\x1b"), b"");
         // Enough further content arrives without ever completing a
-        // recognized sequence that the held-back ESC ages out of the
+        // recognized sequence that the held-back ESC falls out of the
         // lookback window -- released as ordinary content, never
-        // silently lost.
+        // silently lost. This is volume-driven, not time-driven: see
+        // the next test for the case where no further bytes ever come.
         let filler = vec![b'x'; super::MAX_SEQUENCE_LEN];
         let released = filter.filter(&filler);
         assert!(
             released.starts_with(b"\x1b"),
-            "the aged-out ESC must be released, not dropped: {released:?}"
+            "the held-back ESC must be released once enough data follows it, not dropped: {released:?}"
+        );
+    }
+
+    // A lone Escape keypress with NO further bytes ever arriving (a
+    // human presses Escape once -- in a claude TUI, this interrupts the
+    // current turn -- and then does nothing else) has no volume to age
+    // it out by the mechanism above. `has_pending`/`take_pending` are
+    // what a caller uses to release it anyway, on its own idle tick, and
+    // this is the case that matters: every other test here releases a
+    // held-back byte by supplying more data, which this one deliberately
+    // never does.
+    #[test]
+    fn a_lone_esc_with_no_further_bytes_is_still_pending_until_the_caller_releases_it_on_its_own_idle_tick()
+     {
+        let mut filter = ReplyFilter::new();
+        assert_eq!(filter.filter(b"\x1b"), b"");
+        assert!(
+            filter.has_pending(),
+            "a lone ESC with nothing after it must stay held, not be silently dropped"
+        );
+        assert_eq!(
+            filter.take_pending(),
+            b"\x1b",
+            "the caller's own idle-tick release must recover exactly the held-back byte, not drop it"
+        );
+        assert!(
+            !filter.has_pending(),
+            "take_pending must actually drain, not just peek"
         );
     }
 }

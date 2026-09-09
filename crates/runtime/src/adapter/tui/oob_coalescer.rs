@@ -20,7 +20,12 @@ use tokio::sync::mpsc;
 /// storm's rapid successive firings (measured at 50-200ms apart) into
 /// one row per second or so of continuous activity, rather than one row
 /// per firing.
-const IDLE_WINDOW: Duration = Duration::from_secs(1);
+///
+/// Shared with `display::terminal_reply::ReplyFilter`'s own idle flush:
+/// a byte that filter holds back (possibly the first byte of a
+/// sequence a later read completes) is released as content on the same
+/// cadence, rather than inventing a second timer value to keep in sync.
+pub(crate) const IDLE_WINDOW: Duration = Duration::from_secs(1);
 
 /// Notifies [`OobCoalescer::spawn`]'s background task of one out-of-band
 /// input occurrence. Cloneable so every viewer connection's own callback

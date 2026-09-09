@@ -465,6 +465,23 @@ async fn serve_viewer(
                     Err(broadcast::error::RecvError::Closed) => return,
                 }
             }
+            // `ReplyFilter` holds a trailing `ESC` back by volume, not
+            // time (more bytes arriving is what proves it wasn't a
+            // reply) -- a lone Escape keypress with nothing typed after
+            // it would otherwise be held forever, and Escape alone is a
+            // real, consequential out-of-band action (it interrupts a
+            // claude TUI's current turn). Disabled whenever nothing is
+            // held (`if reply_filter.has_pending()`), so an idle
+            // connection with no pending bytes never wakes this loop for
+            // nothing; re-armed fresh every iteration, so it always
+            // measures quiet time since the most recent read, matching
+            // `oob_coalescer`'s own idle-window cadence exactly (see
+            // `ReplyFilter`'s doc comment for why the two share one
+            // constant rather than each inventing their own).
+            () = tokio::time::sleep(crate::adapter::tui::oob_coalescer::IDLE_WINDOW), if reply_filter.has_pending() => {
+                let held = reply_filter.take_pending();
+                on_user_input(held);
+            }
         }
     }
 }
