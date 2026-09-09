@@ -192,7 +192,7 @@ fn conformance_requires_exactly_one_of_fixture_or_live() {
     assert!(!output_path.exists());
 }
 
-/// R52: fixture mode used to reach a real vendor-CLI spawn on every
+/// Fixture mode used to reach a real vendor-CLI spawn on every
 /// adapter regardless of the kill switch -- each adapter's own
 /// process/client-spawning scenarios ran before anything consulted
 /// `CREW_DISABLE_VENDOR_CLI`. (Fixture mode is

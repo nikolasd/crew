@@ -214,8 +214,8 @@ ALTER TABLE policy_violations_new RENAME TO policy_violations;
 ";
 
 /// Migration 9: persists the approval decision's rationale and
-/// repairs rows R34 left behind: `decided_by` was written via
-/// `serde_json::to_string`, storing the JSON-quoted token (`"human"` with
+/// repairs rows a pre-migration serialization bug left behind: `decided_by`
+/// was written via `serde_json::to_string`, storing the JSON-quoted token (`"human"` with
 /// quotes), so equality against the bare token matched nothing. The
 /// `UPDATE` strips exactly one leading and trailing quote from affected
 /// rows; `reason` stays nullable -- decisions recorded before this
@@ -583,7 +583,7 @@ mod tests {
     }
 
     /// Exercises migration 9: a pre-existing approval row whose
-    /// `decided_by` was written JSON-quoted by R34's bug is rewritten to
+    /// `decided_by` was written JSON-quoted by that same pre-migration bug is rewritten to
     /// the bare token, and the new `reason` column exists and is NULL for
     /// pre-migration rows.
     #[test]

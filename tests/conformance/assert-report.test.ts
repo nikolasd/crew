@@ -49,8 +49,8 @@ function adapterReport(adapter: string): AdapterConformanceReport {
   };
 }
 
-// crew-v2 gap-closure WP-C: fixture mode is TUI-sourced now (spec §4.6) --
-// the headless control plane and its claude/codex/copilot/ompRpc labels
+// Fixture mode is TUI-sourced (see `docs/adr/0026-headless-retirement.md`)
+// -- the headless control plane and its claude/codex/copilot/ompRpc labels
 // are retired. Every key below is hyphenated, so bracket notation (not
 // dot access) is required throughout this file.
 function validReport(): CombinedReport {

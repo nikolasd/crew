@@ -123,8 +123,8 @@ pub trait RunDriver: Send + Sync {
     /// Consumed by `runtime/status`'s `activeRuns` and the idle-shutdown
     /// decision: a daemon with in-flight adapter work must never
     /// self-terminate as idle. Required, not defaulted: a driver that
-    /// silently reported `0` would reintroduce R87 into a safety
-    /// decision. Deliberately counts live adapters only -- a
+    /// silently reported `0` would reintroduce a false-idle signal into a
+    /// safety decision. Deliberately counts live adapters only -- a
     /// queued/starting run with no adapter yet does not suppress idle
     /// shutdown, which is safe because such a run's submitting client is
     /// still connected (connections suppress idle independently) and an

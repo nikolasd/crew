@@ -5,7 +5,7 @@
 //! recording the runtime's identity, then serves the socket protocol until it
 //! is signalled, an accepted in-band `runtime/shutdown` arrives (refused
 //! with `-32602` while any run is live or another connection is open,
-//! unless `force: true` -- R82; the SIGTERM operator path stays
+//! unless `force: true`; the SIGTERM operator path stays
 //! deliberately unarbitrated), or it has been idle (no connections, no
 //! active runs) for the configured interval. On any of
 //! those it journals a stop record, then -- and only then -- removes the
@@ -970,7 +970,7 @@ fn apply_and_render(
         RuntimeEvent::AdapterProtocolHealthEvent {
             healthy, detail, ..
         } => {
-            // R12/R42/R57 invest in a precise detail (the vendor's error
+            // This event carries a precise detail (the vendor's error
             // subtype, the raw stop reason); surface it instead of a
             // constant label.
             let label = if *healthy {
@@ -1416,7 +1416,7 @@ mod tests {
         }
     }
 
-    /// R91: the status row must render the journaled detail -- the
+    /// The status row must render the journaled detail -- the
     /// vendor's error subtype / raw stop reason -- not a constant label.
     /// Mirrors the two cases model.test.ts pins for the embedded monitor.
     #[test]

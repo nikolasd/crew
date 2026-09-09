@@ -1083,8 +1083,9 @@ impl<'c> DomainRepository<'c> {
     /// `RunFlagsChanged` event. Shared by [`Self::set_run_flag`] and
     /// [`Self::release_quarantine`] so both build their commit from the
     /// exact same `UPDATE`/event pair -- one guarded-write path for every
-    /// mutation of `runs.flags_*`, preserving R73's sole-writer property
-    /// even as R75 adds a second caller.
+    /// mutation of `runs.flags_*`, preserving this function as the sole
+    /// writer of that row even as [`Self::release_quarantine`] adds a
+    /// second caller.
     fn write_run_flags(
         &mut self,
         run_id: crew_protocol::RunId,
@@ -1133,9 +1134,10 @@ impl<'c> DomainRepository<'c> {
     /// `run_domain_op` closures, never a caller's async steps, so that
     /// snapshot-then-write-back shape could silently revert a concurrent
     /// flag change: a lost update neither side detects. Reading and
-    /// writing inside this one call removes the gap -- R70-R72's
-    /// guarded-write doctrine applied to a flag flip rather than a
-    /// decision.
+    /// writing inside this one call removes the gap -- the same
+    /// guarded-write discipline used elsewhere in this file (keep a
+    /// mutation's read and its write inside one atomic unit) applied here
+    /// to a flag flip rather than a decision.
     ///
     /// The read ([`Self::read_run_flags`]) executes on `self.conn`
     /// *before* [`Self::append_and_apply`] opens its SQL transaction, not
@@ -1170,8 +1172,8 @@ impl<'c> DomainRepository<'c> {
     /// resolution being released -- so the `policy_violations` count below
     /// never counts that violation, only a *different*, still-open one.
     ///
-    /// This is the fix for the second half of R75: `decide`'s release used
-    /// to call an unconditional [`Self::set_run_flag`]`(run_id,
+    /// This closes a race in policy-violation release: `decide`'s release
+    /// used to call an unconditional [`Self::set_run_flag`]`(run_id,
     /// PolicyQuarantined, false)` as its own, independent commit. A fresh
     /// violation recorded on this run (by
     /// [`Self::record_policy_violation`]/[`crate::policy::ViolationService::apply_action`])
@@ -1220,7 +1222,7 @@ impl<'c> DomainRepository<'c> {
     ///
     /// `principal_instance_id` arbitrates ownership against the message's
     /// *run* (re-read from `runs` inside this guarded write, immediately
-    /// before the `INSERT`, then checked against `tasks` -- R77), never
+    /// before the `INSERT`, then checked against `tasks`), never
     /// against `message.task_id` as presented: that field is caller
     /// content, not something this write may trust for authorization, so
     /// a caller cannot dodge the check by asserting a `taskId` it happens
@@ -2269,7 +2271,7 @@ impl<'c> DomainRepository<'c> {
     /// Decides a previously proposed plan for a run: guards inside the
     /// writing transaction (re-read `status` and `owner_client_instance_id`
     /// from `plans`, mirroring [`Self::decide_approval`'s] race-safe owner
-    /// check -- R71), journals a `PlanDecided` event, and writes the
+    /// check), journals a `PlanDecided` event, and writes the
     /// decision onto the row. The daemon enforces nothing about *routing*;
     /// it only persists the leader's decision.
     ///
@@ -2599,9 +2601,10 @@ impl<'c> DomainRepository<'c> {
     /// by `resolution IS NULL` -- a `reconcile/omp` ownership rebind that
     /// commits between a caller's snapshot read and this write must
     /// invalidate the stale caller, and it can only do that if the check
-    /// happens here, not in `ViolationService::decide` (mirrors R71's
-    /// `decide_approval`). The `UPDATE` deliberately precedes the
-    /// terminal-run guard so an already-decided violation reports
+    /// happens here, not in `ViolationService::decide` (mirrors
+    /// [`Self::decide_approval`]'s race-safe owner check). The `UPDATE`
+    /// deliberately precedes the terminal-run guard so an already-decided
+    /// violation reports
     /// [`DomainError::AlreadyResolved`] even when its run has also
     /// settled; an `Err` returned here discards the appended event
     /// together with the rejected write (the transaction rolls back as a

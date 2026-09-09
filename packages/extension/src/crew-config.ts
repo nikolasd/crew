@@ -37,7 +37,7 @@ export interface CrewConfigFile {
     {
       readonly enabled?: boolean;
       readonly bin?: string;
-      // "headless" is retired (crew-v2 gap-closure WP-C, spec §4.6) -- the
+      // "headless" is retired (see `docs/adr/0026-headless-retirement.md`) -- the
       // daemon still parses it (so an old layer file doesn't fail to load
       // here, ahead of the daemon's own load) but then typed-rejects it
       // before dispatch. Kept in this union for the same reason: this type

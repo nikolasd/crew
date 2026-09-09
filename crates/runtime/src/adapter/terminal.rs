@@ -235,7 +235,7 @@ impl Adapter for TerminalAdapter {
         Box::pin(async move {
             let Some((sink, run_id, task_id, worker_id)) = session else {
                 // Already settled (or never started): a second cancel is
-                // genuinely a no-op, the same judgement R13 made for an
+                // genuinely a no-op, the same judgement made for an
                 // absent adapter -- an Err here would read as "a live
                 // vendor process a kill failed against" and raise a false
                 // degradedControl on a run that settled cleanly.

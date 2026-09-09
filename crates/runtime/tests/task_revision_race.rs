@@ -1,5 +1,6 @@
-//! Regression tests for R74: `task/upsert` and `reconcile/omp` used to
-//! split their revision check from their write into two separate
+//! Regression tests for a revision-check/write race in `task/upsert` and
+//! `reconcile/omp`, which used to split their revision check from their
+//! write into two separate
 //! `run_domain_op` round trips -- a caller-side pre-check that read the
 //! stored revision, then a write whose statement carried no revision
 //! predicate of its own:
@@ -29,7 +30,7 @@
 //! the revision back) regardless. The first test below observed exactly
 //! that RED against that shape.
 //!
-//! The R74 fix moved both guards into the writes themselves:
+//! The fix moved both guards into the writes themselves:
 //! `upsert_task`'s `ON CONFLICT` arm only applies when the presented
 //! revision is not lower than the stored one, and
 //! `reconcile_ownership`'s `UPDATE` carries `AND revision = ?`, each
@@ -37,8 +38,9 @@
 //! ([`DomainError::RevisionTooLow`] / [`DomainError::RevisionMismatch`]).
 //! The stored revision is deliberately NOT consumed by a rebind: reclaim
 //! stays idempotent across retries and restarts (last reconciler wins),
-//! and a usurped owner is refused at decision time by the R71/R72 in-tx
-//! ownership arbitration instead. The caller-side pre-checks were
+//! and a usurped owner is refused at decision time by the same
+//! in-transaction owner re-check the guarded-write doctrine applies to
+//! approval and plan decisions instead. The caller-side pre-checks were
 //! deleted, so the contract holds under every ordering, not only the one
 //! `join!(biased; ...)` pins for reproducibility.
 //!
@@ -116,7 +118,7 @@ async fn seed_task(
     .expect("seed task");
 }
 
-/// Mirrors `OrchestrationService::task_upsert`'s post-R74/R76 shape: one
+/// Mirrors `OrchestrationService::task_upsert`'s guarded-write shape: one
 /// guarded write round trip via [`DomainRepository::upsert_task`], whose
 /// `ON CONFLICT` arm refuses a lower revision or a mismatched
 /// owner inside its own transaction. No caller-side pre-check
@@ -141,7 +143,7 @@ async fn task_upsert_round_trips(
     Ok(())
 }
 
-/// Mirrors `OrchestrationService::reconcile_omp`'s post-R74 shape: one
+/// Mirrors `OrchestrationService::reconcile_omp`'s guarded-write shape: one
 /// guarded write round trip via [`DomainRepository::reconcile_ownership`],
 /// whose `AND revision = ?` predicate arbitrates the match inside its own
 /// transaction; the stored revision is not consumed. No caller-side
@@ -191,8 +193,9 @@ async fn reconcile_event_count(db: &DatabaseHandle) -> i64 {
 /// `task/upsert`-shaped calls from the same owner present revision 5
 /// (declared first) and revision 4 (declared second) -- same owner on
 /// both sides so this file's revision-monotonicity subject is isolated
-/// from R76's ownership guard, which would otherwise refuse both
-/// contenders outright. Written RED against the pre-R74 shape, where
+/// from the ownership guard, which would otherwise refuse both
+/// contenders outright. Written RED against the split check-then-write
+/// shape, where
 /// both callers' pre-checks read stored revision 3 and both unconditional
 /// writes landed, revision 4 last -- final state was `(4, "omp-1")`.
 /// Post-fix the guard inside the write refuses the lower revision once
@@ -233,16 +236,17 @@ async fn concurrent_upserts_cannot_move_a_revision_backwards() {
 /// A reconcile whose presented revision is stale *at write time* must be
 /// refused. Seeds revision 3 (owner `omp-1`); an upsert from the same
 /// owner advances the task to revision 5 -- same owner as the seed so
-/// this setup step is unaffected by R76's ownership guard, which is out
+/// this setup step is unaffected by the ownership guard, which is out
 /// of scope for this reconcile-revision test; a reconcile still
 /// presenting revision 3 must then be refused by the `AND revision = ?`
 /// predicate, classified in-transaction with the actual stored revision
-/// -- pre-R74 the unguarded `UPDATE` would have rebound (and moved the
-/// revision back to 3) regardless. A reconcile presenting the current
+/// -- before the fix, the unguarded `UPDATE` would have rebound (and moved
+/// the revision back to 3) regardless. A reconcile presenting the current
 /// revision 5 then succeeds, and the stored revision is NOT consumed by
 /// the rebind: reclaim stays idempotent -- a repeat reconcile at 5 also
 /// succeeds (last reconciler wins; a usurped owner is refused at decision
-/// time by the R71/R72 in-tx ownership arbitration instead).
+/// time by the same in-transaction owner re-check the guarded-write
+/// doctrine applies to approval and plan decisions instead).
 #[tokio::test]
 async fn a_reconcile_presenting_a_stale_revision_is_refused() {
     let (_state_dir, db) = open_db().await;
@@ -293,12 +297,12 @@ async fn a_reconcile_presenting_a_stale_revision_is_refused() {
 }
 
 /// A stale revision arriving strictly *after* a newer one, with no
-/// concurrency at all: pre-R74 the repo-layer write this file drives
-/// accepted it unconditionally (only the since-deleted service-layer
-/// pre-check refused it), so this was RED here too. Post-fix the guarded
-/// write alone must refuse it. Both upserts present the same owner as
-/// the seed -- same owner on both sides so this revision-sequencing
-/// subject is isolated from R76's ownership guard.
+/// concurrency at all: before the fix, the repo-layer write this file
+/// drives accepted it unconditionally (only the since-deleted
+/// service-layer pre-check refused it), so this was RED here too.
+/// Post-fix the guarded write alone must refuse it. Both upserts present
+/// the same owner as the seed -- same owner on both sides so this
+/// revision-sequencing subject is isolated from the ownership guard.
 #[tokio::test]
 async fn a_stale_upsert_arriving_after_a_newer_one_is_refused_sequentially() {
     let (_state_dir, db) = open_db().await;
