@@ -52,7 +52,7 @@ use crate::display::{
 };
 use crate::supervisor::{EscalationTimings, PtyProcess, SupervisorError};
 
-use super::classify::Surface;
+use super::classify::{GateKind, Surface};
 use super::discovery::{DiscoveryError, find_transcript_by_nonce};
 use super::grid::TerminalGrid;
 use super::input::{PASTE_CHUNK_BYTES, paste_chunks};
@@ -834,6 +834,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
     /// `ProtocolHealthChanged` diagnostic. `run_slot` is the caller's
     /// already-held, already-checked-empty `self.run` guard -- see
     /// `run_pipeline`'s own doc comment for why it stays held throughout.
+    #[allow(clippy::too_many_arguments)]
     async fn resume_from(
         &self,
         run_slot: &mut Option<RunState>,
@@ -1114,6 +1115,10 @@ impl<V: TuiVendor> TuiAdapter<V> {
             &pty,
             type_text,
             spawn_instant + INJECT_MIN_DELAY,
+            run_id,
+            task_id,
+            worker_id,
+            &sink,
         )
         .await
         {
@@ -1690,8 +1695,19 @@ async fn wait_for_readiness(
     pty: &Arc<PtyProcess>,
     inject: Option<PromptInjection<'_>>,
     not_before: tokio::time::Instant,
+    run_id: RunId,
+    task_id: TaskId,
+    worker_id: WorkerId,
+    sink: &Arc<dyn AdapterEventSink>,
 ) -> Result<(), AdapterError> {
     let deadline = tokio::time::Instant::now() + cap;
+    // Set once this poll journals `FirstRunGateDetected` +
+    // `EscalationRaised` for the gate currently blocking the run --
+    // exactly once per distinct gate, even though the loop below keeps
+    // re-classifying the same `Gate(kind)` on every tick until it
+    // resolves. A vendor that swaps from one gate to another (observed
+    // nowhere yet, but not ruled out) re-escalates for the new one.
+    let mut escalated_gate: Option<GateKind> = None;
 
     // Wait for the first output (a single check, not a loop: every
     // outcome below either proceeds past this point or returns). This
@@ -1738,14 +1754,59 @@ async fn wait_for_readiness(
         match classified {
             None | Some(Surface::PromptReady) => break,
             Some(Surface::Gate(gate)) => {
-                return Err(AdapterError::process(
-                    kind,
-                    "start",
-                    format!(
-                        "a first-run gate is blocking the run ({gate:?}) -- answer it by hand \
-                         once in this workspace outside crew, then retry"
-                    ),
-                ));
+                // A recognized first-run gate does not fail the run: it
+                // parks it and hands the human the decision, journaling
+                // exactly once per distinct gate even though this arm
+                // re-fires on every tick the grid still reads as the same
+                // `Gate(gate)`.
+                if escalated_gate != Some(gate) {
+                    emit(
+                        sink,
+                        run_id,
+                        task_id,
+                        worker_id,
+                        AdapterEventPayload::FirstRunGateDetected {
+                            kind: protocol_gate_kind(gate),
+                        },
+                        None,
+                    )
+                    .await;
+                    escalated_gate = Some(gate);
+                }
+                // Parked on no deadline of its own -- neither `cap` nor
+                // any other timeout -- until the surface changes (the next
+                // loop iteration's classify above), the process exits, or
+                // the run is cancelled. A human answering a first-run gate
+                // by hand has no bound this adapter may impose; see the
+                // approval service for the same "no Duration at all"
+                // judgement made for the same reason.
+                tokio::select! {
+                    biased;
+                    _ = pty.exit_watcher() => {
+                        let classified = {
+                            let g = grid.lock().expect("terminal-grid mutex never poisoned");
+                            vendor.classify_surface(&g)
+                        };
+                        return Err(match classified {
+                            Some(Surface::Gate(gate)) => AdapterError::process(
+                                kind,
+                                "start",
+                                format!(
+                                    "the worker process exited while a first-run gate was \
+                                     blocking the run ({gate:?})"
+                                ),
+                            ),
+                            _ => AdapterError::process(
+                                kind,
+                                "start",
+                                "the worker process exited before a recognizable surface \
+                                 appeared",
+                            ),
+                        });
+                    }
+                    _ = tokio::time::timeout(quiet, rx.recv()) => {}
+                }
+                continue;
             }
             Some(Surface::Undecided) => {
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -1849,6 +1910,21 @@ async fn wait_for_readiness(
             Ok(_) => continue,
             Err(_) => return Ok(()),
         }
+    }
+}
+
+/// Maps this module's internal [`GateKind`] to the durable protocol enum
+/// journaled on [`crew_protocol::RuntimeEvent::FirstRunGateDetected`].
+/// Kept as an explicit `match` (not a `From` impl) so a new `GateKind`
+/// variant fails this file to compile rather than silently falling
+/// through -- the protocol enum is mirrored 1:1 by hand, on purpose.
+fn protocol_gate_kind(gate: GateKind) -> crew_protocol::FirstRunGateKind {
+    match gate {
+        GateKind::ClaudeWorkspaceTrust => crew_protocol::FirstRunGateKind::ClaudeWorkspaceTrust,
+        GateKind::ClaudeThemePicker => crew_protocol::FirstRunGateKind::ClaudeThemePicker,
+        GateKind::ClaudeSignIn => crew_protocol::FirstRunGateKind::ClaudeSignIn,
+        GateKind::CodexDirectoryTrust => crew_protocol::FirstRunGateKind::CodexDirectoryTrust,
+        GateKind::CodexSignIn => crew_protocol::FirstRunGateKind::CodexSignIn,
     }
 }
 
@@ -2384,7 +2460,121 @@ mod tests {
 
     use super::super::classify::GateKind;
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+    /// Polls `condition` until it is true or `timeout` elapses, returning
+    /// which. Mirrors `tests/tui_adapter.rs`'s own `wait_until` helper
+    /// (duplicated here -- that file is a separate integration-test
+    /// binary, not reachable from this unit-test module).
+    async fn wait_until(mut condition: impl FnMut() -> bool, timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if condition() {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(15)).await;
+        }
+    }
+
+    /// A minimal [`AdapterEventSink`] that just records every payload it
+    /// is given, for the `wait_for_readiness` unit tests below that need
+    /// to see what the gate-escalation path journaled without a real
+    /// database (that end-to-end proof, through `DomainAdapterEventSink`
+    /// into a real `EscalationRaised` row with its `question`, is
+    /// `event_sink.rs`'s own `first_run_gate_tests` module).
+    struct GateRecordingSink(StdMutex<Vec<AdapterEventPayload>>);
+
+    impl GateRecordingSink {
+        fn new() -> Arc<Self> {
+            Arc::new(Self(StdMutex::new(Vec::new())))
+        }
+
+        fn payloads(&self) -> Vec<AdapterEventPayload> {
+            self.0
+                .lock()
+                .expect("recording sink mutex never poisoned")
+                .clone()
+        }
+    }
+
+    impl AdapterEventSink for GateRecordingSink {
+        fn emit(&self, event: AdapterEvent) -> AdapterFuture<'_, u64> {
+            self.0
+                .lock()
+                .expect("recording sink mutex never poisoned")
+                .push(event.payload);
+            Box::pin(async { Ok(0) })
+        }
+
+        fn note_real_user_turn(&self, _run_id: RunId) -> AdapterFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    /// A test-only vendor whose `classify_surface` deterministically
+    /// reports a fixed [`GateKind`] for its first `clear_after` calls,
+    /// then `Surface::PromptReady` forever after -- lets the gate-park
+    /// loop be tested on TICK COUNTS rather than real elapsed time or
+    /// fixture-replay timing. A whole captured screen (e.g.
+    /// `claude-trust-to-composer.raw`) typically arrives on the PTY as a
+    /// single read, so replaying a fixture that transitions gate ->
+    /// composer cannot reliably exercise more than one tick of this poll;
+    /// this double can.
+    ///
+    /// `wait_for_readiness` calls no `TuiVendor` method but
+    /// `classify_surface`, so every other trait method here is
+    /// unreachable by construction.
+    struct CountingGateVendor {
+        gate: GateKind,
+        clear_after: u32,
+        calls: AtomicU32,
+    }
+
+    impl TuiVendor for CountingGateVendor {
+        fn kind(&self) -> &'static str {
+            "counting-gate"
+        }
+        fn launch(&self, _spec: &StartSpec, _cfg: &AdapterConfig) -> LaunchSpec {
+            unreachable!("wait_for_readiness never calls TuiVendor::launch")
+        }
+        fn resume_launch(
+            &self,
+            _session: &VendorSessionRef,
+            _spec: &StartSpec,
+            _cfg: &AdapterConfig,
+        ) -> LaunchSpec {
+            unreachable!("wait_for_readiness never calls TuiVendor::resume_launch")
+        }
+        fn transcript_root(&self, _spec: &StartSpec, _cfg: &AdapterConfig) -> PathBuf {
+            unreachable!("wait_for_readiness never calls TuiVendor::transcript_root")
+        }
+        fn format(&self) -> Arc<dyn TranscriptFormat> {
+            unreachable!("wait_for_readiness never calls TuiVendor::format")
+        }
+        fn compose_input(&self, _message: &str) -> Vec<u8> {
+            unreachable!("wait_for_readiness never calls TuiVendor::compose_input")
+        }
+        fn interrupt_sequence(&self) -> Vec<u8> {
+            unreachable!("wait_for_readiness never calls TuiVendor::interrupt_sequence")
+        }
+        fn permission_args(&self, _mode: crate::config::crew::PermissionMode) -> Vec<String> {
+            unreachable!("wait_for_readiness never calls TuiVendor::permission_args")
+        }
+        fn version_gate(&self, _probed: &str) -> VersionVerdict {
+            unreachable!("wait_for_readiness never calls TuiVendor::version_gate")
+        }
+        fn classify_surface(&self, _grid: &TerminalGrid) -> Option<Surface> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n < self.clear_after {
+                Some(Surface::Gate(self.gate))
+            } else {
+                Some(Surface::PromptReady)
+            }
+        }
+    }
 
     /// The constant is derived from the bounds it must dominate,
     /// not chosen. If a production bound is ever raised past it, this fails
@@ -2912,19 +3102,24 @@ mod tests {
     }
 
     /// End-to-end proof that `wait_for_readiness` itself, not just the
-    /// Enter-precondition helper, refuses to paste into a gate: a real
-    /// double replays a committed capture verbatim onto its own PTY
-    /// output (the same bytes a live vendor produced), fed into the grid
-    /// the exact way `run_pipeline` feeds it (a background task on its
-    /// own subscription), and the readiness poll must recognize the gate
-    /// and fail closed before ever calling `write_paste`. The double
-    /// sleeps after replaying so its output channel stays open through
-    /// the poll -- otherwise the channel closing before
-    /// `wait_for_readiness` ever reads from it would be misread as "the
-    /// process exited before producing output", the wrong error for this
-    /// test to prove.
+    /// Enter-precondition helper, recognizes a gate from a real replayed
+    /// capture (the same bytes a live vendor produced, fed into the grid
+    /// the exact way `run_pipeline` feeds it) and parks on it rather than
+    /// pasting into it: it journals `FirstRunGateDetected` naming the
+    /// gate exactly once, then keeps polling -- on no deadline of its
+    /// own -- until the process exits (forced here via `terminate()`
+    /// rather than waiting out the double's own sleep), at which point
+    /// the failure names the gate that was blocking it. This is also
+    /// this slice's fixture-driven proof of requirement (c) ("a fake
+    /// vendor that exits under the gate -> failure names the gate");
+    /// requirement (a)'s remaining half -- that the paired
+    /// `EscalationRaised` a real sink raises carries the right `kind`
+    /// and a populated `question` -- is `event_sink.rs`'s own
+    /// `first_run_gate_tests` module, which proves the DB/journal side
+    /// this unit test's stub sink cannot.
     #[tokio::test]
-    async fn wait_for_readiness_refuses_to_paste_into_a_replayed_gate_capture() {
+    async fn wait_for_readiness_escalates_and_then_fails_when_the_process_exits_under_a_replayed_gate_capture()
+     {
         use crate::adapter::tui::ClaudeTuiVendor;
 
         let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2935,7 +3130,7 @@ mod tests {
                     program: PathBuf::from("/bin/sh"),
                     args: vec![
                         "-c".to_string(),
-                        format!("cat '{}' && sleep 5", fixture_path.display()),
+                        format!("cat '{}' && sleep 30", fixture_path.display()),
                     ],
                     ..crate::supervisor::SpawnSpec::minimal()
                 },
@@ -2964,23 +3159,56 @@ mod tests {
         }
 
         let vendor = ClaudeTuiVendor::new(PathBuf::from("/w"), vec![]);
-        let result = wait_for_readiness(
-            &mut readiness_rx,
-            "claude",
-            &vendor,
-            &grid,
-            Duration::from_millis(50),
-            Duration::from_secs(3),
-            &pty,
-            Some(PromptInjection {
-                text: "this must never be written",
-                write_timeout: Duration::from_secs(1),
-            }),
-            tokio::time::Instant::now(),
-        )
-        .await;
+        let sink = GateRecordingSink::new();
+        let dyn_sink: Arc<dyn AdapterEventSink> = sink.clone();
+        let run_id = RunId::new();
+        let task_id = TaskId::new();
+        let worker_id = WorkerId::new();
 
+        let pty_for_wait = Arc::clone(&pty);
+        let wait = tokio::spawn(async move {
+            wait_for_readiness(
+                &mut readiness_rx,
+                "claude",
+                &vendor,
+                &grid,
+                Duration::from_millis(50),
+                Duration::from_secs(30),
+                &pty_for_wait,
+                Some(PromptInjection {
+                    text: "this must never be written",
+                    write_timeout: Duration::from_secs(1),
+                }),
+                tokio::time::Instant::now(),
+                run_id,
+                task_id,
+                worker_id,
+                &dyn_sink,
+            )
+            .await
+        });
+
+        // Park, don't fail: wait for the escalation to actually land
+        // rather than asserting it failed immediately.
+        assert!(
+            wait_until(|| !sink.payloads().is_empty(), Duration::from_secs(5)).await,
+            "a replayed gate capture must escalate, not silently fail closed or hang"
+        );
+        match &sink.payloads()[..] {
+            [AdapterEventPayload::FirstRunGateDetected { kind }] => {
+                assert_eq!(*kind, crew_protocol::FirstRunGateKind::ClaudeWorkspaceTrust);
+            }
+            other => panic!("expected exactly one FirstRunGateDetected, got {other:?}"),
+        }
+
+        // The gate never clears on its own (the fixture is a static
+        // replay): force the exit path instead of waiting out the
+        // double's own sleep, and confirm the failure names the gate.
         let _ = pty.terminate().await;
+        let result = tokio::time::timeout(Duration::from_secs(5), wait)
+            .await
+            .expect("must return promptly once the process exits")
+            .expect("wait_for_readiness task must not panic");
 
         match result {
             Err(err) => {
@@ -3043,6 +3271,7 @@ mod tests {
         }
 
         let vendor = ClaudeTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let sink: Arc<dyn AdapterEventSink> = GateRecordingSink::new();
         let started = tokio::time::Instant::now();
         let result = wait_for_readiness(
             &mut readiness_rx,
@@ -3057,6 +3286,10 @@ mod tests {
                 write_timeout: Duration::from_secs(1),
             }),
             tokio::time::Instant::now(),
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            &sink,
         )
         .await;
         let elapsed = started.elapsed();
@@ -3120,6 +3353,7 @@ mod tests {
         }
 
         let vendor = ClaudeTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let sink: Arc<dyn AdapterEventSink> = GateRecordingSink::new();
         let started = tokio::time::Instant::now();
         // A long cap: if the closed-channel case were mishandled as a
         // pacing tick, this test would either hang here or take
@@ -3140,6 +3374,10 @@ mod tests {
                     write_timeout: Duration::from_secs(1),
                 }),
                 tokio::time::Instant::now(),
+                RunId::new(),
+                TaskId::new(),
+                WorkerId::new(),
+                &sink,
             ),
         )
         .await
@@ -3157,6 +3395,85 @@ mod tests {
             elapsed < Duration::from_secs(1),
             "must fail promptly on the closed channel, not spin toward the 30s cap: took {elapsed:?}"
         );
+    }
+
+    /// Requirement (b): a vendor that clears its gate after a few ticks
+    /// resumes normally. `wait_for_readiness` must escalate exactly once
+    /// for the gate it first saw, then -- once the identical surface
+    /// classifies as `PromptReady` on a later tick, nothing else about
+    /// the call having changed -- return `Ok(())` exactly as an ungated
+    /// readiness would, so the caller's ordinary phase-2 Enter delivery
+    /// proceeds unmodified.
+    #[tokio::test]
+    async fn wait_for_readiness_resumes_normally_once_a_parked_gate_clears() {
+        let pty = Arc::new(
+            PtyProcess::spawn(
+                &crate::supervisor::SpawnSpec {
+                    program: PathBuf::from("/bin/sh"),
+                    args: vec!["-c".to_string(), "printf hi && sleep 30".to_string()],
+                    ..crate::supervisor::SpawnSpec::minimal()
+                },
+                EscalationTimings::default(),
+            )
+            .expect("spawn the ticking double"),
+        );
+
+        let mut readiness_rx = pty.subscribe_output();
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        {
+            let mut grid_rx = pty.subscribe_output();
+            let grid = Arc::clone(&grid);
+            tokio::spawn(async move {
+                loop {
+                    match grid_rx.recv().await {
+                        Ok(bytes) => grid
+                            .lock()
+                            .expect("terminal-grid mutex never poisoned")
+                            .push(&bytes),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        let vendor = CountingGateVendor {
+            gate: GateKind::ClaudeWorkspaceTrust,
+            clear_after: 3,
+            calls: AtomicU32::new(0),
+        };
+        let sink = GateRecordingSink::new();
+        let dyn_sink: Arc<dyn AdapterEventSink> = sink.clone();
+
+        let result = wait_for_readiness(
+            &mut readiness_rx,
+            "counting-gate",
+            &vendor,
+            &grid,
+            Duration::from_millis(20),
+            Duration::from_secs(5),
+            &pty,
+            None,
+            tokio::time::Instant::now(),
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            &dyn_sink,
+        )
+        .await;
+
+        let _ = pty.terminate().await;
+
+        result.expect("a gate that clears must resolve readiness normally, not fail it");
+        match &sink.payloads()[..] {
+            [AdapterEventPayload::FirstRunGateDetected { kind }] => {
+                assert_eq!(*kind, crew_protocol::FirstRunGateKind::ClaudeWorkspaceTrust);
+            }
+            other => panic!(
+                "the gate must be escalated exactly once even though classify_surface reports \
+                 it on every tick until it clears: {other:?}"
+            ),
+        }
     }
 
     // ----------------------------------------------- the bracketed-paste invariant
