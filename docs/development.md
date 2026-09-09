@@ -95,7 +95,7 @@ CLI layer, only what the extension does for you.
 
 ### CrewConfig
 
-The merged configuration deserializes into an immutable `CrewConfig` (spec §10) — approval mode,
+The merged configuration deserializes into an immutable `CrewConfig` (see [architecture.md § Configuration and Policy](architecture.md#configuration-and-policy)) — approval mode,
 concurrency/timeout/turn-budget limits, display backend preference, per-adapter config, workspace
 defaults, dashboard, retention, and (additive-across-layers) security patterns. A thin
 `RuntimePolicy` adapter (`crates/runtime/src/config/mod.rs`) exposes the fields the runtime's

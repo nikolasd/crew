@@ -194,8 +194,8 @@ per-run and a daily cost ceiling, and a `native_discovery_reviewed` rollout gate
 authorization of vendor-discovered nested workers. `PolicyEvaluator::evaluate` enforced all
 five before every run's authorization.
 
-crew.json (spec §10, `crew::CrewConfig`) deliberately does not model this org-governance
-surface — the design spec retires the org config layer outright (§2.2/§12). That ruling deleted the
+crew.json (`crew::CrewConfig`) deliberately does not model this org-governance
+surface — the org config layer was retired outright. That ruling deleted the
 enforcement and the corresponding `RuntimePolicy` fields rather than keeping them
 permanently inert, since that YAML layer was never actually wired up end to end (the
 extension passed no config-path flags) and so was unreachable in every real deployment.
