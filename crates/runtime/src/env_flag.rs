@@ -1,22 +1,21 @@
-//! One tiny helper shared by every renamed `CREW_*`/`OMP_CREW_*`
-//! environment variable that used to be `BATMAN_*`/`OMP_BATMAN_*`: read the
-//! new name, falling back to the old one, so an existing shell, CI job, or
-//! `.env` file that still sets the pre-rename name keeps working unchanged
-//! during the migration. Mirrors TypeScript's `envFlag`
+//! One tiny helper for a renamed `CREW_*`/`OMP_CREW_*` environment
+//! variable that used to be `BATMAN_*`/`OMP_BATMAN_*`: read the new name,
+//! falling back to the old one, so an existing shell, CI job, or `.env`
+//! file that still sets the pre-rename name keeps working unchanged during
+//! the migration. Mirrors TypeScript's `envFlag`
 //! (`packages/extension/src/env-flag.ts`).
+//!
+//! Only `BATMAN_STATE_DIR` still needs this. The vendor-CLI kill switch
+//! used to, and no longer does: `.cargo/config.toml` sets
+//! `CREW_DISABLE_VENDOR_CLI` for every cargo-launched process, which means
+//! the new name is never absent under cargo and the fallback to the old one
+//! could never fire. A switch that cannot be reached is worse than a
+//! retired one -- someone setting the old name for a live run would have
+//! got fixture mode and no indication why -- so it was retired outright.
 
-use std::env;
-
-/// Reads `new` from the process environment, falling back to `old` when
-/// `new` is unset.
-#[must_use]
-pub fn env_flag(new: &str, old: &str) -> Option<String> {
-    env::var(new).ok().or_else(|| env::var(old).ok())
-}
-
-/// Same as [`env_flag`], but reads from an explicit map instead of the
-/// process environment -- for call sites that already thread a map through
-/// for testability (e.g. [`crate::security::StateRoot::resolve`]).
+/// Reads `new` from an explicit environment map, falling back to `old` when
+/// `new` is absent -- for call sites that already thread a map through for
+/// testability (e.g. [`crate::security::StateRoot::resolve`]).
 #[must_use]
 pub fn env_flag_from(
     env: &std::collections::HashMap<String, String>,

@@ -17,3 +17,27 @@
 # not fought.
 [env]
 CREW_FORCE_HIDDEN_DISPLAYS = "1"
+
+# The same safeguard for vendor CLIs. Unset, the runtime treats them as
+# ordinary installed dependencies: the availability probe and the
+# conformance suites spawn the real binary if one is on PATH. That is the
+# correct production default and the wrong test default -- it made a
+# conformance baseline pass against a live `claude --version` on a machine
+# that happened to have it installed, and report four failures on one that
+# did not, with the difference invisible in the output. Every job in
+# `ci.yml` sets this, and every local run was supposed to; "was supposed
+# to" is what this line replaces.
+#
+# Only the exact value "1" disables (see `vendor_cli_invocation_disabled`
+# in crates/runtime/src/conformance/mod.rs). A deliberate live run turns it
+# off by value rather than by unsetting it, because `[env]` means it is
+# never absent under cargo:
+#
+#     CREW_DISABLE_VENDOR_CLI=0 CREW_LIVE_CWD=/path/to/trusted/project \
+#       cargo test --test conformance
+#
+# `force` is omitted above and here, so an exported value always wins over
+# these -- that override is what makes a live run possible, and it is a
+# visible, deliberate act on the command line rather than an ambient
+# condition of the shell.
+CREW_DISABLE_VENDOR_CLI = "1"

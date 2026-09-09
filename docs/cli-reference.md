@@ -349,8 +349,8 @@ crewd conformance --adapter <claude|codex|copilot|ompRpc|all> (--fixture | --liv
 ```
 
 Exactly one of `--fixture`/`--live` must be set. `--fixture` runs entirely offline against golden
-frames; `--live` shells out to the real vendor CLI (gated by adapter-specific env vars, e.g.
-`CREW_LIVE_CLAUDE=1`) and reports a structured `{adapter, mode: "live", passed: false, error}`
+frames; `--live` shells out to the real vendor CLI (permitted only when `CREW_DISABLE_VENDOR_CLI`
+is not `1` — see below) and reports a structured `{adapter, mode: "live", passed: false, error}`
 entry rather than a hard process failure if the vendor CLI is unavailable or refuses (e.g. out of
 credits). The report is written to `--output` and also printed to stdout.
 - The live suite spawns the real vendor TUI on a PTY and drives it through the same injection

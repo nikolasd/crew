@@ -122,6 +122,7 @@ producing a clean result that looked exactly like success.
 - [Measurement and Instruments](#measurement-and-instruments)
   - [A zero is a measurement, and an unchecked instrument reports zero](#a-zero-is-a-measurement-and-an-unchecked-instrument-reports-zero)
   - [The same blindness one level out: a check nobody runs, and a scan that reads nothing](#the-same-blindness-one-level-out-a-check-nobody-runs-and-a-scan-that-reads-nothing)
+  - [A documented switch that no code reads is a control that only exists in the reader's head](#a-documented-switch-that-no-code-reads-is-a-control-that-only-exists-in-the-readers-head)
   - [A claim about the future has no failure mode when the future arrives](#a-claim-about-the-future-has-no-failure-mode-when-the-future-arrives)
 
 ---
@@ -1793,6 +1794,64 @@ code: the replacement matched the skip list as a leading path prefix, which exem
 second time against a file that cannot be fixed by editing it. Changing what a check examines is a
 change to the check, and needs the same scrutiny as changing what it matches. The "nobody runs it" half has no unit test by
 nature; its guard is the `markers` job, which runs the control tests alongside the scan.
+
+### A documented switch that no code reads is a control that only exists in the reader's head
+
+**Location:** `.cargo/config.toml`'s `[env]` block, `crates/runtime/src/conformance/mod.rs`'s
+`vendor_cli_invocation_disabled`; found while making the vendor-CLI kill switch structural
+
+**The bug:** The same commit produced different conformance results on two machines. One reported
+four failures; the other reported none. The difference was not the code — it was that one machine
+had the vendor CLIs installed and neither run had set `CREW_DISABLE_VENDOR_CLI=1`. Unset, the
+availability probe spawns `<vendor> --version`, a real subprocess, and the baseline that expects an
+unavailable CLI does not match a CLI that answers. Nothing in the output said which machine had
+been measured.
+
+The switch had always been correct. It was simply not *set* — every local run depended on a person
+remembering a prefix that CI sets automatically, and the failure mode of forgetting was a plausible
+wrong answer rather than an error.
+
+Making it structural (a `[env]` entry, beside the display safeguard that already worked this way)
+then exposed two more switches that had quietly stopped existing:
+
+* **`CREW_LIVE_CLAUDE=1` was read by no code at all.** It appeared in `CLAUDE.md`, `AGENTS.md` and
+  `docs/cli-reference.md` as the documented way to run live conformance, and in zero `.rs` files;
+  only `CREW_LIVE_CWD` is ever read. Anyone following the documentation got fixture mode while
+  believing they had run live — a clean result that was evidence of nothing, which is the same
+  defect as the one that started the investigation. `docs/manual-testing.md` had been showing the
+  form that actually works for some time, and the contradiction went unnoticed because nobody
+  reconciles two documents that each look authoritative.
+* **`BATMAN_DISABLE_VENDOR_CLI` became unreachable the moment the switch went structural.** The
+  fallback helper consults the old name only when the new one is *absent*, and a `[env]` entry
+  means the new name is never absent under cargo. Someone setting the legacy name for a live run
+  would have got fixture mode and no indication why. The fix that removes a footgun can create one
+  a level down, and a fallback is only alive while the thing it falls back from can be missing.
+
+**The lesson:** a control that depends on a person remembering it is not a control, it is a habit,
+and habits do not fail loudly. Prefer a default that is structural — set where the tool reads it,
+not where the operator types it — and then make the deliberate escape from that default explicit,
+by value rather than by omission, so that using it is a visible act rather than an ambient property
+of somebody's shell.
+
+Two corollaries, both learned here. First, when a default becomes structural, every mechanism that
+keyed on the variable being *absent* is now dead, and dead silently: go and look for those rather
+than waiting to be told. Second, and more general than environment variables: a documented switch
+that no code reads is indistinguishable, to its reader, from one that works. The reader follows the
+instructions, sees a clean result, and has been told nothing. Grepping the codebase for a variable
+the documentation names is a five-second check that nobody performs, because documentation is not
+usually the thing under suspicion.
+
+**Regression tests:** `crates/runtime/src/conformance/mod.rs` —
+`the_cargo_config_supplies_the_kill_switch_to_this_process` fails if the `[env]` entry is deleted,
+which nothing else in the suite does: the fixture suites pass either way, and pass *for a different
+reason* when the switch is off, having spawned a real `--version` first. That is precisely the
+indistinguishability above, and without the test the safeguard would be a line in a config file
+nobody had watched work. `only_the_exact_value_one_disables_vendor_cli_invocation` pins the
+predicate as a value test rather than a presence test — under `[env]` the variable is never absent,
+so a presence test would make the live path unreachable from inside the repository and every
+live-only scenario would report `Skipped` forever, which reads exactly like a clean fixture run.
+Both were confirmed to fail before being trusted. No test can guard the dead-documentation half;
+its only defense is the habit of grepping for the identifier a document tells you to set.
 
 ### A claim about the future has no failure mode when the future arrives
 

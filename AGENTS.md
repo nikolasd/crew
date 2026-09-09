@@ -265,21 +265,31 @@ cargo test --test adapter_contract
 # Specific TS file
 bun test packages/extension/src/runtime.test.ts
 
-# Conformance (fixture mode, no live calls)
-CREW_DISABLE_VENDOR_CLI=1 cargo test --test conformance
+# Conformance (fixture mode, no live calls) -- .cargo/config.toml's [env]
+# sets CREW_DISABLE_VENDOR_CLI=1 for every cargo-launched process, so no
+# prefix is needed and forgetting one can no longer spawn a vendor binary.
+cargo test --test conformance
 
-# Live conformance for specific adapter (requires credentials)
-CREW_LIVE_CLAUDE=1 cargo test --test conformance
+# Live conformance (requires credentials). The switch is turned off by
+# VALUE, not by unsetting it: [env] means it is never absent under cargo.
+CREW_DISABLE_VENDOR_CLI=0 CREW_LIVE_CWD=/path/to/trusted/project \
+  cargo test --test conformance
 ```
 
 ### CI Pipeline (`.github/workflows/ci.yml`)
 
-Five jobs run on every push/PR:
+Jobs run on every push/PR:
 1. **format** — `cargo fmt --check` + Biome format check
 2. **clippy** — `cargo clippy` with `-D warnings`
 3. **test** — `cargo test` + `bun test` on ubuntu-latest and macos-latest (with `CREW_DISABLE_VENDOR_CLI=1`)
 4. **generate-check** — verifies generated code is up to date (`bun run generate --check`)
 5. **security** — `cargo audit` + gitleaks scan
+6. **markers** — `scripts/check-markers.ts` plus its own control tests; unconditional
+7. **trailers** — attribution trailers in the commits the PR adds (pull requests only)
+
+Plus `typecheck`, `bundle-check`, and the `changes` classifier the expensive jobs gate on. Read
+`.github/workflows/ci.yml` for the current set rather than trusting this list to be exhaustive —
+it has been wrong before, and a job nobody knows about is a job nobody notices the absence of.
 
 ### Release (`.github/workflows/release.yml`)
 
