@@ -205,8 +205,22 @@ this: a widget-visibility decision was written into the user guide the same day 
 ahead of the change that would make it true — worth checking that a doc changed alongside a decision
 actually describes what shipped, not what was agreed.
 
-Citations (in code comments, ADRs, or docs) may only point at something that survives — an in-repo
-path, an ADR, a PR number, or a URL — never a local or gitignored file.
+Citations (in code comments, ADRs, or docs) may only point at something that survives, and "survives"
+means "is in this repository" — an in-repo path, or an ADR or release record cited by path. Never a
+local or gitignored file, and never an identifier that only resolves somewhere else: a tracker ticket,
+a decision label, a review-register marker, or a bare pull-request number. A reader who cannot follow
+a pointer has been given nothing, and the reasoning it stood in for is what they actually needed.
+
+So write the reasoning itself. Not "the fix for the wrong-object bug" pointing at a number, but what
+the bug was and why the code answers it. A comment that names a mechanism (`the fix at
+`message/send``) is fine — that is a place in this repository. A comment that gestures at an unnamed
+event ("the earlier fix", "that work") is the same defect wearing different clothes: the test is
+whether the sentence tells the reader what happened without a lookup.
+
+`bun run check` enforces this as its first step (`scripts/check-markers.ts`), and prints the file,
+line, token and rule for anything it finds. Two directories are exempt and both are deliberate:
+`fixtures/`, whose files are byte-exact terminal recordings that cannot be edited without destroying
+what makes them evidence, and `assets/`, where the logo's parts carry labels of the same shape.
 
 ## Questions?
 

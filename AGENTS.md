@@ -133,6 +133,23 @@ crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/aud
 - Tool names: `crew_<verb>` (e.g., `crew_task`, `crew_worker`, `crew_run`)
 - Commands: `/crew` (subcommands `health`, `run`, `runs`, `export`, `clean`, `reopen`, `doctor`, `config`) plus the standalone `/crew-install`
 
+### Comments carry reasoning, not pointers
+
+A comment exists to tell the next reader why the code is the way it is. It may cite anything that
+lives in this repository — a path, an ADR, a release record — and nothing that does not. Tracker
+ticket ids, decision labels, review-register markers and bare pull-request numbers are all the same
+defect: a reader who follows one lands nowhere, and the reasoning it stood in for is gone.
+
+Write the reasoning instead. Where a marker named a defect, name the defect: "the wrong-object
+property bug", not a number. Naming a mechanism is fine (`the fix at `message/send`` is a place in
+this repository); gesturing at an unnamed event ("the earlier fix", "that work") is not. The test is
+whether the sentence tells the reader what happened without a lookup.
+
+Enforced as the first step of `bun run check` by `scripts/check-markers.ts`, which prints file, line,
+token and rule. `fixtures/` and `assets/` are exempt — the first holds byte-exact terminal recordings
+that cannot be edited without destroying what makes them evidence, the second labels the logo's parts
+with the same shape the rule matches.
+
 ---
 
 ## Important Files

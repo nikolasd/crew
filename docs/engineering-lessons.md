@@ -112,6 +112,8 @@ append-only log — pruning it is separate work from writing this rule down, and
   - [A deletion sweep must sweep claims, not just references](#a-deletion-sweep-must-sweep-claims-not-just-references)
 - [Fixture Integrity](#fixture-integrity)
   - [A byte-exact fixture is not text, and git will rewrite it](#a-byte-exact-fixture-is-not-text-and-git-will-rewrite-it)
+- [Measurement and Instruments](#measurement-and-instruments)
+  - [A zero is a measurement, and an unchecked instrument reports zero](#a-zero-is-a-measurement-and-an-unchecked-instrument-reports-zero)
 
 ---
 
@@ -1675,3 +1677,44 @@ The same applies to any future binary-ish fixture: a recording, a compiled artif
 tree, which is the copy that looks correct either way. The protection is the attribute plus the
 staged-blob hash check at the time of adding, recorded in
 `fixtures/adapters/tui-screens/README.md`.
+
+## Measurement and Instruments
+
+### A zero is a measurement, and an unchecked instrument reports zero
+
+**Location:** `scripts/check-markers.ts` and its positive-control test; discovered across the
+repository-wide sweep that produced it
+
+**The bug:** Four separate checks during one piece of work returned a confident zero from an
+instrument that could not have returned anything else. Every one of them looked exactly like a pass.
+
+* `git diff origin/main...HEAD` was run on a branch whose work was **uncommitted**. The three-dot
+  diff compares the merge base to `HEAD`, so it measured the last commit and reported no changes —
+  against a working tree full of them.
+* A shell loop passed `"crates/runtime crates/xtask"` as a **single quoted pathspec**. Git looked
+  for one path containing a space, found none, and reported zero for every row of the table.
+* `git grep -E '\bD[0-9]'` matched nothing at all. POSIX extended regular expressions **have no
+  word-boundary escape**; the pattern is simply unsatisfiable, and the clean result was
+  indistinguishable from a clean tree. The same pattern under `-P`, or in ripgrep, found the
+  matches immediately. This one was used to certify a slice as clean, twice, by two different people.
+* A recursive `rg` from the repository root **skips hidden directories by default**, so it never
+  opened `.github/` and never saw the markers in the workflow files. Naming the path explicitly
+  finds them; traversing to it does not.
+
+The last two were being used to *check a scanner*. One of them disagreed with the scanner, and the
+scanner was right.
+
+**The lesson:** a zero is a measurement, and a measurement is only as good as a demonstration that
+the instrument can produce a non-zero. Before trusting a clean result, run the instrument against a
+case you know should match — a line you can see with your own eyes, a file you just edited. That is
+cheap, and it is the only thing that separates "nothing is wrong" from "nothing was looked at".
+
+For anything that runs repeatedly, build the demonstration in. `check-markers.test.ts` pins every
+rule against text it must catch, and asserts that no rule exists without such a control, so a
+pattern edited into something unsatisfiable fails the control before the repository scan can report
+a false all-clear. This is the same shape as the entry on a fail-closed assertion whose failure path
+is never exercised: an assertion nobody has seen fail, and a search nobody has seen match, are both
+claims resting on an untested mechanism.
+
+**Regression tests:** `scripts/check-markers.test.ts` — the `positive control` block, including
+`every declared rule is exercised by a control above`, which fails if a rule is added without one.

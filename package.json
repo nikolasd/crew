@@ -2,7 +2,9 @@
   "name": "@nikolasd/crew-workspace",
   "private": true,
   "packageManager": "bun@1.3.14",
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "setup": "bash scripts/setup.sh",
     "generate": "cargo run -p crew-xtask -- generate",
@@ -11,7 +13,8 @@
     "format:write": "biome format --write .",
     "typecheck": "tsc --noEmit",
     "test": "CREW_DISABLE_VENDOR_CLI=1 bun test && CREW_DISABLE_VENDOR_CLI=1 cargo test --workspace",
-    "check": "bun run generate --check && bun run format:check && bun run typecheck && (CHECK_OUT=$(mktemp -d) && bun run --cwd packages/extension build --outdir \"$CHECK_OUT/dist\" && rm -rf \"$CHECK_OUT\") && CREW_DISABLE_VENDOR_CLI=1 bun test && CREW_DISABLE_VENDOR_CLI=1 cargo test --workspace"
+    "check": "bun run check:markers && bun run generate --check && bun run format:check && bun run typecheck && (CHECK_OUT=$(mktemp -d) && bun run --cwd packages/extension build --outdir \"$CHECK_OUT/dist\" && rm -rf \"$CHECK_OUT\") && CREW_DISABLE_VENDOR_CLI=1 bun test && CREW_DISABLE_VENDOR_CLI=1 cargo test --workspace",
+    "check:markers": "bun scripts/check-markers.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7",
