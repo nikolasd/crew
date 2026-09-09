@@ -424,7 +424,23 @@ async fn serve_viewer(
                     Ok(0) | Err(_) => return,
                     Ok(n) => {
                         let bytes = buf[..n].to_vec();
-                        on_user_input(bytes.clone());
+                        // A real terminal answering the vendor's own
+                        // redraw-driven escape queries (CPR, DA, focus/
+                        // paste-mode reports) shares this exact socket
+                        // with genuine keystrokes -- see
+                        // `terminal_reply`'s doc comment for the incident
+                        // this filter exists for. Only the residue after
+                        // stripping recognized replies is out-of-band
+                        // INPUT; a read that is nothing but replies never
+                        // reaches `on_user_input` at all, so it neither
+                        // journals an event nor sets
+                        // `needsReconciliation`. The vendor's own PTY
+                        // still gets every byte, unfiltered, below --
+                        // stripping is for the journaling decision only.
+                        let residue = super::terminal_reply::strip_terminal_replies(&bytes);
+                        if !residue.is_empty() {
+                            on_user_input(residue);
+                        }
                         // A failed keystroke delivery is degraded control,
                         // never silence: the viewer typed and nothing
                         // reached the vendor process (a deferred minor).

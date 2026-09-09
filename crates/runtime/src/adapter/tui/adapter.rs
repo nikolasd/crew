@@ -1248,7 +1248,8 @@ impl<V: TuiVendor> TuiAdapter<V> {
             while let Some((tagged, _new_cursor)) = batch_rx.recv().await {
                 for (event, cursor) in cursor_placements(tagged) {
                     if let TuiEvent::SessionMeta { vendor_session_id } = &event {
-                        let unchanged = last_vendor_session_id.as_deref() == Some(vendor_session_id.as_str());
+                        let unchanged =
+                            last_vendor_session_id.as_deref() == Some(vendor_session_id.as_str());
                         if unchanged && cursor.is_none() {
                             continue;
                         }
