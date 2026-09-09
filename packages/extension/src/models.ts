@@ -9,8 +9,12 @@
 //
 //   VALIDATION comes from omp's own model catalogue (`omp models --json`),
 //   which crew can read for free because crew runs INSIDE omp. It lists
-//   canonical ids per provider -- 725 models across 7 providers on the
-//   machine this was written on, three of which are crew's adapters.
+//   canonical ids per provider, read fresh on every call rather than cached
+//   -- but it is scoped to providers the local omp installation holds
+//   credentials for, which is a different question from "does the vendor
+//   CLI accept this name". A machine with no `anthropic` credentials in omp
+//   has an empty catalogue for `claude` even though the claude binary itself
+//   works fine (see `currentModels`'s fallback below for what that implies).
 //
 //   ALIAS RESOLUTION cannot come from the catalogue, because the catalogue
 //   holds canonical ids and display names and never aliases: `openai-codex`
@@ -79,7 +83,7 @@ const PROVIDER_FOR_ADAPTER: Partial<Record<Adapter, string>> = {
  * shorthand for copilot would be a mapping we owned and could not verify,
  * so there is none.
  */
-const VENDOR_ALIASES: Partial<Record<Adapter, Readonly<Record<string, string>>>> = {
+export const VENDOR_ALIASES: Partial<Record<Adapter, Readonly<Record<string, string>>>> = {
   claude: {
     fable: "claude-fable-5-1",
     opus: "claude-opus-5",

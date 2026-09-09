@@ -10,8 +10,10 @@
 // subset fixture can make an ambiguous input look unique, which is the one
 // thing these tests exist to catch.
 
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { expect, test } from "bun:test";
-import { type Catalogue, decideModel, isCataloguedAdapter, readCatalogue, resolutionNote, resolveModelName } from "./models";
+import { type Catalogue, VENDOR_ALIASES, currentModels, decideModel, isCataloguedAdapter, readCatalogue, resolutionNote, resolveModelName } from "./models";
 
 /** Every `anthropic` id omp catalogues. */
 const ANTHROPIC: Catalogue = {
@@ -292,4 +294,117 @@ test("a model resolved from the local alias table is verified even when the cata
 test("a name that could not be checked because the catalogue was unavailable is not verified", () => {
   const d = decideModel("codex", "gpt-5.6-sol", undefined, { available: false, why: "omp not on PATH" });
   expect(d.kind === "use" && d.verified).toBe(false);
+});
+
+// ------------------------------------------------------- currentModels
+
+test("currentModels offers the catalogue when one is available, and says so", () => {
+  const result = currentModels("claude", ANTHROPIC);
+  expect(result).toEqual({ available: true, models: ANTHROPIC.ids, source: "catalogue" });
+});
+
+test("currentModels falls back to the vendor's own family table when the catalogue has nothing for this provider", () => {
+  // The real scenario this exists for: a machine with no `anthropic`
+  // credentials in omp, so `readCatalogue("claude")` is unavailable even
+  // though the claude binary itself works fine.
+  const result = currentModels("claude", { available: false, why: "omp's catalogue lists no models for provider `anthropic`" });
+  expect(result.available).toBe(true);
+  expect(result.available && result.source).toBe("vendorFamilyTable");
+  expect(result.available && [...result.models].sort()).toEqual(["claude-fable-5-1", "claude-haiku-4-5", "claude-opus-5", "claude-sonnet-5"]);
+});
+
+test("currentModels reports unavailable when neither the catalogue nor a family table has anything -- ompRpc", () => {
+  const result = currentModels("ompRpc" as never, { available: false, why: "no single catalogue provider bounds the ompRpc adapter" });
+  expect(result).toEqual({ available: false });
+});
+
+test("currentModels reports unavailable for copilot when the catalogue is down -- it has no reviewed aliases", () => {
+  const result = currentModels("copilot", { available: false, why: "omp not on PATH" });
+  expect(result).toEqual({ available: false });
+});
+
+// ------------------------------------------- VENDOR_ALIASES drift guard
+
+/**
+ * `VENDOR_ALIASES.claude`'s values are also what `currentModels` offers the
+ * model-ask dialog when omp's catalogue has nothing for `claude` -- so this
+ * table silently drifting from the installed binary is no longer a
+ * cosmetic problem, it is the dialog offering models that no longer exist
+ * or omitting the vendor's current one.
+ *
+ * Reads `latest_per_family` out of the INSTALLED claude binary rather than
+ * trusting the table on faith: that object is baked into the binary's own
+ * bundled model catalogue (greppable off the raw bytes -- a few hundred
+ * megabytes read and searched in well under a second, measured). Skips
+ * visibly, rather than failing, when the binary can't be found or read:
+ * CI has no vendor CLI, and a test that fails there is a test that gets
+ * deleted.
+ *
+ * This legitimately fails on a machine whose installed claude is older or
+ * newer than this table -- that is the guard doing its job, not a defect
+ * in the table, which is what the failure message says.
+ */
+function findClaudeBinary(): string | undefined {
+  try {
+    const path = execFileSync("which", ["claude"], { encoding: "utf8" }).trim();
+    return path === "" ? undefined : path;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractLatestPerFamily(source: string): Record<string, string> | undefined {
+  const block = /latest_per_family:\{([^}]*)\}/.exec(source);
+  if (!block) {
+    return undefined;
+  }
+  const entries: Record<string, string> = {};
+  for (const entry of block[1]!.matchAll(/(\w+):"([^"]*)"/g)) {
+    entries[entry[1]!] = entry[2]!;
+  }
+  return Object.keys(entries).length > 0 ? entries : undefined;
+}
+
+const claudeBinaryPath = findClaudeBinary();
+let installedLatestPerFamily: Record<string, string> | undefined;
+let skipReason: string | undefined;
+if (claudeBinaryPath === undefined) {
+  skipReason = "`claude` is not on PATH";
+} else {
+  try {
+    installedLatestPerFamily = extractLatestPerFamily(readFileSync(claudeBinaryPath).toString("latin1"));
+    if (installedLatestPerFamily === undefined) {
+      skipReason = `could not find a \`latest_per_family\` object in ${claudeBinaryPath}`;
+    }
+  } catch (err) {
+    skipReason = `could not read ${claudeBinaryPath}: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+if (skipReason !== undefined) {
+  // Visible, not silent: printed even though the test itself is skipped,
+  // so a reader of CI output sees the guard was skipped and why, not
+  // nothing.
+  console.warn(`SKIPPING VENDOR_ALIASES.claude drift guard: ${skipReason}`);
+}
+
+function sortedEntries(record: Readonly<Record<string, string>> | undefined): [string, string][] {
+  return Object.entries(record ?? {}).sort(([a], [b]) => a.localeCompare(b));
+}
+
+test.skipIf(skipReason !== undefined)("VENDOR_ALIASES.claude matches the installed claude binary's latest_per_family", () => {
+  const table = VENDOR_ALIASES.claude;
+  const installed = installedLatestPerFamily;
+  const tableSorted = sortedEntries(table);
+  const installedSorted = sortedEntries(installed);
+  if (JSON.stringify(tableSorted) !== JSON.stringify(installedSorted)) {
+    throw new Error(
+      `VENDOR_ALIASES.claude has drifted from the installed claude binary's latest_per_family.\n` +
+        `  table (models.ts):               ${JSON.stringify(table)}\n` +
+        `  installed (${claudeBinaryPath}): ${JSON.stringify(installed)}\n` +
+        `Update VENDOR_ALIASES.claude to match, and re-check whether the vendor added a family the ` +
+        `model-ask dialog should now offer. (If this machine's claude is simply older or newer than ` +
+        `the table expects, that is this guard working as intended, not a defect in the table.)`,
+    );
+  }
+  expect(tableSorted).toEqual(installedSorted);
 });

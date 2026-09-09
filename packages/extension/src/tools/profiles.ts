@@ -8,11 +8,15 @@ import type { AgentToolResult, ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { homedir } from "node:os";
 
 import { CrewConfigError, persistConfiguredModel, resolveConfiguredModel } from "../crew-config";
-import { decideModel, isCataloguedAdapter, readCatalogue } from "../models";
+import { currentModels, decideModel, isCataloguedAdapter, readCatalogue, resolveModelName } from "../models";
 import type { OrchestrationToolContext } from "./shared";
 import { callOrchestration } from "./shared";
 
 export const CREW_PROFILE_TOOL_NAME = "crew_profile";
+
+/** How long the model-ask dialog waits for a pick before timing out, same
+ *  window `plan.ts`'s and `approval-ui.ts`'s dialogs use. */
+const MODEL_DIALOG_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** The four reserved adapter kinds `crates/runtime/src/adapter/profile.rs`'s
  *  `AdapterKind::RESERVED_NAMES` also declares -- kept in sync manually,
@@ -58,6 +62,21 @@ function modelConflictResult(adapter: string, configuredModel: string): AgentToo
   };
 }
 
+/**
+ * The refusal for every "no answer exists, and none can be obtained" path.
+ * One `code` throughout (`model-not-configured`) since a caller's retry
+ * logic only needs to know registration didn't happen; `reason` in
+ * `details` and the message text say WHY, since that differs by adapter
+ * and by whether crew could even try to ask.
+ */
+function modelNotConfiguredResult(adapter: string, reason: "no-model-given" | "no-ui" | "no-current-models" | "dialog-timeout", text: string): AgentToolResult<unknown> {
+  return {
+    content: [{ type: "text", text }],
+    details: { code: "model-not-configured", adapter, reason },
+    isError: true,
+  };
+}
+
 export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolContext): void {
   const params = pi.zod.object({
     adapter: pi.zod.string().describe("The adapter name this profile launches, e.g. claude, codex, copilot, ompRpc, terminalDegraded."),
@@ -65,7 +84,7 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
       .string()
       .optional()
       .describe(
-        "The model identifier this profile uses. Optional: if omitted and no model is already configured for this adapter (in .omp/crew.json), registration is refused with a typed 'model-not-configured' error -- ask the user which model to use, then call crew_profile again with it. For claude, codex and copilot the value you pass is resolved before anything else happens, against omp's own model catalogue and the vendor's aliases: a vendor alias ('opus', 'haiku') and a name matching exactly one model ('sol' -> gpt-5.6-sol) both resolve to the canonical id, and the result is reported back to you. A name matching several models is refused with a typed 'model-ambiguous' error listing them -- name one of them exactly. A name omp's catalogue does not know is still used, but is reported as UNVERIFIED and is NOT recorded in .omp/crew.json: pass it again next session, or record it there yourself once a run has proven it. The first time a confirmed model is given explicitly for an adapter with none configured, its canonical id is persisted into the repository's .omp/crew.json for future sessions to reuse silently. crew_profile never overwrites an already-recorded model, and never silently ignores an explicit value that conflicts with one: passing a value naming a *different* model than the one already configured is refused with a typed 'model-conflict' error naming the stored value -- correct it by editing the repository's .omp/crew.json directly (/crew config path locates it; /crew config has no set/edit subcommand), never by passing a new value here. Passing a value naming the same model as the configured one is a no-op success, whichever of the two is the shorthand.",
+        "A suggested model identifier, not a decision. Once a model is already configured for this adapter (in .omp/crew.json), it is authoritative: this parameter is only compared to it (a genuine mismatch is refused with a typed 'model-conflict' error naming the stored value; the same model either way is a no-op success), so pass the previously-registered value or omit it. Before any model is configured, for claude, codex and copilot, crew itself asks the user which model to use via an interactive dialog -- it does not accept this value directly, however it is spelled. Passing a value here still helps: if it resolves against omp's catalogue or the vendor's own aliases ('opus', 'haiku', a name matching exactly one catalogue entry), it is preselected in the dialog, but the user's own pick is what gets used and persisted. If no interactive UI is attached, or the dialog times out with no answer, or there is nothing to offer (no catalogue entry and no vendor alias table for this adapter), registration is refused with a typed 'model-not-configured' error -- register a profile from an interactive session once, or write the model into the repository's .omp/crew.json directly (/crew config path locates it). ompRpc and other adapters omp does not catalogue have no dialog to offer either way: pass the model explicitly, or the same 'model-not-configured' error applies.",
       ),
     startupOptions: pi.zod
       .record(pi.zod.string(), pi.zod.unknown())
@@ -79,7 +98,7 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
     name: CREW_PROFILE_TOOL_NAME,
     label: "Crew Profile",
     description:
-      "Register a reusable worker profile (adapter, model, startup options, environment allowlist) before provisioning workers. Call this once per adapter/model combination, then pass the returned profileId to crew_worker { op: 'create', profileId }. model is optional -- if none is configured yet for this adapter, you'll get a typed error telling you to ask the user which model to use and call this again; that answer is remembered for future sessions. For claude, codex and copilot, model names are resolved against omp's catalogue and the vendor's aliases, so a shorthand or a unique partial name is accepted and echoed back as the canonical id; a name the catalogue does not know still runs, but is flagged UNVERIFIED and is not remembered. mode:'tui' is filled in automatically for reserved adapters when omitted. The profile-first flow (crew_profile → crew_worker → crew_run) replaces the legacy fingerprint/adapter/model pattern. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
+      "Register a reusable worker profile (adapter, model, startup options, environment allowlist) before provisioning workers. Call this once per adapter/model combination, then pass the returned profileId to crew_worker { op: 'create', profileId }. model is optional and, for claude, codex and copilot, is never accepted as a decision on the first call for an adapter: with no model configured yet, crew opens an interactive dialog and asks the user itself, offering the current models (omp's catalogue, or the vendor's own model family when omp has no catalogue entry for it) with your suggestion (if any) preselected -- the user's pick is what gets used and remembered, not your suggestion. A typed 'model-not-configured' error means there was no way to ask (no interactive UI, the dialog timed out, or nothing to offer) or, for ompRpc and adapters omp does not catalogue, that no model was given at all. Once a model IS configured for an adapter, it is reused silently forever; a value you pass is only compared to it (mismatch: typed 'model-conflict', naming the stored value; match: no-op success). mode:'tui' is filled in automatically for reserved adapters when omitted. The profile-first flow (crew_profile → crew_worker → crew_run) replaces the legacy fingerprint/adapter/model pattern. Registration is permanent for the lifetime of the runtime's database; there is no update or delete operation, so register a new profile rather than mutating an existing one.",
     parameters: params,
     approval: () => "exec",
     async execute(_toolCallId, input, _signal, _onUpdate, extCtx) {
@@ -98,74 +117,110 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
         throw err;
       }
 
-      // A hallucinating leader inventing a model name is the original
-      // symptom -- crew_profile must never let an explicit param silently
-      // clobber (nor silently lose to) an already-persisted choice. An
-      // explicit model that *conflicts* with the stored one is refused,
-      // named, with the correction path spelled out; the *same* explicit
-      // value as already stored is a no-op success (nothing to persist,
-      // nothing to reject).
-      //
-      // Resolution goes in front of that comparison, for the
-      // adapters omp catalogues. `haiku` and a stored `claude-haiku-4-5` are
-      // one model, so comparing the spellings would refuse a correct call
-      // with an error telling the user to edit a file that is already right.
-      // `decideModel` owns the comparison and the ambiguity rule together --
-      // see its doc comment for why each ordering is load-bearing.
+      // The ask is driven by whether a user answer already exists
+      // (`configuredModel`), never by whether the leader supplied one. A
+      // hallucinating leader inventing a model name was the original
+      // symptom, and a leader-supplied model silently bypassing the ask
+      // when one is due was a second instance of the same shape of bug --
+      // both are closed by making the STORED answer, not the caller's
+      // input, the only thing that skips asking.
       let model: string;
       let note: string | undefined;
       // Whether persistence is allowed to write this model down. Withholding
       // it is only justified where a check was available and came back
-      // negative, which is why the non-catalogued path below leaves it true.
+      // negative, which is why the ompRpc/dialog paths below leave it true:
+      // an ompRpc model can't be checked at all, and a dialog pick is by
+      // construction a member of a list something already verified.
       let mayPersist: boolean;
 
-      if (input.model !== undefined && isCataloguedAdapter(input.adapter)) {
-        const catalogue = await (ctx.readModelCatalogue ?? readCatalogue)(input.adapter);
-        const decision = decideModel(input.adapter, input.model, configuredModel, catalogue);
-        if (decision.kind === "conflict") {
-          return modelConflictResult(input.adapter, decision.configuredModel);
+      if (configuredModel !== undefined) {
+        // A user answer already exists. Unchanged from before the ask
+        // existed: an explicit, catalogued input is resolved and compared
+        // to the stored value (`decideModel` owns the comparison and the
+        // ambiguity rule together -- see its doc comment for why each
+        // ordering is load-bearing); anything else reuses the stored text
+        // exactly as recorded.
+        if (input.model !== undefined && isCataloguedAdapter(input.adapter)) {
+          const catalogue = await (ctx.readModelCatalogue ?? readCatalogue)(input.adapter);
+          const decision = decideModel(input.adapter, input.model, configuredModel, catalogue);
+          if (decision.kind === "conflict") {
+            return modelConflictResult(input.adapter, decision.configuredModel);
+          }
+          if (decision.kind === "ambiguous") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `"${decision.from}" matches ${decision.candidates.length} models for adapter ${input.adapter}: ${decision.candidates.join(", ")} -- name one of them exactly.`,
+                },
+              ],
+              details: { code: "model-ambiguous", adapter: input.adapter, requested: decision.from, candidates: decision.candidates },
+              isError: true,
+            };
+          }
+          model = decision.model;
+          note = decision.note;
+          mayPersist = decision.verified;
+        } else {
+          if (input.model !== undefined && input.model !== configuredModel) {
+            return modelConflictResult(input.adapter, configuredModel);
+          }
+          // A model taken from `.omp/crew.json` is used exactly as recorded. It
+          // is already the repository's answer, and re-resolving it could turn
+          // a stored value that has always worked into an ambiguity error on a
+          // call that passed no model at all.
+          model = configuredModel;
+          note = undefined;
+          mayPersist = true;
         }
-        if (decision.kind === "ambiguous") {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `"${decision.from}" matches ${decision.candidates.length} models for adapter ${input.adapter}: ${decision.candidates.join(", ")} -- name one of them exactly.`,
-              },
-            ],
-            details: { code: "model-ambiguous", adapter: input.adapter, requested: decision.from, candidates: decision.candidates },
-            isError: true,
-          };
+      } else if (!isCataloguedAdapter(input.adapter)) {
+        // `ompRpc` and any caller-defined adapter have no catalogue and no
+        // alias source, so there is no bounded list crew could offer a
+        // dialog against -- resolution, and the ask, could only annotate a
+        // name nothing checked. Unchanged from before the ask existed: use
+        // whatever was given, or fail closed if nothing was.
+        if (input.model === undefined) {
+          return modelNotConfiguredResult(input.adapter, "no-model-given", `no model configured for adapter ${input.adapter} -- ask the user which model to use, then call crew_profile again with it; the answer will be persisted for future sessions.`);
         }
-        model = decision.model;
-        note = decision.note;
-        mayPersist = decision.verified;
-      } else {
-        // No catalogue and no alias source for this adapter (`ompRpc`, or a
-        // caller-defined one), or no explicit model to resolve: behaviour
-        // here is exactly what it was before resolution existed.
-        if (input.model !== undefined && configuredModel !== undefined && input.model !== configuredModel) {
-          return modelConflictResult(input.adapter, configuredModel);
-        }
-        const chosen = input.model ?? configuredModel;
-        if (chosen === undefined) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `no model configured for adapter ${input.adapter} -- ask the user which model to use, then call crew_profile again with it; the answer will be persisted for future sessions.`,
-              },
-            ],
-            details: { code: "model-not-configured", adapter: input.adapter },
-            isError: true,
-          };
-        }
-        // A model taken from `.omp/crew.json` is used exactly as recorded. It
-        // is already the repository's answer, and re-resolving it could turn
-        // a stored value that has always worked into an ambiguity error on a
-        // call that passed no model at all.
-        model = chosen;
+        model = input.model;
         note = undefined;
+        mayPersist = true;
+      } else if (!extCtx.hasUI) {
+        // A catalogued adapter with no configured model needs a user
+        // answer, and no interactive UI is attached to collect one. Fails
+        // closed rather than accepting the leader's suggestion as though it
+        // were that answer -- that silent accept was the bug.
+        return modelNotConfiguredResult(input.adapter, "no-ui", `no model configured for adapter ${input.adapter}, and no interactive UI is attached to ask which one to use -- register a profile from an interactive session once, or set the model in the repository's .omp/crew.json directly.`);
+      } else {
+        // The ask: crew opens the dialog itself rather than instructing the
+        // leader to ask and call back. A leader-supplied `input.model` never
+        // gets accepted on its own say-so here -- it only preselects a row
+        // when it resolves to one of the offered models, so the human's own
+        // pick is what is actually used.
+        const catalogue = await (ctx.readModelCatalogue ?? readCatalogue)(input.adapter);
+        const options = currentModels(input.adapter, catalogue);
+        if (!options.available) {
+          return modelNotConfiguredResult(input.adapter, "no-current-models", `no model configured for adapter ${input.adapter}, and there is nothing to offer -- omp's catalogue has no entry for it and it has no reviewed vendor model-family table either.`);
+        }
+        const sourceLabel = options.source === "catalogue" ? "omp's model catalogue" : "the vendor's own model family table (omp's catalogue has no entry for this adapter)";
+        let initialIndex: number | undefined;
+        if (input.model !== undefined) {
+          const suggested = resolveModelName(input.adapter, input.model, catalogue);
+          const suggestedModel = suggested.kind === "ambiguous" || suggested.kind === "unverified" ? undefined : suggested.model;
+          const idx = suggestedModel === undefined ? -1 : options.models.indexOf(suggestedModel);
+          if (idx >= 0) {
+            initialIndex = idx;
+          }
+        }
+        const pick = await extCtx.ui.select(`Model for the ${input.adapter} worker (from ${sourceLabel})`, [...options.models], {
+          timeout: MODEL_DIALOG_TIMEOUT_MS,
+          initialIndex,
+        });
+        if (pick === undefined) {
+          return modelNotConfiguredResult(input.adapter, "dialog-timeout", `no model configured for adapter ${input.adapter}, and the model-selection dialog timed out with no answer.`);
+        }
+        model = pick;
+        note = `model: ${model} (chosen from ${sourceLabel})`;
         mayPersist = true;
       }
 
@@ -187,7 +242,12 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
         result.content.push({ type: "text", text: note });
       }
 
-      if (result.isError !== true && input.model !== undefined && configuredModel === undefined) {
+      // `configuredModel === undefined` alone is the right gate now: every
+      // path that reaches here with it undefined either resolved an
+      // explicit `input.model` (the ompRpc/custom-adapter fallback) or
+      // collected a dialog pick, and both are exactly the "first time this
+      // adapter gets an answer" cases persistence exists for.
+      if (result.isError !== true && configuredModel === undefined) {
         if (!mayPersist) {
           // The failure resolution exists for: an invented dated id became the
           // repository's durable answer in `.omp/crew.json`. A name omp's
