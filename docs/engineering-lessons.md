@@ -24,6 +24,13 @@ should be discovered by reading documentation, not by trial and error.
 This document is a catalog of lessons that still describe a way the system can fail, not an
 append-only log — pruning it is separate work from writing this rule down, and has not happened yet.
 
+**If you read only one entry, read [A zero is a measurement, and an unchecked instrument reports
+zero](#a-zero-is-a-measurement-and-an-unchecked-instrument-reports-zero).** Most entries here
+describe a way one part of the system can break. That one describes a way *you* can break while
+checking whether anything is broken, and it is the only failure mode in this document that has
+been hit six separate times, by four different people, using three different tools — every time
+producing a clean result that looked exactly like success.
+
 ## Topic index
 
 - [IPC and Client Management](#ipc-and-client-management)
