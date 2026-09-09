@@ -1,4 +1,4 @@
-// The milestone bridge (spec §7.2) — the single highest-value component
+// The milestone bridge — the single highest-value component
 // of the team-leader product layer. The extension already subscribes to
 // the runtime journal for the widget; this module injects *milestone
 // digests* into the OMP session so the orchestrating model is told when
@@ -27,10 +27,10 @@ const TERMINAL_STATES: Record<string, true> = {
   lost: true,
 };
 
-/** The instruction appended to a worker-question digest (spec §7.4). */
+/** The instruction appended to a worker-question digest. */
 const QUESTION_TRIAGE = "Answer via crew_send if run context suffices; escalate to the user only for genuinely human decisions.";
 
-/** The rule text appended to a failed-run digest (spec §7.5). */
+/** The rule text appended to a failed-run digest. */
 const TWO_FAILURES_RULE = "Two consecutive failures on the same task require escalation to the user.";
 
 /**
@@ -174,7 +174,7 @@ export function formatDigest(e: EventEnvelope, lookup: RunLookup): string | unde
  * also offered to `tracker`; on a milestone it formats a digest and injects
  * it into the OMP session via `pi.sendMessage(..., { deliverAs:
  * "followUp", triggerTurn: true })`, which is the documented oh-my-pi API
- * for extension-originated text delivered to the model (spec §7.2). A
+ * for extension-originated text delivered to the model. A
  * thrown digest/injection error must never break the monitor: it is logged
  * and swallowed.
  *
