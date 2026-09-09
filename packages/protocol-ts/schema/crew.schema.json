@@ -1995,6 +1995,45 @@
           "additionalProperties": false
         },
         {
+          "description": "A TUI adapter's readiness poll recognized a vendor first-run gate\nblocking the run (workspace trust, a theme picker, sign-in, ...).\nJournaled once, immediately before the paired\n`escalationRaised { reason: \"vendorFirstRunGate\" }` -- `kind` is a\nclosed enum, never captured PTY text, so this event carries no\nredaction obligation of its own.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "firstRunGateDetected"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "runId": {
+                  "$ref": "#/$defs/RunId"
+                },
+                "taskId": {
+                  "$ref": "#/$defs/TaskId"
+                },
+                "workerId": {
+                  "$ref": "#/$defs/WorkerId"
+                },
+                "kind": {
+                  "$ref": "#/$defs/FirstRunGateKind"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "runId",
+                "taskId",
+                "workerId",
+                "kind"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
           "description": "A worker escalated a blocking condition to its leader or a human\noperator. `reason` is a plain, machine-assigned code (never raw\nworker content); `question` has already crossed the redaction\nboundary the same way `workerQuestion`'s field has.",
           "type": "object",
           "properties": {
@@ -3062,6 +3101,17 @@
         "description",
         "adapter",
         "writes"
+      ]
+    },
+    "FirstRunGateKind": {
+      "description": "Which recognized vendor first-run gate blocked a run at readiness.\nClosed set, never derived from captured PTY text, so a\n`firstRunGateDetected` event carries no redaction obligation of its\nown (see that event's doc comment).",
+      "type": "string",
+      "enum": [
+        "claudeWorkspaceTrust",
+        "claudeThemePicker",
+        "claudeSignIn",
+        "codexDirectoryTrust",
+        "codexSignIn"
       ]
     },
     "AnsweredBy": {

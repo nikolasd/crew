@@ -348,6 +348,25 @@ pub enum TimeoutKind {
     Total,
 }
 
+// Mirrored 1:1 from the TUI adapter's own internal `GateKind`
+// (crates/runtime/src/adapter/tui/classify.rs) -- a Rust-only name, not
+// part of the shipped schema, so it stays in this plain comment rather
+// than the doc below.
+/// Which recognized vendor first-run gate blocked a run at readiness.
+/// Closed set, never derived from captured PTY text, so a
+/// `firstRunGateDetected` event carries no redaction obligation of its
+/// own (see that event's doc comment).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum FirstRunGateKind {
+    ClaudeWorkspaceTrust,
+    ClaudeThemePicker,
+    ClaudeSignIn,
+    CodexDirectoryTrust,
+    CodexSignIn,
+}
+
 /// Why a settled run resumed to `working`. The two causes map exactly
 /// to `runResumed`'s two journaling call sites, which race each other
 /// for the same edge -- see that event's own doc comment.
@@ -1072,6 +1091,18 @@ pub enum RuntimeEvent {
         worker_id: WorkerId,
         question: Option<Redacted>,
     },
+    /// A TUI adapter's readiness poll recognized a vendor first-run gate
+    /// blocking the run (workspace trust, a theme picker, sign-in, ...).
+    /// Journaled once, immediately before the paired
+    /// `escalationRaised { reason: "vendorFirstRunGate" }` -- `kind` is a
+    /// closed enum, never captured PTY text, so this event carries no
+    /// redaction obligation of its own.
+    FirstRunGateDetected {
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        kind: FirstRunGateKind,
+    },
     /// A worker escalated a blocking condition to its leader or a human
     /// operator. `reason` is a plain, machine-assigned code (never raw
     /// worker content); `question` has already crossed the redaction
@@ -1613,14 +1644,15 @@ mod redaction_enumeration {
         (
             "RuntimeEvent::EscalationRaised.reason",
             "A machine-assigned code from a closed set, chosen by the runtime and never \
-             caller- or vendor-derived: the only two production construction sites pass \
+             caller- or vendor-derived: the three production construction sites pass \
              the literals `repeated_failure` \
-             (crates/runtime/src/adapter/run_lifecycle.rs) and `write_violation` \
-             (crates/runtime/src/domain/repository.rs). This reason previously \
+             (crates/runtime/src/adapter/run_lifecycle.rs), `write_violation` \
+             (crates/runtime/src/domain/repository.rs), and `vendorFirstRunGate` \
+             (crates/runtime/src/adapter/event_sink.rs). This reason previously \
              offered two supports and neither existed -- it cited \"the field's own doc\", \
              which had no doc, and said the worker's text travels in the sibling \
-             `question`, which no production site populates. What actually secures the \
-             field is the literals above.",
+             `question`, which no production site populates before `vendorFirstRunGate`. \
+             What actually secures the field is the literals above.",
         ),
         (
             "RuntimeEventKind::PolicyViolation.profile_id",

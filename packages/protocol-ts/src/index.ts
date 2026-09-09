@@ -36,6 +36,7 @@ export type * from "./generated/DisplayPlacement";
 export type * from "./generated/DisplayStatus";
 export type * from "./generated/EventEnvelope";
 export type * from "./generated/EventSource";
+export type * from "./generated/FirstRunGateKind";
 export type * from "./generated/InitializeParams";
 export type * from "./generated/InitializeResult";
 export type * from "./generated/InspectRequest";
