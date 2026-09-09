@@ -124,6 +124,50 @@ export function markersIn(commit: string, message: string): TrailerViolation[] {
 }
 
 /**
+ * Brings the exclusion ref up to date, and refuses if it cannot.
+ *
+ * The exclusion is only as good as the ref. A stale `origin/main` leaves
+ * every commit the target branch has gained since the last fetch inside
+ * `<base>..HEAD`, where they read as the pull request's own -- and since
+ * those are squash-merge commits carrying an appended reference, they read
+ * specifically as bare pull-request numbers the author never wrote.
+ *
+ * That is not hypothetical. On the day this check landed it reported six
+ * such findings against a contributor's branch, all of them commits already
+ * on the target branch, and the report was convincing enough that the
+ * contributor rewrote history to satisfy it. Nothing was wrong with their
+ * commits. A guard that produces a confident, specific, wrong list of
+ * violations is worse than one that produces none, because someone acts on
+ * it -- and the person most likely to act on it is the one who trusts the
+ * tooling.
+ *
+ * So this fetches rather than merely detecting: a check that can repair the
+ * condition it would otherwise report is obliged to. Fetching also removes
+ * the failure mode a bare comparison would introduce, where the target
+ * branch advancing mid-run makes a correct checkout look stale.
+ *
+ * A ref that is not a remote-tracking branch (a raw sha, a local branch) is
+ * the caller being deliberate and is left alone. A fetch that fails --
+ * offline, no such remote, no credentials -- is reported loudly and the scan
+ * continues on what is already there: refusing outright would make the check
+ * unusable without a network, and the exclusion may well still be current.
+ * What it must never do is fail silently, which is the whole subject of this
+ * file.
+ */
+function refreshExclusionRef(landed: string, cwd?: string): void {
+  const remoteTracking = /^([A-Za-z0-9._-]+)\/(.+)$/.exec(landed);
+  if (remoteTracking === null) return;
+  const [, remote, branch] = remoteTracking;
+  try {
+    execFileSync("git", ["fetch", "--quiet", remote, branch], { stdio: "pipe", cwd });
+  } catch {
+    console.error(
+      `check-trailers: WARNING -- could not fetch ${remote}/${branch}, so "${landed}" may be behind.\n` + "  If it is, commits already on the target branch will be read as this branch's own and\n" + "  reported as violations their author never wrote. Re-run after `git fetch` before acting\n" + "  on anything below.",
+    );
+  }
+}
+
+/**
  * The commits a pull request actually adds.
  *
  * `range` is the pull request's own `<base>..HEAD`. `landed` is a ref whose
@@ -132,22 +176,25 @@ export function markersIn(commit: string, message: string): TrailerViolation[] {
  * file's header for the measured case that makes the exclusion necessary
  * rather than defensive.
  */
-function commitsIn(range: string, landed: string): { sha: string; message: string }[] {
+export function commitsAdded(range: string, landed: string, cwd?: string): { sha: string; message: string }[] {
   // A missing exclusion ref must be an error, never a silent widening: without
   // it every commit `main` gained since the base would be read as this pull
   // request's own, and the check would fail on subjects nobody on the branch
   // wrote.
   try {
-    execFileSync("git", ["rev-parse", "--verify", "--quiet", `${landed}^{commit}`], { stdio: "pipe" });
+    execFileSync("git", ["rev-parse", "--verify", "--quiet", `${landed}^{commit}`], { stdio: "pipe", cwd });
   } catch {
     console.error(`check-trailers: cannot resolve "${landed}", so the commits already on the target branch\n` + "  cannot be excluded and this check would read commits the pull request did not add.\n" + "  Fetch the branch (CI uses fetch-depth: 0) or pass a different ref as the second argument.");
     process.exit(2);
   }
 
+  refreshExclusionRef(landed, cwd);
+
   // `%x00` separates records and `%x01` separates fields: a commit message can
   // contain any printable text, including whatever delimiter looked safe.
   const raw = execFileSync("git", ["log", "--format=%H%x01%B%x00", range, "--not", landed], {
     encoding: "utf8",
+    cwd,
   });
   return raw
     .split("\0")
@@ -166,7 +213,7 @@ if (import.meta.main) {
     console.error("usage: bun scripts/check-trailers.ts <base-sha>..HEAD [<already-landed-ref>]");
     process.exit(2);
   }
-  const commits = commitsIn(range, landed);
+  const commits = commitsAdded(range, landed);
   const violations = commits.flatMap((c) => [...violationsIn(c.sha, c.message), ...markersIn(c.sha, c.message)]);
   if (violations.length > 0) {
     for (const v of violations) {
