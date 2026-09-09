@@ -152,6 +152,12 @@ read. `fixtures/` and `assets/` are exempt — the first holds byte-exact termin
 cannot be edited without destroying what makes them evidence, the second labels the logo's parts
 with the same shape the rule matches.
 
+The same rules apply to **commit messages**, subject and body, checked by `scripts/check-trailers.ts`
+over the commits a pull request adds and never over history. It imports the marker patterns rather
+than restating them, so the two surfaces cannot drift into enforcing different things. Anything
+already on the target branch is excluded — the reference GitHub appends to a squash-merge subject is
+generated at merge time, is not a citation anyone wrote, and is out of scope.
+
 ---
 
 ## Important Files

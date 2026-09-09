@@ -245,8 +245,21 @@ that governs the citation rule above:
 | what | checked by | scope |
 |---|---|---|
 | files | `scripts/check-markers.ts` | every file git tracks, must be zero |
-| commit messages | `scripts/check-trailers.ts` | the pull request's own commits |
+| commit messages | `scripts/check-trailers.ts` | the pull request's own commits — attribution trailers **and** the marker rules above |
 | history | nothing | immutable, out of scope |
+
+The citation rule applies to commit messages too, subject and body: a commit message is read far
+more often than the branch that produced it, and a squash merge keeps the subject forever. The
+marker patterns are not restated in the trailer checker — it imports them, so the two surfaces
+cannot drift into enforcing different things under one name.
+
+"The pull request's own commits" excludes anything already on the target branch. That matters
+because this repository merges `main` into a branch rather than rebasing it, so a synced branch's
+range contains every commit `main` gained since the base — and GitHub appends `(#NNN)` to each
+squash-merge subject. That trailing `(#NNN)` is generated at merge time by GitHub, is not a citation
+anyone wrote, and is out of scope by construction. If a commit *body* carries an identifier and the
+branch is already pushed, the maintainer edits the squash message at merge rather than anyone
+rewriting history.
 
 A file can be edited, so the marker guard demands zero everywhere. History cannot: commits already
 on `main` carry trailers that predate this rule, and rewriting them would be a worse act than the

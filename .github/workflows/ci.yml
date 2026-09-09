@@ -330,5 +330,13 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      - name: Check commit messages for attribution trailers
-        run: bun scripts/check-trailers.ts ${{ github.event.pull_request.base.sha }}..HEAD
+      # The second argument is the target branch as it stands *now*, and it is
+      # load-bearing rather than defensive. This repository merges `main` into
+      # a branch rather than rebasing it, so once a branch syncs, every commit
+      # `main` gained since the base sits inside `base.sha..HEAD` -- including
+      # squash-merge subjects, to which GitHub appends `(#NNN)`. Without the
+      # exclusion the marker rules would fail a pull request for the subject of
+      # a commit already on `main`, written by nobody on that branch and
+      # amendable by no one. Measured on a real range; see the script's header.
+      - name: Check commit messages for attribution trailers and out-of-repo markers
+        run: bun scripts/check-trailers.ts ${{ github.event.pull_request.base.sha }}..HEAD origin/${{ github.event.pull_request.base.ref }}
