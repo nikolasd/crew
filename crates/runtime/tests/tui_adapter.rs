@@ -1388,15 +1388,24 @@ async fn out_of_band_input_is_journaled_when_a_viewer_types_into_the_attached_pa
     assert!(seen, "a viewer keystroke must journal OutOfBandInput");
 
     // The payload itself structurally carries no free text (only
-    // backend/pane_ref) -- pinned here so the property is not just an
-    // artifact of the enum's current shape.
-    let backend_and_ref = sink.payloads().into_iter().find_map(|p| match p {
-        AdapterEventPayload::OutOfBandInput { backend, pane_ref } => Some((backend, pane_ref)),
+    // backend/pane_ref/the coalesced count+span) -- pinned here so the
+    // property is not just an artifact of the enum's current shape.
+    let payload = sink.payloads().into_iter().find_map(|p| match p {
+        AdapterEventPayload::OutOfBandInput {
+            backend,
+            pane_ref,
+            input_count,
+            span_ms,
+        } => Some((backend, pane_ref, input_count, span_ms)),
         _ => None,
     });
-    let (backend, pane_ref) = backend_and_ref.expect("checked above");
+    let (backend, pane_ref, input_count, _span_ms) = payload.expect("checked above");
     assert_eq!(backend, DisplayBackend::Tmux);
     assert_eq!(pane_ref, "fake-pane-1");
+    assert!(
+        input_count >= 1,
+        "a coalesced row must count at least the one keystroke that triggered it"
+    );
 
     adapter.dispose().await.expect("dispose");
     harness.shutdown().await;

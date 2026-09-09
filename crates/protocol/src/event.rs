@@ -682,6 +682,14 @@ pub enum RuntimeEventKind {
 // from the shipped schema entirely (see NOT_WIRE_MESSAGE_ROOTS in
 // crates/xtask/src/main.rs), so it has no name a schema consumer could
 // look up; that's why the shipped description below doesn't say it.
+/// `OutOfBandInput::input_count`'s default for a row journaled before
+/// coalescing existed: such a row is exactly one input, never zero -- an
+/// `OutOfBandInput` event means "a human typed", and a row asserting zero
+/// of them would contradict its own existence.
+fn one_input() -> u64 {
+    1
+}
+
 /// A sanitized, durable runtime event. Fields are plain, already-sanitized
 /// values, so raw thinking/secret content can never reach the durable log
 /// through this type.
@@ -962,10 +970,31 @@ pub enum RuntimeEvent {
     },
     /// A human typed directly into a native pane, bypassing the
     /// adapter. Sets the run's `RunFlags.needsReconciliation` flag.
+    ///
+    /// Coalesced: one row covers every out-of-band input observed during
+    /// one idle window, not one row per keystroke read. Journaled at the
+    /// END of the window it describes, so the window's start is this
+    /// event's own envelope timestamp minus `spanMs` -- no separate start
+    /// timestamp is carried, to avoid a second place for the two to
+    /// disagree.
     OutOfBandInput {
         run_id: RunId,
         backend: DisplayBackend,
         pane_ref: String,
+        /// How many out-of-band inputs this row coalesces. Absent on
+        /// rows written before coalescing existed; such a row is exactly
+        /// one input, so absence reads as 1, never 0 -- an
+        /// `outOfBandInput` event means "a human typed", and zero of
+        /// them is not a state that can be journaled.
+        #[serde(default = "one_input")]
+        #[ts(type = "number")]
+        input_count: u64,
+        /// Milliseconds between the first and last input this row
+        /// coalesces. Absent on rows written before coalescing existed;
+        /// such a row is a single input, which spans zero milliseconds.
+        #[serde(default)]
+        #[ts(type = "number")]
+        span_ms: u64,
     },
     // The resolved backend's pane creation failed, so the
     // run fell back to a hidden pane instead of the one it actually

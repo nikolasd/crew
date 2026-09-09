@@ -50,7 +50,21 @@ vendorParentRef: string, } } | { "type": "policyViolationRecorded", "payload": {
  * The vendor-assigned pane identifier only -- never terminal
  * contents, never an absolute socket or filesystem path.
  */
-paneRef: string, } } | { "type": "outOfBandInput", "payload": { runId: RunId, backend: DisplayBackend, paneRef: string, } } | { "type": "paneDowngraded", "payload": { runId: RunId, 
+paneRef: string, } } | { "type": "outOfBandInput", "payload": { runId: RunId, backend: DisplayBackend, paneRef: string, 
+/**
+ * How many out-of-band inputs this row coalesces. Absent on
+ * rows written before coalescing existed; such a row is exactly
+ * one input, so absence reads as 1, never 0 -- an
+ * `outOfBandInput` event means "a human typed", and zero of
+ * them is not a state that can be journaled.
+ */
+inputCount: number, 
+/**
+ * Milliseconds between the first and last input this row
+ * coalesces. Absent on rows written before coalescing existed;
+ * such a row is a single input, which spans zero milliseconds.
+ */
+spanMs: number, } } | { "type": "paneDowngraded", "payload": { runId: RunId, 
 /**
  * The backend selection actually resolved to, before creation
  * failed.

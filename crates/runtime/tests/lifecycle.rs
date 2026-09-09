@@ -1006,3 +1006,223 @@ async fn attach_exits_promptly_after_its_daemon_stops_not_just_the_socket() {
          reader thread forever"
     );
 }
+
+/// Like `write_fake_claude_script`, but also emits a CPR (`ESC[6n`) and a
+/// DA (`ESC[c`) query on its own stdout every 50ms in the background,
+/// starting immediately and continuing for the process's whole lifetime --
+/// simulating a TUI's redraw-driven escape queries with nobody typing. The
+/// interval is tighter than any real vendor's redraw cadence so this test
+/// stays fast while still producing many query/reply cycles.
+fn write_escape_storm_claude_script(scripts_dir: &Path, session_dir: &Path) -> PathBuf {
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "2.1.241 (Claude Code)"
+  exit 0
+fi
+echo "Welcome to Claude Code!"
+SESSION_ID="11111111-1111-4111-8111-000000000099"
+TRANSCRIPT="{session_dir}/$SESSION_ID.jsonl"
+( while true; do printf '\033[6n\033[c'; sleep 0.05; done ) &
+while IFS= read -r line; do
+  case "$line" in
+    *"[crew:"*)
+      printf '%s\n' '{{"type":"user","sessionId":"'"$SESSION_ID"'","timestamp":"2026-01-01T00:00:00Z","message":{{"role":"user","content":"'"$line"'"}}}}' >> "$TRANSCRIPT"
+      printf '%s\n' '{{"type":"assistant","sessionId":"'"$SESSION_ID"'","timestamp":"2026-01-01T00:00:01Z","message":{{"content":[{{"type":"text","text":"hi from the fixture e2e"}}]}}}}' >> "$TRANSCRIPT"
+      ;;
+  esac
+done
+"#,
+        session_dir = session_dir.display(),
+    );
+    let path = scripts_dir.join("fake-claude-storm.sh");
+    std::fs::write(&path, script).expect("write fake claude storm script");
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&path, perms).unwrap();
+    path
+}
+
+/// The echo-storm regression test: a vendor TUI's own redraw-driven escape
+/// queries, relayed through `crewd attach` to a REAL terminal emulator
+/// (tmux, hosting the attach pane exactly as `display/tmux.rs`'s
+/// production placement does -- a raw pty pair with nobody driving it
+/// does not auto-answer these queries, so this cannot be reproduced any
+/// other way), come back as CPR/DA replies on the same socket real
+/// keystrokes arrive on. Before the fix, every one of those replies
+/// journaled an `outOfBandInput` event and set `needsReconciliation`;
+/// measured live before this test existed, idling 20s produced 99 such
+/// events. This proves the production filter (`display::terminal_reply`)
+/// closes that end to end: idling with nobody typing must journal zero.
+///
+/// Skips (visibly) when `tmux` isn't on `PATH` rather than failing --
+/// CI images are not guaranteed to carry it, and a test that fails there
+/// is a test that gets deleted.
+#[tokio::test]
+async fn attach_never_journals_a_vendors_own_terminal_reply_storm() {
+    if std::process::Command::new("tmux")
+        .arg("-V")
+        .output()
+        .is_err()
+    {
+        eprintln!(
+            "SKIPPING attach_never_journals_a_vendors_own_terminal_reply_storm: `tmux` is not on PATH"
+        );
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let repo = std::fs::canonicalize(fixture.repo_dir()).unwrap();
+
+    let scripts_dir = tempfile::Builder::new()
+        .prefix("bat-echostorm-scripts-")
+        .tempdir_in("/tmp")
+        .expect("create scripts dir");
+    let session_dir = tempfile::Builder::new()
+        .prefix("bat-echostorm-sess-")
+        .tempdir_in("/tmp")
+        .expect("create session dir");
+    let script_path = write_escape_storm_claude_script(scripts_dir.path(), session_dir.path());
+    let crew_json = scripts_dir.path().join("crew.json");
+    std::fs::write(
+        &crew_json,
+        serde_json::to_string(&json!({
+            "adapters": {
+                "claude": {
+                    "enabled": true,
+                    "bin": script_path.to_str().unwrap(),
+                    "mode": "tui",
+                    "permissionMode": "default",
+                    "profile": "test",
+                    "sessionDir": session_dir.path().to_str().unwrap()
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let (mut server, socket) = DaemonGuard::spawn(&fixture, &crew_json);
+    let mut client = IpcClient::connect(&socket).await;
+    let init = client.initialize("omp-1", &repo).await;
+    assert!(init.get("error").is_none(), "initialize failed: {init:?}");
+
+    let upsert = client
+        .call(
+            2,
+            "task/upsert",
+            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
+        )
+        .await;
+    let task_id = upsert["result"]["taskId"].as_str().unwrap().to_string();
+    let register = client
+        .call(
+            3,
+            "profile/register",
+            json!({
+                "adapter": "claude",
+                "model": "test",
+                "permissionEnvelope": {},
+                "startupOptions": { "claude": { "mode": "tui" } },
+                "environmentAllowlist": [],
+                "source": "attach-echo-storm-test"
+            }),
+        )
+        .await;
+    let profile_id = register["result"]["profileId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let wkr = client
+        .call(4, "worker/create", json!({ "profileId": profile_id }))
+        .await;
+    let worker_id = wkr["result"]["workerId"].as_str().unwrap().to_string();
+    let submit = client
+        .call(
+            5,
+            "run/submit",
+            json!({ "taskId": task_id, "workerId": worker_id, "prompt": "[crew:storm] say hi" }),
+        )
+        .await;
+    let run_id = submit["result"]["runId"].as_str().unwrap().to_string();
+    assert!(
+        wait_for_run_event(&mut client, &run_id, Duration::from_secs(30)).await,
+        "run {run_id} must journal at least one event before attaching"
+    );
+
+    let tmux_session = format!("crew81-{run_id}");
+    let status = std::process::Command::new("tmux")
+        .args([
+            "new-session",
+            "-d",
+            "-s",
+            &tmux_session,
+            "-x",
+            "80",
+            "-y",
+            "24",
+            CREWD,
+            "attach",
+            &run_id,
+            "--repo",
+            repo.to_str().unwrap(),
+            "--state-dir",
+            fixture.state_dir().to_str().unwrap(),
+        ])
+        .status()
+        .expect("start tmux session running crewd attach");
+    assert!(status.success(), "tmux new-session must succeed");
+
+    // Idle: nobody types anything into the pane. The fake vendor's
+    // background loop keeps querying CPR/DA every 50ms regardless, and
+    // tmux (the real terminal emulator for this pane) keeps answering on
+    // its own -- this is the storm, reproduced.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // Positive control, asserted BEFORE the real assertion: a scaffold
+    // that emits nothing at all (a vendor that failed to start, a pane
+    // that never attached, a timing change that ends the idle window
+    // before the first burst) would satisfy "zero journaled rows" just
+    // as well as a working filter -- and certify nothing. Prove the
+    // storm actually fired first, independent of the journaling path
+    // under test: capture the pane's own rendered history and count the
+    // DA reply's fixed parameter string, which only appears there if
+    // tmux genuinely answered the fake vendor's queries.
+    let capture = std::process::Command::new("tmux")
+        .args(["capture-pane", "-p", "-S", "-", "-t", &tmux_session])
+        .output()
+        .expect("capture tmux pane history");
+    let captured = String::from_utf8_lossy(&capture.stdout);
+    let reply_occurrences = captured.matches("?1;2;4c").count();
+    const REPLY_FLOOR: usize = 20;
+    assert!(
+        reply_occurrences >= REPLY_FLOOR,
+        "positive control failed: the storm must have produced at least {REPLY_FLOOR} DA replies \
+         visible in the tmux pane's history (a scaffold that produced none would pass the real \
+         assertion below for the wrong reason) -- got {reply_occurrences} in:\n{captured}"
+    );
+
+    let _ = std::process::Command::new("tmux")
+        .args(["kill-session", "-t", &tmux_session])
+        .output();
+
+    let replay = client
+        .call(50, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    let events = replay["result"].as_array().cloned().unwrap_or_default();
+    let out_of_band_count = events
+        .iter()
+        .filter(|e| {
+            serde_json::to_string(e)
+                .unwrap_or_default()
+                .contains("outOfBandInput")
+        })
+        .count();
+    assert_eq!(
+        out_of_band_count, 0,
+        "a vendor's own terminal-reply storm (CPR/DA, answered by a real terminal) must never \
+         journal an outOfBandInput event -- got {out_of_band_count} in {events:?}"
+    );
+
+    let _ = server.shutdown();
+}
