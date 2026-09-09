@@ -672,7 +672,7 @@ impl Drop for DaemonGuard<'_> {
         let _ = self.shutdown();
     }
 }
-/// The last unproven integration seam from WP29, exercised at the *worker*
+/// The last unproven integration seam, exercised at the *worker*
 /// level (not just task registration): a real `crewd` OS process serves, an
 /// OMP client submits a real `run/submit` whose fake-claude worker journals a
 /// transcript turn over the actual Unix-socket JSON-RPC IPC, the process is

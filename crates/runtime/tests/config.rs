@@ -1,8 +1,8 @@
-//! Superseded by `crates/runtime/tests/crew_config.rs` (crew-v2 gap-closure
-//! WP4/WP5): this file tested the YAML org/repo/user layering system that
-//! WP5 removed (replaced by crew.json in config/mod.rs and config/crew.rs).
-//! Several of its tests asserted the opposite of their own stated behavior
-//! -- see the WP5 report for the audit -- and the two that were genuinely
+//! Superseded by `crates/runtime/tests/crew_config.rs`: this file tested
+//! the YAML org/repo/user layering system, which was later removed
+//! (replaced by crew.json in config/mod.rs and config/crew.rs).
+//! Several of its tests asserted the opposite of their own stated
+//! behavior, and the two that were genuinely
 //! valid (fingerprint stability, key-order invariance) are pinned instead
 //! by `crew_config.rs`'s `fingerprint_is_stable_under_key_order` and
 //! `fingerprint_differs_for_different_configs`.

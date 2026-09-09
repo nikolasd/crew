@@ -698,7 +698,7 @@ async fn omp_extension_receives_all_mutation_methods() {
             "plan/decide",
             "plan/get",
             "run/timeoutAck",
-            // WP23's monitor maintenance surface and the WP19 retention
+            // The monitor maintenance surface and the retention
             // sweep, both exposed over the same omp role.
             "retention/clean",
             "pane/reopen",

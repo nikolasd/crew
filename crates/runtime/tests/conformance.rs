@@ -64,7 +64,7 @@ fn adapters_json_reports_all_four_adapters_with_effective_capabilities() {
              which requires every one of the 14 canonical scenarios to have actually run: {scenarios:?}"
         );
     }
-    // crew-v2 gap-closure WP-C: `crewd adapters --json` reports TUI now
+    // `crewd adapters --json` reports TUI now
     // (the only mode left; headless is retired, spec §4.6), so labels are
     // the `*-tui` ones -- `ompRpc`'s TUI label is `"omp-tui"`, not a
     // mechanical `<wire_name>-tui`.
@@ -195,7 +195,7 @@ fn conformance_requires_exactly_one_of_fixture_or_live() {
 /// R52: fixture mode used to reach a real vendor-CLI spawn on every
 /// adapter regardless of the kill switch -- each adapter's own
 /// process/client-spawning scenarios ran before anything consulted
-/// `CREW_DISABLE_VENDOR_CLI`. (crew-v2 gap-closure WP-C: fixture mode is
+/// `CREW_DISABLE_VENDOR_CLI`. (Fixture mode is
 /// TUI-sourced now, spec §4.6 -- the headless adapters whose specific
 /// scenario names this comment used to enumerate are retired; the
 /// invariant itself is unchanged and still proven below.)

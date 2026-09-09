@@ -593,9 +593,7 @@ async fn dispatch(
             }
         }
         // Plan lifecycle and run-timeout-ack methods: routed through
-        // OrchestrationService, which currently refuses every one of these
-        // with a "not yet implemented" error (crew v2 gap-closure WP6);
-        // WP17/WP21 replace the stub with real handlers.
+        // OrchestrationService like any other guarded RPC method.
         CrewMethod::PlanPropose
         | CrewMethod::PlanDecide
         | CrewMethod::PlanGet

@@ -11,12 +11,14 @@
 //! prove `RunLifecycleSink`/`AdapterRegistry`/cancellation behavior against
 //! actual process-lifecycle evidence -- a fake/stub `Adapter` impl that
 //! only emits pre-scripted events would prove nothing about the
-//! evidence-driven contract those files exist to guard. Before crew-v2
-//! gap-closure WP-C, both files used the real, production `OmpRpcAdapter`
-//! for exactly this, even though neither test cares about OMP-RPC's own
-//! wire protocol -- `OmpRpcAdapter` was simply the only real-process
-//! adapter available to reach for. WP-C deleted the entire headless
-//! control plane (`OmpRpcAdapter` included) and left no drop-in
+//! evidence-driven contract those files exist to guard. Before the
+//! headless control plane was retired (see
+//! `docs/adr/0026-headless-retirement.md`), both files used the real,
+//! production `OmpRpcAdapter` for exactly this, even though neither test
+//! cares about OMP-RPC's own wire protocol -- `OmpRpcAdapter` was simply
+//! the only real-process adapter available to reach for. That retirement
+//! deleted the entire headless control plane (`OmpRpcAdapter` included)
+//! and left no drop-in
 //! substitute: `crate::adapter::terminal::TerminalAdapter` "supervises no
 //! process of its own" by its own doc comment, and `TuiAdapter` is
 //! PTY/vendor-specific and considerably heavier than either file needs.

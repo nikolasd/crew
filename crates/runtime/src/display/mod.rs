@@ -177,7 +177,7 @@ pub trait DisplayBackendTrait: Send + Sync {
 
     /// Creates a Crew-owned pane running `req.command`, or errors
     /// without creating anything. Reachable through `Box<dyn
-    /// DisplayBackendTrait>` -- before WP9 this was an inherent method
+    /// DisplayBackendTrait>` -- this was previously an inherent method
     /// per concrete backend, unreachable through the trait object the
     /// registry actually holds.
     fn create_pane(&self, req: PaneRequest) -> DisplayFuture<'_, PaneHandle>;

@@ -265,7 +265,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         mcp,
         org_security_patterns.clone(),
     ));
-    // TUI-mode support (WP13): only supplied when this runtime's own
+    // TUI-mode support: only supplied when this runtime's own
     // binary path resolved (mirroring `mcp`'s own reasoning exactly --
     // `PaneCoordinator`'s pane command runs `<crewd_path> attach ...`,
     // so a guessed path would launch a pane pointed at a binary that may
@@ -318,7 +318,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         })?,
     );
 
-    // Liveness clocks (WP19): one instance shared by the registry's run
+    // Liveness clocks: one instance shared by the registry's run
     // sinks (which touch it) and the sweep task spawned below (which reads
     // it). Created before `ServerConfig` so both holders get the same Arc.
     let activity_clock = Arc::new(crate::adapter::ActivityClock::new());
@@ -383,10 +383,10 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     // second term is unbounded.
     registry.set_max_live_sessions(policy.max_live_sessions);
 
-    // Resume support (WP14): everything `AdapterRegistry::resume_run`
+    // Resume support: everything `AdapterRegistry::resume_run`
     // needs that only exists after bind -- the journal handle, project id,
     // the server-owned violation service, and the live event broadcast.
-    // Without this a boot-time resume sweep (WP15) could only fail closed;
+    // Without this a boot-time resume sweep could only fail closed;
     // callers that never resume are unaffected either way.
     registry.set_resume_support(Arc::new(crate::adapter::registry::ResumeSupport {
         db: Arc::clone(&db),
@@ -395,7 +395,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         events_tx: server.events_sender(),
     }));
 
-    // Crash recovery (WP15): the sweep is now RESUME FIRST. It runs here --
+    // Crash recovery: the sweep is now RESUME FIRST. It runs here --
     // not earlier -- because it must follow both post-construction registry
     // supports: `set_tui_support` above (a `mode: "tui"` run cannot even
     // have its transcript eligibility checked without it) and
@@ -498,7 +498,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         }
     });
 
-    // Worker timeouts (WP19): the sweep journals `WorkerTimeout`
+    // Worker timeouts: the sweep journals `WorkerTimeout`
     // {Inactivity, Total} facts ONCE per expiry and never touches run
     // state -- the runtime reports; the leader decides (spec §7.5). New
     // activity re-arms the inactivity deadline via the same clock the run

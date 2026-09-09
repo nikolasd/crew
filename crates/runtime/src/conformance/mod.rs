@@ -11,10 +11,10 @@
 //! defines the shared report shape -- it never itself decides pass/fail
 //! for any adapter's scenario.
 //!
-//! **Dispatch axis (crew-v2 gap-closure WP-C):** the headless control plane
-//! this module used to dispatch to (`(`[`AdapterKind`]`, `[`AdapterMode`]`)`,
-//! with `Headless` reaching each adapter's own headless `conformance`
-//! submodule) is retired -- `mode: "headless"` stays deserializable but is
+//! **Dispatch axis:** the headless control plane this module used to
+//! dispatch to (`(`[`AdapterKind`]`, `[`AdapterMode`]`)`, with `Headless`
+//! reaching each adapter's own headless `conformance` submodule) was
+//! retired (ADR-0026) -- `mode: "headless"` stays deserializable but is
 //! typed-rejected before it ever reaches conformance dispatch (spec §4.6).
 //! [`run_fixture_conformance`] and [`run_live_conformance`] both only ever
 //! reach `adapter::tui::{claude,codex,copilot,omp}_conformance` now; the
@@ -132,8 +132,9 @@ impl VendorUnavailable {
     }
 }
 
-/// How many times a fixture suite actually ran (WP26's cache must collapse
-/// repeated submits onto one run). Test-only observability.
+/// How many times a fixture suite actually ran (the adapter registry's
+/// fixture-suite cache must collapse repeated submits onto one run).
+/// Test-only observability.
 #[cfg(test)]
 pub(crate) static FIXTURE_SUITE_RUNS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -155,13 +156,14 @@ pub(crate) static FIXTURE_SUITE_RUNS_SERIAL: std::sync::LazyLock<tokio::sync::Mu
 /// Runs one adapter kind's full fixture conformance suite (never a model
 /// call) and returns its report.
 ///
-/// **Dispatched by `(kind, mode)` (crew-v2 gap-closure WP-B), but only
-/// `AdapterMode::Tui` is reachable now (WP-C):** every call reaches
+/// **Dispatched by `(kind, mode)`, but only `AdapterMode::Tui` is reachable
+/// now:** every call reaches
 /// `adapter::tui::{claude,codex,copilot,omp}_conformance`'s fixture
 /// suites -- the suites that feed `fixture-mode-baseline.json`'s
 /// `claude-tui`/`codex-tui`/`copilot-tui`/`omp-tui` entries, and the only
 /// ones CI's fixture-mode conformance signal has been sourced from since
-/// WP-C. `mode` still takes the full `AdapterMode` enum (not just `Tui`)
+/// the headless control plane was retired (ADR-0026). `mode` still takes
+/// the full `AdapterMode` enum (not just `Tui`)
 /// so a caller-side `Headless` request fails loudly right here (see the
 /// `unreachable!` arm below) rather than the parameter silently narrowing
 /// away the caller's mistake at the type level.
@@ -169,17 +171,17 @@ pub async fn run_fixture_conformance(kind: AdapterKind, mode: AdapterMode) -> Co
     #[cfg(test)]
     FIXTURE_SUITE_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     match mode {
-        // crew-v2 gap-closure WP-C: the headless control plane is retired
-        // (spec §4.6) and its four adapters' `conformance` submodules are
-        // deleted -- there is nothing left to dispatch a `Headless`
-        // request to. Every caller must reject `Headless` before ever
-        // reaching this function: `gate_profile` does so for a live
-        // submit/resume, and `cli.rs`'s `run_conformance` does so for
-        // `crewd conformance --fixture --mode headless` (a typed
-        // rejection there, not silently accepted-and-discarded -- WP-B
-        // M-1 rider). Reaching this arm at all means one of those callers
-        // regressed; panicking loudly here is far more honest than
-        // fabricating a report for a control plane that no longer exists.
+        // The headless control plane is retired (ADR-0026, spec §4.6) and
+        // its four adapters' `conformance` submodules are deleted -- there
+        // is nothing left to dispatch a `Headless` request to. Every
+        // caller must reject `Headless` before ever reaching this
+        // function: `gate_profile` does so for a live submit/resume, and
+        // `cli.rs`'s `run_conformance` does so for `crewd conformance
+        // --fixture --mode headless` (a typed rejection there, not
+        // silently accepted-and-discarded). Reaching this arm at all means
+        // one of those callers regressed; panicking loudly here is far
+        // more honest than fabricating a report for a control plane that
+        // no longer exists.
         AdapterMode::Headless => unreachable!(
             "run_fixture_conformance called with the retired Headless mode for {kind} -- the \
              caller must reject Headless before calling this function"
@@ -223,12 +225,12 @@ pub async fn run_live_conformance(
             AdapterKind::OmpRpc => omp_conformance::live_report().await,
         }
     } else {
-        // crew-v2 gap-closure WP-C: the headless control plane is retired
-        // (spec §4.6) and its four adapters' `conformance` submodules are
-        // deleted. `cli.rs`'s `run_conformance` already rejects `--mode
-        // headless` before ever calling this function with `tui: false`;
-        // this `Err` is the defense-in-depth boundary for any other
-        // caller that might still pass it.
+        // The headless control plane is retired (ADR-0026, spec §4.6) and
+        // its four adapters' `conformance` submodules are deleted.
+        // `cli.rs`'s `run_conformance` already rejects `--mode headless`
+        // before ever calling this function with `tui: false`; this `Err`
+        // is the defense-in-depth boundary for any other caller that
+        // might still pass it.
         Err(format!(
             "adapter {kind} was requested with the retired headless control plane (spec §4.6) \
              -- the headless control plane has no adapter implementation to dispatch to; use \
@@ -284,12 +286,13 @@ pub async fn probe_availability_with_version(
         }
     }
 
-    // crew-v2 gap-closure WP-C: dispatches to each TUI vendor's own
-    // lightweight `--version` probe now (the headless ones, and the
-    // adapters they belonged to, are deleted). Deliberately still
-    // kind-only, not mode-aware: a vendor's installed CLI version does
-    // not vary by how this runtime chooses to invoke it, and Tui is the
-    // only mode that reaches live dispatch at all post-retirement.
+    // Dispatches to each TUI vendor's own lightweight `--version` probe
+    // now (the headless ones, and the adapters they belonged to, were
+    // deleted when the headless control plane was retired, ADR-0026).
+    // Deliberately still kind-only, not mode-aware: a vendor's installed
+    // CLI version does not vary by how this runtime chooses to invoke it,
+    // and Tui is the only mode that reaches live dispatch at all
+    // post-retirement.
     use crate::adapter::tui::{
         claude_conformance, codex_conformance, copilot_conformance, omp_conformance,
     };
@@ -319,11 +322,12 @@ mod tests {
         AdapterKind::OmpRpc,
     ];
 
-    /// crew-v2 gap-closure WP-C: `run_fixture_conformance(kind,
-    /// Headless)` is now a defense-in-depth panic, not a working dispatch
-    /// (the headless adapters it used to reach are deleted). Supersedes
-    /// WP-B's `every_adapter_kind_produces_a_headless_fixture_report`,
-    /// which asserted the opposite.
+    /// `run_fixture_conformance(kind, Headless)` is now a defense-in-depth
+    /// panic, not a working dispatch (the headless adapters it used to
+    /// reach were deleted when the headless control plane was retired,
+    /// ADR-0026). Supersedes the earlier
+    /// `every_adapter_kind_produces_a_headless_fixture_report`, which
+    /// asserted the opposite.
     #[tokio::test]
     #[should_panic(expected = "retired Headless mode")]
     async fn run_fixture_conformance_panics_on_headless_not_dispatches_to_it() {
@@ -331,7 +335,7 @@ mod tests {
         let _ = run_fixture_conformance(AdapterKind::Claude, AdapterMode::Headless).await;
     }
 
-    /// WP-B Task 1: the `Tui` half of the new dispatch axis reaches the
+    /// The `Tui` half of the new dispatch axis reaches the
     /// tui conformance suites, which name their report with the exact
     /// `fixture-mode-baseline.json` keys -- `ompRpc`'s is `"omp-tui"`, not
     /// a mechanical `<wire_name>-tui` (verified against each
@@ -355,7 +359,7 @@ mod tests {
         }
     }
 
-    /// WP-B ruling deliverable (b2): `nested != NestedCapability::Managed`
+    /// `nested != NestedCapability::Managed`
     /// gates `DomainAdapterEventSink` construction
     /// (`adapter::registry.rs:469`/`:792`), NOT authorization -- but it is
     /// still a load-bearing tautology today, since no in-tree adapter (in
@@ -364,8 +368,8 @@ mod tests {
     /// paths visibly and deliberately, not silently.
     #[tokio::test]
     async fn no_in_tree_adapter_declares_managed_nested_in_either_mode() {
-        // crew-v2 gap-closure WP-C: only `Tui` reaches live dispatch now
-        // (`Headless` is a defense-in-depth panic, pinned separately by
+        // Only `Tui` reaches live dispatch now (`Headless` is a
+        // defense-in-depth panic, pinned separately by
         // `run_fixture_conformance_panics_on_headless_not_dispatches_to_it`).
         let _serial = FIXTURE_SUITE_RUNS_SERIAL.lock().await;
         for kind in ALL_KINDS {

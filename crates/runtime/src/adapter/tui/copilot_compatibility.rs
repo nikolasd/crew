@@ -15,9 +15,10 @@
 //! a newer CLI release here always requires that same kind of empirical
 //! verification, not a guess.
 //!
-//! crew-v2 gap-closure WP-C: moved here from the (now-deleted) headless
-//! `adapter::copilot` module -- this table gates the TUI vendor's version
-//! check now that the headless one it originally served is gone. The
+//! Moved here from the (now-deleted) headless `adapter::copilot` module
+//! when the headless control plane was retired (ADR-0026) -- this table
+//! gates the TUI vendor's version check now that the headless one it
+//! originally served is gone. The
 //! empirical reprobe evidence this table's own doc comment describes
 //! (the `initialize`/`agentInfo` handshake) now lives in
 //! `super::copilot_conformance`'s live/fixture suites instead of a
@@ -92,10 +93,11 @@ pub fn copilot_acp_protocol_version_supported(protocol_version: u64) -> bool {
 mod tests {
     use super::*;
 
-    /// Moved from the deleted `tests/copilot_adapter.rs` (crew-v2
-    /// gap-closure WP-C): the pure compatibility-table check has no
-    /// dependency on the (deleted) headless adapter at all, so it moves
-    /// verbatim rather than being lost with the rest of that file.
+    /// Moved from the deleted `tests/copilot_adapter.rs` when the headless
+    /// control plane was retired (ADR-0026): the pure compatibility-table
+    /// check has no dependency on the (deleted) headless adapter at all,
+    /// so it moves verbatim rather than being lost with the rest of that
+    /// file.
     #[test]
     fn known_cli_version_is_exact_match_against_every_empirically_verified_version() {
         assert!(copilot_cli_version_known("1.0.73"));

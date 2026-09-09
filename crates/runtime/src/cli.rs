@@ -571,7 +571,7 @@ async fn run_lease_release(
     // The intent is durable journal text: sanitize it with the full
     // configured Redactor (built-ins plus `security.patterns` from the
     // user and repo crew.json layers, same precedence `serve` uses) when
-    // a config is readable (WP26). This command is crash recovery, so a
+    // a config is readable. This command is crash recovery, so a
     // broken or absent config degrades to built-in rules with a visible
     // warning instead of blocking the operator's cleanup.
     let mut layer_files: Vec<PathBuf> = Vec::new();
@@ -1253,10 +1253,9 @@ async fn run_conformance(
         }
     };
 
-    // crew-v2 gap-closure WP-C (WP-B M-1 rider): `--mode headless` is a
-    // typed rejection now, for both `--fixture` and `--live` -- never
-    // silently accepted-and-discarded. Before this WP, `--fixture`
-    // ignored `--mode` entirely (always headless-sourced) and `--live
+    // `--mode headless` is a typed rejection now, for both `--fixture`
+    // and `--live` -- never silently accepted-and-discarded. Before this,
+    // `--fixture` ignored `--mode` entirely (always headless-sourced) and `--live
     // --mode headless` silently reached each adapter's own headless
     // `live_report`; both dispatch targets are deleted along with the
     // headless control plane itself (spec §4.6).
@@ -1393,8 +1392,8 @@ async fn run_adapters(json: bool) -> ExitCode {
     ];
     let mut reports = Vec::with_capacity(kinds.len());
     for kind in kinds {
-        // crew-v2 gap-closure WP-C: TUI now, not Headless -- the headless
-        // control plane is retired (spec §4.6) and its adapters deleted.
+        // TUI now, not Headless -- the headless control plane is retired
+        // (spec §4.6) and its adapters deleted.
         // Report labels are now the `*-tui` ones (`claude-tui`, ...),
         // matching every other TUI-sourced fixture report.
         reports.push(run_fixture_conformance(kind, AdapterMode::Tui).await);

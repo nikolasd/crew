@@ -2,7 +2,7 @@
 //! field set the runtime's redaction, workspace, concurrency, retention,
 //! and diagnostic consumers read.
 //!
-//! Before crew-v2 gap-closure WP5, this crate loaded three YAML layers
+//! Before this module existed, this crate loaded three YAML layers
 //! (org/repo/user) into a `RuntimePolicy` with a wider field set:
 //! deny-by-default model/adapter allowlists, per-run/daily cost ceilings,
 //! a required-capability list, and a bag of six advisory "rollout gate"
@@ -14,7 +14,7 @@
 //! crew.json's schema (spec §10, [`crew::CrewConfig`]) deliberately does
 //! not model that org-governance surface (the design spec's §2.2/§12
 //! retire the org config layer outright, moving it to
-//! `docs/future-features.md`). Per the WP5 ruling, the fields with no
+//! `docs/future-features.md`). Per that ruling, the fields with no
 //! `CrewConfig` equivalent -- `allowed_models`, `allowed_adapters`,
 //! `required_capabilities`, both cost ceilings, and the
 //! `native_discovery_reviewed` rollout gate -- and the `policy::evaluate`
@@ -138,8 +138,8 @@ pub fn resolve_policy(
     Ok(RuntimePolicy::from_crew_config(&cfg))
 }
 
-/// Maps `CrewConfig`'s display backend to the protocol's enum. WP9
-/// reconciled the two: `crew_protocol::DisplayBackend` now has an exact
+/// Maps `CrewConfig`'s display backend to the protocol's enum:
+/// `crew_protocol::DisplayBackend` has an exact
 /// counterpart for every concrete choice here (`Herdr`, `Tmux`,
 /// `OsWindow`, `Hidden`) -- only `Auto` has no protocol-side backend of
 /// its own, because it means "no forced backend, resolve one" wherever

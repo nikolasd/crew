@@ -185,7 +185,7 @@ impl Server {
         // `Server::coordination_broker`. `config.run_driver` is already
         // available (constructed by the caller before `bind`), so this
         // has no construction-order cycle with `AdapterRegistry`.
-        // WP26: both the violation service and the pane coordinator
+        // Both the violation service and the pane coordinator
         // journal durable text that reached the daemon from outside it
         // (cancellation intents, subprocess stderr) -- both get the full
         // configured Redactor, built-in rules plus the compiled

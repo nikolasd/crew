@@ -22,11 +22,12 @@
 //! cancellation side effects of `Cancel`/`QuarantineAndCancel` do not
 //! share that guarantee.
 //!
-//! Crew-v2 gap-closure WP5: a sibling `record_cost_ceiling` used to journal
-//! a `cost_ceiling_exceeded` violation through the same `apply_action`
-//! path, for the org-governance cost ceiling retired in that WP (deleted
-//! outright -- config-sourced, and that config layer was never reachable
-//! in production). Nested-worker handling below is unaffected.
+//! A sibling `record_cost_ceiling` used to journal a `cost_ceiling_exceeded`
+//! violation through the same `apply_action` path, for the org-governance
+//! cost ceiling retired along with the rest of org-governance enforcement
+//! (see `crate::policy::evaluate`'s module doc; deleted outright --
+//! config-sourced, and that config layer was never reachable in
+//! production). Nested-worker handling below is unaffected.
 //!
 //! [`ViolationService::decide`] resolves a violation via
 //! `policy/violation/decide`, restricted to the violation's task's
@@ -131,7 +132,7 @@ pub struct ViolationService {
     /// value, not per-run).
     action: NestedViolationAction,
     /// The full configured Redactor -- built-in rules PLUS the compiled
-    /// `security.patterns` (WP26). Cancellation intents and their
+    /// `security.patterns`. Cancellation intents and their
     /// acknowledgements are durable journal text and must pass through the
     /// same redaction every other journaled mutation gets, never a
     /// built-ins-only instance that would silently skip org patterns.

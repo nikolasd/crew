@@ -34,11 +34,12 @@
 //! `cli.rs` around [`pump`], which is generic over any `AsyncRead`/
 //! `AsyncWrite` pair and so is fully testable with in-memory pipes.
 //!
-//! WP8 delivers the `on_user_input` callback as a seam only: this module
-//! proves bytes typed by a viewer reach the callback, but nothing yet
-//! constructs a `RuntimeEvent::OutOfBandInput` from it. That production
-//! wiring (through the adapter's event sink and the `Redactor`) lands in
-//! WP11, once a TUI adapter exists to own the run context the event needs.
+//! The `on_user_input` callback was delivered as a seam only, at first:
+//! this module proves bytes typed by a viewer reach the callback, but
+//! nothing yet constructs a `RuntimeEvent::OutOfBandInput` from it. That
+//! production wiring (through the adapter's event sink and the
+//! `Redactor`) landed once a TUI adapter existed to own the run context
+//! the event needs.
 
 use std::collections::VecDeque;
 use std::future::Future;
@@ -426,7 +427,7 @@ async fn serve_viewer(
                         on_user_input(bytes.clone());
                         // A failed keystroke delivery is degraded control,
                         // never silence: the viewer typed and nothing
-                        // reached the vendor process (WP8 deferred minor).
+                        // reached the vendor process (a deferred minor).
                         if let Err(err) = target.write_input(bytes).await {
                             tracing::warn!(error = %err, "attach write_input failed; \
                                 keystrokes may not reach the vendor process");

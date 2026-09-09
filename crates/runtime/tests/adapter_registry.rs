@@ -88,7 +88,7 @@ fn terminal_profile() -> WorkerProfile {
         adapter: "claude".to_string(),
         model: String::new(),
         permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
-        // crew-v2 gap-closure WP-C: `mode` must be explicit `Tui` now --
+        // `mode` must be explicit `Tui` now --
         // `Default::default()`'s `Headless` is retired and gate_profile
         // refuses it before this test's own scenario (authorization,
         // duplicate-start, ...) is ever reached.

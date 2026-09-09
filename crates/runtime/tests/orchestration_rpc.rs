@@ -2873,8 +2873,8 @@ async fn display_principal_cannot_call_plan_or_timeout_ack_methods() {
 
 #[tokio::test]
 async fn omp_extension_plan_methods_reach_real_handlers_and_timeout_ack_stays_stubbed() {
-    // WP17 landed real `plan/propose|decide|get` handlers; `run/timeoutAck`
-    // remains a stub until WP21. An `ompExtension` client reaches the
+    // Real `plan/propose|decide|get` handlers landed first; `run/timeoutAck`
+    // remained a stub a while longer. An `ompExtension` client reaches the
     // service layer for all of them (never METHOD_NOT_FOUND).
     let harness = Harness::start(|_| {}).await;
     let mut client = omp_client(&harness, "omp-1").await;
@@ -2889,7 +2889,7 @@ async fn omp_extension_plan_methods_reach_real_handlers_and_timeout_ack_stays_st
         );
     }
 
-    // WP21: run/timeoutAck reaches its handler too (invalid_params on
+    // `run/timeoutAck` now reaches its handler too (invalid_params on
     // empty params, never METHOD_NOT_FOUND / not-yet-implemented).
     let attempt = client.call(2, "run/timeoutAck", json!({})).await;
     assert_eq!(
@@ -3240,7 +3240,7 @@ async fn plan_decide_is_refused_for_a_non_owning_client() {
     assert_eq!(get["result"]["approved"], Value::Null);
 }
 
-/// WP19: spawning a run from an approved plan subtask snapshots its
+/// Spawning a run from an approved plan subtask snapshots its
 /// `turnBudget`; steering sends consume turns; the send at the cap is
 /// refused with the typed `BUDGET_EXCEEDED` code AND journals (hence
 /// broadcasts) the durable `budgetExceeded` fact; the refused message row
@@ -4194,10 +4194,12 @@ impl AdapterEventSink for TestSink {
 /// `running_adapter`/`cancel_run` to the adapter's own methods exactly as
 /// `AdapterRegistry` does -- exercising the real `Adapter::cancel`
 /// implementation (`SpawnEvidenceAdapter`'s watcher task ->
-/// `ManagedProcess::terminate()`), not a hand-rolled stand-in. Before
-/// crew-v2 gap-closure WP-C this drove a real `OmpRpcAdapter`; see
-/// `support::spawn_evidence_adapter`'s module doc for why it doesn't
-/// anymore and what `SpawnEvidenceAdapter` still proves in its place.
+/// `ManagedProcess::terminate()`), not a hand-rolled stand-in. Before the
+/// headless control plane was retired (see
+/// `docs/adr/0026-headless-retirement.md`), this drove a real
+/// `OmpRpcAdapter`; see `support::spawn_evidence_adapter`'s module doc for
+/// why it doesn't anymore and what `SpawnEvidenceAdapter` still proves in
+/// its place.
 struct RealAdapterRunDriver {
     adapter: parking_lot::Mutex<Option<Arc<SpawnEvidenceAdapter>>>,
     sink: Arc<TestSink>,
@@ -4296,10 +4298,11 @@ impl RunDriver for RealAdapterRunDriver {
 /// blocks reading stdin until closed or signaled), so this exercises the
 /// vehicle's real, production-shared `cancel()` implementation
 /// (`crew_runtime::supervisor::ManagedProcess::terminate`, the same
-/// escalation path every real adapter uses) end to end. Before crew-v2
-/// gap-closure WP-C this drove a real `OmpRpcAdapter`; see
-/// `support::spawn_evidence_adapter`'s module doc for why it doesn't
-/// anymore.
+/// escalation path every real adapter uses) end to end. Before the
+/// headless control plane was retired (see
+/// `docs/adr/0026-headless-retirement.md`), this drove a real
+/// `OmpRpcAdapter`; see `support::spawn_evidence_adapter`'s module doc for
+/// why it doesn't anymore.
 ///
 /// This does not itself prove SIGKILL escalation (`jsonl` mode doesn't
 /// ignore SIGINT/SIGTERM, so `ManagedProcess::terminate` is expected to

@@ -7,7 +7,7 @@
 //! scenario was reported `Fail`, which a capability gate read as a
 //! disproof and stripped `steering`/`resume`.
 //!
-//! Crew-v2 gap-closure WP5 ruling: this file used to carry a phase 3,
+//! This file used to carry a phase 3,
 //! proving the *policy* consequence end to end -- that a
 //! `PolicyEvaluator` policy requiring `steering`+`resume` (via
 //! `required_capabilities`) still authorized Codex under the switch. That
@@ -19,7 +19,7 @@
 //! itself, independent of any policy, never lets the switch corrupt
 //! `effective_capabilities`.
 //!
-//! Crew-v2 gap-closure WP-C ruling: fixture mode is TUI-sourced now (spec
+//! Fixture mode is TUI-sourced now (spec
 //! §4.6) -- `run_fixture_conformance` only ever reaches
 //! `adapter::tui::*_conformance`, whose golden-fixture scenarios need no
 //! live vendor process for anything except the real `--version`/binary

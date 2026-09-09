@@ -20,13 +20,13 @@
 //! fails closed with the exact JSON path that named it
 //! (`"adapters.claude.notAField"`, `"limits.bogusField"`, ...).
 //!
-//! Controller override (crew-v2 gap-closure WP4, ledgered): every
-//! adapter's `mode` defaults to `headless`, not the `tui` shown in the
-//! spec's example -- no TUI adapter existed yet. Later work packages flip
-//! each vendor's default to `tui` as its TUI adapter lands. WP13 landed
-//! Claude's, WP27 Codex's, and WP28 Copilot's and OMP's (all four
-//! `TuiVendor` impls pass fixture-mode conformance), so every built-in
-//! adapter defaults to `tui` here -- the spec §10 end state.
+//! Controller override, ledgered: every adapter's `mode` defaults to
+//! `headless`, not the `tui` shown in the spec's example -- no TUI
+//! adapter existed yet. Each vendor's default was flipped to `tui` in
+//! turn as its own TUI adapter landed -- Claude's first, then Codex's,
+//! then Copilot's and OMP's (all four `TuiVendor` impls pass
+//! fixture-mode conformance) -- so every built-in adapter defaults to
+//! `tui` here -- the spec §10 end state.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -66,10 +66,10 @@ pub enum ConfigError {
 
     /// One of the four reserved adapter kinds (`claude`/`codex`/`copilot`/
     /// `omp`, each backed by a real Rust adapter implementation) was
-    /// configured with `mode: "headless"`. crew v2 is TUI-only (crew-v2
-    /// gap-closure WP-C, spec §4.6): the headless control plane was
-    /// retired and its adapter code deleted, so this key can now only
-    /// ever name a mode this daemon has no implementation for. `headless`
+    /// configured with `mode: "headless"`. crew v2 is TUI-only (spec §4.6;
+    /// see `docs/adr/0026-headless-retirement.md`): the headless control
+    /// plane was retired and its adapter code deleted, so this key can now
+    /// only ever name a mode this daemon has no implementation for. `headless`
     /// stays a *deserializable* enum value (old journals and configs must
     /// still parse), so this is a validation-layer rejection, not a
     /// deserialization failure -- a config with `mode: "gemini-typo"` (an
@@ -187,7 +187,7 @@ impl Default for DisplayConfig {
 
 /// Whether a vendor adapter runs its worker attached to a real TUI pane
 /// or drives a headless protocol adapter. `"headless"` is retired
-/// (crew-v2 gap-closure WP-C, spec §4.6): it still parses here (an old
+/// (spec §4.6): it still parses here (an old
 /// config file naming it must not fail to load with a schema-shaped
 /// error) but is rejected with a typed error at validation time --
 /// `load_layers` refuses any reserved adapter kind whose `mode` is
@@ -336,8 +336,8 @@ impl Default for CrewConfig {
 
 /// The four built-in adapters, per spec §10. All four default to
 /// `mode: tui` now that every vendor's TUI adapter has landed and passes
-/// fixture-mode conformance (WP13 / WP27 / WP28) -- the spec's end
-/// state, completing the WP4 controller override (see module docs).
+/// fixture-mode conformance -- the spec's end state, completing the
+/// controller override (see module docs).
 fn default_adapters() -> BTreeMap<String, AdapterConfig> {
     let mut adapters = BTreeMap::new();
     adapters.insert(
