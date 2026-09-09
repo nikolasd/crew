@@ -119,7 +119,8 @@ otherwise assume means all of it is.
   `attempts` only inside the backend-selection loop, and the field is still a list of backends
   rather than of outcomes, so a pane-creation failure after successful selection is still absent
   from it. The decision stands; the work does not exist yet. Anyone reading `attempts` today is
-  reading selection history only. Tracked as CREW-73, to land before the next live exercise.
+  reading selection history only. This is tracked as pending work, to land before the next live
+  exercise.
 
 > **Amendment, 2026-09-08.** Every claim in the section above was true when written and three of
 > them are no longer the whole picture. Recorded as an addition rather than by editing the text,
@@ -280,12 +281,12 @@ fact.
 * Bounded by invariants 1 and 2 (canonical Rust protocol types; every daemon message validated
   before extension logic touches it), which are what made the journaled-value question load-bearing
   rather than cosmetic.
-* The resume-cause event kind (PR #89) rode this decision's protocol-change window so that there
+* The resume-cause event kind rode this decision's protocol-change window so that there
   would be one schema regeneration rather than two. That is scheduling rather than design, and is
   noted only so a reader does not look for a connection between the two subjects.
-* The placement half shipped in PR #87 ("delete Embedded placement, backend-natural-form default");
-  the surfacing half in PR #88 ("typed PaneDowngraded event, sticky monitor flag, digest"). The
-  digest's currency guard, which the third channel depends on, shipped separately in PR #84.
+* The placement half shipped as "delete Embedded placement, backend-natural-form default";
+  the surfacing half as "typed PaneDowngraded event, sticky monitor flag, digest". The
+  digest's currency guard, which the third channel depends on, shipped separately.
 * Guard tests, by their real names on main rather than by the names the design note proposed:
   `attach_reports_the_backends_actual_placement_not_the_requested_one` pins that a backend reports
   what it did rather than what was asked;
@@ -296,5 +297,5 @@ fact.
   sticky flag survives subsequent unrelated events — the precise behaviour whose absence hid the
   original failure — and `packages/extension/src/milestones.test.ts` that a downgrade is always a
   milestone. **There is no test that a post-selection failure appears in `attempts`, because that
-  channel does not exist yet** (CREW-73). The two legacy-replay guards written for the
+  channel does not exist yet.** The two legacy-replay guards written for the
   deprecate-in-place shape were dropped with it.

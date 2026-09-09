@@ -369,7 +369,7 @@ a session that reconnects under a new `instanceId` without a matching `reconcile
 every one of these six methods, and `task/upsert` itself, refuse `-32602` against a task that same
 session originally created, until `reconcile/omp` rebinds ownership to the new instance id.
 
-R81 extended the same connection-bound-identity gate to the workspace-lease surface itself:
+This connection-bound-identity gate also extends to the workspace-lease surface itself:
 `workspace/get`, `workspace/release`, `workspace/inspect`, and `workspace/apply` all resolve their
 target purely from a caller-supplied `leaseId`, so each now re-derives the lease's owning task and
 refuses `-32602` unless the connected instance owns it -- before any teardown, materialization, or

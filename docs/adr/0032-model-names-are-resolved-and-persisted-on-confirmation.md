@@ -160,7 +160,7 @@ omitted a working shorthand.
   it also specified is kept and implemented.
 * Builds on the earlier ask-on-first-use-and-persist policy, which this decision leaves intact and
   gates.
-* Shipped in PR #96. Resolution logic in `packages/extension/src/models.ts`, applied in
+* Resolution logic in `packages/extension/src/models.ts`, applied in
   `packages/extension/src/tools/profiles.ts` before the stored-model comparison — the ordering
   matters, because comparing a shorthand against a stored canonical identifier reads as a conflict
   when it is the same model.
