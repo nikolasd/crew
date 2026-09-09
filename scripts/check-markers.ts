@@ -65,7 +65,20 @@ export const RULES: readonly Rule[] = [
   // The trailing letter is required: lettered labels are real, not typos.
   { name: "decision label", pattern: /\bD[0-9]{1,2}[a-z]?\b/ },
   { name: "review-register marker", pattern: /\bR[0-9]{1,3}\b/ },
-  { name: "bare pull-request number", pattern: /#[0-9]{1,4}\b/ },
+  // A sub-finding of a review-register entry. The shortest shape here, and so
+  // the most likely to collide with ordinary text one day -- measured at zero
+  // collisions when added, but unlike the review marker there is no directory
+  // to exclude if that changes, because a collision would be in code.
+  { name: "review sub-finding", pattern: /\bW[0-9]\b/ },
+  // Work-package labels of a planning document that is not in this repository.
+  { name: "work-package label", pattern: /\bWP-?[0-9A-C]+\b/ },
+  // A markdown heading anchor is not a pull-request reference. The lookahead
+  // is what tells them apart: an anchor carries a slug after its number
+  // (an anchor slug follows the digits), a reference does not. Keying on the
+  // token's own shape rather than on the surrounding link syntax means a bare
+  // anchor in prose is excluded too. Measured identical, repo-wide, to a
+  // lookbehind pair excluding `](` and `.md`; this form is the shorter one.
+  { name: "bare pull-request number", pattern: /#[0-9]{1,4}(?![-\w])/ },
 ];
 
 /**
@@ -91,6 +104,19 @@ export const SKIP_DIRS: readonly string[] = [".git", "node_modules", "target", "
  * content this scan cannot take at face value.
  */
 export const SKIP_FILES: readonly string[] = ["scripts/check-markers.test.ts"];
+
+/**
+ * Directories whose files are recorded artifacts rather than authored text.
+ *
+ * The same reasoning that exempts `fixtures`: `release/live-conformance`'s
+ * JSON reports are harness output copied verbatim, and that directory's own
+ * README says so -- "no fields altered, provenance preserved". A label inside
+ * a report's `detail` field is part of what the harness emitted. Editing it to
+ * satisfy a text rule would make the README's claim false, which is the one
+ * property that makes the report evidence. The README itself is authored prose
+ * and is not exempt.
+ */
+export const SKIP_GLOB_DIRS: readonly string[] = ["release/live-conformance"];
 
 /** Extensions worth scanning. Everything else is data or binary. */
 const SCAN_EXTENSIONS: readonly string[] = [".rs", ".ts", ".tsx", ".js", ".mjs", ".md", ".yml", ".yaml", ".toml", ".json", ".sh"];
@@ -133,6 +159,9 @@ function* walk(dir: string, root: string): Generator<string> {
     if (statSync(path).size > 2 * 1024 * 1024) continue;
     const rel = relative(root, path);
     if (SKIP_FILES.includes(rel)) continue;
+    // Recorded artifacts are exempt, but only their data: a README beside them
+    // is authored text and is scanned like anything else.
+    if (rel.endsWith(".json") && SKIP_GLOB_DIRS.some((d) => rel.startsWith(`${d}/`))) continue;
     yield rel;
   }
 }

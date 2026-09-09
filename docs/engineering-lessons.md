@@ -114,6 +114,7 @@ append-only log — pruning it is separate work from writing this rule down, and
   - [A byte-exact fixture is not text, and git will rewrite it](#a-byte-exact-fixture-is-not-text-and-git-will-rewrite-it)
 - [Measurement and Instruments](#measurement-and-instruments)
   - [A zero is a measurement, and an unchecked instrument reports zero](#a-zero-is-a-measurement-and-an-unchecked-instrument-reports-zero)
+  - [A claim about the future has no failure mode when the future arrives](#a-claim-about-the-future-has-no-failure-mode-when-the-future-arrives)
 
 ---
 
@@ -1718,3 +1719,45 @@ claims resting on an untested mechanism.
 
 **Regression tests:** `scripts/check-markers.test.ts` — the `positive control` block, including
 `every declared rule is exercised by a control above`, which fails if a rule is added without one.
+
+### A claim about the future has no failure mode when the future arrives
+
+**Location:** `crates/protocol/src/method.rs`'s orchestration block, against
+`crates/runtime/src/service/orchestration.rs` and `crates/protocol/src/plan.rs`
+
+**The bug:** A comment on the `plan/*` and `run/timeoutAck` wire methods read:
+
+> The daemon accepts these methods and refuses them with a "not yet implemented"
+> JSON-RPC error until a later work package lands their real handlers.
+
+It was true when written. The handlers then landed -- all four dispatch to real
+implementations in `service::orchestration` -- and nothing anywhere noticed. The
+comment went on describing a daemon that no longer existed, and `plan.rs`'s own
+module doc, two files away, had been saying the opposite in plainer language
+("fully implemented and reachable via the daemon's JSON-RPC interface") for the
+whole intervening period. Two comments in the same crate contradicted each other
+and no reader reconciled them, which is the measure of how little either was
+being read against the code.
+
+**The lesson:** a claim about the future has no failure mode when the future
+arrives. The event that falsifies "not yet implemented" is precisely the event
+nobody re-reads that comment for -- the person landing the handlers is thinking
+about handlers, not about a sentence in a wire-protocol enum three files away.
+The same shape covers "temporary", "for now", "until X ships", and any TODO
+without an owner: each is a prediction, and predictions do not raise errors when
+they expire.
+
+Where such a claim is worth writing at all, tie it to something that *fails*.
+A test that starts passing when the work lands (and is expected to fail until
+then), an assertion that trips, a `#[cfg]` that stops compiling, or a doc the
+implementing change is already forced to touch. If none of those is available,
+prefer describing what the code does now over promising what it will do later --
+a description stays honest by being rewritten alongside the code, which is the
+same reasoning as "documentation follows code, never leads it".
+
+**Regression tests:** none possible for the class -- the defect is a true
+sentence becoming false with no event to observe. The instance is fixed, and the
+practice is the takeaway. Note that the repository-wide identifier sweep is what
+surfaced it: the stale claim was carrying a marker, so a mechanical pass would
+have reworded it into a shorter stale claim. Reading each replacement for truth
+rather than for shape is what caught it.

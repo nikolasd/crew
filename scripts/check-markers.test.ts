@@ -19,6 +19,8 @@ describe("positive control: every rule catches its own marker", () => {
     ["ticket id", "// CREW-79: the readiness gate", "CREW-79"],
     ["decision label", "// D28: the third channel", "D28"],
     ["review-register marker", "// R52: a fabricated disproof", "R52"],
+    ["review sub-finding", "// GREEN guard for the W2 finding", "W2"],
+    ["work-package label", "// retired by gap-closure WP-C", "WP-C"],
     ["bare pull-request number", "// shipped since #88", "#88"],
   ];
 
@@ -47,6 +49,19 @@ describe("the two pattern decisions that were measured, not guessed", () => {
   test("a lettered decision label is caught -- D29a is a real label", () => {
     expect(scanText("// D29a's rule: resolve, but never silently", "a.ts").map((f) => f.token)).toContain("D29a");
   });
+
+  test("work-package labels are caught in both spellings", () => {
+    expect(scanText("// gap-closure WP29 ruling", "a.rs").map((f) => f.token)).toContain("WP29");
+    expect(scanText("// retired by WP-C, spec 4.6", "a.rs").map((f) => f.token)).toContain("WP-C");
+  });
+
+  test("a work-package label is not also read as a sub-finding", () => {
+    // `WP29` must not match the W rule: the `P` breaks the word boundary.
+    // If it ever did, every work-package label would be reported twice under
+    // two different rules, and the count would silently double.
+    const rules = scanText("// gap-closure WP29", "a.rs").map((f) => f.rule);
+    expect(rules).not.toContain("review sub-finding");
+  });
 });
 
 describe("negative controls: things that must never be flagged", () => {
@@ -63,6 +78,20 @@ describe("negative controls: things that must never be flagged", () => {
   test("ordinary prose containing the letters is not flagged", () => {
     const text = "The D register and the R channel both settle. Add 3D rendering.";
     expect(scanText(text, "a.md")).toEqual([]);
+  });
+
+  test("markdown heading anchors are not pull-request references", () => {
+    // Every remaining `#N` in docs was one of these. An anchor carries a slug
+    // after its number; a pull-request reference does not.
+    const anchors = "See [Worker adapters](#4-worker-adapters) and [manual-testing.md](manual-testing.md#8-the-dashboard).";
+    expect(scanText(anchors, "docs.md").filter((f) => f.rule === "bare pull-request number")).toEqual([]);
+  });
+
+  test("a real pull-request reference beside an anchor is still caught", () => {
+    // The other half of the pair: excluding anchors must not exclude the thing
+    // the rule exists for.
+    const mixed = "Landed in #134; see [the section](#6-when-something-breaks).";
+    expect(scanText(mixed, "docs.md").map((f) => f.token)).toEqual(["#134"]);
   });
 
   test("a longer identifier is not a marker", () => {
