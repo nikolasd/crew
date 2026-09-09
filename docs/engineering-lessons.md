@@ -121,6 +121,7 @@ producing a clean result that looked exactly like success.
   - [A byte-exact fixture is not text, and git will rewrite it](#a-byte-exact-fixture-is-not-text-and-git-will-rewrite-it)
 - [Measurement and Instruments](#measurement-and-instruments)
   - [A zero is a measurement, and an unchecked instrument reports zero](#a-zero-is-a-measurement-and-an-unchecked-instrument-reports-zero)
+  - [The same blindness one level out: a check nobody runs, and a scan that reads nothing](#the-same-blindness-one-level-out-a-check-nobody-runs-and-a-scan-that-reads-nothing)
   - [A claim about the future has no failure mode when the future arrives](#a-claim-about-the-future-has-no-failure-mode-when-the-future-arrives)
 
 ---
@@ -1734,6 +1735,64 @@ claims resting on an untested mechanism.
 
 **Regression tests:** `scripts/check-markers.test.ts` — the `positive control` block, including
 `every declared rule is exercised by a control above`, which fails if a rule is added without one.
+
+### The same blindness one level out: a check nobody runs, and a scan that reads nothing
+
+**Location:** `.github/workflows/ci.yml`'s `markers` job and `scripts/check-markers.ts`'s
+`trackedFiles`; found on the guard above, days after it shipped
+
+**The bug:** The scanner in the previous entry was built with a positive control per rule precisely
+so it could never report a false all-clear. It then shipped with two defects of exactly the shape it
+was designed to prevent — both *outside* the patterns the control covers.
+
+* **It was never run.** `bun run check` invoked it as its first step, and `bun run check` is a local
+  convenience: no CI job called it, and the only mention of `check:markers` anywhere under
+  `.github/` was inside a comment. Every pull request went green. From outside, a rule enforced by
+  nothing looks identical to a rule nothing violates — the same indistinguishability as an
+  unsatisfiable pattern, moved from the matcher to the pipeline.
+* **On a normal checkout it read the wrong files.** It walked the filesystem, so it scanned
+  gitignored generated output — `crates/protocol/bindings/`, which `ts-rs` writes during
+  `cargo test -p crew-protocol`, carrying markers copied from the Rust doc comments it was
+  generated from. On a clean, fully-swept `main` it reported 385 markers in 20 files, none of them
+  repository content and none present in CI. That is the inverse failure and it is not the milder
+  one: a guard that fires on a correct tree is a guard people learn to skip, and it had already
+  become the first thing to fail in the gate.
+
+The fix is `git ls-files` — the repository's own definition of its content, which honours
+`.gitignore` by construction instead of by a list that has to be maintained, and which reaches
+`.github/` where a recursive walk skips it — plus a `markers` job that runs on every pull request
+and on `main`, unconditionally, including the docs-only pull requests the test matrix skips.
+
+Writing that enumerator immediately reproduced the original class a third time. `git ls-files`
+returning nothing — `git` absent from `PATH`, a directory that is not a repository, an extension
+filter edited until it matches nothing — yields zero files, zero findings, and the same cheerful
+all-clear as a clean repository. So the enumerator carries its own control: no checkout of this
+repository has zero scannable tracked files, therefore zero is a broken scan and throws rather than
+passing. The success line reports how many files it read, because that number is the only thing in
+a CI log that distinguishes a clean repository from a scan that read almost nothing.
+
+**The lesson:** a positive control proves the instrument can fire. It says nothing about whether
+anyone pulls the trigger, or about what the instrument was aimed at. Each of those is a separate
+place the same blindness lives, and each needs its own answer: *is it wired into something that
+fails* — a CI job, not a script a developer may or may not run — and *is the population it examines
+the population it is meant to examine*. Ask both questions of the guard itself, not only of the code
+it inspects; the mechanism cannot audit itself, and neither can its author. When a new guard lands,
+the review question is not only "does it catch a violation" but "what does it run over, who runs it,
+and what does it print when it runs over nothing".
+
+**Regression tests:** `scripts/check-markers.test.ts` — the `the scan follows git, not the
+filesystem` block: a gitignored file carrying a marker is not flagged, a tracked file carrying the
+same marker is (the pair is worthless without the second half), an untracked file is not, a skipped
+directory is skipped at any depth, and a scan that enumerates nothing throws instead of reporting
+clean. Each was confirmed to fail against a deliberately broken enumerator before being trusted.
+
+The depth case was a defect in the fix itself, caught by asking the second question above of the new
+code: the replacement matched the skip list as a leading path prefix, which exempts a top-level
+`dist/` but not `packages/extension/dist/index.js` -- a tracked, committed bundle generated from
+`packages/extension/src/`. Under it, a marker in extension source would be reported twice, the
+second time against a file that cannot be fixed by editing it. Changing what a check examines is a
+change to the check, and needs the same scrutiny as changing what it matches. The "nobody runs it" half has no unit test by
+nature; its guard is the `markers` job, which runs the control tests alongside the scan.
 
 ### A claim about the future has no failure mode when the future arrives
 
