@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 // Reconciled with `crates/runtime`'s config-facing
-// `crew::config::crew::DisplayBackend` (WP9): that enum additionally has
+// `crew::config::crew::DisplayBackend`: that enum additionally has
 // `Auto`, meaning "no forced backend", which has no concrete backend of its
 // own here -- every other variant of the config enum maps to exactly one of
 // these (`crate::config::protocol_display_backend` in the runtime crate

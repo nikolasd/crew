@@ -5,13 +5,13 @@
 
 ## Control plane
 
-- [x] **v0.5.0 ships TUI-only.** User ruling 2026-08-27 reverses this checklist's own WP29-era
+- [x] **v0.5.0 ships TUI-only.** User ruling 2026-08-27 reverses this checklist's own earlier
       "KEEP ALL FOUR" stance on the headless adapters (see the "Conformance evidence" section
       below, written under that now-superseded stance): the headless control plane
       (`adapter::{claude,codex,copilot,omp_rpc}`, one implementation per vendor, driving each
-      vendor's own non-interactive/JSON protocol directly) is retired outright per the crew-v2
-      design spec §4.6, in favor of `adapter::tui::*` as the sole control plane
-      (crew-v2 gap-closure WP-C; `docs/adr/0026-headless-retirement.md`).
+      vendor's own non-interactive/JSON protocol directly) is retired outright, in favor of
+      `adapter::tui::*` as the sole control plane (see `docs/adr/0026-headless-retirement.md`,
+      which reconstructs the retired design's requirement and records the retirement itself).
 - [x] `mode: "headless"` is deserializable but typed-rejected: an old config/profile/journal entry
       naming it still parses (never a hard crash on history), but every path that would act on it
       -- config validation, adapter-registry dispatch, `crewd conformance --mode headless`, live
@@ -54,7 +54,7 @@ SHA-256 checksums, an executable named `crewd`), emitted by `crew-xtask package-
 
 ## Build / gate (CI)
 
-- [x] `bun run check` green (schema drift + build + all tests, `CREW_DISABLE_VENDOR_CLI=1`) — all 13 CI checks green on PRs #19–#22
+- [x] `bun run check` green (schema drift + build + all tests, `CREW_DISABLE_VENDOR_CLI=1`) — all 13 CI checks green across this release's merges (commits 6b05818, e7c6b4e, d27cee4, 8b1a979)
 - [x] `cargo clippy --all-targets --all-features -- -D warnings`
 - [x] `cargo fmt --all --check`
 - [x] `bun run generate --check`
@@ -79,12 +79,12 @@ SHA-256 checksums, an executable named `crewd`), emitted by `crew-xtask package-
       gone output-silent for `ENTER_IDLE_MIN` -- an idle TUI processes it exactly like a human's
       keystroke, independent of vendor startup-render speed; queue-style sends additionally split
       text and Enter with a 150ms gap (an atomic `text\r` is swallowed whole by codex).
-- [x] codex: re-proven on current main (2026-08-27, main@2cde61e, post-#17/#18 adapter changes) --
+- [x] codex: re-proven on current main (2026-08-27, main@2cde61e, post-commit fa40af8/2cde61e adapter changes) --
       `probe` / `read_only_start_and_progress` / `follow_up` / `cancellation_scope` all pass
       (4/4 runnable), a byte-identical report to the earlier confirmed run. Full
       spawn -> type -> submit -> discover -> tail path proven.
       `release/live-conformance/codex-tui.json`.
-- [x] copilot: re-run 2026-08-27 on current main -- folder-trust prerequisite solved (#15), and
+- [x] copilot: re-run 2026-08-27 on current main -- folder-trust prerequisite solved (commit 0ca5d5b), and
       submit + transcript discovery now genuinely work (`start=Ok(())`, `session=true`; the
       2026-08-26 evening run's discovery failure is gone). `read_only_start_and_progress` and
       `follow_up` still fail (`first_message=false`/`saw_ack=false`), but the root cause is now

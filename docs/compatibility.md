@@ -40,7 +40,7 @@ Windows equivalent is implemented), and the packaged binaries are built against 
 ## Adapter Compatibility
 
 **The table and the four per-adapter sections immediately below are historical.** They were
-generated from the headless control plane's `--live` conformance runs. crew-v2 gap-closure WP-C
+generated from the headless control plane's `--live` conformance runs. crew-v2 gap-closure
 retired that control plane entirely — deleted, not kept inert (`mode: "headless"` stays
 deserializable for old configs/journals but is typed-rejected;
 [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md)) — so none of the
@@ -134,7 +134,7 @@ v1 field names.
 **Current.** Unlike everything above, this subsection is reproducible against the tree as it
 stands today — `--mode tui` is the only live mode there is now.
 
-WP29 added a TUI-mode live suite (`crewd conformance --live --mode tui`) that spawns the real
+A TUI-mode live suite (`crewd conformance --live --mode tui`) was added that spawns the real
 vendor TUI on a PTY and drives it through the same injection path the runtime uses. It exercises
 `probe`, `read_only_start_and_progress`, `follow_up`, `cancellation_scope`, and `session_resume`.
 `session_resume` is **skipped** on every adapter (a single-process resume is not a daemon
@@ -144,8 +144,8 @@ restart; transcript recovery across a real restart is a separate e2e, tracked as
 | Adapter | Runnable pass | Notes |
 |---------|---------------|-------|
 | Claude  | 4 / 4 | fully green (TUI) |
-| Codex   | 4 / 4 | fully green (TUI) — credits refilled; re-run 2026-08-27 on current main (post-#17/#18 adapter changes) is byte-identical to the 2026-08-26 evening report. The earlier out-of-credits state ([`codex-tui-post-quota.json`](../release/live-conformance/codex-tui-post-quota.json), no turns observable at all) is retained only as historical exhaustion evidence |
-| Copilot | 2 / 4 | `read_only_start_and_progress` + `follow_up` fail — CONFIRMED vendor monthly quota wall (`session.error`, `errorCode: quota_exceeded`, independently verified against the raw tailed session file, not just the harness's summary); probe + cancel proven. Not a capture defect: an earlier 2026-08-26 diagnosis blamed transcript-capture/discovery, but that was problem #15's untrusted-workspace bug — discovery itself now succeeds here (`start=Ok(())`, `session=true`). **Erratum:** the fix is a preflight check inside this adapter's own conformance harness only (`ensure_copilot_workspace_trusted`); it is not wired into the production adapter, and no equivalent exists for any other vendor — the same class of failure reached production for a different vendor's worker (CREW-79) after this note was written |
+| Codex   | 4 / 4 | fully green (TUI) — credits refilled; re-run 2026-08-27 on current main (after the intervening adapter changes) is byte-identical to the 2026-08-26 evening report. The earlier out-of-credits state ([`codex-tui-post-quota.json`](../release/live-conformance/codex-tui-post-quota.json), no turns observable at all) is retained only as historical exhaustion evidence |
+| Copilot | 2 / 4 | `read_only_start_and_progress` + `follow_up` fail — CONFIRMED vendor monthly quota wall (`session.error`, `errorCode: quota_exceeded`, independently verified against the raw tailed session file, not just the harness's summary); probe + cancel proven. Not a capture defect: an earlier 2026-08-26 diagnosis blamed transcript-capture/discovery, but that was an untrusted-workspace bug fixed by commit `0ca5d5b` (2026-08-27) — discovery itself now succeeds here (`start=Ok(())`, `session=true`). **Erratum:** the fix is a preflight check inside this adapter's own conformance harness only (`ensure_copilot_workspace_trusted`); it is not wired into the production adapter, and no equivalent exists for any other vendor — the same class of failure reached production for claude and codex — see `release/live-conformance/2026-09-09-vendor-first-run-gates.md` |
 
 Version provenance: the live reports deliberately record **no** vendor version (`version: null`) —
 the TUI harness does not pin one, so a report is evidence about the adapter injection path, not
@@ -154,8 +154,8 @@ captures in the table above (same CLIs, later releases; the headless control pla
 is retired, see the historical notice above) — see "TUI vendor CLI version gates" below for the
 exact pins. Gap: there is no recorded recipe for re-capturing the `*-tui` fixtures against future
 CLIs (`capture-manifest.yml` governed recapturing the now-deleted headless fixtures specifically
-and was deleted along with them by crew-v2 gap-closure WP-C; it never covered `*-tui`) — tracked
-with the open WP29 items.
+and was deleted along with them by crew-v2 gap-closure; it never covered `*-tui`) — tracked
+as an open item from that release.
 
 Raw reports (verbatim, with an erratum on the overstated `session_resume` detail):
 [`release/live-conformance/`](../release/live-conformance/).

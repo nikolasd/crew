@@ -82,7 +82,7 @@ for it explicitly through the wire protocol.
 * Bad, because it directly violates the project's foundational constraint and would make BATMAN
   impossible to remove without OMP losing its own scheduling capability entirely.
 
-## Amendment (2026-08-19, R76)
+## Amendment (2026-08-19)
 
 Both annotated claims above are now partial. `task/upsert`'s guarded write
 (`DomainRepository::upsert_task`) still persists whatever revision and owner OMP presents when
@@ -94,8 +94,8 @@ Both annotated claims above are now partial. `task/upsert`'s guarded write
   caller-supplied value against the identity the connection layer already authenticated at connect
   time (ADR-0009), the same kind of check `reconcile/omp` already performed against its own
   `new_owner`.
-* At the guarded write itself, `upsert_task`'s `ON CONFLICT` arm now conjoins R74's revision
-  predicate with an ownership predicate (`excluded.owner_client_instance_id =
+* At the guarded write itself, `upsert_task`'s `ON CONFLICT` arm now conjoins the existing
+  revision-guard predicate with an ownership predicate (`excluded.owner_client_instance_id =
   tasks.owner_client_instance_id`) -- an existing row may only be re-upserted by its current owner.
   A non-owner presenting even the exact stored revision is refused, classified in the same
   transaction as `DomainError::NotOwner`.
@@ -107,22 +107,22 @@ else's task id, someone else's stored revision, and its own instance id, and the
 it as if OMP itself had asked to transfer ownership -- which OMP had not. This ADR's actual boundary
 line is unmoved: Rust still never resolves, merges, or retries anything OMP didn't ask for; it now
 also refuses to let one caller impersonate another caller's *identity* when writing a field this ADR
-always intended to reflect OMP's own intent. See `docs/journal.md` Part XXVII and `REVIEW.md`'s R76
-resolution history for the full mechanism, including the run-lifecycle gap this fix's own review
-found (R77) -- since closed by threading the same ownership check into `run/submit`, `run/retry`,
-`run/cancel`, `message/send`, `workspace/acquire`, and `coordination/child/decide` (`docs/journal.md`
-Part XXIX). The workspace-lease surface (`workspace/get`/`release`/`inspect`/`apply`, R81) closed
-the same way one review later, gated by the same `run_owner_op` arbitration (`docs/journal.md` Part
-XXX); that review sweep found no further unarbitrated task-scoped mutation, so the remaining
-registered successors from this doctrine (R82-R86) are all Medium or Low, not High.
+always intended to reflect OMP's own intent. See `docs/journal.md` Part XXVII for the full
+mechanism, including the run-lifecycle gap this fix's own review found -- since closed by threading
+the same ownership check into `run/submit`, `run/retry`, `run/cancel`, `message/send`,
+`workspace/acquire`, and `coordination/child/decide` (`docs/journal.md` Part XXIX). The
+workspace-lease surface (`workspace/get`/`release`/`inspect`/`apply`) closed the same way one review
+later, gated by the same `run_owner_op` arbitration (`docs/journal.md` Part XXX); that review sweep
+found no further unarbitrated task-scoped mutation, so the remaining follow-on gaps from this
+doctrine were all rated Medium or Low, not High.
 
 ## Links
 
 * Narrated in `../journal.md`, Part II introduction and throughout
 * Enforced concretely by [ADR-0012](0012-explicit-run-lifecycle-relation-runtime-evidence-only.md)
-* `REVIEW.md`'s R76, R77, R81 and R82-R86 (cited in the sections above) — **cited a register that no
-  longer exists.** `REVIEW.md` was a maintainer-local, gitignored findings register; it is gone, so
-  those numbers cannot be resolved by anyone. The mechanism each one indexed is described in this
-  ADR's own prose above and needs no external source. The citations are left as written, for the same
-  reason the `docs/journal.md` citations are (see `README.md` in this directory): an ADR records what
-  it cited when it was written.
+* This ADR originally cited several `REVIEW.md` register entries in the sections above —
+  **citations to a register that no longer exists.** `REVIEW.md` was a maintainer-local, gitignored
+  findings register; it is gone, so those entries cannot be resolved by anyone. The mechanism each
+  one indexed is described in this ADR's own prose above and needs no external source. The bare
+  register citations have been removed as part of a repo-wide sweep of external, non-durable
+  references; the substance they stood for remains in the prose above, unchanged.

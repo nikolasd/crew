@@ -16,6 +16,31 @@ unused. It is left as a gap for the same reason the `docs/journal.md` citations 
 the numbers below record what was written when it was written, and renumbering them to close a gap
 would make every reference written before today wrong.
 
+References to the external ticket tracker (`CREW-<number>`) have been removed from every ADR's body,
+repo-wide. An ADR is meant to be read on its own, by someone who may never have access to that
+tracker, and a ticket number embedded in a decision's own text asked the reader to trust a system this
+repository does not control and cannot keep durable — unlike `docs/journal.md` above, which is a
+citation to something that once existed in this repository and is kept exactly as written for that
+reason, a ticket number was never a citation to anything in this repository at all. This is wording
+cleanup, not a change to any decision: where a ticket number was doing real narrative work (naming
+the fix that closed a gap, or the review that found one), the surrounding prose was reworded to carry
+that meaning in its own words; where it was a location tag adding nothing beyond what the sentence
+already said, it was simply dropped. Provenance for anything that ticket number used to stand for now
+lives either in the reworded prose itself or in a citation to a real path in this repository — another
+ADR, a section of `architecture.md`, a dated file under `docs/security/` — never in a number that
+points outside it.
+
+On 2026-09-09, the same treatment was extended to `REVIEW.md` register identifiers — a bare `R`
+followed by one to three digits — cited in several ADRs above. Two of those ADRs had previously carried a
+self-aware annotation choosing to leave the bare register number in place, reasoned by analogy with
+the `docs/journal.md` exception above. That analogy does not hold: a `docs/journal.md` citation
+points at a commit that still exists and can still be read, while `REVIEW.md` was a maintainer-local,
+gitignored findings register that left no equivalent trace anywhere in this repository — citing its
+numbers preserved nothing checkable, only the appearance of one. Tracker and register identifiers
+were replaced by their reasoning across the ADRs that carried them; the decisions themselves are
+untouched, and what each register entry indexed is now stated directly in the surrounding prose
+rather than behind a number nobody can resolve.
+
 | ID | Title | Status |
 |---|---|---|
 | [0001](0001-omp-extension-with-separate-rust-daemon.md) | External OMP extension with a separate Rust daemon | Accepted |
