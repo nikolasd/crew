@@ -218,7 +218,14 @@ event ("the earlier fix", "that work") is the same defect wearing different clot
 whether the sentence tells the reader what happened without a lookup.
 
 `bun run check` enforces this as its first step (`scripts/check-markers.ts`), and prints the file,
-line, token and rule for anything it finds. Two directories are exempt and both are deliberate:
+line, token and rule for anything it finds. CI's `markers` job runs the same scan on every pull
+request and on `main` — including docs-only pull requests, which skip the test matrix but are the
+changes most likely to introduce a marker.
+
+What it scans is **what `git ls-files` reports**, not what happens to be on disk. Generated output
+is gitignored precisely because it is not this repository's content, and a scan that read it would
+fail on a clean checkout over markers copied into files nobody wrote. Two directories are exempt
+beyond that, and both are deliberate:
 `fixtures/`, whose files are byte-exact terminal recordings that cannot be edited without destroying
 what makes them evidence, and `assets/`, where the logo's parts carry labels of the same shape.
 `release/live-conformance/*.json` is exempt for the same reason as `fixtures/` — those reports are
@@ -237,7 +244,7 @@ that governs the citation rule above:
 
 | what | checked by | scope |
 |---|---|---|
-| files | `scripts/check-markers.ts` | the whole tree, must be zero |
+| files | `scripts/check-markers.ts` | every file git tracks, must be zero |
 | commit messages | `scripts/check-trailers.ts` | the pull request's own commits |
 | history | nothing | immutable, out of scope |
 

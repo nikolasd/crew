@@ -269,9 +269,48 @@ jobs:
           # does not propagate into the action's env.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Out-of-repo tracker references in the repository's own files -- the rule
+  # that no identifier may point at a board, register or planning document
+  # that a reader of this repository cannot open. `bun run check` has run this
+  # since the rule landed, but `bun run check` is a local convenience: no job
+  # here invoked it, so for its first days the guard was enforced only on the
+  # machines of people who chose to run it. A check that no pipeline runs is
+  # indistinguishable, from outside, from a check that finds nothing.
+  #
+  # UNCONDITIONAL, unlike the test matrix: markers live in prose more often
+  # than in code, so skipping this on a docs-only pull request would exempt
+  # exactly the changes most likely to introduce one.
+  #
+  # The scanner's own unit tests run here too, not only in the `test` job that
+  # docs-only pull requests skip. They are this guard's positive control --
+  # text every rule must catch -- and a scanner whose patterns have been
+  # edited into matching nothing reports a clean tree in precisely the same
+  # way as a clean tree. Running the scan without its control would leave that
+  # indistinguishable again, one level in.
+  #
+  # No `bun install`: both commands use only Bun and Node built-ins, which is
+  # what keeps this the cheapest job in the file.
+  markers:
+    runs-on: ubuntu-latest
+    steps:
+      # `check-markers` enumerates via `git ls-files`, which reads the index
+      # of whatever is checked out; no history is needed, so the default
+      # shallow checkout is enough.
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Check the marker rules can still catch a marker
+        run: bun test scripts/check-markers.test.ts
+
+      - name: Check for out-of-repo tracker references
+        run: bun run check:markers
+
   # Attribution trailers in the commits a pull request ADDS. Deliberately
-  # narrow: `check-markers` scans files and demands zero across the whole
-  # tree, but a commit message is not a file and history cannot be edited --
+  # narrow: `check-markers` above scans every file git tracks and demands
+  # zero, but a commit message is not a file and history cannot be edited --
   # commits already on main carry trailers predating this rule, and rewriting
   # them would be worse than the trailers are. So this reads exactly the range
   # the PR proposes to add, and nothing else. Skipped on push, where there is

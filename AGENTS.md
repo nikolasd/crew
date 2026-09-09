@@ -145,9 +145,11 @@ property bug", not a number. Naming a mechanism is fine (`the fix at `message/se
 this repository); gesturing at an unnamed event ("the earlier fix", "that work") is not. The test is
 whether the sentence tells the reader what happened without a lookup.
 
-Enforced as the first step of `bun run check` by `scripts/check-markers.ts`, which prints file, line,
-token and rule. `fixtures/` and `assets/` are exempt — the first holds byte-exact terminal recordings
-that cannot be edited without destroying what makes them evidence, the second labels the logo's parts
+Enforced as the first step of `bun run check` by `scripts/check-markers.ts`, and by CI's `markers`
+job on every pull request and on `main`; it prints file, line, token and rule. It scans what
+`git ls-files` reports — gitignored generated output is not this repository's content and is not
+read. `fixtures/` and `assets/` are exempt — the first holds byte-exact terminal recordings that
+cannot be edited without destroying what makes them evidence, the second labels the logo's parts
 with the same shape the rule matches.
 
 ---
