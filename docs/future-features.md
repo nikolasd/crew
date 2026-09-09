@@ -585,6 +585,30 @@ checklist.
 
 ---
 
+## Copilot/OMP-RPC TUI Adapters Have No First-Run-Gate Predicate Yet
+
+**References:** `crates/runtime/src/adapter/tui/adapter.rs` (`TuiVendor::classify_surface`), `crates/runtime/src/adapter/tui/classify.rs`
+
+### What it is
+
+The TUI readiness gate now classifies what a vendor's terminal is actually showing before typing
+into it, and refuses to paste into (or confirm) a recognized first-run gate — for claude and codex,
+the two vendors with a real `classify_surface` implementation. `CopilotTuiVendor` and `OmpTuiVendor`
+still use the trait's default (`classify_surface` returns `None`), which keeps the pre-existing
+behavior unconditionally: the prompt is delivered to whatever is on screen, gate or not. This is not
+a considered decision to leave those two vendors uncovered — it is scoped, sequenced work not done
+yet. Predicates for both are already planned as a later slice of the same effort that added claude's
+and codex's.
+
+### Not yet covered, on purpose to build later
+
+Nothing to trigger here and nothing being deferred: this entry exists so the gap between "crew has
+gate protection" and "crew has gate protection for two of four TUI vendors" stays visible until the
+remaining two predicates land, rather than being invisible from outside the code. Remove this entry
+once `CopilotTuiVendor`/`OmpTuiVendor` gain real `classify_surface` implementations.
+
+---
+
 ## How to use this document
 
 1. **Adding a future feature:** Append a new section with the feature name, what it is, concrete scenarios that justify it, why it's deferred, and a decision trigger.

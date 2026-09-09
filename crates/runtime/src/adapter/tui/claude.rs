@@ -242,6 +242,13 @@ impl TuiVendor for ClaudeTuiVendor {
     // `session_id_from_transcript_path` is not overridden: the real
     // CLI's own transcript filename stem *is* its session id (a UUID),
     // exactly what the trait's default implementation derives.
+
+    fn classify_surface(
+        &self,
+        grid: &super::grid::TerminalGrid,
+    ) -> Option<super::classify::Surface> {
+        Some(super::classify::classify_claude_surface(grid))
+    }
 }
 
 /// The real `claude` CLI's session JSONL transcript format: one entry

@@ -12,20 +12,22 @@
 //! -- a first-run gate answered and cleared would still classify as
 //! blocking, forever, on the accumulator's read.
 //!
-//! Ships with no production caller yet, same as `screen.rs` and `grid.rs`
-//! before it: wiring this into the adapter's actual run loop (deciding
-//! what a worker does with `Gate`/`PromptReady`/`Undecided`) is a later
-//! slice, so `#[allow(dead_code)]` below is deliberate -- delete it the
-//! same slice that adds a real caller.
-#![allow(dead_code)]
+//! `ClaudeTuiVendor`/`CodexTuiVendor`'s own `TuiVendor::classify_surface`
+//! overrides are this module's real production callers, wiring
+//! `classify_claude_surface`/`classify_codex_surface` into
+//! `wait_for_readiness`'s poll (`adapter.rs`) and the Enter-time
+//! re-check both depend on.
 
 use super::grid::TerminalGrid;
 
 /// A named first-run gate, vendor-specific. Each variant corresponds to
 /// exactly one committed capture that proves it (see the tests below) --
 /// no variant here is speculative.
+///
+/// `pub`, not `pub(crate)`, for the same reason as [`super::grid::TerminalGrid`]:
+/// it flows through `TuiVendor::classify_surface`, a `pub` trait method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GateKind {
+pub enum GateKind {
     ClaudeWorkspaceTrust,
     ClaudeThemePicker,
     ClaudeSignIn,
@@ -33,9 +35,10 @@ pub(crate) enum GateKind {
     CodexSignIn,
 }
 
-/// What a vendor's terminal surface currently shows.
+/// What a vendor's terminal surface currently shows. `pub` for the same
+/// reason as [`GateKind`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Surface {
+pub enum Surface {
     /// A recognized first-run gate is blocking the run; see [`GateKind`].
     Gate(GateKind),
     /// The vendor's main composer is up and no known gate is blocking it.
