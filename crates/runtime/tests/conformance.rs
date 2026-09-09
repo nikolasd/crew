@@ -65,7 +65,7 @@ fn adapters_json_reports_all_four_adapters_with_effective_capabilities() {
         );
     }
     // `crewd adapters --json` reports TUI now
-    // (the only mode left; headless is retired, spec §4.6), so labels are
+    // (the only mode left; headless is retired, `docs/adr/0026-headless-retirement.md`), so labels are
     // the `*-tui` ones -- `ompRpc`'s TUI label is `"omp-tui"`, not a
     // mechanical `<wire_name>-tui`.
     for expected in ["claude-tui", "codex-tui", "copilot-tui", "omp-tui"] {
@@ -196,7 +196,7 @@ fn conformance_requires_exactly_one_of_fixture_or_live() {
 /// adapter regardless of the kill switch -- each adapter's own
 /// process/client-spawning scenarios ran before anything consulted
 /// `CREW_DISABLE_VENDOR_CLI`. (Fixture mode is
-/// TUI-sourced now, spec §4.6 -- the headless adapters whose specific
+/// TUI-sourced now -- the headless adapters whose specific
 /// scenario names this comment used to enumerate are retired; the
 /// invariant itself is unchanged and still proven below.)
 ///

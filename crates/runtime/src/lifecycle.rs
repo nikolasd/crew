@@ -500,7 +500,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
 
     // Worker timeouts: the sweep journals `WorkerTimeout`
     // {Inactivity, Total} facts ONCE per expiry and never touches run
-    // state -- the runtime reports; the leader decides (spec §7.5). New
+    // state -- the runtime reports; the leader decides. New
     // activity re-arms the inactivity deadline via the same clock the run
     // sinks touch. A sweep failure is logged, never fatal: the next tick
     // re-evaluates from the unchanged clocks.

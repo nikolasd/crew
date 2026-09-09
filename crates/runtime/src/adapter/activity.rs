@@ -1,7 +1,7 @@
 //! Per-run liveness clocks: the activity evidence the timeout sweep
 //! reduces into `WorkerTimeout{Inactivity|Total}` journal decisions.
 //!
-//! Two independent deadlines per run, per spec §7.5:
+//! Two independent deadlines per run:
 //!
 //! * **Inactivity** — measured from the last vendor event that flowed
 //!   through [`crate::adapter::run_lifecycle::RunLifecycleSink`]. Every

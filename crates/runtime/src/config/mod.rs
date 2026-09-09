@@ -11,10 +11,12 @@
 //! -- the extension passed no config-path flags -- so every deployment
 //! already ran with each of those fields at its default, empty/off value.
 //!
-//! crew.json's schema (spec §10, [`crew::CrewConfig`]) deliberately does
-//! not model that org-governance surface (the design spec's §2.2/§12
-//! retire the org config layer outright, moving it to
-//! `docs/future-features.md`). Per that ruling, the fields with no
+//! crew.json's schema ([`crew::CrewConfig`]) deliberately does not model
+//! that org-governance surface -- the org config layer was retired
+//! outright, with any future need tracked in `docs/future-features.md`
+//! (see `policy::evaluate`'s module doc for how that ruling was
+//! reconstructed after its original citation stopped resolving). Per
+//! that ruling, the fields with no
 //! `CrewConfig` equivalent -- `allowed_models`, `allowed_adapters`,
 //! `required_capabilities`, both cost ceilings, and the
 //! `native_discovery_reviewed` rollout gate -- and the `policy::evaluate`

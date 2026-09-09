@@ -741,8 +741,8 @@ impl RecoveryCoordinator {
                 }
             }
             Some(AdapterMode::Headless) => {
-                // The headless control plane is retired (ADR-0026, spec
-                // §4.6) -- there is no adapter implementation left to even
+                // The headless control plane is retired (ADR-0026) --
+                // there is no adapter implementation left to even
                 // ask "does it declare session resumption". Reject here, at
                 // the FIRST point recovery inspects this run's mode, with
                 // the same honest reason `gate_profile` gives a live submit
@@ -754,7 +754,7 @@ impl RecoveryCoordinator {
                 // continuation it never claimed to be).
                 return Err(format!(
                     "adapter {kind} was requested with mode: \"headless\", which is retired in \
-                     crew v2 (spec §4.6) -- the headless control plane has no adapter \
+                     crew v2 -- the headless control plane has no adapter \
                      implementation to dispatch to; use mode: \"tui\""
                 ));
             }

@@ -15,7 +15,7 @@
 //! dispatch to (`(`[`AdapterKind`]`, `[`AdapterMode`]`)`, with `Headless`
 //! reaching each adapter's own headless `conformance` submodule) was
 //! retired (ADR-0026) -- `mode: "headless"` stays deserializable but is
-//! typed-rejected before it ever reaches conformance dispatch (spec §4.6).
+//! typed-rejected before it ever reaches conformance dispatch.
 //! [`run_fixture_conformance`] and [`run_live_conformance`] both only ever
 //! reach `adapter::tui::{claude,codex,copilot,omp}_conformance` now; the
 //! `AdapterMode` parameter each still takes exists solely so a caller-side
@@ -171,7 +171,7 @@ pub async fn run_fixture_conformance(kind: AdapterKind, mode: AdapterMode) -> Co
     #[cfg(test)]
     FIXTURE_SUITE_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     match mode {
-        // The headless control plane is retired (ADR-0026, spec §4.6) and
+        // The headless control plane is retired (ADR-0026) and
         // its four adapters' `conformance` submodules are deleted -- there
         // is nothing left to dispatch a `Headless` request to. Every
         // caller must reject `Headless` before ever reaching this
@@ -225,14 +225,14 @@ pub async fn run_live_conformance(
             AdapterKind::OmpRpc => omp_conformance::live_report().await,
         }
     } else {
-        // The headless control plane is retired (ADR-0026, spec §4.6) and
+        // The headless control plane is retired (ADR-0026) and
         // its four adapters' `conformance` submodules are deleted.
         // `cli.rs`'s `run_conformance` already rejects `--mode headless`
         // before ever calling this function with `tui: false`; this `Err`
         // is the defense-in-depth boundary for any other caller that
         // might still pass it.
         Err(format!(
-            "adapter {kind} was requested with the retired headless control plane (spec §4.6) \
+            "adapter {kind} was requested with the retired headless control plane \
              -- the headless control plane has no adapter implementation to dispatch to; use \
              the TUI live report instead"
         ))

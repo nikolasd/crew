@@ -49,21 +49,6 @@ impl ServiceError {
             message: msg.into(),
         }
     }
-
-    /// A refusal for a known, role-permitted method whose real handler
-    /// lands in a later work package. Reuses `METHOD_NOT_FOUND` (-32601),
-    /// the same code the ACP-facing Copilot client already returns for a
-    /// recognized-but-unimplemented method
-    /// (`crate::adapter::copilot::client`), rather than inventing a new
-    /// refusal shape; the message text (not the code) is what
-    /// distinguishes "not yet implemented" from "unknown or out of role".
-    #[allow(dead_code)] // retained for future method stubs
-    fn not_yet_implemented(method_name: &str) -> Self {
-        Self {
-            code: error_code::METHOD_NOT_FOUND,
-            message: format!("{method_name} is not yet implemented"),
-        }
-    }
 }
 
 impl From<DomainError> for ServiceError {
@@ -3165,8 +3150,8 @@ impl OrchestrationService {
     }
 
     /// `run/timeoutAck`: the leader's decision surface for a
-    /// [`RuntimeEvent::WorkerTimeout`] fact (spec §7.5 -- the runtime
-    /// reports; the leader decides).
+    /// [`RuntimeEvent::WorkerTimeout`] fact (the runtime reports; the
+    /// leader decides).
     ///
     /// * `extend` re-arms BOTH of the run's liveness deadlines with a fresh
     ///   window (the same shared clock the timeout sweep reads). Refused

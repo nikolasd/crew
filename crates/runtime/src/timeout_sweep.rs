@@ -1,7 +1,7 @@
 //! The worker-timeout sweep: turns the shared [`ActivityClock`]'s
 //! liveness state into durable [`RuntimeEvent::WorkerTimeout`] facts.
 //!
-//! Two deadlines per run, per spec §7.5:
+//! Two deadlines per run:
 //!
 //! * **Inactivity** — from the run's last journaled vendor event. Fires
 //!   once per quiet stretch; new activity re-arms it.

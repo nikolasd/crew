@@ -1258,10 +1258,10 @@ async fn run_conformance(
     // `--fixture` ignored `--mode` entirely (always headless-sourced) and `--live
     // --mode headless` silently reached each adapter's own headless
     // `live_report`; both dispatch targets are deleted along with the
-    // headless control plane itself (spec §4.6).
+    // headless control plane itself (`docs/adr/0026-headless-retirement.md`).
     if matches!(mode, ConformanceModeArg::Headless) {
         return fail(
-            &"mode: \"headless\" is retired in crew v2 (spec §4.6) -- the headless control \
+            &"mode: \"headless\" is retired in crew v2 -- the headless control \
               plane has no adapter implementation to dispatch to; use --mode tui (the default)",
         );
     }
@@ -1393,7 +1393,7 @@ async fn run_adapters(json: bool) -> ExitCode {
     let mut reports = Vec::with_capacity(kinds.len());
     for kind in kinds {
         // TUI now, not Headless -- the headless control plane is retired
-        // (spec §4.6) and its adapters deleted.
+        // (`docs/adr/0026-headless-retirement.md`) and its adapters deleted.
         // Report labels are now the `*-tui` ones (`claude-tui`, ...),
         // matching every other TUI-sourced fixture report.
         reports.push(run_fixture_conformance(kind, AdapterMode::Tui).await);

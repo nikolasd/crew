@@ -1,4 +1,4 @@
-//! Integration tests for the crew JSON config module (spec §10).
+//! Integration tests for the crew JSON config module.
 //!
 //! Layers: built-in defaults → arbitrary ordered file paths → per-run
 //! overrides. Deep merge, later layers win, `security.patterns` is
@@ -22,7 +22,7 @@ fn write_layer(dir: &Path, name: &str, value: &serde_json::Value) -> std::path::
     path
 }
 
-/// Defaults match spec §10. Every built-in adapter defaults to `mode:
+/// Every built-in adapter defaults to `mode:
 /// "tui"` (each vendor's TUI adapter flipped its own default in turn;
 /// `headless` was then retired as a live mode entirely, leaving `tui`
 /// the only one a reserved adapter kind may configure -- see
