@@ -228,7 +228,7 @@ async fn terminal_adapter_capabilities() {
     assert_eq!(caps.protocol, ProtocolKind::Terminal);
 }
 
-/// R95: this adapter supervises no process of its own and never emits a
+/// This adapter supervises no process of its own and never emits a
 /// real `ProcessExited`, so a terminal-adapter run used to pin its
 /// concurrency slot, the idle timer, and unforced `runtime/shutdown` for
 /// the life of the daemon -- `watch_settlement`'s receiver never fired.

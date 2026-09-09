@@ -488,7 +488,7 @@ fn compare_dirs(fresh_dir: &Path, committed_dir: &Path) -> Result<()> {
 }
 
 /// Verifies the protocol-ts barrel (`src/index.ts`) re-exports every
-/// generated binding. R17 made "every generated file is re-exported" the
+/// generated binding. "Every generated file is re-exported" is the
 /// barrel's contract; this turns that convention into a build failure,
 /// so a type that exists on the wire is always importable from the barrel.
 fn check_barrel_completeness(root: &Path, generated_dir: &Path) -> Result<()> {

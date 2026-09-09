@@ -1,12 +1,12 @@
-//! Regression tests for R75: `ViolationService`'s own quarantine
-//! idempotency check used to be a check-then-act race, on the very flag
-//! R73 (`run_flags_lost_update.rs`) hardened the *write* side of, and
-//! R72/R54 (`violation_owner_race.rs`, `policy_violation.rs`) hardened the
-//! ownership/conflict side of. Found during R73's adversarial review
-//! (`agent://R73Adversary`, finding W2), not fixed by it: R73's mechanism
-//! is the flag write itself never losing a concurrent mutation of a
-//! *different* flag; this file's races are about whether
-//! `ViolationService` decides to write `policyQuarantined` at all.
+//! Regression tests for a check-then-act race in `ViolationService`'s own
+//! quarantine idempotency check, on the very flag `run_flags_lost_update.rs`
+//! hardened the *write* side of, and `violation_owner_race.rs`/
+//! `policy_violation.rs` hardened the ownership/conflict side of. Found
+//! during the write-side fix's own adversarial review, not fixed by it:
+//! that fix's mechanism is the flag write
+//! itself never losing a concurrent mutation of a *different* flag; this
+//! file's races are about whether `ViolationService` decides to write
+//! `policyQuarantined` at all.
 //!
 //! Two shapes, both fixed across `crates/runtime/src/policy/violation.rs`
 //! and `crates/runtime/src/domain/repository.rs`:
@@ -457,7 +457,7 @@ async fn a_plain_release_with_no_concurrent_violation_clears_quarantine() {
 /// If `DomainRepository::record_policy_violation`'s
 /// `flags_policy_quarantined`/`state` read were hoisted back out into an
 /// earlier, separate round trip *before* `load_policy_fingerprint` --
-/// the pre-R75 shape -- it would pair with `decide`'s `resolve` round
+/// the pre-fix shape -- it would pair with `decide`'s `resolve` round
 /// trip rather than its `release`, land *before* the release's clear
 /// instead of after it, and read the seed's `true`. `already_actioned`
 /// would then come back `true` and the fresh violation would never get

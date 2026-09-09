@@ -227,7 +227,7 @@ fn lease_release_refuses_while_a_runtime_is_serving() {
     );
 }
 
-/// R86 review W1: an unclean crash (SIGKILL, machine crash) leaves
+/// An unclean crash (SIGKILL, machine crash) leaves
 /// `runtime.sock` on disk with no live flock holder -- the exact case
 /// this command exists for. A stale socket alone must NOT refuse, or the
 /// no-remedy condition is reinstated for crashes and the operator is

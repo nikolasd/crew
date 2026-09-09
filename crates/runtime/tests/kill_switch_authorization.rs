@@ -1,4 +1,4 @@
-//! The R68 regression proof: with `CREW_DISABLE_VENDOR_CLI=1` set, a
+//! Regression proof: with `CREW_DISABLE_VENDOR_CLI=1` set, a
 //! development-only kill switch must never shrink the *effective*
 //! capabilities a conformance report proves. An unattempted scenario is
 //! reported [`crew_runtime::conformance::ScenarioOutcome::Skipped`] --
@@ -15,7 +15,7 @@
 //! rest of org-governance enforcement (see `policy::evaluate`'s module
 //! doc), so there is no longer an authorization path for it to prove.
 //! What remains -- and is the actual, capability-downgrade-consuming
-//! invariant R68 is about -- is phase 1/2 below: the conformance report
+//! invariant this file proves -- is phase 1/2 below: the conformance report
 //! itself, independent of any policy, never lets the switch corrupt
 //! `effective_capabilities`.
 //!
@@ -31,12 +31,12 @@
 //! claim than it did against the headless control plane: that the one
 //! scenario the switch *does* skip carries no capability consequence, so
 //! `effective_capabilities` trivially equals `declared_capabilities`. The
-//! deeper claim R68 is actually about -- that a *gated* scenario's skip,
-//! specifically, must never be read as a disproof -- has no live end-to-end
-//! trigger left in fixture mode and is proven synthetically instead, at
-//! the unit level: `conformance::report`'s
+//! deeper claim this invariant is actually about -- that a *gated*
+//! scenario's skip, specifically, must never be read as a disproof -- has
+//! no live end-to-end trigger left in fixture mode and is proven
+//! synthetically instead, at the unit level: `conformance::report`'s
 //! `a_skipped_scenario_leaves_its_gated_capability_declared` inline test
-//! (the direct, single-gate R68 proof; its sibling
+//! (the direct, single-gate proof; its sibling
 //! `a_skip_never_masks_a_real_disproof_of_a_different_gate` additionally
 //! proves a skip on one gate never masks a genuine disproof on another).
 //!
@@ -102,13 +102,14 @@ async fn the_kill_switch_never_shrinks_effective_capabilities() {
         assert!(
             skipped_names.contains(scenario::PROBE),
             "{kind}: PROBE must report skipped under the switch (its own real \
-             vendor-CLI check), or the R68 proof above is vacuous: skipped={skipped:?}"
+             vendor-CLI check), or the proof above is vacuous: skipped={skipped:?}"
         );
     }
     // At least one adapter must carry a genuinely skipped scenario -- not
     // merely `!report.passed`, which a real, unrelated Fail could also
     // trigger with zero skips present -- or the effective==declared
-    // assertions above would be vacuous with respect to R68's actual claim.
+    // assertions above would be vacuous with respect to this invariant's
+    // actual claim.
     assert!(
         any_skipped,
         "at least one adapter must report a was_skipped() scenario while the \

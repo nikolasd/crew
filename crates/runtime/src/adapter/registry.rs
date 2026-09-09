@@ -82,13 +82,14 @@ pub trait AdapterAuthorization: Send + Sync {
     /// [`crate::conformance::ScenarioOutcome::Skipped`] (the kill switch,
     /// a missing probe, or any other skipped-gating scenario) must be
     /// refused with a typed rejection naming which of those it was --
-    /// never silently stripped (that would be a fabricated disproof, R52)
+    /// never silently stripped (that would be a fabricated disproof)
     /// and never silently granted (that would let an unattempted scenario
     /// pass as proof). `effective_capabilities` already carries `Skipped`
     /// scenarios as undowngraded precisely so this function can tell
     /// "proved" apart from "merely never disproved" -- collapsing that
     /// distinction back into a bare grant/deny here would silently reopen
-    /// the skip-grants-declared hazard the R68/R52 invariants exist to
+    /// the skip-grants-declared hazard the deny-on-unproven rule above and
+    /// `effective_capabilities`' undowngraded-`Skipped` guarantee exist to
     /// close.
     ///
     /// # Errors
@@ -752,7 +753,7 @@ impl RunDriver for AdapterRegistry {
 /// non-terminal. `Err` from `settled` means the run's sink was dropped
 /// without any process exit ever being observed -- an adapter task that
 /// died before emitting one (the terminal adapter itself now settles via
-/// `cancel`'s synthetic `ProcessExited`, R95); that path therefore leaves
+/// `cancel`'s synthetic `ProcessExited`); that path therefore leaves
 /// the run non-terminal until the boot recovery sweep. Never release on
 /// that path: there is no settlement to record, and a release without one
 /// would hand this run's slot to another.
@@ -881,7 +882,7 @@ async fn run_one(
         }
     };
     // Fail closed: a sink whose org redaction patterns do not compile
-    // must never journal anything (invariant 4, R14).
+    // must never journal anything (invariant 4).
     let sink = match DomainAdapterEventSink::new(
         Arc::clone(&ctx.db),
         ctx.project_id,
@@ -2080,7 +2081,7 @@ mod settlement_tests {
         db.shutdown().await.expect("shutdown database");
     }
 
-    /// R67: the full settlement chain, not its halves. A synthetic
+    /// The full settlement chain, not its halves. A synthetic
     /// `ProcessExited` emitted through a real [`SettlementSink`] must fire
     /// the receiver [`watch_settlement`] holds, and settling through a
     /// real ceiling-1 [`crate::policy::PolicyEvaluator`] -- the production

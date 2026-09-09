@@ -517,7 +517,7 @@ async fn workspace_inspect_captures_real_evidence() {
     assert!(!list.artifacts.is_empty(), "should have stored artifacts");
 }
 
-/// R36: the isolation tests above hand-seed `run_id` on their input
+/// The isolation tests above hand-seed `run_id` on their input
 /// fixtures; nothing proved the real producers stamp it. Reverting the
 /// production stamping (`inspect.rs`/`apply.rs`) to `run_id: None` left
 /// the whole suite green -- proven by doing exactly that scratch revert

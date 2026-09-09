@@ -1,4 +1,4 @@
-//! R94: `require_live_run` is a caller-side pre-check in its own
+//! `require_live_run` is a caller-side pre-check in its own
 //! `run_domain_op` round trip, so a run settling between that check and
 //! the broker's write used to journal a message against a terminal run
 //! -- despite the broker's doc promising a live-token connection can

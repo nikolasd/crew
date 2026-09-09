@@ -684,7 +684,7 @@ impl ViolationService {
     ///
     /// Returns whether the flag was actually cleared. No write and no
     /// broadcast if it was already clear or another violation remains
-    /// open -- unlike the pre-R75 `set_quarantined(run_id, false)` this
+    /// open -- unlike the `set_quarantined(run_id, false)` this
     /// replaced, a release is no longer guaranteed to change the flag it
     /// targets, and [`Self::decide_and_release_status`] reports that back
     /// to its caller instead of discarding it.
