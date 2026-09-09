@@ -135,8 +135,8 @@ questions this design turned on are recorded here as part of the decision:
   asked a question", an approval wait, a `waitingPeer` and a `paused` run must all survive a timeout
   untouched. It is also the second thing the `turnSettled` column buys beyond snapshot readability —
   without it there is no way to distinguish an abandoned answer from a run that is merely quiet.
-* `pane/reopen`'s gate re-keyed from run state to pane liveness, and the stale-socket sweep
-  (CREW-15). One definition of "live pane" — a connect probe, the only portable proof of a listener —
+* `pane/reopen`'s gate re-keyed from run state to pane liveness, and the stale-socket sweep.
+  One definition of "live pane" — a connect probe, the only portable proof of a listener —
   shared by the gate and the sweep. The sweep is keyed on liveness and never on ownership, because
   the pane directory is per-*user* and shared across every repository, so another repository's live
   sockets sit beside this daemon's dead ones and must survive.
@@ -204,19 +204,19 @@ already exists would be a new and worse failure mode.
   the wave-3 backstop. That was written when a stuck run was still visibly `working`; once a settled
   turn is distinguishable, silence is actionable evidence rather than an unexplained gap.
 
-## Amendment (2026-08-31, CREW-49)
+## Amendment (2026-08-31)
 
 Wave 2's fold boundary ("the first turn-end at or after the run's start") was too literal. Live
-evidence (CREW-48): the vendor emitted `end_turn` twice for one answer, the first entry's content
-entirely a `thinking` block. CREW-48's own content guard on the turn-boundary detector now excludes
+evidence: the vendor emitted `end_turn` twice for one answer, the first entry's content
+entirely a `thinking` block. A fix's own content guard on the turn-boundary detector now excludes
 that case outright -- a thinking-only entry is not a boundary at all, so it stops being a problem
 here too. But the guard deliberately still admits a turn that ends having produced only *tool*
 activity (a `tool_use` block, no `text`) as a real boundary, since that turn genuinely did end. This
 case is not the one observed live; it is the one the guard's own design leaves reachable, and this
 fold has to handle it on that basis: a run whose first turn is tool-only, with the actual answer
-written in a second turn (reached via CREW-47's resumption paths), would have `run/result` read the
-first, empty boundary and report `resultText: null` for a run that, moments later, plainly has an
-answer.
+written in a second turn (reached via an earlier fix's resumption paths), would have `run/result`
+read the first, empty boundary and report `resultText: null` for a run that, moments later, plainly
+has an answer.
 
 The fold boundary is now **the first turn-end that already has some result text accumulated before
 it**, not the first turn-end outright (`query::run_result_events_op`). A content-free boundary is

@@ -173,7 +173,7 @@ A durable mutation must broadcast the same event it just committed, in the same 
 
 ### A state edge driven by evidence must identify the cause, not merely correlate with it
 
-**Location:** `crates/runtime/src/adapter/run_lifecycle.rs`'s `observe_vendor_activity` (CREW-47)
+**Location:** `crates/runtime/src/adapter/run_lifecycle.rs`'s `observe_vendor_activity`
 
 **The bug:** a run parked at `waitingUser` by a finished turn was resumed to `working` by *any*
 journaled non-exit event, on the premise that "the vendor produced something, so the leader must have
@@ -536,7 +536,7 @@ or `run_state` -- the two fields the guard now owns -- but still carries `run_id
 `protocolUnhealthy`). Ownership and `humanRequired` remain read fields no *decision* write
 mutates, so a losing racer's decision cannot invalidate either pre-check; ownership itself can
 still change between the snapshot read and the guarded write through the unrelated reconcile
-path's task-ownership rebind, an interleaving R70 does not touch. Part XIX's
+path's task-ownership rebind, an interleaving this guard does not touch. Part XIX's
 `AlreadyResolved`/`RunSettled` variants, already generalized with `kind`/`id`/`existing` fields,
 are reused as-is.
 
@@ -544,7 +544,7 @@ are reused as-is.
 is why this entry exists separately: a fix that closes a root cause in one service is not done
 until every sibling implementing the same shape is swept for it. `decide_approval`'s identical
 exposure outlived the policy-violation fix until that fix's own adversarial review swept the
-sibling and registered R70 -- the second instance was found by the first fix's review, not by the
+sibling and found it -- the second instance was found by the first fix's review, not by the
 pattern.
 
 **Regression tests:** `crates/runtime/tests/approval_decide_race.rs` --
@@ -623,7 +623,7 @@ just written, grading its own homework; it always reported unchanged. In both ca
 would have confirmed the promise and running it would not. Assert on observed behavior — a spawn
 count, the previously-committed bytes — never on the code path you believe you took.
 
-A third instance, same shape (CREW-50): `crew_transcript` called `events/replay` through the client's
+A third instance, same shape: `crew_transcript` called `events/replay` through the client's
 generic `request()` path, whose fallback for a method with no registered validator demands a JSON
 *object* — and `events/replay` returns a bare array, so every real call failed validation. The tool's
 own test suite could not see it, because `leader.test.ts` fakes `client.request` itself: the test
@@ -645,7 +645,7 @@ reason.
 
 ### A payload crosses several boundaries, and clearing the one you are thinking about tells you nothing about the others
 
-**Location:** `.github/workflows/auto-commit-dist.yml` (CREW-26)
+**Location:** `.github/workflows/auto-commit-dist.yml`
 
 The auto-commit workflow passed the ~484 KB bundle to `jq` as `--arg distContent "$DIST_B64"`. Two
 people reviewed the size question and both checked it against the *API's* limit — the base64
@@ -662,7 +662,7 @@ not the destination. The fix was `--rawfile`, which bypasses argv entirely.
 
 ### A citation establishes that a mechanism exists, not that your use of it is safe
 
-**Location:** CREW-26's design iterations
+**Location:** `.github/workflows/auto-commit-dist.yml`'s design iterations
 
 That same workflow's design cited GitHub documentation for every claim it made, and the two blocking
 defects that survived to late review — `GITHUB_TOKEN` not retriggering workflow runs, and a
@@ -678,9 +678,10 @@ Sibling of the entry above: same failure, one layer down.
 ### Finding an instance's call site is not the same as enumerating the write's call sites
 
 **Location:** `crates/runtime/src/service/orchestration.rs::message_send`,
-`crates/runtime/src/coordination/broker.rs` (CREW-28, then CREW-33)
+`crates/runtime/src/coordination/broker.rs` — fixed twice in succession, each patch missing a
+different door onto the same table
 
-CREW-28 closed an unredacted message payload by adding redaction at `message/send`, and described
+A fix closed an unredacted message payload by adding redaction at `message/send`, and described
 `INSERT INTO messages` as having a single entry point. It has two: `send_internal`, reached from the
 coordination broker, is the other, and the broker held no redactor at all — so `coordination/askPolicy`
 and `coordination/reportBlocked` kept writing worker-supplied text unredacted after the "fix".
@@ -694,14 +695,14 @@ found. `grep -rn "INSERT INTO <table>"` and then the callers of whatever wraps i
 event-append path. A fix scoped to the call site you happened to find leaves every sibling door open,
 and the next person will reasonably read the fix as having closed the class.
 
-**Postscript — the same author, one layer over, three commits later.** CREW-33 fixed the broker by
-enumerating its *routes*: `requestChild`, `askPolicy`, `reportBlocked`. It missed
+**Postscript — the same author, one layer over, three commits later.** A follow-up fix addressed the
+broker by enumerating its *routes*: `requestChild`, `askPolicy`, `reportBlocked`. It missed
 `coordination/publishArtifact`, which builds its `RunMessage` **directly** rather than funnelling
 through `send`, so it reached `messages.payload` unredacted through a door none of those three
-routes pass. CREW-34 found it only because the compiler demanded a claim once the field was typed.
+routes pass. The gap was found only because the compiler demanded a claim once the field was typed.
 
 The right enumeration was never the routes; it was the constructions — `grep -rn "RunMessage {"`.
-That command had already been run, during CREW-34's own scoping, and its output was read as a
+That command had already been run, during the type-level fix's own scoping, and its output was read as a
 *count* ("11 sites, bounded, fine") rather than as a list to classify one by one. So the lesson
 above is correct and was not enough on its own: **enumerate the constructions of the durable value,
 not the entry points that reach them**, and when a grep answers with a number, the number is not the
@@ -717,7 +718,7 @@ has to be remembered at the moment it applies, and a compile error does not.
 **Locations:** `git merge-base --is-ancestor` under squash-merge; `git diff A B` versus a revert;
 `gh pr checks` field parsing; `grep -c` over a single file
 
-The recurring failure across the CREW-27..34 audit was not code that was wrong. It was *measurements
+The recurring failure across the redaction-audit fixes above was not code that was wrong. It was *measurements
 that looked like proof*. Four worth naming, because each returned a plausible answer to a question
 slightly different from the one asked:
 
@@ -756,8 +757,9 @@ contradiction is the signal, not the noise to be explained away.
 
 ### An instrument you do not read against your own conclusion is not a check
 
-**Locations:** an `Option`-field/`skip_serializing_if` audit script (CREW-46/47 review); a `grep` for
-test functions in `crates/runtime/tests/run_result.rs` (CREW-49 rider review)
+**Locations:** an `Option`-field/`skip_serializing_if` audit script (the allowlist-reason review); a
+`grep` for test functions in `crates/runtime/tests/run_result.rs` (the run/result fold-boundary
+amendment's rider review)
 
 **The bug:** two failures of the same shape, neither of them a bug in the instrument.
 
@@ -787,7 +789,7 @@ instrument broke, and a fallback reached for at that moment inherits none of its
 **Regression tests:** N/A — process lessons. The concrete residue is a duplicate test that is on
 `main` right now (`run_result_stops_at_the_first_boundary_that_carries_text` alongside
 `run_result_reads_up_to_the_first_turn_end_not_a_later_one`, both in `tests/run_result.rs`), with its
-removal riding CREW-51 — the review landed before the retraction did. And
+removal riding a later cleanup fix — the review landed before the retraction did. And
 `an_empty_content_user_entry_is_not_a_real_user_turn`, which exists because the same review's other
 findings were read properly.
 
@@ -800,10 +802,10 @@ findings were read properly.
 Four tests in this suite fail under CPU contention and pass alone. Individually each reads as a flake;
 together they are one mistake made four times — a timing threshold chosen while the machine was quiet.
 
-- The pane-reopen test's connect probe raced a `fork()`ed child holding an inherited fd (CREW-30) —
+- The pane-reopen test's connect probe raced a `fork()`ed child holding an inherited fd —
   proven at 1.13% under fork load, 0% in 40,000 clean iterations.
 - The liveness race test declared `MAX_DURATION: 60s` and ran 52 minutes, because the deadline is
-  checked at the *top* of each iteration and so bounds iterations attempted, not wall clock (CREW-38).
+  checked at the *top* of each iteration and so bounds iterations attempted, not wall clock.
 - The paste test's per-chunk write timeout expired when the mock vendor was starved of CPU: "the
   vendor stopped consuming input 2 of 5 chunks into a 4533 byte prompt". Passes alone in 1.62s.
 - The conformance kill-switch fixture test: flaky under load, clean alone in 7.4s.
@@ -816,7 +818,7 @@ other processes on the box.
 
 ### `any` and `all` disagree on the empty set, and the flip that looks stricter is the one that opens
 
-**Location:** `crates/runtime/src/adapter/tui/claude.rs`'s `is_real_user_turn` (CREW-47 rider)
+**Location:** `crates/runtime/src/adapter/tui/claude.rs`'s `is_real_user_turn`
 
 **The bug:** a predicate deciding whether a vendor transcript entry is a real user turn — and
 therefore whether it may resume a run parked at a finished turn — tested
@@ -839,7 +841,7 @@ thinking about mixed content would have produced.
 
 ### A test's name is a claim, and it is the claim people trust
 
-**Location:** `run_timeout_ack_extend_rearms_nudge_noops_and_abort_cancels` (CREW-40)
+**Location:** `run_timeout_ack_extend_rearms_nudge_noops_and_abort_cancels`
 
 That test asserted `rearmed: true` on a run whose activity clock was never tracked — the harness's fake
 drivers bypass the adapter event pipeline that alone populates it. So the assertion re-exercised the
@@ -852,15 +854,16 @@ changes, the name is part of what has to change — and a name asserting more th
 same defect as a comment asserting more than the code does, in the place people are least likely to
 check.
 
-A second instance, and a harder one to catch, because nothing failed (CREW-49): the test
-`run_result_reads_up_to_the_first_turn_end_not_a_later_one` was accurate when written. CREW-49 then
-changed the fold to read up to the first turn end **that already carries text**, and the two rules
-happen to agree on that test's own fixture — so it kept passing while its name became a description
-of a rule that no longer exists. A test whose name goes stale under a semantics change announces
-nothing: it does not fail, it does not appear in the diff, and the next reader takes the name as the
-current contract. It is being deleted in CREW-51 in favour of the correctly-named replacement, which
-is the right direction — when a rule changes, audit the names of the tests that still pass, not only
-the ones that break.
+A second instance, and a harder one to catch, because nothing failed: the test
+`run_result_reads_up_to_the_first_turn_end_not_a_later_one` was accurate when written. The
+fold-boundary amendment recorded in [ADR-0027](adr/0027-turn-end-settles-a-run.md) then changed the
+fold to read up to the first turn end **that already carries text**, and the two rules happen to
+agree on that test's own fixture — so it kept passing while its name became a description of a rule
+that no longer exists. A test whose name goes stale under a semantics change announces nothing: it
+does not fail, it does not appear in the diff, and the next reader takes the name as the current
+contract. It is being deleted in favour of the correctly-named replacement, which is the right
+direction — when a rule changes, audit the names of the tests that still pass, not only the ones that
+break.
 
 ## Instruments and Their Blind Spots
 
@@ -982,7 +985,7 @@ anything. When a guard needs an exemption, establish first whether the exemption
 whether the guard is looking in the wrong place.
 
 ### Agreement is not verification
-**Location:** `crates/runtime/src/adapter/tui/adapter.rs` (CREW-70)
+**Location:** `crates/runtime/src/adapter/tui/adapter.rs`
 
 A design note argued that bounding a PTY write on progress rather than elapsed time would let a
 starved write survive, "where today it must finish an entire chunk inside the bound". True clause,
@@ -1145,8 +1148,8 @@ before it — and if predicted, say so in its name or its docs.
 This class is not confined to code. A stacked pull request displayed green checks for a workflow that
 never ran on it: the gate was filtered on `pull_request: branches: [main, master]`, and a stack's
 child targets its parent instead. Green ticks for a gate that did not execute are the same failure
-wearing different clothes. (Closed by widening the trigger to all base branches — CREW-22 — but the
-next entry is about why that sentence deserved to be more than a footnote.)
+wearing different clothes. (Closed by widening the trigger to all base branches, but the next entry
+is about why that sentence deserved to be more than a footnote.)
 
 ### A status string is a claim, and needs the same evidence a state edge does
 
@@ -1162,10 +1165,10 @@ reasonably take as measured, and that nothing measured.
 | Artefact | Claimed | Actually | Closed by |
 |---|---|---|---|
 | `pane/reopen`'s result | a live pane | a socket file whose listener was gone | a connect probe, `display::pane_socket::is_live` |
-| `run/submit`'s `result["display"]` | where the pane was placed | the placement *requested*; no consumer anywhere reads it | open when this entry was written (CREW-11) |
-| A stacked PR's green checks | the gate passed | the gate never ran on that base | widening the `pull_request` trigger (CREW-22) |
-| `architecture.md`'s component diagram and list | `config/merge.rs` performs the config merge and fingerprint | the module was not declared in `config/mod.rs` and never compiled | deleting it, and crediting `config/crew.rs` (CREW-23) |
-| `plan.rs`'s own doc comment | its RPCs are unimplemented | they were implemented | correcting the comment (CREW-23) |
+| `run/submit`'s `result["display"]` | where the pane was placed | the placement *requested*; no consumer anywhere reads it | open when this entry was written |
+| A stacked PR's green checks | the gate passed | the gate never ran on that base | widening the `pull_request` trigger |
+| `architecture.md`'s component diagram and list | `config/merge.rs` performs the config merge and fingerprint | the module was not declared in `config/mod.rs` and never compiled | deleting it, and crediting `config/crew.rs` |
+| `plan.rs`'s own doc comment | its RPCs are unimplemented | they were implemented | correcting the comment |
 | The dashboard's `reconnecting…` | a retry that can succeed | the daemon had idle-exited; `EventSource` retries forever and nothing respawns it | counting failures, then naming the real cause |
 
 Two things make this a pattern worth a rule rather than six independent fixes.
@@ -1216,7 +1219,7 @@ across 14 paragraphs, including its "What it does not prevent" section. Across t
 are **25,267 bytes in 207 fields, 21% of the 118 KB schema** — and `validate.ts` imports that schema at
 runtime, so all of it ships in the extension bundle.
 
-That means ADR numbers, ticket IDs and sentences like "the claim became true at CREW-28" are wire
+That means ADR numbers, ticket IDs and sentences like "the claim became true at TICKET-123" are wire
 artifacts, addressed to a reader who has none of that context.
 
 **The lesson:** `///` on a protocol type is consumer-facing API prose; `//` is not lifted, because `///`
@@ -1355,14 +1358,15 @@ moves when the point of the move is to reinstate the original.
 ### Retiring a journaled wire value is three rules, not one
 
 **Location:** `crates/protocol/src/display.rs` — `DisplayBackend::Terminal` (WP9) and
-`DisplayPlacement::Embedded` (CREW-52)
+`DisplayPlacement::Embedded`
 
 **The bug:** WP9 retired the `Terminal` display backend by deleting the enum variant. Nothing else.
 `DisplayBackend` is journaled, so any event log carrying `backend: "terminal"` stops deserializing —
 `events/replay`, crash recovery and `audit export` all fail on it. Nobody noticed because no local
 journal predates WP9; the exposure is entirely other people's data.
 
-CREW-52 was then about to do it again to `DisplayPlacement::Embedded`, whose removal was approved on
+A later retirement effort (see [ADR-0029](adr/0029-placement-follows-the-backend-embedded-deleted.md))
+was then about to do it again to `DisplayPlacement::Embedded`, whose removal was approved on
 the strength of a good argument (no backend implements it — herdr and tmux refuse it, osWindow ignores
 it, `hidden` has no pane to place). `placement` is journaled too, and `"embedded"` was present in the
 maintainer's own default-root journal, not merely in a test fixture.
@@ -1391,7 +1395,7 @@ dropped. Both would otherwise sit in the schema looking equally alive.
 repo's own journals may be discarded, which moots obligation 2 *for us, this once*. That ruling is
 about our data, not about the rule — and obligation 3 survives it untouched.
 
-**Regression tests:** the replay-acceptance tests this rule would normally require are deleted. In PR #87, `DisplayPlacement::Embedded` was removed from both the Rust enum and the protocol schema, and both associated replay tests were deleted along with it. This deletion is justified by the pre-release ruling above (obligation 2 does not apply), and by the fact that no backend ever implemented `Embedded` — it was always a dead enum variant with no user-facing request path. Obligation 3 (request-boundary rejection) is fulfilled: two independent submit paths each parse `displayPreference` with typed rejection. `orchestration.rs:997-1002` and `:1242-1247` both map malformed `displayPreference` to `ServiceError::invalid_params`, so any request carrying `"embedded"` fails at the boundary before reaching business logic. This protects against future changes to one path — both must be closed for the retirement to hold. The code comment at `:994-995` distinguishes this from an unresolvable backend, which yields headless rather than an error. The entry records the rule itself, which remains valid for future retirements of values that *were* genuinely used and user-facing.
+**Regression tests:** the replay-acceptance tests this rule would normally require are deleted. As recorded in [ADR-0029](adr/0029-placement-follows-the-backend-embedded-deleted.md), `DisplayPlacement::Embedded` was removed from both the Rust enum and the protocol schema, and both associated replay tests were deleted along with it. This deletion is justified by the pre-release ruling above (obligation 2 does not apply), and by the fact that no backend ever implemented `Embedded` — it was always a dead enum variant with no user-facing request path. Obligation 3 (request-boundary rejection) is fulfilled: two independent submit paths each parse `displayPreference` with typed rejection. `orchestration.rs:997-1002` and `:1242-1247` both map malformed `displayPreference` to `ServiceError::invalid_params`, so any request carrying `"embedded"` fails at the boundary before reaching business logic. This protects against future changes to one path — both must be closed for the retirement to hold. The code comment at `:994-995` distinguishes this from an unresolvable backend, which yields headless rather than an error. The entry records the rule itself, which remains valid for future retirements of values that *were* genuinely used and user-facing.
 
 ---
 
@@ -1400,7 +1404,6 @@ about our data, not about the rule — and obligation 3 survives it untouched.
 ### A default trait-method body is permission to say nothing, and in a wrapper chain silence is wrong
 
 **Location:** `crates/runtime/src/adapter/event_sink.rs`'s `AdapterEventSink::note_real_user_turn`
-(CREW-47, and its rider)
 
 **The bug:** a new out-of-band signal was added to the sink trait with a default no-op body, so
 existing implementors would keep compiling. Production wraps them:
@@ -1457,7 +1460,7 @@ happens, whether its evidence still holds -- not inferring compilation success. 
 retargeted test, run it deliberately unfixed first (only the mechanical change applied) to observe
 the *actual* failure, exactly as this session did here: the panic's message named precisely which
 assertion had gone stale, which is what made the real fix (in `crates/runtime/src/conformance/report.rs`'s
-unit-level R68 proof and this file's rewritten assertions) targeted rather than guessed at. The same
+unit-level proof and this file's rewritten assertions) targeted rather than guessed at. The same
 methodology already used throughout this codebase's regression tests ("verify by breaking it") applies
 just as much to fixing an existing test as to writing a new one.
 
@@ -1472,10 +1475,11 @@ production code path a test can pin. The corrected test itself
 
 **Location:** `crates/runtime/tests/run_result.rs` —
 `run_result_reads_an_answer_that_follows_a_content_free_boundary` and
-`run_result_reads_up_to_the_first_turn_end_not_a_later_one` (CREW-49)
+`run_result_reads_up_to_the_first_turn_end_not_a_later_one`
 
-**The bug:** CREW-49 changed `run/result`'s fold boundary from "the first turn-end" to "the first
-turn-end that already has result text accumulated before it". Two tests cover it and neither is
+**The bug:** [ADR-0027](adr/0027-turn-end-settles-a-run.md)'s amendment changed `run/result`'s fold
+boundary from "the first turn-end" to "the first turn-end that already has result text accumulated
+before it". Two tests cover it and neither is
 sufficient alone, which is the point. The new test — text arriving after a content-free boundary is
 still returned — **distinguishes** the new behaviour from the old: it fails on the pre-change code.
 The older test — text A, boundary, text B, boundary, expect A — **preserves** the property the
@@ -1485,19 +1489,20 @@ reading later turns and rewriting an answer the leader has already read. Ship on
 original bug returns untouched.
 
 **If you are writing about this failure, get the evidence right — two people have already got it
-wrong.** The case observed live was a *thinking-only* `end_turn` entry, and CREW-48's content guard
-now excludes that outright, so CREW-48 alone fixes the session that started this. CREW-49 exists for
-the *tool-use-only* boundary, which the guard deliberately still admits: reachable by design, never
-observed. The two were transposed once in the ADR itself and then again, hours after the correction,
-in an unrelated document by a different author working from the same evidence. That recurrence is why
-this paragraph exists: the authority is ADR-0027's CREW-49 amendment, which states which case is
-observed and which is inferred — read it before describing this failure, and do not reconstruct it
-from a commit message or from here.
+wrong.** The case observed live was a *thinking-only* `end_turn` entry, and the turn-boundary
+detector's content guard now excludes that outright, so that guard alone fixes the session that
+started this. The fold-boundary amendment exists for the *tool-use-only* boundary, which the guard
+deliberately still admits: reachable by design, never observed. The two were transposed once in the
+ADR itself and then again, hours after the correction, in an unrelated document by a different author
+working from the same evidence. That recurrence is why this paragraph exists: the authority is
+[ADR-0027](adr/0027-turn-end-settles-a-run.md)'s amendment, which states which case is observed and
+which is inferred — read it before describing this failure, and do not reconstruct it from a commit
+message or from here.
 
 A review of that change asked for the preservation test as though it were missing; it had been on
 `main` for weeks, and the grep behind the claim had failed (see "An instrument you do not read
 against your own conclusion is not a check"). The requested duplicate was written and merged before
-the retraction caught up, so both now sit on `main` and CREW-51 removes one. Which one is the
+the retraction caught up, so both now sit on `main` and a later cleanup removes one. Which one is the
 instructive part: the older name asserts the pre-change rule ("up to the first turn end"), so it is
 the one being deleted, and the newer, accurately-named test survives as the preservation guard.
 
@@ -1516,13 +1521,15 @@ compilation — the negative alone is weak evidence, and so is the positive.
 
 ### Changing a doc comment's sigil is a test-suite edit when that comment holds a code fence
 
-**Location:** `crates/protocol/src/event.rs` (`Redacted`, now `RedactedBoundaryDoctests`) -- CREW-45
+**Location:** `crates/protocol/src/event.rs` (`Redacted`, now `RedactedBoundaryDoctests`)
 
-**The bug:** CREW-45 moved maintainer-facing history out of protocol doc comments, because
+**The bug:** [ADR-0035](adr/0035-protocol-doc-comment-sigil-split.md)'s sigil split moved
+maintainer-facing history out of protocol doc comments, because
 `schemars` lifts a `///` comment verbatim into `crew.schema.json`'s `description` while a `//`
 comment desugars to nothing a derive macro can see. `Redacted`'s doc comment was the largest such
 block at 3,386 bytes -- and buried in it, below four sections of prose, sat the `compile_fail` /
-positive doctest pair written by CREW-29 as the executable proof that a bare `String` cannot
+positive doctest pair written when the `Redacted` type was introduced, as the executable proof that
+a bare `String` cannot
 populate a caller-carrying field. Moving the block wholesale to `//`, which is what the change was
 mechanically *about*, would have deleted both tests. Not disabled them, not failed them: a doctest
 only runs from a `///`, `//!` or `#[doc]` comment, so under `//` the code fences become ordinary
@@ -1548,7 +1555,7 @@ changing, or its file changing, or anything going red.
 **Regression tests:** The rescued pair itself, on `RedactedBoundaryDoctests` in
 `crates/protocol/src/event.rs` -- one `compile_fail`, one positive, verified as the same two tests
 before and after the move rather than assumed. `schema_compatibility_passes_against_the_committed_schema`
-covers the other half of CREW-45 (that the shipped descriptions actually changed).
+covers the other half of the sigil split (that the shipped descriptions actually changed).
 
 ---
 
@@ -1650,8 +1657,7 @@ claims, with its own tests); the transferable practice is the takeaway.
 
 ### A byte-exact fixture is not text, and git will rewrite it
 
-**Location:** `fixtures/adapters/tui-screens/` and the repository's `.gitattributes` (CREW-79
-slice 1)
+**Location:** `fixtures/adapters/tui-screens/` and the repository's `.gitattributes`
 
 **The bug:** The first `git add` of the vendor TUI screen captures printed
 `warning: ... CRLF will be replaced by LF the next time Git touches it`. These files are

@@ -124,5 +124,5 @@ comment sigil that no longer executes it.
   [ADR-0006](0006-type-enforced-redaction-boundary.md) (the same "a convention nobody's build
   enforces eventually fails" reasoning, applied there to redaction and here to doc comments)
 * The lowercase-property-name gap this ADR states above (a snake_case field name whose camelCase
-  wire form is a property somewhere, resolving as out of scope rather than as a leak) is CREW-75,
-  closed by a fourth resolution case in the same sibling-property check.
+  wire form is a property somewhere, resolving as out of scope rather than as a leak) was closed
+  by a fourth resolution case added to the same sibling-property check.

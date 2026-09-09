@@ -458,7 +458,7 @@ free to exercise (no model call, just `crew_profile` calls):
 
 | You call `crew_profile` with... | Resolves to | What you see |
 |---|---|---|
-| An id already exact in the catalogue, e.g. `claude-opus-5` | Itself | Registered silently — no note, nothing persisted differently from before CREW-53 |
+| An id already exact in the catalogue, e.g. `claude-opus-5` | Itself | Registered silently — no note, nothing persisted differently from before model resolution was added ([ADR-0032](adr/0032-model-names-are-resolved-and-persisted-on-confirmation.md)) |
 | A vendor alias, e.g. `haiku` for `claude` | `claude-haiku-4-5` | `model: claude-haiku-4-5 (resolved "haiku" via claude's own alias table)` |
 | A shorthand matching exactly one catalogue id, e.g. `sol` for `codex` | `gpt-5.6-sol` | `model: gpt-5.6-sol (resolved "sol" -- the only openai-codex model matching it)` |
 | A shorthand matching **several** catalogue ids | Nothing — refused | `"<input>" matches N models for adapter <adapter>: <id>, <id>, ... -- name one of them exactly.` (a typed `model-ambiguous` error; nothing is registered or persisted) |
@@ -471,11 +471,12 @@ verify) — see the doc comment on `VENDOR_ALIASES` in `models.ts` before assumi
 entry for some other shorthand.
 
 **Persistence follows verification, not success.** An `exact`, `alias`, or `match` resolution is
-confirmed and gets written to `.omp/crew.json` on first use, same as before CREW-53. An
-`unverified` name runs (the vendor gets the final say) but is deliberately **not** recorded — pass
-it again next session, or add it to `.omp/crew.json` yourself once a run has proven it works.
+confirmed and gets written to `.omp/crew.json` on first use, same as before model resolution was
+added. An `unverified` name runs (the vendor gets the final say) but is deliberately **not**
+recorded — pass it again next session, or add it to `.omp/crew.json` yourself once a run has proven
+it works.
 
-CREW-8's conflict check still applies, but now compares canonical ids, not raw spelling — a stored
+The existing conflict check still applies, but now compares canonical ids, not raw spelling — a stored
 `claude-opus-5` and an explicit `opus` are recognized as the same model and accepted as a no-op,
 not refused. A request that resolves to a genuinely *different* model than the one stored is still
 refused with the same typed error as before:
@@ -1007,19 +1008,19 @@ Checks:
   any §7 run, usage and cost figures populate from `adapterUsageReported` events. The journaled
   prompt is *not* shown on the dashboard today (that column is future work) — read it via
   `/crew run <runId>` or an audit export instead.
-- **Known adapters show their real vendor mark (CREW-55).** `claude`, `codex`, `copilot`, and
+- **Known adapters show their real vendor mark.** `claude`, `codex`, `copilot`, and
   `omp`/`ompRpc` each render an inline vendor logo in the run/worker table instead of the plain
   BRAND.md colour cell; an adapter with no supplied mark (or a run whose worker row is missing, so
-  its adapter can't be proven) falls back to the neutral colour cell exactly as before CREW-55 —
+  its adapter can't be proven) falls back to the neutral colour cell exactly as before this feature —
   that fallback is correct, not a regression (`crates/runtime/src/dashboard/page.rs::markOf`,
   `LOGOS`).
-- **Reload or reconnect now shows history immediately (CREW-54/56).** Open the dashboard (or kill
+- **Reload or reconnect now shows history immediately.** Open the dashboard (or kill
   and restart your connection) *after* runs already exist, with nothing new happening: every
   already-committed run/event appears right away, replayed from the journal — before this fix, a
   viewer connecting after the fact saw an empty feed until the *next* live mutation. A brief
   network blip that reconnects the `EventSource` must not duplicate any row already shown (the
   client tracks rendered sequences and skips a replay/live duplicate of the same event).
-- **A stale dashboard token after a daemon restart says so, and stops retrying (CREW-62).**
+- **A stale dashboard token after a daemon restart says so, and stops retrying.**
   Restart the daemon (`crewd stop --repo "$PWD"` then let `/crew health` respawn it) without
   reloading the already-open dashboard page: the live indicator changes to **"dashboard link
   expired"** (title text names `/crew health` as the fix), not the generic "daemon not running" —
