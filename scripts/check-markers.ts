@@ -79,6 +79,19 @@ export const RULES: readonly Rule[] = [
   // anchor in prose is excluded too. Measured identical, repo-wide, to a
   // lookbehind pair excluding `](` and `.md`; this form is the shorter one.
   { name: "bare pull-request number", pattern: /#[0-9]{1,4}(?![-\w])/ },
+  // A section of a design document that is not in this repository. The bare
+  // section mark is NOT the rule: `§[0-9]` alone matches about a hundred
+  // legitimate in-repo cross-references -- a walkthrough citing its own
+  // sections, a checklist citing `docs/manual-testing.md` §8 -- and a guard
+  // that flags a hundred correct references gets weakened, which is how
+  // dangling citations survived this long. The word before it is what makes
+  // it dangling, so the word is in the pattern.
+  //
+  // `[\s\\]*` rather than `\s*` because the real occurrences were split by a
+  // Rust string continuation: a space, a BACKSLASH, a newline, indentation.
+  // A pattern without the backslash misses exactly the sites a line-oriented
+  // hand count already missed.
+  { name: "external spec citation", pattern: /spec[\s\\]*§/ },
 ];
 
 /**
@@ -128,17 +141,56 @@ export type Finding = {
   readonly rule: string;
 };
 
-/** Every marker in `text`, with 1-based line numbers. */
+/**
+ * Every marker in `text`, with 1-based line numbers.
+ *
+ * Scans the **whole file at once**, not line by line, and derives each line
+ * number from the match offset. That is not a refactor: a marker can be split
+ * across source lines, and a line-by-line scanner cannot see one that is. The
+ * case that proved it was a Rust string continuation --
+ *
+ *     "... retired in crew v2 (spec \\
+ *      §4.6) -- the headless control plane ..."
+ *
+ * -- where a hand count using a line-oriented grep found 12 sites and the
+ * real number was 18. The characters between `spec` and the section mark are
+ * a space, a backslash, a newline and indentation, so a pattern that means to
+ * catch this has to tolerate all four; see the section-citation rule above.
+ *
+ * The residual limitation, stated rather than left to be discovered: a marker
+ * split *mid-token* (`CREW-` ending one line, `79` starting the next) is
+ * still invisible, and deliberately so. Catching it would mean allowing
+ * whitespace inside every token, which would match far more than it caught.
+ */
 export function scanText(text: string, file: string): Finding[] {
   const findings: Finding[] = [];
-  const lines = text.split("\n");
-  for (const [index, line] of lines.entries()) {
-    for (const rule of RULES) {
-      // A fresh global clone per line: see RULES' own comment on lastIndex.
-      const scanner = new RegExp(rule.pattern.source, "g");
-      for (const match of line.matchAll(scanner)) {
-        findings.push({ file, line: index + 1, token: match[0], rule: rule.name });
-      }
+  // Line starts, for turning a match offset into a line number without
+  // re-scanning the text once per match.
+  const lineStarts: number[] = [0];
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === "\n") lineStarts.push(i + 1);
+  }
+  const lineOf = (offset: number): number => {
+    let lo = 0;
+    let hi = lineStarts.length - 1;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if ((lineStarts[mid] ?? 0) <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1;
+  };
+
+  for (const rule of RULES) {
+    // A fresh global clone per rule: see RULES' own comment on lastIndex.
+    const scanner = new RegExp(rule.pattern.source, "g");
+    for (const match of text.matchAll(scanner)) {
+      findings.push({
+        file,
+        line: lineOf(match.index ?? 0),
+        token: match[0].replace(/\s+/g, " "),
+        rule: rule.name,
+      });
     }
   }
   return findings;

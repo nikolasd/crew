@@ -22,6 +22,7 @@ describe("positive control: every rule catches its own marker", () => {
     ["review sub-finding", "// GREEN guard for the W2 finding", "W2"],
     ["work-package label", "// retired by gap-closure WP-C", "WP-C"],
     ["bare pull-request number", "// shipped since #88", "#88"],
+    ["external spec citation", "// retired in crew v2 (spec §4.6)", "spec §"],
   ];
 
   for (const [rule, text, token] of mustCatch) {
@@ -64,6 +65,24 @@ describe("the two pattern decisions that were measured, not guessed", () => {
   });
 });
 
+describe("the multi-line case a line-oriented scan cannot see", () => {
+  test("a citation split by a Rust string continuation is still caught", () => {
+    // The real occurrence, verbatim: a hand count using a line-oriented grep
+    // reported 12 sites where there were 18, because the characters between
+    // `spec` and the section mark are a space, a backslash, a newline and
+    // indentation -- and `\\s*` alone does not cover a backslash.
+    const source = '"... which is retired in crew v2 (spec \\\n         §4.6) -- the headless ..."';
+    const found = scanText(source, "registry.rs");
+    expect(found.map((f) => f.rule)).toContain("external spec citation");
+  });
+
+  test("the line number reported is where the marker starts", () => {
+    const found = scanText("clean\nalso clean\n// spec §4.6 here", "a.rs");
+    expect(found).toHaveLength(1);
+    expect(found[0]?.line).toBe(3);
+  });
+});
+
 describe("negative controls: things that must never be flagged", () => {
   test("hex colours are not pull-request numbers", () => {
     const text = 'fill="#0d0d0d" and `#f74fcc` and `#161826` and `#10a37f`';
@@ -92,6 +111,13 @@ describe("negative controls: things that must never be flagged", () => {
     // the rule exists for.
     const mixed = "Landed in #134; see [the section](#6-when-something-breaks).";
     expect(scanText(mixed, "docs.md").map((f) => f.token)).toEqual(["#134"]);
+  });
+
+  test("an in-repo section reference is not an external spec citation", () => {
+    // ~100 of these exist and every one is correct: the section mark is never
+    // the defect, the document being sectioned is.
+    const text = "See `docs/manual-testing.md` §8 and §3 of the walkthrough.";
+    expect(scanText(text, "a.md")).toEqual([]);
   });
 
   test("a longer identifier is not a marker", () => {
