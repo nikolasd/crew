@@ -4,8 +4,8 @@
 //!
 //! Wire-facing result shapes only: the actual propose/decide/get/timeoutAck
 //! orchestration implementation lives in `crate::service::orchestration`
-//! (WP17 landed `plan/*`, WP21 added `run/timeoutAck`). The methods are
-//! fully implemented and reachable via the daemon's JSON-RPC interface.
+//! The methods are fully implemented and reachable via the daemon's
+//! JSON-RPC interface.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
