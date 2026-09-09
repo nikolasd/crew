@@ -181,8 +181,8 @@ pub enum RegistryError {
     )]
     LiveSessionCapReached { cap: usize, live: usize },
     /// `mode: "headless"` was requested for a reserved adapter kind after
-    /// the headless control plane's retirement (spec §4.6: crew v2 is
-    /// TUI-only; `docs/adr/0026-headless-retirement.md`). This is
+    /// the headless control plane's retirement (crew v2 is TUI-only;
+    /// `docs/adr/0026-headless-retirement.md`). This is
     /// distinct from [`Self::TuiModeUnavailable`]: that one names a
     /// specific kind's TUI vendor gap (temporary, closes as vendors land
     /// TUI support); this one names a permanently retired control plane
@@ -194,8 +194,8 @@ pub enum RegistryError {
     /// recovery resume (`AdapterRegistry::resume_run`) -- the shared
     /// pre-flight both paths run through.
     #[error(
-        "adapter {0} was requested with mode: \"headless\", which is retired in crew v2 (spec \
-         §4.6) -- the headless control plane has no adapter implementation to dispatch to; use \
+        "adapter {0} was requested with mode: \"headless\", which is retired in crew v2 -- the \
+         headless control plane has no adapter implementation to dispatch to; use \
          mode: \"tui\""
     )]
     HeadlessControlPlaneRetired(String),
