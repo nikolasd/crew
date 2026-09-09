@@ -52,7 +52,9 @@ use crate::display::{
 };
 use crate::supervisor::{EscalationTimings, PtyProcess, SupervisorError};
 
+use super::classify::Surface;
 use super::discovery::{DiscoveryError, find_transcript_by_nonce};
+use super::grid::TerminalGrid;
 use super::input::{PASTE_CHUNK_BYTES, paste_chunks};
 use super::tailer::{TailerHandle, TranscriptTailer};
 use super::verify::{PromptVerdict, verify_recorded_prompt};
@@ -206,6 +208,23 @@ pub trait TuiVendor: Send + Sync + 'static {
         _timings: &TuiTimings,
     ) -> AdapterFuture<'_, ()> {
         Box::pin(async { Ok(()) })
+    }
+
+    /// Classifies what this vendor's TUI is currently showing, from a
+    /// [`TerminalGrid`] built from the bytes it has written to the PTY
+    /// since spawn. Pure, like every other method here: no process spawn,
+    /// no I/O -- the grid is already built, this only reads it.
+    ///
+    /// `None` means this vendor has no real predicate yet: [`wait_for_readiness`]
+    /// falls back to its legacy behavior for it (any output means
+    /// ready, no gate can be recognized), rather than fail-closing on a
+    /// vendor this slice was never asked to cover. This is a DIFFERENT
+    /// claim from [`Surface::Undecided`], which a real classifier (claude,
+    /// codex) returns when the screen genuinely matches no known gate or
+    /// prompt yet -- conflating the two would fail-close every copilot/omp
+    /// start the day this default stops being overridden for them too.
+    fn classify_surface(&self, _grid: &TerminalGrid) -> Option<Surface> {
+        None
     }
 }
 
@@ -962,6 +981,33 @@ impl<V: TuiVendor> TuiAdapter<V> {
             });
         }
 
+        // Fed independently of `readiness_rx`, mirroring `last_output`'s
+        // own subscription above: this is the grid `wait_for_readiness`
+        // polls, and it must keep accumulating through phase 2's Enter
+        // wait too (the re-check there needs the CURRENT surface, not a
+        // stale one from readiness time -- codex's gate can paint after
+        // its composer, strictly after readiness already concluded
+        // `PromptReady`), so its lifetime spans this whole function, not
+        // just the call to `wait_for_readiness`.
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        {
+            let mut grid_rx = pty.subscribe_output();
+            let grid = Arc::clone(&grid);
+            tokio::spawn(async move {
+                loop {
+                    match grid_rx.recv().await {
+                        Ok(bytes) => {
+                            grid.lock()
+                                .expect("terminal-grid mutex never poisoned")
+                                .push(&bytes);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
         emit(
             &sink,
             run_id,
@@ -1071,6 +1117,8 @@ impl<V: TuiVendor> TuiAdapter<V> {
         if let Err(err) = wait_for_readiness(
             &mut readiness_rx,
             self.kind(),
+            self.vendor.as_ref(),
+            &grid,
             self.timings.readiness_quiet,
             self.timings.readiness_cap,
             &pty,
@@ -1099,9 +1147,58 @@ impl<V: TuiVendor> TuiAdapter<V> {
             {
                 tracing::debug!(kind = self.kind(), "{err}");
             }
-            // A write failure here means the worker already exited; the exit
-            // watcher owns reporting that -- nothing useful to add.
-            let _ = pty.write_input(enter).await;
+            // The Enter precondition: re-classify in this SAME idle
+            // window (`wait_for_output_idle` above waits up to
+            // `submit_idle`/`ENTER_IDLE_CAP`, ample time for a late gate
+            // to appear), never reuse the readiness-time classification --
+            // see `enter_precondition`'s own doc comment for why.
+            let precondition = {
+                let g = grid.lock().expect("terminal-grid mutex never poisoned");
+                enter_precondition(self.vendor.as_ref(), &g)
+            };
+            match precondition {
+                EnterPrecondition::Proceed => {
+                    // A write failure here means the worker already exited;
+                    // the exit watcher owns reporting that -- nothing
+                    // useful to add.
+                    let _ = pty.write_input(enter).await;
+                }
+                EnterPrecondition::Blocked(surface) => {
+                    // Withholding the Enter must fail the run, not just
+                    // skip a step: the prompt is already pasted, so the
+                    // run cannot progress either way, and a run that
+                    // silently withholds and then waits out
+                    // `discovery_timeout` reads as an unrelated hang, not
+                    // as this decision. Same shape as the readiness-path
+                    // failure above, naming the actual variant seen.
+                    let detail = match surface {
+                        Surface::Gate(gate) => format!(
+                            "a first-run gate appeared after the prompt was pasted ({gate:?}) -- \
+                             withholding the submit byte rather than confirming into it; answer \
+                             it by hand once in this workspace outside crew, then retry"
+                        ),
+                        Surface::Undecided => "the surface became unreadable after the prompt \
+                                                was pasted -- withholding the submit byte rather \
+                                                than confirming into an unrecognized screen"
+                            .to_string(),
+                        Surface::PromptReady => {
+                            unreachable!("EnterPrecondition::Proceed handles PromptReady")
+                        }
+                    };
+                    return self
+                        .fail_start(
+                            pty,
+                            attach,
+                            pane_outcome,
+                            sink,
+                            run_id,
+                            task_id,
+                            worker_id,
+                            AdapterError::process(self.kind(), "start", detail),
+                        )
+                        .await;
+                }
+            }
         }
 
         // A resume with an already-known transcript path (e.g. from a
@@ -1564,17 +1661,70 @@ async fn emit_tui_event(
     }
 }
 
-/// Waits for the PTY's first output, then for `quiet` with no further
-/// output, bounded overall by `cap`. If `quiet` is never reached before
-/// `cap` elapses, returns `Ok(())` anyway (proceeding on a chatty CLI
-/// rather than failing the run outright); a closed output channel before
-/// any output arrived (the process died immediately) is reported as an
-/// error. `rx` must already be subscribed *before* this is called --
-/// see the caller's own comment on why it is captured immediately after
-/// spawn rather than here.
+/// The outcome of re-checking, at Enter time, whether the submit byte
+/// should still be delivered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnterPrecondition {
+    /// Deliver the Enter: `PromptReady`, or a vendor with no real
+    /// predicate (`classify_surface` returned `None`) keeping its
+    /// unconditional legacy behavior.
+    Proceed,
+    /// Withhold it. Carries the classification that caused this, so the
+    /// caller can name the actual reason rather than guessing at it --
+    /// `Gate` and `Undecided` are different facts about the world and
+    /// read differently to whoever debugs the failure.
+    Blocked(Surface),
+}
+
+/// Classifies `grid`'s CURRENT state through `vendor` to decide whether
+/// the Enter byte should still be delivered -- never the classification
+/// `wait_for_readiness` reached earlier. That re-check is required, not
+/// belt-and-braces: a vendor whose first-run gate paints strictly after
+/// its own composer (observed live on codex) can classify as
+/// `PromptReady` at readiness time and `Gate` by the time the submit
+/// byte is due, since the caller waits for output to go quiet in
+/// between -- exactly the window a late gate has to appear in.
+///
+/// A withheld Enter must fail the run, not merely skip a step: the
+/// prompt has already been pasted, so the run cannot progress either
+/// way, and a typed failure naming what was seen is diagnosable in one
+/// line where a silent skip looks like an unrelated hang until whoever
+/// is debugging it reads the wrong subsystem first.
+fn enter_precondition(vendor: &dyn TuiVendor, grid: &TerminalGrid) -> EnterPrecondition {
+    match vendor.classify_surface(grid) {
+        None | Some(Surface::PromptReady) => EnterPrecondition::Proceed,
+        Some(other) => EnterPrecondition::Blocked(other),
+    }
+}
+
+/// Waits for the PTY's first output, then polls `vendor.classify_surface`
+/// on `grid` (which a caller-owned background task keeps fed from the
+/// same broadcast stream `rx` subscribes to) until the surface is
+/// decided, bounded overall by `cap`. `rx` must already be subscribed
+/// *before* this is called -- see the caller's own comment on why it is
+/// captured immediately after spawn rather than here.
+///
+/// A vendor with no real predicate yet (`classify_surface` returns
+/// `None`) keeps the exact legacy behavior: first output means
+/// ready, paste immediately, no gate can be recognized for it. A vendor
+/// with a real predicate (claude, codex) instead:
+///
+/// - `PromptReady` -- proceed to paste, same as the legacy path.
+/// - `Gate(kind)` -- **never paste, never Enter.** A typed start failure
+///   naming the gate, honest about what crew saw rather than silently
+///   treating a blocked dialog as ready. (The park-and-escalate behavior
+///   this eventually becomes is later work; this slice's job is only to
+///   stop writing into a gate, not to resume past one.)
+/// - `Undecided` -- keep polling until `cap`, then a typed start failure
+///   naming that nothing was ever positively identified. Fail closed:
+///   a surface this module cannot read is exactly the failure mode this
+///   whole design exists to prevent, not a case to guess through.
+#[allow(clippy::too_many_arguments)]
 async fn wait_for_readiness(
     rx: &mut broadcast::Receiver<Vec<u8>>,
     kind: &str,
+    vendor: &dyn TuiVendor,
+    grid: &StdMutex<TerminalGrid>,
     quiet: Duration,
     cap: Duration,
     pty: &Arc<PtyProcess>,
@@ -1584,7 +1734,9 @@ async fn wait_for_readiness(
     let deadline = tokio::time::Instant::now() + cap;
 
     // Wait for the first output (a single check, not a loop: every
-    // outcome below either proceeds past this point or returns).
+    // outcome below either proceeds past this point or returns). This
+    // only proves the vendor's stdin is wired at all -- classify_surface
+    // has nothing to read before this, since the grid is still empty.
     let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
     if remaining.is_zero() {
         return Err(AdapterError::process(
@@ -1594,29 +1746,7 @@ async fn wait_for_readiness(
         ));
     }
     match tokio::time::timeout(remaining, rx.recv()).await {
-        Ok(Ok(_)) | Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
-            // First output appeared: the vendor's stdin is wired. Hold
-            // until the spawn-anchored floor, then deliver the prompt text.
-            // Deliberately WITHOUT the submit byte: a CR sent here can be
-            // swallowed by the render loop mid-layout. The Enter itself is
-            // delivered by the caller once the PTY has gone quiet (see the
-            // phase-2 block in `run_pipeline`) -- an idle TUI processes it
-            // exactly like a human's keystroke, with no timing assumption
-            // about startup speed at all.
-            if tokio::time::Instant::now() < not_before {
-                tokio::time::sleep_until(not_before).await;
-            }
-            if let Some(injection) = inject
-                && let Err(err) =
-                    write_paste(pty, kind, "start", injection.text, injection.write_timeout).await
-            {
-                return Err(AdapterError::process(
-                    kind,
-                    "start",
-                    format!("initial prompt injection failed: {err}"),
-                ));
-            }
-        }
+        Ok(Ok(_)) | Ok(Err(broadcast::error::RecvError::Lagged(_))) => {}
         Ok(Err(broadcast::error::RecvError::Closed)) => {
             return Err(AdapterError::process(
                 kind,
@@ -1632,7 +1762,123 @@ async fn wait_for_readiness(
             ));
         }
     }
+    // Hold until the spawn-anchored floor before reading the surface or
+    // typing anything: a vendor mid-launch has not painted its real
+    // screen yet, and INJECT_MIN_DELAY exists precisely so text is not
+    // typed into that window either.
+    if tokio::time::Instant::now() < not_before {
+        tokio::time::sleep_until(not_before).await;
+    }
 
+    loop {
+        let classified = {
+            let g = grid.lock().expect("terminal-grid mutex never poisoned");
+            vendor.classify_surface(&g)
+        };
+        match classified {
+            None | Some(Surface::PromptReady) => break,
+            Some(Surface::Gate(gate)) => {
+                return Err(AdapterError::process(
+                    kind,
+                    "start",
+                    format!(
+                        "a first-run gate is blocking the run ({gate:?}) -- answer it by hand \
+                         once in this workspace outside crew, then retry"
+                    ),
+                ));
+            }
+            Some(Surface::Undecided) => {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err(AdapterError::process(
+                        kind,
+                        "start",
+                        "no recognizable prompt or first-run gate appeared before the readiness \
+                         cap elapsed",
+                    ));
+                }
+                // Raced against `pty.exit_watcher()`, not detected via
+                // the output channel closing: a broadcast `Receiver`
+                // only reports `Closed` once every `Sender` is dropped,
+                // which is tied to the PTY's own reader task noticing
+                // EOF/EIO -- verified directly (a double that exits
+                // clean after printing output left its channel open well
+                // past several seconds, with no explicit `terminate()`
+                // in between) that this does not happen promptly, or
+                // perhaps ever, from a bare process exit on its own.
+                // `exit_watcher()` is this codebase's own authoritative
+                // signal (backed by the reaper thread's real `wait()`),
+                // already used everywhere else a caller needs to know a
+                // vendor process died -- resolving immediately if the
+                // process had already exited before this call, and
+                // whenever the reaper next observes it otherwise.
+                tokio::select! {
+                    biased;
+                    _ = pty.exit_watcher() => {
+                        let classified = {
+                            let g = grid.lock().expect("terminal-grid mutex never poisoned");
+                            vendor.classify_surface(&g)
+                        };
+                        return Err(match classified {
+                            Some(Surface::Gate(gate)) => AdapterError::process(
+                                kind,
+                                "start",
+                                format!(
+                                    "the worker process exited while a first-run gate was \
+                                     blocking the run ({gate:?})"
+                                ),
+                            ),
+                            _ => AdapterError::process(
+                                kind,
+                                "start",
+                                "the worker process exited before a recognizable surface \
+                                 appeared",
+                            ),
+                        });
+                    }
+                    // A per-tick receive timeout, or any `rx` outcome
+                    // other than a still-hypothetical channel close, is a
+                    // pacing wake-up, not itself a failure: it means no
+                    // NEW bytes arrived in this window, not that the
+                    // grid is empty or will stay Undecided forever (a
+                    // vendor's whole first paint can arrive as one
+                    // burst, entirely consumed by the earlier "wait for
+                    // first output" check above, with nothing further
+                    // ever coming until the process eventually exits or
+                    // writes again). Either way, loop back and re-check
+                    // classify_surface on the grid a background task
+                    // keeps feeding independently of this `rx` --
+                    // `remaining.is_zero()` above is the only real
+                    // deadline enforcement here, alongside
+                    // `exit_watcher()` above as the real exit signal.
+                    _ = tokio::time::timeout(quiet.min(remaining), rx.recv()) => {}
+                }
+                continue;
+            }
+        }
+    }
+
+    // Deliberately WITHOUT the submit byte: a CR sent here can be
+    // swallowed by the render loop mid-layout. The Enter itself is
+    // delivered by the caller once the PTY has gone quiet (see the
+    // phase-2 block in `run_pipeline`) -- an idle TUI processes it
+    // exactly like a human's keystroke, with no timing assumption about
+    // startup speed at all.
+    if let Some(injection) = inject
+        && let Err(err) =
+            write_paste(pty, kind, "start", injection.text, injection.write_timeout).await
+    {
+        return Err(AdapterError::process(
+            kind,
+            "start",
+            format!("initial prompt injection failed: {err}"),
+        ));
+    }
+
+    // Let the paste settle. This loop's shape predates classify_surface
+    // and is kept as a courtesy pause after the write -- the Enter-time
+    // re-check in `run_pipeline`'s phase 2 is what actually gates the
+    // submit byte now, not this.
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
@@ -2176,6 +2422,7 @@ mod tests {
 
     use crew_protocol::{Classified, ContentClass};
 
+    use super::super::classify::GateKind;
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -2614,6 +2861,409 @@ mod tests {
         assert_eq!(
             verify_recorded_prompt(&transcript, format.as_ref(), &injected, nonce),
             PromptVerdict::Intact
+        );
+    }
+
+    // -------------------------------------------- the Enter precondition
+
+    fn fixture(name: &str) -> Vec<u8> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/adapters/tui-screens")
+            .join(name);
+        std::fs::read(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+    }
+
+    fn grid_from(name: &str) -> TerminalGrid {
+        let mut grid = TerminalGrid::new();
+        grid.push(&fixture(name));
+        grid
+    }
+
+    /// The whole point of re-checking at Enter time rather than reusing
+    /// the readiness-time classification: a grid whose CURRENT state is a
+    /// gate must never let the Enter through, regardless of what led up
+    /// to it -- a late-appearing gate classifies identically to one that
+    /// was there from the start, which is exactly what makes this a
+    /// pure function of current state rather than a state machine that
+    /// could latch a stale "was ready" flag.
+    #[test]
+    fn enter_precondition_blocks_once_a_gate_is_on_the_current_screen() {
+        use crate::adapter::tui::{ClaudeTuiVendor, CodexTuiVendor};
+
+        let claude = ClaudeTuiVendor::new(PathBuf::from("/w"), vec![]);
+        assert_eq!(
+            enter_precondition(&claude, &grid_from("claude-workspace-trust.raw")),
+            EnterPrecondition::Blocked(Surface::Gate(GateKind::ClaudeWorkspaceTrust)),
+            "a claude gate on screen must withhold the Enter, naming that gate"
+        );
+
+        // codex-composer-then-trust.raw, not codex-directory-trust.raw:
+        // the latter's own FINAL state has moved on past its gate to
+        // codex's ordinary startup output (established in slice 2's
+        // `codex_directory_trust_is_shown_before_it_moves_on_to_startup`),
+        // so pushing it whole does not leave the gate on screen. This
+        // fixture's final state genuinely is the gate -- it is the one
+        // whose composer paints FIRST and the gate arrives after, which
+        // is exactly the live race shape being tested here.
+        let codex = CodexTuiVendor::new(PathBuf::from("/w"), vec![]);
+        assert_eq!(
+            enter_precondition(&codex, &grid_from("codex-composer-then-trust.raw")),
+            EnterPrecondition::Blocked(Surface::Gate(GateKind::CodexDirectoryTrust)),
+            "codex's gate on screen must withhold the Enter -- this is the exact shape of the \
+             live race that motivated the re-check: the gate paints strictly after the \
+             composer, so a readiness-time classification of PromptReady says nothing about \
+             what is on screen by the time Enter is due"
+        );
+    }
+
+    /// The other half: a genuinely ready composer, with no gate on
+    /// screen, still gets its Enter -- the re-check is not a one-way
+    /// switch that only ever withholds.
+    #[test]
+    fn enter_precondition_proceeds_when_the_composer_is_ready_with_no_gate_showing() {
+        use crate::adapter::tui::ClaudeTuiVendor;
+
+        let claude = ClaudeTuiVendor::new(PathBuf::from("/w"), vec![]);
+        assert_eq!(
+            enter_precondition(&claude, &grid_from("claude-trust-to-composer.raw")),
+            EnterPrecondition::Proceed,
+            "a gate that has been answered and cleared, composer now up, must let the Enter \
+             through -- this is the fixture that exists specifically to prove a grid (unlike \
+             the accumulator) can tell the difference"
+        );
+    }
+
+    /// A vendor with no real predicate yet (`classify_surface` returns
+    /// `None`) must keep the pre-classification behavior: this slice
+    /// cannot recognize a gate for copilot/omp, so it must not withhold
+    /// their Enter on the strength of a classification it never made.
+    #[test]
+    fn enter_precondition_proceeds_unconditionally_for_a_vendor_with_no_predicate() {
+        use crate::adapter::tui::CopilotTuiVendor;
+
+        let copilot = CopilotTuiVendor::new(PathBuf::from("/w"), vec![]);
+        // Content is irrelevant here -- even a screen showing a claude
+        // gate must not affect a vendor that has no predicate to read it
+        // with.
+        assert_eq!(
+            enter_precondition(&copilot, &grid_from("claude-workspace-trust.raw")),
+            EnterPrecondition::Proceed
+        );
+    }
+
+    /// End-to-end proof that `wait_for_readiness` itself, not just the
+    /// Enter-precondition helper, refuses to paste into a gate: a real
+    /// double replays a committed capture verbatim onto its own PTY
+    /// output (the same bytes a live vendor produced), fed into the grid
+    /// the exact way `run_pipeline` feeds it (a background task on its
+    /// own subscription), and the readiness poll must recognize the gate
+    /// and fail closed before ever calling `write_paste`. The double
+    /// sleeps after replaying so its output channel stays open through
+    /// the poll -- otherwise the channel closing before
+    /// `wait_for_readiness` ever reads from it would be misread as "the
+    /// process exited before producing output", the wrong error for this
+    /// test to prove.
+    #[tokio::test]
+    async fn wait_for_readiness_refuses_to_paste_into_a_replayed_gate_capture() {
+        use crate::adapter::tui::ClaudeTuiVendor;
+
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/adapters/tui-screens/claude-workspace-trust.raw");
+        let pty = Arc::new(
+            PtyProcess::spawn(
+                &crate::supervisor::SpawnSpec {
+                    program: PathBuf::from("/bin/sh"),
+                    args: vec![
+                        "-c".to_string(),
+                        format!("cat '{}' && sleep 5", fixture_path.display()),
+                    ],
+                    ..crate::supervisor::SpawnSpec::minimal()
+                },
+                EscalationTimings::default(),
+            )
+            .expect("spawn the replay double"),
+        );
+
+        let mut readiness_rx = pty.subscribe_output();
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        {
+            let mut grid_rx = pty.subscribe_output();
+            let grid = Arc::clone(&grid);
+            tokio::spawn(async move {
+                loop {
+                    match grid_rx.recv().await {
+                        Ok(bytes) => grid
+                            .lock()
+                            .expect("terminal-grid mutex never poisoned")
+                            .push(&bytes),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        let vendor = ClaudeTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let result = wait_for_readiness(
+            &mut readiness_rx,
+            "claude",
+            &vendor,
+            &grid,
+            Duration::from_millis(50),
+            Duration::from_secs(3),
+            &pty,
+            Some(PromptInjection {
+                text: "this must never be written",
+                write_timeout: Duration::from_secs(1),
+            }),
+            tokio::time::Instant::now(),
+        )
+        .await;
+
+        let _ = pty.terminate().await;
+
+        match result {
+            Err(err) => {
+                let message = err.to_string();
+                assert!(
+                    message.contains("ClaudeWorkspaceTrust"),
+                    "the error must name the gate it saw: {message}"
+                );
+            }
+            Ok(()) => {
+                panic!("a replayed gate capture must never be classified as ready to paste into")
+            }
+        }
+    }
+
+    /// A truly unrecognized surface must fail closed once `cap` elapses --
+    /// not loop forever. This is the regression case for a real bug the
+    /// test above forced out during development: the `Undecided` poll
+    /// branch returned early on the first quiet-tick receive timeout
+    /// instead of re-checking `classify_surface` up to the actual
+    /// deadline, so a burst of first output consumed entirely by the
+    /// "wait for first output" check left nothing further for a later
+    /// `rx.recv()` to ever receive, and the very first per-tick timeout
+    /// was misread as "never becoming ready" -- failing a gate this
+    /// module could positively identify, for the wrong reason. `cap` is
+    /// kept short here specifically so this test still runs fast.
+    #[tokio::test]
+    async fn wait_for_readiness_fails_closed_after_cap_on_an_unrecognized_surface() {
+        use crate::adapter::tui::ClaudeTuiVendor;
+
+        let pty = Arc::new(
+            PtyProcess::spawn(
+                &crate::supervisor::SpawnSpec {
+                    program: PathBuf::from("/bin/sh"),
+                    args: vec!["-c".to_string(), "echo hello && sleep 5".to_string()],
+                    ..crate::supervisor::SpawnSpec::minimal()
+                },
+                EscalationTimings::default(),
+            )
+            .expect("spawn the unrecognized-surface double"),
+        );
+
+        let mut readiness_rx = pty.subscribe_output();
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        {
+            let mut grid_rx = pty.subscribe_output();
+            let grid = Arc::clone(&grid);
+            tokio::spawn(async move {
+                loop {
+                    match grid_rx.recv().await {
+                        Ok(bytes) => grid
+                            .lock()
+                            .expect("terminal-grid mutex never poisoned")
+                            .push(&bytes),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        let vendor = ClaudeTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let started = tokio::time::Instant::now();
+        let result = wait_for_readiness(
+            &mut readiness_rx,
+            "claude",
+            &vendor,
+            &grid,
+            Duration::from_millis(30),
+            Duration::from_millis(300),
+            &pty,
+            Some(PromptInjection {
+                text: "this must never be written",
+                write_timeout: Duration::from_secs(1),
+            }),
+            tokio::time::Instant::now(),
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        let _ = pty.terminate().await;
+
+        let message = result
+            .expect_err("an unrecognized surface must never be treated as ready")
+            .to_string();
+        assert!(
+            message.contains("no recognizable prompt or first-run gate"),
+            "unexpected failure reason: {message}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "must fail at the readiness cap (300ms), not hang: took {elapsed:?}"
+        );
+    }
+
+    /// A vendor that exits before any surface is positively identified
+    /// must fail promptly, not spin `classify_surface` at full speed for
+    /// the rest of a (deliberately long) `cap`: a closed broadcast
+    /// channel's `recv()` returns immediately and keeps doing so, so
+    /// treating it the same as a per-tick pacing timeout would busy-loop
+    /// on the mutex and the classifier instead of waiting on anything.
+    /// `cap` here is set far longer than this test's own timeout to make
+    /// that failure mode visible if it regresses.
+    #[tokio::test]
+    async fn wait_for_readiness_fails_promptly_when_the_process_exits_unrecognized() {
+        use crate::adapter::tui::ClaudeTuiVendor;
+
+        let pty = Arc::new(
+            PtyProcess::spawn(
+                &crate::supervisor::SpawnSpec {
+                    program: PathBuf::from("/bin/sh"),
+                    args: vec!["-c".to_string(), "echo hello".to_string()],
+                    ..crate::supervisor::SpawnSpec::minimal()
+                },
+                EscalationTimings::default(),
+            )
+            .expect("spawn the exiting double"),
+        );
+
+        let mut readiness_rx = pty.subscribe_output();
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        {
+            let mut grid_rx = pty.subscribe_output();
+            let grid = Arc::clone(&grid);
+            tokio::spawn(async move {
+                loop {
+                    match grid_rx.recv().await {
+                        Ok(bytes) => grid
+                            .lock()
+                            .expect("terminal-grid mutex never poisoned")
+                            .push(&bytes),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        let vendor = ClaudeTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let started = tokio::time::Instant::now();
+        // A long cap: if the closed-channel case were mishandled as a
+        // pacing tick, this test would either hang here or take
+        // (approximately) this whole duration instead of failing
+        // promptly once the process exits.
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            wait_for_readiness(
+                &mut readiness_rx,
+                "claude",
+                &vendor,
+                &grid,
+                Duration::from_millis(30),
+                Duration::from_secs(30),
+                &pty,
+                Some(PromptInjection {
+                    text: "this must never be written",
+                    write_timeout: Duration::from_secs(1),
+                }),
+                tokio::time::Instant::now(),
+            ),
+        )
+        .await
+        .expect("must return well within the 5s outer timeout, long before the 30s readiness cap");
+        let elapsed = started.elapsed();
+
+        let message = result
+            .expect_err("a process that exited unrecognized must never be treated as ready")
+            .to_string();
+        assert!(
+            message.contains("the worker process exited"),
+            "unexpected failure reason: {message}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "must fail promptly on the closed channel, not spin toward the 30s cap: took {elapsed:?}"
+        );
+    }
+
+    // ----------------------------------------------- the bracketed-paste invariant
+
+    /// Prompt text is always delivered to a vendor TUI as a bracketed
+    /// paste, never as raw keystrokes: `write_paste` is the only path
+    /// permitted to write prompt bytes to a PTY. Shipped originally as a
+    /// prompt-integrity fix (a multi-line prompt submitted line-by-line),
+    /// live measurement later established it is also a security control
+    /// -- the identical bytes written unframed are parsed by the vendor
+    /// as keystrokes, and an escape sequence embedded in ordinary prompt
+    /// text can move a first-run security dialog's selection off its
+    /// safe default before crew's own Enter confirms it, turning an
+    /// intended no-op into a silent trust grant.
+    ///
+    /// This file (`adapter.rs`) has every `PtyProcess::write_input` call
+    /// site that exists for prompt delivery in this crate -- the other
+    /// two hits for the name in the crate are `write_input`'s own
+    /// definition (`supervisor/pty.rs`) and `display/attach.rs`'s relay
+    /// of a human's own keystrokes typed directly into an attached pane,
+    /// which is a different, already-understood mechanism (a person
+    /// answering their own pane, not crew composing and submitting a
+    /// prompt) and out of scope for this invariant.
+    ///
+    /// The check itself: every `write_input(` call site in this file's
+    /// own source text must carry one of the four known-safe arguments
+    /// below -- a paste chunk `write_paste` itself already framed, the
+    /// single submit byte (twice, once per delivery path: fresh-start and
+    /// queued `send`), or a fixed control sequence
+    /// (`interrupt_sequence()`, twice: turn-cancel and steer). A fifth
+    /// call site with a different argument -- most importantly, prompt
+    /// TEXT written directly -- fails this test by not matching any
+    /// allowed pattern, which is the whole point: a future path that
+    /// writes prompt text outside `write_paste` reintroduces the bug this
+    /// invariant exists to prevent even if it never touches `write_paste`
+    /// itself.
+    #[test]
+    fn every_write_input_call_site_in_this_file_is_a_known_safe_shape() {
+        let whole_file = include_str!("adapter.rs");
+        // Scanning only the production portion, before `mod tests`: this
+        // very test's own doc comment and regex literal below both
+        // contain the substring "write_input(" many times over, which
+        // would otherwise inflate the count against itself -- the same
+        // self-exemption the marker guard gives its own test file, for
+        // the same reason (a scanner's rule text is not what it scans).
+        let source = whole_file
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .map_or(whole_file, |(production, _)| production);
+        let call_sites = source.matches("write_input(").count();
+        assert_eq!(
+            call_sites, 5,
+            "the known-safe count below assumes exactly 5 call sites (write_paste's own chunk \
+             write, two submit-byte writes, two interrupt-sequence writes); update the pattern \
+             list AND this count together if a new one is added, don't just bump this number"
+        );
+
+        let allowed = regex::Regex::new(
+            r"write_input\((chunk\)|enter\)|&bytes\[split_at\.\.\]\)|&self\.vendor\.interrupt_sequence\(\)\))",
+        )
+        .expect("valid regex");
+        let matched = allowed.find_iter(source).count();
+        assert_eq!(
+            matched, call_sites,
+            "a write_input( call site in this file does not match any of the known-safe \
+             argument shapes -- if this is a new prompt-text write path, it must go through \
+             write_paste instead; if it is a new safe shape (a single control byte or a \
+             pre-framed chunk), add its exact argument text to the allowlist above"
         );
     }
 }

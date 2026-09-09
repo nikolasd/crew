@@ -252,6 +252,13 @@ impl TuiVendor for CodexTuiVendor {
     // hands back paths whose id this adapter extracts by trimming the
     // known prefix/suffix shape instead (see
     // [`session_id_from_rollout_filename`]).
+
+    fn classify_surface(
+        &self,
+        grid: &super::grid::TerminalGrid,
+    ) -> Option<super::classify::Surface> {
+        Some(super::classify::classify_codex_surface(grid))
+    }
 }
 
 /// Derives a rollout's session id from its filename:
