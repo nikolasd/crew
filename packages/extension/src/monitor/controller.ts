@@ -274,7 +274,7 @@ export interface MonitorHandle {
 }
 
 /** Registers the `/crew` command and the replay-first monitor lifecycle.
- *  Wires the milestone bridge (spec §7.2) onto the monitor's single
+ *  Wires the milestone bridge onto the monitor's single
  *  subscription so the model is injected with digests on milestones
  *  instead of having to poll the monitor. Returns a handle for reporting
  *  submit failures to the widget. */
