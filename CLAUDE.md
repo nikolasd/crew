@@ -39,6 +39,14 @@ bun run build
 # with Bun 1.3.14). Refresh the committed bundle via the `refresh-bundle` workflow, or a linux-x64
 # build, before committing — see README/CONTRIBUTING. Note: `bun run check` builds to a temp dir
 # and does not modify the committed dist.
+#
+# What makes it stale is NOT touching dist/. A change under crates/protocol/ regenerates the
+# TypeScript bindings, the bundle embeds those bindings, and the committed dist is stale from that
+# moment — in a file your diff never mentions. Nothing local reports it: `bun run check` builds to
+# a temp dir and never compares the committed artifact, so a green local gate is a true statement
+# about a gate that does not cover this file. `bundle-check` catches it and `auto-commit-dist`
+# rebuilds and pushes the correct linux-x64 bundle to the branch as `crew-bot[bot]` — fetch before
+# your next push. The trigger is "did I change anything the bundle embeds", not "did I touch dist".
 # Formatting
 bun run format:check   # Biome (TS/JS)
 bun run format:write
