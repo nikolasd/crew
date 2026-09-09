@@ -248,7 +248,8 @@ async fn reconcile_event_sequence(db: &DatabaseHandle, task_id: TaskId) -> Optio
     db.run_domain_op(Box::new(move |conn| {
         let sequence: Option<i64> = conn
             .query_row(
-                "SELECT sequence FROM events WHERE task_id = ?1 AND event_json LIKE '%reconcileEvent%'",
+                "SELECT sequence FROM events WHERE task_id = ?1 AND event_json LIKE '%reconcileEvent%' \
+                 ORDER BY sequence ASC LIMIT 1",
                 [task_id.to_string()],
                 |r| r.get(0),
             )
@@ -261,22 +262,40 @@ async fn reconcile_event_sequence(db: &DatabaseHandle, task_id: TaskId) -> Optio
 }
 
 /// The journal sequence of the `policyViolationDecided` row for
-/// `violation_id`, if the guarded write actually committed one. Diagnostic
-/// only, for the same failure message as
+/// `violation_id` on `task_id`, if the guarded write actually committed
+/// one. Diagnostic only, for the same failure message as
 /// [`reconcile_event_sequence`] -- comparing the two sequences (when both
 /// exist) tells a reader which write the actor actually processed first,
 /// which is the fact the enqueue-order argument in this file's header
 /// claims is fixed and this diagnostic exists to confirm or refute on an
 /// actual recurrence rather than a rerun of the same argument.
+///
+/// **The `LIKE '%policyViolationDecided%<id>%'` match is correct only
+/// because `RuntimeEvent` is adjacently tagged
+/// (`#[serde(tag = "type", content = "payload")]`), so the type string
+/// always precedes the id in the serialized JSON.** If that tagging ever
+/// changes, this returns `None` for an event that actually exists, and
+/// the failure message would then read as "the guarded write refused"
+/// when it did not -- the opposite of the truth. `a_former_owner_
+/// replaying_its_identical_resolution_is_refused` below asserts this
+/// helper actually finds a real, known-committed event, specifically so
+/// a serde change like that fails there, at the point of change, instead
+/// of producing a confidently wrong diagnosis on a rare CI recurrence of
+/// this test.
 async fn decided_event_sequence(
     db: &DatabaseHandle,
+    task_id: TaskId,
     violation_id: PolicyViolationId,
 ) -> Option<i64> {
     db.run_domain_op(Box::new(move |conn| {
         let sequence: Option<i64> = conn
             .query_row(
-                "SELECT sequence FROM events WHERE event_json LIKE ?1",
-                [format!("%policyViolationDecided%{violation_id}%")],
+                "SELECT sequence FROM events WHERE task_id = ?1 AND event_json LIKE ?2 \
+                 ORDER BY sequence ASC LIMIT 1",
+                rusqlite::params![
+                    task_id.to_string(),
+                    format!("%policyViolationDecided%{violation_id}%")
+                ],
                 |r| r.get(0),
             )
             .optional()?;
@@ -315,6 +334,15 @@ async fn current_task_owner(db: &DatabaseHandle, task_id: TaskId) -> Option<Stri
 /// spanning three contention profiles; on recurrence, read the sequence
 /// numbers, the guarded-write outcome, and the current owner printed below
 /// rather than re-running the enqueue-order argument in this file's header.
+/// Reading the three: `decided sequence < reconcile sequence` means the
+/// guarded write really was processed first (the enqueue-order argument
+/// itself is wrong); `decided sequence > reconcile sequence` with the
+/// current owner already `"omp-2"` means the write ran after the rebind
+/// but its ownership re-read still saw the stale value -- a real bug in
+/// `resolve_policy_violation`, though printing these three facts alone
+/// cannot yet distinguish a stale read from no re-read happening at all;
+/// `reconcile sequence: None` means the rebind itself never committed,
+/// pointing at `rebind_owner`/`reconcile_ownership` instead.
 #[tokio::test]
 async fn a_stale_owner_is_refused_by_the_guarded_write_after_a_rebind() {
     let (_state_dir, db) = open_db().await;
@@ -342,7 +370,7 @@ async fn a_stale_owner_is_refused_by_the_guarded_write_after_a_rebind() {
     // write the actor actually processed first, not another restatement
     // of which order it is supposed to.
     let reconcile_seq = reconcile_event_sequence(&db, task_id).await;
-    let decided_seq = decided_event_sequence(&db, violation_id).await;
+    let decided_seq = decided_event_sequence(&db, task_id, violation_id).await;
     let owner_now = current_task_owner(&db, task_id).await;
 
     assert!(
@@ -409,6 +437,21 @@ async fn a_former_owner_replaying_its_identical_resolution_is_refused() {
     assert!(
         matches!(outcome, Ok(DecideOutcome::Decided)),
         "the original owner must be able to resolve: {outcome:?}"
+    );
+    // Positive control for `decided_event_sequence`'s own doc comment: a
+    // real, known-committed event must actually be found by the same LIKE
+    // pattern the failure-diagnostic helper above depends on, so a future
+    // change to RuntimeEvent's serde tagging shape fails loudly here
+    // instead of silently returning None from that helper on a rare CI
+    // recurrence of the stale-owner test.
+    assert!(
+        decided_event_sequence(&db, task_id, violation_id)
+            .await
+            .is_some(),
+        "a just-committed policyViolationDecided event must be found by decided_event_sequence's \
+         own match pattern -- if this fails, RuntimeEvent's serde tagging changed and the \
+         diagnostic in a_stale_owner_is_refused_by_the_guarded_write_after_a_rebind is no longer \
+         trustworthy"
     );
 
     rebind_owner(&db, project_id, task_id, "omp-2", 1).await;
