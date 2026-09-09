@@ -13,8 +13,8 @@ implementation, satisfying tests but nothing else. The real `AdapterRegistry` �
 `working <-> waitingUser` toggle, the policy-violation service, and the boot recovery sweep. Every
 real run's row therefore stayed `queued` however successfully its vendor process ran and exited;
 `run/get`, `run/list`, the `/batman` monitor, and the approval flow all read a value that was wrong
-for every real run, and only a daemon restart (`RecoveryCoordinator`) ever terminalized anything
-(REVIEW.md R69). How should the adapter layer apply the edges its own journaled evidence already
+for every real run, and only a daemon restart (`RecoveryCoordinator`) ever terminalized anything.
+How should the adapter layer apply the edges its own journaled evidence already
 proves happened, without duplicating or contradicting the existing legal-edge table or the existing
 terminalization paths?
 
@@ -88,9 +88,9 @@ failure.
 * Fixing this exposed two secondary defects that had to move with it: Copilot's
   `CopilotClientEvent::ProcessExited` previously carried no exit status at all (now
   `exit_code`/`signal` are real), and a violation-cancel ordering race in the policy-violation
-  service. Both are covered by this change's tests; R12 (Claude error-result subtypes) and R13
-  (violation-cancel's warning not distinguishing "no running adapter" from a kill failure) remain
-  open and untouched.
+  service. Both are covered by this change's tests; two known gaps remain open and untouched:
+  Claude's error-result subtypes, and violation-cancel's warning not distinguishing "no running
+  adapter" from a kill failure.
 * A run's lifecycle now depends on the same evidence walk producing exactly one terminal edge per
   run; any future adapter that journals `ProcessExited` more than once, or out of order relative to
   a cancellation, must be audited against this sink's forward-only/terminal-wins guarantees.
@@ -134,9 +134,11 @@ failure.
   [ADR-0015](0015-omp-native-facts-as-non-owning-mirror-lost-on-omission.md)
 * Commits alongside the per-mutation broadcast invariant from
   [ADR-0020](0020-per-mutation-event-broadcast-is-not-optional.md)
-* `REVIEW.md` R69 (cited in "Context and Problem Statement") — **cited a register that no longer
-  exists.** `REVIEW.md` was a maintainer-local, gitignored findings register; it is gone, so the
-  number cannot be resolved by anyone. What it indexed is stated in the sentence that cites it: every
-  reader of `run/get`, `run/list`, the monitor and the approval flow saw a value that was wrong for
-  every real run, and only a daemon restart terminalized anything. The citation is left as written —
-  an ADR records what it cited when it was written.
+* This ADR's "Context and Problem Statement" section originally included a citation to a specific
+  `REVIEW.md` entry — **a citation to a register that no longer exists.** `REVIEW.md` was a
+  maintainer-local, gitignored findings register; it is gone, so that entry cannot be resolved by
+  anyone. What it indexed is stated in the sentence itself: every reader of `run/get`, `run/list`,
+  the monitor and the approval flow saw a value that was wrong for every real run, and only a daemon
+  restart terminalized anything. The bare register citation has been removed as part of a repo-wide
+  sweep of external, non-durable references; the substance it stood for remains in that sentence
+  unchanged.

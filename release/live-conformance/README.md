@@ -1,7 +1,7 @@
 # Live TUI conformance evidence (0.5.0)
 
 Raw `crewd conformance --live --mode tui` reports, copied verbatim from the
-WP29 run harness output (no fields altered — provenance preserved).
+run harness output (no fields altered — provenance preserved).
 
 | File | Source (`/tmp`) | Adapter | runnable scenarios | `session_resume` |
 |---|---|---|---|---|
@@ -15,7 +15,7 @@ WP29 run harness output (no fields altered — provenance preserved).
 "runnable" = every scenario except `session_resume`, which is skipped by
 design (see below).
 
-## Erratum — "the untrusted-workspace problem #15 fixed" (added 2026-09-08)
+## Erratum — "the untrusted-workspace problem (commit 0ca5d5b) fixed" (added 2026-09-08)
 
 Two entries below describe the untrusted-workspace trust-modal problem as
 **fixed**. Scope that claim before relying on it: the fix
@@ -46,9 +46,9 @@ The captures behind that record are committed as
 Each raw report's `session_resume` scenario carries the detail:
 
 > genuine restart recovery is proven by the separate serve->stop->serve
-> end-to-end smoke (WP29), not this report
+> end-to-end smoke, not this report
 
-This is **overstated**. The serve->stop->serve smoke that passed in WP29 was
+This is **overstated**. The serve->stop->serve smoke that passed was
 **vendor-free** (`crewd serve -> status -> stop`, no vendor task). The
 *transcript-recovery-across-a-real-daemon-restart* case — i.e. run a vendor
 task, stop the daemon, restart it, and assert the transcript is recovered —
@@ -59,14 +59,14 @@ daemon-restart recovery.
 ## Vendor billing walls (not adapter defects) — status as of 2026-08-27
 
 - **codex**: RESOLVED, re-proven on current main. The 2026-08-27 rerun
-  (`codex-tui.json`, main@2cde61e, post-#17/#18 adapter changes) is
+  (`codex-tui.json`, main@2cde61e, post-commit fa40af8/2cde61e adapter changes) is
   byte-identical to the 2026-08-26 evening report: all four runnable
   scenarios still pass (4/4). The pre-refill `codex-tui-post-quota.json`
   (v6) is retained only as historical exhaustion evidence.
 - **copilot**: RECLASSIFIED BACK to a confirmed vendor billing wall — not
   a capture defect. The 2026-08-26 evening diagnosis above (a
   transcript-capture/discovery failure) was the **untrusted-workspace**
-  problem #15 fixed: discovery now works (`start=Ok(())`, `session=true`
+  problem (commit 0ca5d5b) fixed: discovery now works (`start=Ok(())`, `session=true`
   in the 2026-08-27 report, vs. `start=Err(...)`/`session=false` on
   2026-08-26 — compare `copilot-tui.json` against
   `copilot-tui-2026-08-26-transcript-capture.json`, kept here for that
@@ -105,7 +105,7 @@ their sources (`cmp`-verified); the overstatement is corrected here only.
 ## Rerun 2026-08-26 (evening)
 
 Both `codex` and `copilot` live TUI smokes were rerun via
-`crewd conformance --live --mode tui` after the WP29 follow-up work:
+`crewd conformance --live --mode tui` after follow-up work:
 
 - **codex**: 4/4 runnable (credits refilled). `codex-tui.json` replaced with the
   fresh run; `session_resume` skipped by design.
@@ -121,7 +121,7 @@ overstated.
 
 ## Rerun 2026-08-27
 
-Fresh live TUI conformance ran again on current `main@2cde61e` (post-#17/#18
+Fresh live TUI conformance ran again on current `main@2cde61e` (post-commit fa40af8/2cde61e
 adapter changes), from a trusted `CREW_LIVE_CWD`:
 
 - **codex**: `codex-tui.json` replaced with the fresh run — byte-identical to
@@ -132,7 +132,7 @@ adapter changes), from a trusted `CREW_LIVE_CWD`:
   contrast. `probe` and `cancellation_scope` pass; `read_only_start_and_progress`
   and `follow_up` fail. The diagnosis changed from the 2026-08-26 evening
   entry above: discovery itself no longer fails (that was the untrusted-
-  workspace problem #15 fixed — this run's `start=Ok(())`/`session=true`
+  workspace problem (commit 0ca5d5b) fixed — this run's `start=Ok(())`/`session=true`
   proves it), so the failure is now root-caused, not just suspected, as the
   vendor's own monthly quota wall — the tailed session's `events.jsonl`
   records a typed `session.error` with `errorCode: quota_exceeded`

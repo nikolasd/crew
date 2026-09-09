@@ -5,9 +5,10 @@
 
 ## Context and Problem Statement
 
-R81 (2026-08-18) ownership-gated the `workspace/*` surface: `acquire`, `apply`, `release`, and
+An ownership gate added earlier (2026-08-18; see [ADR-0011](0011-omp-retains-task-graph-authority.md)'s
+amendment) restricted the `workspace/*` surface: `acquire`, `apply`, `release`, and
 `get` all refuse a caller whose session does not own the lease's run, with one uniform refusal
-message. Its adversarial review then observed the asymmetry that became R85: every *other*
+message. Its adversarial review then observed an asymmetry: every *other*
 project-scoped read — `task/get`, `worker/list`, `worker/get`, `run/list`, `run/get`,
 `message/list`, `approval/list`, `policy/violation/list`, `coordination/child/list`, and
 `events/replay` — takes no principal at all, and several of them disclose the very facts
@@ -23,7 +24,7 @@ carries every `LeaseAcquired` payload verbatim. Is the read side under-gated, or
 * OMP owns the task graph (ADR-0011); BATMAN's journal exists to make the whole project's
   state observable and replayable. Monitors, doctors, and a *new* session recovering from a
   crash all legitimately need to see runs their session did not create.
-* Ownership arbitration (R71/R77) exists to serialize *mutation* — two sessions must not both
+* Ownership arbitration exists to serialize *mutation* — two sessions must not both
   drive one task — not to hide state from same-user readers.
 
 ## Considered Options
@@ -52,13 +53,12 @@ the same uid.
   project without impersonating the owning session — which is exactly what crash recovery
   requires, since the owning session may no longer exist.
 * The rule is statable in one sentence, so every future read handler has a default answer:
-  reads take no principal; mutations arbitrate ownership inside the transaction that writes
-  (R71, R74, R78).
+  reads take no principal; mutations arbitrate ownership inside the transaction that writes.
 
 ### Negative Consequences
 
-* `run/get` discloses `workspacePath` to any same-user client — the entry point R81's evidence
-  named. The gate that matters is that *mutating* that workspace requires ownership; the path
+* `run/get` discloses `workspacePath` to any same-user client — the entry point that earlier
+  ownership-gate review's evidence named. The gate that matters is that *mutating* that workspace requires ownership; the path
   itself is not a capability.
 * A future multi-tenant deployment (different OS users proxied through one daemon) would
   invalidate the same-user premise this decision rests on and would have to revisit the whole
@@ -69,9 +69,9 @@ the same uid.
 ### Open reads, ownership-gated writes (chosen)
 
 * Good, because it matches what the system already needs to function (recovery, monitoring)
-  and documents the asymmetry R85 found instead of leaving it implicit.
+  and documents the asymmetry found instead of leaving it implicit.
 * Bad, because the confidentiality non-claim must stay documented, or the next reviewer
-  re-derives R85.
+  re-derives the same finding.
 
 ### Ownership-gate every run-naming read
 
@@ -89,7 +89,8 @@ the same uid.
 
 ## Links
 
-* Documents the asymmetry found as R85 during R81's adversarial review
+* Documents the asymmetry found during the workspace-lease ownership gate's adversarial review
+  (see [ADR-0011](0011-omp-retains-task-graph-authority.md)'s amendment)
 * Read-side surface: `crates/runtime/src/service/orchestration.rs` (`task_get`, `worker_list`,
   `worker_get`, `run_list`, `run_get`, `message_list`, `approval_list`,
   `policy_violation_list`), `crates/runtime/src/ipc/connection.rs` (`events/replay`)

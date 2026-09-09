@@ -90,6 +90,6 @@ and no changes anywhere else.
 
 ## Links
 
-* Narrated in `../journal.md`, commit `49233a5` (bug #2)
+* Narrated in `../journal.md`, commit `49233a5`
 * Relies on the role-table superset relationship established by
   [ADR-0009](0009-role-based-authorization-from-the-connection-not-per-call.md)

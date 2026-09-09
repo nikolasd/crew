@@ -165,7 +165,7 @@ async fn acknowledged_operation_is_excluded_from_incomplete_operations() {
     handle.shutdown().await.unwrap();
 }
 
-/// R66: shutting down after the actor thread died abnormally must still
+/// Shutting down after the actor thread died abnormally must still
 /// join (reap) the thread and report the actor unavailable -- the old
 /// `rx.await.map_err(...)?` short-circuited past the join, leaking the
 /// JoinHandle and losing the panic.

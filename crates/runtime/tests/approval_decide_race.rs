@@ -1,4 +1,4 @@
-//! Regression tests for R70: `ApprovalService::decide` must not admit two
+//! Regression tests: `ApprovalService::decide` must not admit two
 //! concurrent decisions for the same approval.
 //!
 //! `DatabaseHandle::run_domain_op` (`crates/runtime/src/db/actor.rs`) sends a
@@ -15,8 +15,8 @@
 //! Plain (non-`biased`) `join!` rotates which branch it polls first on
 //! every poll of the combined future -- a fairness mechanism documented on
 //! the macro itself -- so it does *not* guarantee argument order beyond
-//! the very first poll; an earlier version of the analogous R54 file
-//! (`policy_violation.rs`) wrongly assumed it did. `biased;` pins polling
+//! the very first poll; an earlier version of the analogous
+//! `policy_violation.rs` file wrongly assumed it did. `biased;` pins polling
 //! to declaration order on every poll, so the first-declared future always
 //! enqueues its next `run_domain_op` command before the second is even
 //! polled, which makes the actor's enqueue -- and thus processing -- order
@@ -42,7 +42,7 @@
 //! Only `humanRequired` is still checked caller-side by `decide` -- it
 //! reads a field a decision write never mutates, so it cannot go stale.
 //! Task ownership used to be a second caller-side pre-check here, but it
-//! moved into `decide_approval`'s guarded write for R71 (see
+//! moved into `decide_approval`'s guarded write (see
 //! `approval_owner_race.rs`), because a `reconcile/omp` rebind landing
 //! between a caller-side snapshot read and the write could otherwise leave
 //! a stale owner's decision with nothing left to refuse it. That move is
@@ -55,7 +55,7 @@
 //! The fourth test, `deciding_an_approval_whose_run_has_already_settled_is_refused`,
 //! deliberately does *not* join! `decide` against the run-settling
 //! transition, even though that would look like the more direct test of
-//! "the run settles mid-decide". An adversarial review of the analogous R54
+//! "the run settles mid-decide". An adversarial review of the analogous
 //! test (`releasing_a_violation_whose_run_has_already_settled_is_refused`)
 //! found a residual timing gap in that shape: `decide`'s first round trip
 //! (the snapshot) could in principle have its actor reply arrive so fast that
@@ -65,7 +65,7 @@
 //! microseconds), but a real timing dependency rather than a scheduling
 //! guarantee. This test instead settles the run first, sequentially, then
 //! calls `decide` -- zero timing dependency, and it still proves exactly the
-//! thing R70 changed: `ApprovalSnapshot` no longer carries `run_state` (or
+//! thing the fix above changed: `ApprovalSnapshot` no longer carries `run_state` (or
 //! `decision`), so the guard's own live read of `runs.state` inside
 //! `decide_approval`'s transaction is the *only* thing left that can refuse
 //! this decision, and this test shows that read is correct on its own terms.

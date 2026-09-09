@@ -15,7 +15,7 @@ source of truth for unfinished work.
 ## Display RPC Registration Surface
 
 **Specified by:** Workspaces/Displays plan, Task 5  
-**Deferred per:** M2/M3 gap-closure Decision #6  
+**Deferred per:** the M2/M3 gap-closure review's decision to defer this  
 **References:** `crates/protocol/src/method.rs`, `.../2026-07-22-crew-workspaces-displays.md` (Task 5), `.../2026-07-27-crew-m2-m3-gap-closure.md` (Decision 6)
 
 ### What it is
@@ -43,7 +43,7 @@ You run both Herdr (terminal) and a web dashboard. Herdr crashes. The `DisplaySe
 
 Partly narrowed since this was written: `display::pane_socket::is_live` established a connect-probe definition of pane liveness, used by `pane/reopen` and by the startup sweep that unlinks dead sockets ([ADR-0027](adr/0027-turn-end-settles-a-run.md)). That answers "is this *pane* alive" for a Crew-owned attach socket. It does not answer "is this *backend* still able to accept new panes", which is what routing needs, and it says nothing about a backend that never had a Crew socket in the first place. So the scenario stands, but its premise is no longer "nothing detects a dead backend" — it is that pane-level liveness does not generalize to backend-level routing.
 
-**Cross-note:** the crewd-served web monitor ([CREW-12](adr/)) must be scoped as a **read-only viewer** built on `events/subscribe` + `events/replay`. If it is instead allowed to receive routed runs, it becomes a display backend and this entry's trigger fires — a registration surface would then be required rather than deferred.
+**Cross-note:** the crewd-served web monitor must be scoped as a **read-only viewer** built on `events/subscribe` + `events/replay`. If it is instead allowed to receive routed runs, it becomes a display backend and this entry's trigger fires — a registration surface would then be required rather than deferred.
 
 **3. Multi-tenant / shared daemon**
 
@@ -51,7 +51,7 @@ Five developers share one Crew daemon, each with their own display client (diffe
 
 **4. Operator visibility in `crewd doctor`**
 
-Doctor's display check (TODO #21) currently checks if Herdr/tmux *could* work. With `display/list`, it could report which backends are actually registered and live right now, giving operators real-time visibility into display infrastructure health.
+Doctor's display check currently checks if Herdr/tmux *could* work. With `display/list`, it could report which backends are actually registered and live right now, giving operators real-time visibility into display infrastructure health.
 
 ### Why deferred
 
@@ -123,7 +123,8 @@ Implement only when an organization operates multiple Crew repositories and need
 
 **Blocked by:** ACP protocol version 1 (Copilot CLI)
 **References:** `crates/runtime/src/adapter/tui/copilot.rs` (the headless
-`adapter/copilot/client.rs` this originally cited was removed by crew-v2 gap-closure WP-C), TODO.md
+`adapter/copilot/client.rs` this originally cited was removed by crew-v2 gap-closure's headless
+retirement — see [ADR-0026](adr/0026-headless-retirement.md)), TODO.md
 item 50 (retired)
 
 ### What it is
@@ -152,7 +153,8 @@ bumping the pinned Copilot CLI version.
 
 **Blocked by:** ACP protocol version 1 (Copilot CLI)
 **References:** `crates/runtime/src/adapter/tui/copilot_compatibility.rs` (moved from the retired
-headless `adapter/copilot/compatibility.rs` by crew-v2 gap-closure WP-C), TODO.md item 51 (retired)
+headless `adapter/copilot/compatibility.rs` by crew-v2 gap-closure's headless retirement — see
+[ADR-0026](adr/0026-headless-retirement.md)), TODO.md item 51 (retired)
 
 ### What it is
 
@@ -167,7 +169,7 @@ all — there is no message to observe. `normalize.rs` correctly drops
 unrecognized updates to zero events rather than fabricate a
 `NestedWorkerObserved`. A test already pins this (formerly in the now-deleted
 `copilot_adapter.rs`, moved with the rest of this table to
-`adapter/tui/copilot_compatibility.rs`'s own inline tests by crew-v2 gap-closure WP-C): it fails
+`adapter/tui/copilot_compatibility.rs`'s own inline tests by crew-v2 gap-closure): it fails
 if `COPILOT_MAX_ACP_PROTOCOL_VERSION` is ever raised without a corresponding mapping added, so the
 gap can't silently regress into a false negative.
 
@@ -181,7 +183,7 @@ version check as the token-usage entry above — revisit both together.
 
 ## Org Governance Enforcement (Model/Adapter Allowlists, Cost Ceilings, Rollout Gates)
 
-**Specified by:** crew-v2 gap-closure WP5 ruling (2026-08-22); supersedes the entries below
+**Specified by:** the crew-v2 gap-closure ruling (2026-08-22); supersedes the entries below
 **References:** `crates/runtime/src/policy/evaluate.rs`, `crates/runtime/src/config/mod.rs`
 
 ### What it is
@@ -192,8 +194,8 @@ per-run and a daily cost ceiling, and a `native_discovery_reviewed` rollout gate
 authorization of vendor-discovered nested workers. `PolicyEvaluator::evaluate` enforced all
 five before every run's authorization.
 
-crew.json (spec §10, `crew::CrewConfig`) deliberately does not model this org-governance
-surface — the design spec retires the org config layer outright (§2.2/§12). WP5 deleted the
+crew.json (`crew::CrewConfig`) deliberately does not model this org-governance
+surface — the org config layer was retired outright. That ruling deleted the
 enforcement and the corresponding `RuntimePolicy` fields rather than keeping them
 permanently inert, since that YAML layer was never actually wired up end to end (the
 extension passed no config-path flags) and so was unreachable in every real deployment.
@@ -225,7 +227,7 @@ inputs without it.
 
 ## Headless Control Plane
 
-**Specified by:** crew-v2 gap-closure WP-C ruling (2026-08-22)
+**Specified by:** the crew-v2 gap-closure ruling (2026-08-22)
 **References:** [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md),
 [`docs/adr/0025-crew-v2-tui-control-plane.md`](adr/0025-crew-v2-tui-control-plane.md)
 
@@ -234,7 +236,7 @@ inputs without it.
 Before crew-v2, each of the four worker adapters (Claude, Codex, Copilot, OMP-RPC) had two
 independent implementations: a headless one driving each vendor's own non-interactive/JSON
 protocol directly (`claude stream-json`, `codex app-server`, `copilot --acp`, `omp --mode rpc`),
-and a TUI one driving the real interactive CLI on a PTY. WP-C deleted every headless
+and a TUI one driving the real interactive CLI on a PTY. That ruling deleted every headless
 implementation, its fixtures, and its conformance suite, leaving `adapter::tui::*` as the sole
 control plane. `mode: "headless"` stays deserializable (an old journal or config naming it must
 still parse) but is typed-rejected at both config-validation and adapter-dispatch time — never
@@ -245,7 +247,7 @@ silently remapped to `tui` and never silently accepted.
 The headless adapters existed for CI-friendly, non-interactive automation and for hidden/backgrounded
 runs a PTY-based TUI can't naturally serve. But crew-v2's TUI control plane became the
 better-maintained, better-tested path (ADR-0025), and running two parallel implementations per
-vendor doubled the surface WP-C's authors had to keep correct without doubling real usage — no
+vendor doubled the surface its authors had to keep correct without doubling real usage — no
 operator was reported as depending on the headless path specifically. Retiring it outright, rather
 than keeping it permanently inert, follows the same reasoning as the Org Governance Enforcement
 entry above: an unreachable-in-practice code path is a liability, not a free option.
@@ -276,7 +278,7 @@ since the vendor wire formats this was built against may themselves have moved o
 
 **Specified by:** TODO.md "Other Potential Features" backlog (retired 2026-08-06)
 **Status:** written against the pre-crew-v2 YAML org/repo/user config
-(`LayeredConfig`/`merge.rs`), removed by crew-v2 gap-closure WP5 in favor of `crew.json`
+(`LayeredConfig`/`merge.rs`), removed by the crew-v2 gap-closure ruling in favor of `crew.json`
 (`crates/runtime/src/config/crew.rs`). The four ideas below are unaffected in spirit (crew.json
 could equally use templates/schema validation/versioning/encryption) but any implementation
 would target `crew.rs`'s `load_layers`, not the paths named below.
@@ -314,8 +316,7 @@ unrecognized/misspelled key.
 
 **Why deferred:** `parse_config_file` already fails closed on invalid YAML;
 the marginal gain is a better error message for typos in optional/unknown
-fields, not a correctness gap. A schema now exists (#16:
-`crew-config.schema.json`, generated by `render_config_schema()` and
+fields, not a correctness gap. A schema now exists (`crew-config.schema.json`, generated by `render_config_schema()` and
 exposed via `crewd schema`), so the remaining gap is narrower than it was
 — it's wiring that already-generated schema into `crew.rs`'s
 `load_layers` to validate a config file *before* merge, not generating one
@@ -355,13 +356,13 @@ config from the entry above is built).
 
 ## True tabs for Terminal.app (and pre-1.3.0 Ghostty)
 
-**Specified by:** deferred from CREW-9's first cut (2026-08-29)
+**Specified by:** deferred from the host-terminal pane-following feature's first cut (2026-08-29)
 **References:** `crates/runtime/src/display/os_window.rs`,
 [`docs/adr/0025-crew-v2-tui-control-plane.md`](adr/0025-crew-v2-tui-control-plane.md)
 
 ### What it is
 
-CREW-9 made worker panes follow the host terminal instead of always assuming Terminal.app, and two
+That work made worker panes follow the host terminal instead of always assuming Terminal.app, and two
 of the three supported targets already open a **real tab** in the window the user is looking at:
 
 | Target | Shipped behaviour |
@@ -396,7 +397,7 @@ undesirable.
 
 The honest framing: for iTerm2 and current Ghostty, "panes follow the host" already means a tab in
 the window you are working in. For Terminal.app it means a foregrounded window of the right
-application, which is a large improvement over the pre-CREW-9 behaviour of an un-activated window of
+application, which is a large improvement over the earlier behaviour of an un-activated window of
 the *wrong* application, and may simply be good enough.
 
 ### Decision trigger
@@ -416,7 +417,7 @@ reported honestly per backend, so a caller that cares can already tell what it g
 
 ## True Graceful Stop (`crew_stop { outcome: "done" }`)
 
-**Specified by:** CREW-35 (skills-audit tool-surface fixes, 2026-08-30)
+**Specified by:** the skills-audit tool-surface fixes (2026-08-30)
 **References:** `packages/extension/src/tools/leader.ts` (`registerStopTool`), `crates/runtime/src/service/orchestration.rs` (`run_cancel`)
 
 ### What it is
@@ -430,7 +431,7 @@ right away). The only real difference between the two outcomes is that `'done'` 
 `message/send` follow-up a moment before the same kill; there is no grace period, and no
 server-side distinction between "let it finish its turn" and "stop it now."
 
-CREW-35 fixed the dishonesty (removed the ignored `mode` parameter, rewrote the tool description to
+That fix removed the dishonesty (removed the ignored `mode` parameter, rewrote the tool description to
 say plainly that both outcomes kill immediately). This entry tracks the feature the old description
 was describing, in case it's ever worth actually building: a `run/cancel` (or dedicated `run/stop`)
 mode that gives a live vendor process a bounded window to reach its own turn boundary --
@@ -468,16 +469,16 @@ without inventing new server behavior.
 
 ## `run/list` Canonical Result Type
 
-**Specified by:** CREW-43 (RunMessage codegen fix, 2026-08-30)
+**Specified by:** the RunMessage codegen fix (2026-08-30)
 **References:** `crates/protocol/src/run.rs` (`Run`), `crates/runtime/src/service/query.rs`
 (`run_list_op`/`row_to_run_json`), `crates/runtime/src/service/orchestration.rs:1130` (`run_list`)
 
 ### What it is
 
-`message/list` (CREW-43) and every other multi-row read RPC now has a canonical protocol result
+`message/list` and every other multi-row read RPC now has a canonical protocol result
 type, schema-validated via Ajv on the extension side. `run/list` is the one holdout: its result is
 still validated only structurally (any JSON object passes), the same gap `RunMessage` had before
-CREW-43 closed it.
+that fix closed it.
 
 The gap isn't an oversight of the same shape, though — it was investigated, not just noticed.
 `run_list_op`'s actual wire response (`row_to_run_json`) includes two fields the existing `Run`
@@ -502,8 +503,8 @@ Closing this cleanly needs one of two real design choices, not a mechanical fix:
    constructs" into "the shape submit-time code constructs, plus fields it never has yet."
 
 Neither is a wire-safety fix on the order of `RunMessage`'s -- both are a real API-shape decision
-with call-site consequences, so CREW-43 reported this rather than picking one under a
-tool-surface-honesty ticket's scope.
+with call-site consequences, so that fix reported this rather than picking one under an unrelated
+tool-surface-honesty fix's scope.
 
 ### Decision trigger
 

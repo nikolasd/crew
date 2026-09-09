@@ -215,8 +215,8 @@ Check catalog, in run order:
 
 `DoctorResult.unresolved_gates` is still present on the wire (always empty) but the catalog no
 longer has `rollout_gates_resolved`/`rollout_gate_<gate>` rows: the org-governance rollout gates they
-reported on were retired with the YAML org config layer they were sourced from (crew-v2 gap-closure
-WP5) — see [`future-features.md`](future-features.md#org-governance-enforcement-modeladapter-allowlists-cost-ceilings-rollout-gates).
+reported on were retired with the YAML org config layer they were sourced from (crew-v2 gap-closure)
+— see [`future-features.md`](future-features.md#org-governance-enforcement-modeladapter-allowlists-cost-ceilings-rollout-gates).
 
 A check that's missing required context (no db handle, no policy, etc.) reports a failure prefixed
 `skipped:` rather than silently passing.
@@ -231,7 +231,7 @@ requiring a live runtime connection — see [`user-guide.md`](user-guide.md).
 
 ### `crewd config`
 
-Manages the `crew.json` config layer (spec §10, `crates/runtime/src/config/crew.rs`). Three
+Manages the `crew.json` config layer ([architecture.md § Configuration and Policy](architecture.md#configuration-and-policy), `crates/runtime/src/config/crew.rs`). Three
 subcommands:
 
 ```bash
@@ -253,7 +253,7 @@ crewd config path [--repo <path>]
 - **`path`** lists the config layer files in precedence order and whether each exists on disk, for
   `--repo` (current directory if omitted).
 
-`mode: "headless"` is retired (crew-v2 gap-closure WP-C, spec §4.6): a `crew.json` layer naming it
+`mode: "headless"` is retired (crew-v2 gap-closure; see [ADR-0026](adr/0026-headless-retirement.md)): a `crew.json` layer naming it
 still parses (so `config print`/`config path` never fail on an old file), but `serve`/every other
 subcommand that reads config typed-rejects it at validation time, naming the retirement --
 [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md).
@@ -356,7 +356,7 @@ credits). The report is written to `--output` and also printed to stdout.
 - The live suite spawns the real vendor TUI on a PTY and drives it through the same injection
   path the runtime uses. `tui` is the only accepted `--mode` value (and its default) —
   the headless control plane this used to also reach is retired: `--mode headless` is a typed
-  rejection, not a live path, per crew-v2 gap-closure WP-C (spec §4.6,
+  rejection, not a live path, per crew-v2 gap-closure (see
   [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md)). The fixture suite
   ignores `--mode`.
 

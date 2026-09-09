@@ -13,7 +13,7 @@ test("generated type accepts the golden initialize request", async () => {
   expect(value.client.name).toBe("@nikolasd/crew");
 });
 
-// Smoke check for the crew v2 `RuntimeEvent` additions (WP6): the
+// Smoke check for the crew v2 `RuntimeEvent` additions: the
 // canonical schema accepts a well-formed `WorkerTimeout` event envelope
 // and rejects one carrying an unknown field, the same way every other
 // event variant is guarded by `deny_unknown_fields`.

@@ -181,9 +181,8 @@ its code, and because both are instances of what the change is about.
 
 ## Links
 
-* Follows the measurement in PR #103, which fixed a test-side accelerated bound and left this
+* Follows an earlier measurement fix that corrected a test-side accelerated bound and left this
   product question open deliberately.
-* Shipped in PR #109.
 * Constrained by the truncation guarantee that introduced chunked bracketed-paste delivery in the
   first place; that guarantee is restated above rather than changed.
 * Proven by five tests over `bound_on_progress` driven directly, with the write future and the

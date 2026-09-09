@@ -398,10 +398,10 @@ impl OrchestrationService {
     /// `task/upsert`, `approval/decide`, every run-lifecycle mutation
     /// that guards a runs-DB write against another instance's task
     /// (`run/submit`, `run/retry`, `run/cancel`, `message/send`,
-    /// `coordination/child/decide`, `workspace/acquire` -- R77), and every
+    /// `coordination/child/decide`, `workspace/acquire`), and every
     /// lease-scoped method that resolves a lease before acting on it
     /// (`workspace/get`, `workspace/release`, `workspace/inspect`,
-    /// `workspace/apply` -- R81, via [`Self::require_lease_owner`]). Role
+    /// `workspace/apply`, via [`Self::require_lease_owner`]). Role
     /// admission itself already happened in the connection layer's method
     /// table; every one of those methods is `ompExtension`-only
     /// (`crate::ipc::ClientPrincipal::allowed_methods`), so `principal` is
@@ -467,9 +467,10 @@ impl OrchestrationService {
 
     /// `ownerClientInstanceId` must equal the connected `principal`'s own
     /// instance id -- this is param validation against the identity the
-    /// connection layer already authenticated, not the R76 ownership
-    /// guard: the legitimate extension always presents its own session
-    /// id, so no caller behavior changes. Revision monotonicity and,
+    /// connection layer already authenticated, not the ownership check
+    /// `upsert_task`'s own guarded write performs below: the legitimate
+    /// extension always presents its own session id, so no caller
+    /// behavior changes. Revision monotonicity and,
     /// for an existing task, ownership of the row itself are both
     /// arbitrated inside `upsert_task`'s own guarded write: a
     /// caller-side pre-check read in a separate round trip could be
@@ -1566,7 +1567,7 @@ impl OrchestrationService {
             // journaled `cancelled` but a vendor process may still be
             // live. Make that visible to `run/get` and the monitor via
             // `degradedControl`, mirroring the policy-violation
-            // path's R13 treatment -- guarded write, journaled, broadcast.
+            // path's treatment -- guarded write, journaled, broadcast.
             tracing::warn!(error = %err, run_id = %run_id, "failed to cancel running adapter subprocess");
             match self
                 .db
@@ -1941,7 +1942,7 @@ impl OrchestrationService {
     /// confirms `principal` currently owns the run it belongs to -- the
     /// ownership gate shared, byte-for-byte, by all four lease-scoped
     /// methods (`workspace/get`, `workspace/release`, `workspace/inspect`,
-    /// `workspace/apply`; R81). As on `workspace_acquire`, this is a
+    /// `workspace/apply`). As on `workspace_acquire`, this is a
     /// dedicated domain round trip against the runs database, separate
     /// from `LeaseService`'s own database file, so the two cannot commit
     /// atomically: a `reconcile/omp` rebind that commits inside the gap

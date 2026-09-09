@@ -16,7 +16,7 @@ export interface OrchestrationToolContext {
   /** Optional callback to report a run/submit failure to the monitor. */
   reportSubmitFailure?: (message: string) => void;
   /**
-   * Reads omp's model catalogue (CREW-53). Optional, defaulting to the real
+   * Reads omp's model catalogue. Optional, defaulting to the real
    * `readCatalogue`: it exists as a seam so tests do not spawn `omp` as a
    * subprocess, and so a future extension-facing model API can replace the
    * shell-out in one place.
@@ -67,7 +67,7 @@ function renderSummary(method: string, result: unknown): string {
 }
 
 /** Wire values `run/submit`/`run/retry`'s `displayPreference.launchProgram`
- *  accepts (CREW-9) -- must match `crates/protocol/src/display.rs`'s
+ *  accepts -- must match `crates/protocol/src/display.rs`'s
  *  `HostProgramHint` exactly. A closed set, never a raw string: this value
  *  ends up selecting and parameterizing an `osascript` invocation on the
  *  daemon side, so `$TERM_PROGRAM` content must never reach it unmapped --
@@ -109,7 +109,7 @@ export function launchProgramHint(env: Readonly<Record<string, string | undefine
  * malformed. `ordered: []` matches the daemon's own default (any
  * available backend) when `displayPreference` is absent entirely.
  *
- * CREW-52: `placement` is deliberately NOT included here at all, never a
+ * `placement` is deliberately NOT included here at all, never a
  * hardcoded value. It used to be `"embedded"`, independently hardcoded on
  * both sides of the wire and asserted (by a comment, not a test) to match
  * the daemon's own default -- exactly the class of doc-claim defect this

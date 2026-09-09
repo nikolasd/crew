@@ -136,7 +136,7 @@ test("crew_transcript filters events to the run and normalizes", async () => {
   expect(events.every((e) => e.type === "runEvent" || e.type === "taskEvent")).toBe(true);
 });
 
-test("crew_stop done sends a wrap-up then cancels immediately -- there is no soft/graceful distinction (CREW-35)", async () => {
+test("crew_stop done sends a wrap-up then cancels immediately -- there is no soft/graceful distinction", async () => {
   const { client, calls } = fakeClient();
   const { tools } = setupLeaderTools(client);
   const result = await tools.get(CREW_STOP_TOOL_NAME)!({ op: "stop", runId: "run-1", outcome: "done" }, fakeExtCtx());

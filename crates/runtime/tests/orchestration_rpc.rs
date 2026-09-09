@@ -475,7 +475,7 @@ impl RunDriver for ConfigurableCancelViolationDriver {
     }
 }
 
-/// R13: a policy cancellation whose adapter kill actually FAILS must not
+/// A policy cancellation whose adapter kill actually FAILS must not
 /// record a clean success -- the run is journaled `cancelled` (the intent
 /// stands) but `degradedControl` must be raised so `run/get` and the
 /// monitor see that the control plane could not act on this run.
@@ -499,8 +499,8 @@ async fn a_failed_policy_kill_raises_degraded_control() {
     );
 }
 
-/// R13's counter-case: an absent adapter is a clean outcome, not a kill
-/// failure -- `degradedControl` must stay false.
+/// The counter-case to the previous test: an absent adapter is a clean
+/// outcome, not a kill failure -- `degradedControl` must stay false.
 #[tokio::test]
 async fn a_policy_cancel_with_no_running_adapter_is_clean() {
     let harness = Harness::start(|c| {
@@ -1198,7 +1198,7 @@ async fn second_nested_worker_observed_on_an_already_actioned_run_never_double_c
     assert_eq!(get["result"]["state"], "cancelled");
 }
 
-/// R80: `policy/violation/list` is the discovery surface for which
+/// `policy/violation/list` is the discovery surface for which
 /// violation still holds a quarantine -- two recorded violations, one
 /// decided, must both list with their real decision state.
 #[tokio::test]
@@ -1295,7 +1295,7 @@ async fn policy_violation_list_reports_decision_state_for_every_violation() {
     assert_eq!(decided[0]["resolvedBy"], "omp-1");
 }
 
-/// R78: the quarantine gate for `workspace/apply` lives inside the same
+/// The quarantine gate for `workspace/apply` lives inside the same
 /// domain op as the ownership gate AND inside the `ApplyStarted` append's
 /// own transaction. A quarantined run's apply must be refused `-32101`
 /// with no `applyStarted` in the journal -- flipping either
@@ -1368,7 +1368,7 @@ async fn workspace_apply_on_a_quarantined_run_is_refused_and_journals_no_apply_s
     );
 }
 
-/// R79: two CONCURRENT cancelling observations must both report success.
+/// Two CONCURRENT cancelling observations must both report success.
 /// The loser's transition fails because the winner terminalized the run;
 /// that is the idempotent success the doc comment always promised,
 /// acknowledged as `superseded` in the audited `operations` table rather
@@ -1483,8 +1483,8 @@ async fn concurrent_cancelling_violations_are_both_idempotent_successes() {
     // (reading already_actioned = false) before either transition commits.
     let (first, second) = tokio::join!(emit("child-a", "parent-a"), emit("child-b", "parent-b"));
     // NOTE: the sink swallows record_nested_worker errors into a warn log
-    // (event_sink.rs), so these two expects cannot fail for R79's reason;
-    // the real idempotency proof is the two-outcome operations-table
+    // (event_sink.rs), so these two expects cannot fail for the idempotency
+    // reason this test targets; the real idempotency proof is the two-outcome operations-table
     // assertion below, which fails when the loser's ack never lands.
     first.expect("the sink never errors");
     second.expect("the sink never errors");
@@ -2057,8 +2057,8 @@ impl RunDriver for StartCapturingRunDriver {
 }
 
 /// A [`RunDriver`] whose kill genuinely fails: `cancel_run` returns `Err`,
-/// which since R13 always means a live vendor process the kill failed
-/// against -- never an absent adapter.
+/// which by this suite's convention always means a live vendor process the
+/// kill failed against -- never an absent adapter.
 #[derive(Default)]
 struct KillFailingRunDriver {
     inner: FakeRunDriver,
@@ -2098,8 +2098,9 @@ impl RunDriver for KillFailingRunDriver {
     }
 }
 
-/// RED: since R13, `cancel_run`'s `Err` always means a live vendor
-/// process a kill actually failed against -- the policy-violation path
+/// RED: `cancel_run`'s `Err` always means a live vendor process a kill
+/// actually failed against (the same convention the policy-violation
+/// kill-failure test above relies on) -- the policy-violation path
 /// raises `flags.degradedControl` on that condition, but `run/cancel`
 /// only warns and reports unqualified success. The kill failure must
 /// become visible to `run/get` and the monitor via the same guarded,
@@ -3580,7 +3581,7 @@ async fn reconcile_omp_rejects_mismatched_revision() {
     );
 }
 
-/// R76: `task/upsert`'s guarded write has no ownership predicate -- it
+/// `task/upsert`'s guarded write has no ownership predicate -- it
 /// only enforces revision monotonicity, never that the caller's
 /// `ownerClientInstanceId` matches whoever currently owns the row. A
 /// second OMP-extension client that never reconciled can therefore
@@ -3596,7 +3597,7 @@ async fn reconcile_omp_rejects_mismatched_revision() {
 /// revision arbitration) an upsert *by the new owner* at the stored
 /// revision succeeds. That half already passes today -- not because
 /// ownership is enforced, but because nothing is enforced -- and it must
-/// keep passing once R76's guard lands.
+/// keep passing once the ownership guard lands.
 #[tokio::test]
 async fn task_upsert_cannot_seize_ownership_from_another_instance() {
     let harness = Harness::start(|_| {}).await;
@@ -3626,8 +3627,9 @@ async fn task_upsert_cannot_seize_ownership_from_another_instance() {
         "an upsert by a non-owner presenting the stored revision must be refused: {seizure:?}"
     );
 
-    // Higher revision + non-owner: the variant that also clears R74's
-    // `>=` guard, so the owner clause alone must refuse it.
+    // Higher revision + non-owner: the variant that also clears the
+    // revision-monotonicity `>=` guard, so the owner clause alone must
+    // refuse it.
     let seizure_higher = second_client
         .call(
             6,
@@ -3647,7 +3649,7 @@ async fn task_upsert_cannot_seize_ownership_from_another_instance() {
 
     // Lower revision + non-owner: RevisionTooLow wins the classification
     // (deliberate precedence -- an owner-agnostic staleness report keeps
-    // R74's byte-pinned message stable).
+    // the revision guard's byte-pinned message stable).
     let seizure_lower = second_client
         .call(
             7,
@@ -3848,7 +3850,7 @@ async fn run_submit_rejects_an_unrecognized_workspace_mode() {
 
 // -------------------------------------------- lease leak on failed run start
 
-/// R50: `materialize()` failing after `LeaseService::acquire` succeeded must
+/// `materialize()` failing after `LeaseService::acquire` succeeded must
 /// release the lease, not leak it. The harness repository has an empty
 /// `.git` directory with no commits, so `gitWorktree` isolation's
 /// `git rev-parse HEAD` fails inside `materialize()` -- exactly the failure
@@ -3936,8 +3938,9 @@ async fn start_queued_run_releases_the_lease_when_materialize_fails() {
     );
 }
 
-/// R50, second call site: `workspace/acquire`'s own `materialize()` failure
-/// must release the lease exactly like `start_queued_run`'s.
+/// Second call site for the lease-leak above: `workspace/acquire`'s own
+/// `materialize()` failure must release the lease exactly like
+/// `start_queued_run`'s.
 #[tokio::test]
 async fn workspace_acquire_releases_the_lease_when_materialize_fails() {
     let harness = Harness::start(|c| {
@@ -4023,7 +4026,7 @@ async fn workspace_acquire_releases_the_lease_when_materialize_fails() {
     );
 }
 
-/// R41: a driver that fails `start` after the workspace was already
+/// A driver that fails `start` after the workspace was already
 /// materialized and the lease activated must still release the lease and
 /// tear down the worktree it just created, not leak both.
 #[tokio::test]
@@ -4392,7 +4395,7 @@ async fn run_cancel_reaches_real_spawn_evidence_adapter_and_kills_process() {
 
 // -------------------------------------------------------- artifact isolation
 
-/// Regression test for R10: artifact APIs must scope results by the
+/// Regression test: artifact APIs must scope results by the
 /// caller's task ownership. Two OMP-extension clients connecting to the
 /// same daemon, each owning a different task, should never see each
 /// other's artifacts.
@@ -4589,10 +4592,10 @@ async fn seed_artifact(
     store.store(artifact, content).await.unwrap()
 }
 
-// -------------------------------------------------------- R77: run-lifecycle authority
+// -------------------------------------------------------- run-lifecycle authority
 //
-// R76 closed `task/upsert`'s ownership hole, but the same review (its W2
-// finding) found that ownership gates *decisions* -- `approval/decide`,
+// Closing `task/upsert`'s ownership hole above fixed one path, but the
+// same review found that ownership gates *decisions* --
 // `policy/violation/decide`, `reconcile/omp` -- and never the run
 // lifecycle itself. `OrchestrationService::dispatch` calls
 // `run_submit`, `run_retry`, `run_cancel`, `message_send`,
@@ -4744,7 +4747,7 @@ async fn run_cancel_against_another_instances_run_is_refused() {
         "a refused cancel must journal nothing: before {before}, after {after}"
     );
 
-    // W3 precedence pin: the owner now genuinely cancels, reaching a
+    // A precedence pin: the owner now genuinely cancels, reaching a
     // terminal state -- the observable contract of the reordering in
     // `transition_run` is that a *non-owner's* cancel of that
     // terminal run still classifies as `NotOwner` (-32602), not
@@ -4785,7 +4788,7 @@ async fn run_retry_against_another_instances_task_is_refused() {
     let (task_id, _worker_id, run_id) = submit_run_with_driver(&mut owner, "omp-1").await;
 
     // Owner cancels its own run to reach a terminal state -- legitimate,
-    // exercises none of R77's guarded paths.
+    // exercises none of this section's guarded paths.
     let cancel = owner
         .call(5, "run/cancel", json!({ "runId": run_id }))
         .await;
@@ -4923,7 +4926,7 @@ async fn workspace_acquire_against_another_instances_run_is_refused() {
         "a refused acquire must not have journaled any workspace event: {replay:?}"
     );
 
-    // W2: the journal assertion above cannot distinguish "checked before
+    // The journal assertion above cannot distinguish "checked before
     // acquiring" from "checked after acquiring, with the leaked lease
     // never journaled" -- leases live in `LeaseService`'s own DB, not
     // the runs DB the journal assertion reads. `run/get` reads the lease
@@ -4982,7 +4985,7 @@ async fn coordination_child_decide_against_another_instances_run_is_refused() {
         "a refused decide must journal nothing: before {before}, after {after}"
     );
 
-    // W1: the deny arm above never exercises the accept arm's ownership
+    // The deny arm above never exercises the accept arm's ownership
     // check (`decide_child`'s guarded write, reached via
     // `coordination_child_decide`'s `"accept"` branch,
     // orchestration.rs:2078) -- deleting that check alone would leave
@@ -5021,9 +5024,9 @@ async fn coordination_child_decide_against_another_instances_run_is_refused() {
     );
 }
 
-/// GREEN guard for R81/W2: no test anywhere exercised a successful
-/// `coordination/child/decide` "accept" -- the R77 GREEN chain below
-/// only covers "deny", and the attacker "accept" case above is refused
+/// GREEN guard: no test anywhere exercised a successful
+/// `coordination/child/decide` "accept" -- the run-lifecycle GREEN chain
+/// below only covers "deny", and the attacker "accept" case above is refused
 /// before `decide_child`'s event is ever built. Swapping `Accept` for
 /// `ChildWorkerRequestDenied`, or dropping the three `Some(..)` child
 /// ids, in `DomainRepository::decide_child` would leave the whole suite
@@ -5094,7 +5097,7 @@ async fn owner_accepting_a_child_request_journals_the_child_ids_and_returns_the_
     assert_eq!(recorded["payload"]["childRunId"], child_run_id);
 }
 
-/// GREEN guard for R77: every guarded mutation above must still succeed
+/// A GREEN guard: every guarded mutation above must still succeed
 /// when the caller genuinely owns the task/run it targets, so the
 /// eventual fix (threading `principal` and arbitrating task ownership
 /// inside each guarded write) cannot pass by universally refusing.
@@ -5255,7 +5258,7 @@ async fn workspace_get_against_another_instances_lease_is_refused() {
     );
 }
 
-/// R84: an unknown `leaseId` must be the same caller error (`-32602`) as
+/// An unknown `leaseId` must be the same caller error (`-32602`) as
 /// an unowned one -- reporting `-32603` both misclassified the error and
 /// let a caller distinguish "exists but not yours" from "does not exist"
 /// by error code.
@@ -5394,10 +5397,10 @@ async fn a_copy_workspace_echoes_copy_not_isolated() {
     );
 }
 
-/// GREEN guard for R81: the owner using its own lease must still
+/// A GREEN guard: the owner using its own lease must still
 /// succeed once ownership arbitration is threaded into
 /// `workspace_get`, `workspace_inspect`, and `workspace_release` -- a
-/// universal-refusal fix must not pass any of them either (W4).
+/// universal-refusal fix must not pass any of them either.
 #[tokio::test]
 async fn workspace_release_by_the_owning_instance_succeeds() {
     let harness = Harness::start(|c| {
@@ -5655,7 +5658,7 @@ async fn workspace_inspect_against_another_instances_lease_is_refused() {
 /// harder (`seed_artifact` above), but would not distinguish "refused for
 /// ownership" from "refused because the artifact could not be resolved
 /// yet" -- the two errors this test's message assertion tells apart.
-/// Pre-R81, absent any ownership check, the handler ran the (since
+/// Before this ownership gate existed, the handler ran the (since
 /// deleted) caller-side quarantine pre-check, journaled `ApplyStarted`,
 /// and only then failed resolving the artifact -- a mutation reached the
 /// journal from an unauthorized caller before the request was refused at
@@ -5724,11 +5727,11 @@ async fn workspace_apply_against_another_instances_lease_is_refused() {
     );
 }
 
-/// GREEN guard for R81: the owner applying against its own lease must
+/// A GREEN guard: the owner applying against its own lease must
 /// still pass the ownership gate and reach artifact resolution -- the
 /// `-32603` from `WorkspaceApplier` failing on a bogus, never-seeded
 /// artifact is the proof a wrongly-universal refusal would instead
-/// surface as `-32602` before this point is ever reached (W4).
+/// surface as `-32602` before this point is ever reached.
 #[tokio::test]
 async fn workspace_apply_by_the_owning_instance_reaches_artifact_resolution() {
     let harness = Harness::start(|c| {

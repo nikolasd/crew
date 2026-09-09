@@ -125,12 +125,14 @@ unredacted content is the narrowly held one — defensible, but only while state
 >
 > | | durable | redacted | in `audit export` |
 > |---|---|---|---|
-> | decision reasons (before CREW-32) | yes | **no** | **yes** |
+> | decision reasons (before the redaction fix below) | yes | **no** | **yes** |
 >
 > These were strictly worse than the steer payload this ADR compared itself against: a payload lives
 > in `messages`, which `audit/export.rs` never reads, while a reason is a `RuntimeEvent` in `events`
-> — so it was exportable, not merely durable. Closed by CREW-32, which routes all three through the
-> redactor. Recorded here rather than silently fixed because this ADR's own framing — two exposure
+> — so it was exportable, not merely durable. Closed by a fix that routes all three through the
+> redactor (see the findings for `ApprovalEvent.reason`, `PlanDecided.reason`, and `ChildEvent.reason`
+> in `docs/security/redacted-field-inventory-2026-09-07.md`). Recorded here rather than silently
+> fixed because this ADR's own framing — two exposure
 > classes, the redacted one widely distributed — was built on a survey that had missed a third, and a
 > reader comparing paths deserves to know the survey was the incomplete part rather than the code.
 

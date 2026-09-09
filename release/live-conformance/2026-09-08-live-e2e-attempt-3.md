@@ -3,7 +3,8 @@
 **Verdict: FAIL. The v0.7.0 release gate stays closed.**
 
 Build under test: `main` @ `cab041a`, `crewd` built from source (binary mtime 19:56, after
-`cab041a` at 17:57; contains the CREW-74 string; no source newer than the binary).
+`cab041a` at 17:57; contains the pane attach-retry marker string unique to that source; no source
+newer than the binary).
 Host: omp 18.1.13, claude CLI 2.1.263, herdr 0.8.2, load 3.4 on 18 cores.
 State root `/tmp/crew-e2e3-state` (created empty; the default `~/.omp/crew` was untouched).
 Target repository: a freshly created and committed repo (`fcb70e5`) — **new to the vendor CLI**,
@@ -46,7 +47,7 @@ there was no crash loop, and no billed runaway.
 
 Named here rather than left to ticket references, so this record stands alone.
 
-### 1. A failed start fabricates success, and leaves no durable trace (F4, F17 → CREW-78)
+### 1. A failed start fabricates success, and leaves no durable trace (F4, F17)
 
 Observed twice. On run `01a08216` the submit RPC returned `start failed: no transcript containing
 nonce … within 8s` to the leader, while the run it had already journaled as `working` was neither
@@ -90,7 +91,7 @@ Decided after the run — see the rulings addendum at the end: **`failed`.** `lo
 supervisor could not observe *how* the process exited, and here it observed a clean exit perfectly
 well.
 
-### 2. First-run vendor prompts are invisible, and crew types into them (F10, F13 → CREW-79)
+### 2. First-run vendor prompts are invisible, and crew types into them (F10, F13)
 
 **Root cause of the P3 incident**, observed by the maintainer in the worker's tab: the claude CLI
 paused on its interactive *"allow access to this repository folder"* trust question — a first launch
@@ -123,10 +124,12 @@ Every reference to it lives inside that one file, reachable only from the confor
 directory — record the untrusted-workspace problem as *"since fixed"*. That is true of one vendor's
 test harness and of nothing a user touches. This record supersedes that characterisation.
 
-CREW-69's `question` field is the missing channel: it has two production call sites, both
-post-discovery, both passing `None`. A third would have to be written at `fail_start`.
+The missing channel is `EscalationRaised.question` (`crates/protocol/src/event.rs`) — ruled in
+scope but deferred to post-E2E implementation, see `docs/future-features.md`'s "Escalations Carry
+the Worker's Actual Question": it has two production call sites, both post-discovery, both passing
+`None`. A third would have to be written at `fail_start`.
 
-### 3. A parked run is declared `lost` after five minutes (F12 → CREW-80)
+### 3. A parked run is declared `lost` after five minutes (F12)
 
 Run `01a08219` settled to `waitingUser` at 17:39:17 and was never touched. At 17:50:22, seq 249
 recorded `workerTimeout kind=inactivity sinceMs=302380` and seq 250 recorded `runLost` — terminal,
@@ -149,7 +152,7 @@ viewer echo, not from the turn that ended six minutes earlier. Here it delayed t
 nothing in the design constrains the direction, so a differently-timed echo fires it *early*, against
 a leader that was about to act.
 
-### 4. A parked run floods the journal at ~30 rows/second (F7, F9, F16 → CREW-81)
+### 4. A parked run floods the journal at ~30 rows/second (F7, F9, F16)
 
 Between 18:41:46 and 18:49:43 — the eight minutes run `01a08253` sat parked in a tab — the journal
 grew from 706 to 15,338 events: **7,308 `outOfBandInput` plus 7,309 `runFlagsEvent`**, into an
@@ -195,12 +198,12 @@ A record of a failed run is not a record that nothing works. Observed good on 20
   with no handler reached and no 404 leak; a valid token produced `303` to `/` with
   `Set-Cookie: crew_dashboard=…; Path=/; HttpOnly; SameSite=Strict`; the listener bound to
   `127.0.0.1:4747` only.
-- **The CREW-74 display fallback did exactly its job**: herdr failed, tmux was unavailable, osWindow
+- **The pane attach-retry fallback did exactly its job** (see [ADR-0029](../../docs/adr/0029-placement-follows-the-backend-embedded-deleted.md)): herdr failed, tmux was unavailable, osWindow
   succeeded, and the downgrade was journaled with the full `attempted: [herdr, tmux, osWindow]`
   sequence and surfaced by the monitor. A pane in a non-preferred host *with* the event is the
   mechanism working.
-- **The CREW-4 recorded-prompt comparison caught a real composer-level truncation** (3,150 of 18,409
-  characters) and failed the start loudly. ADR-0030's progress bound did not miss this: it tracks
+- **The recorded-prompt comparison caught a real composer-level truncation** (3,150 of 18,409
+  characters) and failed the start loudly. [ADR-0030](../../docs/adr/0030-paste-delivery-bounded-on-progress.md)'s progress bound did not miss this: it tracks
   bytes accepted at the PTY boundary and explicitly hands composer-side truncation to the
   transcript comparison, which worked.
 - Prompt journaling on submit (ADR-0028), the result read on a settled turn, and the headline P3
@@ -211,28 +214,28 @@ A record of a failed run is not a record that nothing works. Observed good on 20
 
 ---
 
-## Findings and their tickets
+## Findings and their status
 
-| # | Finding | Ticket | Sev |
+| # | Finding | Fix landed in-repo? | Sev |
 |---|---|---|---|
-| F1 | Widget renders the empty-state box on an empty journal, contrary to D22 and two documents; no `/crew widget` toggle exists | CREW-77 | P3 |
-| F4, F17 | Fabricated success; a start failure leaves no durable trace | CREW-78 | P1 |
-| F10, F13 | Readiness accepts any bytes; paste-and-Enter into vendor dialogs; no dialog detection; the test-only Copilot trust helper | CREW-79 | P1 |
-| F12 | Parked run declared `lost` at five minutes; clock re-armed by echoes | CREW-80 | P1 |
-| F7, F9, F16 | Attach-socket echo storm; two fsync'd rows per read; vendor-session duplication | CREW-81 | P1 |
-| F5 | herdr broken on 0.8.2; no version gate on the backend | CREW-82 | P2 |
-| F14 | `[crew:<nonce>]` in the prompt trips vendor injection defences | CREW-83 | P2 |
-| F15 | A retry never journals its prompt | CREW-84 | P2 |
-| F11 | `crew_transcript` replay discards payload; no run filter | CREW-85 | P2 |
-| F6 | Usage never implemented for any TUI adapter | CREW-86 | P3 |
-| F2, F3 | Model ask bypassed when the leader supplies a model; `taskId` error message unhelpful | CREW-87 | P3 |
-| F8 | Milestone digests need timestamps so late delivery reads as history | CREW-88 | P3 |
+| F1 | Widget renders the empty-state box on an empty journal, contrary to the decision that the widget stays hidden on an empty journal and to two documents; no `/crew widget` toggle exists | Not yet fixed | P3 |
+| F4, F17 | Fabricated success; a start failure leaves no durable trace | Fixed — `terminal_state_for` now branches on `turnSettled` (`crates/runtime/src/adapter/run_lifecycle.rs`) | P1 |
+| F10, F13 | Readiness accepts any bytes; paste-and-Enter into vendor dialogs; no dialog detection; the test-only Copilot trust helper | Partial — a screen-normalization primitive for detecting an on-screen phrase landed (`crates/runtime/src/adapter/tui/screen.rs`); the classification predicate that would actually gate on it has not | P1 |
+| F12 | Parked run declared `lost` at five minutes; clock re-armed by echoes | Not yet fixed | P1 |
+| F7, F9, F16 | Attach-socket echo storm; two fsync'd rows per read; vendor-session duplication | Not yet fixed | P1 |
+| F5 | herdr broken on 0.8.2; no version gate on the backend | Fixed — a verified-minimum version floor was added (`crates/runtime/src/display/herdr.rs`) | P2 |
+| F14 | `[crew:<nonce>]` in the prompt trips vendor injection defences | Fixed — a self-describing tag replaced the bare nonce suffix (`crates/runtime/src/adapter/tui/adapter.rs`, `verify.rs`, `discovery.rs`) | P2 |
+| F15 | A retry never journals its prompt | Not yet fixed | P2 |
+| F11 | `crew_transcript` replay discards payload; no run filter | Not yet fixed | P2 |
+| F6 | Usage never implemented for any TUI adapter | Not yet fixed | P3 |
+| F2, F3 | Model ask bypassed when the leader supplies a model; `taskId` error message unhelpful | Not yet fixed | P3 |
+| F8 | Milestone digests need timestamps so late delivery reads as history | Not yet fixed | P3 |
 
 ### Notes on two findings that are decisions, not just defects
 
 **F14 and F13 are in tension and should be scoped together.** Crew appends `[crew:<nonce>]` to the
 delivered prompt for transcript discovery, and the model reads it; the P4 worker refused its task
-citing the tag. But `verify.rs` (CREW-13) locates the transcript entry *by* that nonce
+citing the tag. But `verify.rs` locates the transcript entry *by* that nonce
 (`adapter/tui/verify.rs:70`) in order to diff recorded against injected text — and that is the check
 which caught the P4 truncation. **Relocating the nonce satisfies discovery cleanly and blinds the
 detector that caught F13.** The cheaper fix: the worker refused an *unexplained* token, and nothing
@@ -273,7 +276,7 @@ not — start failures are not journaled).
 Recorded here so this record does not keep an open question that has since been answered. These came
 from the maintainer directly, on his own channel, after reading the diagnoses.
 
-**CREW-90 — build coordination, do not retire it.** The missing piece is delivery: the worker never
+**Build coordination — do not retire it.** The missing piece is delivery: the worker never
 receives the MCP helper or its scope token, because `build_adapter` discards both
 (`crates/runtime/src/adapter/registry.rs:1372`). Wiring it re-opens ADR-0016's PID-reuse question,
 because scope tokens would exist for the first time — so `revoke_for_run`, which still has no caller,
@@ -281,7 +284,7 @@ must be closed inside the same work rather than after it. Shipping delivery with
 create the exposure ADR-0016 warned about, in a system that is currently safe only because the
 feature is dead.
 
-**CREW-80 — an abandoned run must stop the worker process.** Today `settle_abandoned_turn`
+**An abandoned run must stop the worker process.** Today `settle_abandoned_turn`
 (`crates/runtime/src/domain/repository.rs:1852-1875`) only transitions the run's state; it never
 touches the process, adapter, pane, concurrency slot or lease. This run demonstrated the effect: the
 run was declared dead at 17:50:22 and its worker lived until 18:39:45. Further direction: *"abandoned"
@@ -290,13 +293,15 @@ hand and does not intend to, so the leader owns every worker's lifetime. Crew st
 identity on tasks but has no disconnect handling today, so that trigger needs building. The terminal
 state must not be `lost`; `cancelled` is the candidate.
 
-**CREW-99 — documentation follows code, never leads it.** A behaviour is documented once it ships.
+**Documentation follows code, never leads it.** A behaviour is documented once it ships.
 This closes the class of finding F1 belongs to.
 
-**CREW-78 — a cleanly exited run that did no work is `failed`.** `lost` is reserved for genuine
+**A cleanly exited run that did no work is `failed`.** `lost` is reserved for genuine
 unobservability: the case where the supervisor could not see how the process exited. It follows that
 `lost` should stop carrying the second meaning it has today, where `settle_abandoned_turn` uses it
-for an abandoned turn whose process was perfectly observable.
+for an abandoned turn whose process was perfectly observable. (Shipped: `terminal_state_for` in
+`crates/runtime/src/adapter/run_lifecycle.rs` now branches on `turnSettled` rather than always
+resolving a zero exit to `succeeded`.)
 
 *Provenance:* confirmed by the maintainer to the architect, 2026-09-08 night, after being asked to
 confirm each of the four rulings by name. Recorded first as his stated position while he was still

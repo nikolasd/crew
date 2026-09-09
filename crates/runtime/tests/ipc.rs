@@ -72,8 +72,8 @@ impl WorkerCredentialVerifier for FakeVerifier {
 }
 
 /// A [`crew_runtime::service::RunDriver`] stub reporting a fixed live-run
-/// count, for R87/R82 tests: `runtime/status` must report the driver's
-/// count and `runtime/shutdown` must refuse while it is nonzero.
+/// count, used by tests checking that `runtime/status` reports the
+/// driver's count and that `runtime/shutdown` refuses while it is nonzero.
 struct FixedCountDriver {
     count: usize,
 }
@@ -755,9 +755,9 @@ async fn display_receives_only_status_and_event_methods() {
     assert_eq!(hidden["error"]["code"], error_code::METHOD_NOT_FOUND);
 }
 
-// -------------------------------------------------------------- R87/R82
+// ---------------------------------- runtime/status & runtime/shutdown
 
-/// R87: `runtime/status` must report the run driver's live count, never a
+/// `runtime/status` must report the run driver's live count, never a
 /// hardcoded placeholder.
 #[tokio::test]
 async fn runtime_status_reports_the_drivers_active_run_count() {
@@ -787,7 +787,7 @@ async fn runtime_status_reports_the_drivers_active_run_count() {
     );
 }
 
-/// R82: `runtime/shutdown` must refuse while runs are live (the daemon
+/// `runtime/shutdown` must refuse while runs are live (the daemon
 /// serves every connected instance), and `force: true` overrides.
 #[tokio::test]
 async fn runtime_shutdown_is_refused_while_runs_are_live_unless_forced() {
@@ -832,8 +832,8 @@ async fn runtime_shutdown_is_refused_while_runs_are_live_unless_forced() {
     assert_eq!(stopped["result"]["stopping"], true, "{stopped:?}");
 }
 
-/// R82's second gate: a second live connection also refuses an unforced
-/// shutdown.
+/// The same rule's second gate: a second live connection also refuses an
+/// unforced shutdown.
 #[tokio::test]
 async fn runtime_shutdown_is_refused_while_another_connection_is_live() {
     let harness = Harness::start(|c| c.credential_reader = matching_reader()).await;
@@ -876,7 +876,7 @@ async fn runtime_shutdown_is_refused_while_another_connection_is_live() {
     );
 }
 
-/// R82's accept leg: a single connection with zero live runs must be
+/// The rule's accept leg: a single connection with zero live runs must be
 /// allowed to stop the daemon WITHOUT force -- an inverted gate ("always
 /// refuse unless forced") must fail here.
 #[tokio::test]

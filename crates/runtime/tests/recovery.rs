@@ -312,7 +312,7 @@ async fn stuck_paused_run_is_untouched_when_not_opted_in() {
     assert_eq!(run_state(&db, run_id).await, "paused");
 }
 
-/// R51: the realistic crash is "the daemon died and a supervisor restarted it
+/// The realistic crash is "the daemon died and a supervisor restarted it
 /// seconds later," so the startup sweep must recover a run whose last event is
 /// seconds old. Under the old five-minute staleness cutoff this exact run --
 /// the common case -- was skipped by the only sweep that would ever run

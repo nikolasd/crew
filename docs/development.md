@@ -95,7 +95,7 @@ CLI layer, only what the extension does for you.
 
 ### CrewConfig
 
-The merged configuration deserializes into an immutable `CrewConfig` (spec §10) — approval mode,
+The merged configuration deserializes into an immutable `CrewConfig` (see [architecture.md § Configuration and Policy](architecture.md#configuration-and-policy)) — approval mode,
 concurrency/timeout/turn-budget limits, display backend preference, per-adapter config, workspace
 defaults, dashboard, retention, and (additive-across-layers) security patterns. A thin
 `RuntimePolicy` adapter (`crates/runtime/src/config/mod.rs`) exposes the fields the runtime's
@@ -283,7 +283,7 @@ The test suite's Rust integration test files (`crates/runtime/tests/`) cover:
 - Approval workflows
 - Audit and redaction
 - All four TUI vendor adapters (Claude, Codex, Copilot, OMP-RPC) — the headless control plane
-  these once ran alongside is retired (crew-v2 gap-closure WP-C; deserializable but rejected, see
+  these once ran alongside is retired (crew-v2 gap-closure; deserializable but rejected, see
   [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md))
 - Configuration and merging
 - Conformance testing

@@ -1,8 +1,8 @@
-// Model-name resolution for `crew_profile` (CREW-53, D29/D29a).
+// Model-name resolution for `crew_profile`.
 //
 // The problem this exists for: a leader invents a plausible-looking dated
 // model id, `crew_profile` accepts it because nothing validates model
-// names, and CREW-8's persistence writes it to `.omp/crew.json` where it
+// names, and persistence writes it to `.omp/crew.json` where it
 // becomes the repository's answer. That happened during a live E2E.
 //
 // Two separate jobs, and it took a scoping pass to see they are separate:
@@ -19,7 +19,7 @@
 //   small table -- but every entry's TARGET is checkable against the
 //   catalogue, which is what keeps the table from rotting silently.
 //
-// D29a's rule throughout: resolve, but never silently. A name that resolves
+// The rule throughout: resolve, but never silently. A name that resolves
 // says what it resolved to; a name that does not is passed through with a
 // visible note, never quietly accepted as though it had been verified.
 
@@ -237,7 +237,7 @@ export function resolveModelName(adapter: Adapter, input: string, catalogue: Cat
 }
 
 /**
- * The one-line note a user sees. D29a: a resolution is never silent, and an
+ * The one-line note a user sees. A resolution is never silent, and an
  * unverified name never looks like an accepted one.
  *
  * `ambiguous` has no note because it is not a resolution -- the caller turns
@@ -265,7 +265,7 @@ export function resolutionNote(adapter: Adapter, r: Resolution): string | undefi
  * `ompRpc` and any caller-defined adapter are excluded: they have no
  * provider and no alias source, so resolving them could only annotate a
  * name nothing checked. Excluding them keeps `crew_profile`'s behaviour for
- * those adapters identical to what it was before CREW-53.
+ * those adapters identical to what it was before resolution existed.
  */
 export function isCataloguedAdapter(adapter: string): adapter is Adapter {
   return Object.hasOwn(PROVIDER_FOR_ADAPTER, adapter);
@@ -314,19 +314,19 @@ export type ModelOutcome =
    * Register with `model`; surface `note` when the input was not already
    * canonical. `verified` says whether anything actually confirmed the
    * model exists -- an exact catalogue id, or crew's own reviewed alias
-   * table. It gates PERSISTENCE, not registration: CREW-53's symptom was an
+   * table. It gates PERSISTENCE, not registration: the symptom was an
    * invented dated id becoming the repository's durable answer, so a name
    * nothing could confirm may run but must not be written to
    * `.omp/crew.json`.
    */
   | { kind: "use"; model: string; verified: boolean; note?: string }
-  /** CREW-8's refusal: the request names a different model than the stored one. */
+  /** The refusal: the request names a different model than the stored one. */
   | { kind: "conflict"; configuredModel: string }
   /** The input matches several models -- refuse and name them. */
   | { kind: "ambiguous"; from: string; candidates: readonly string[] };
 
 /**
- * Resolves `requested`, then applies CREW-8's stored-model rules to the
+ * Resolves `requested`, then applies the stored-model rules to the
  * result.
  *
  * Two orderings here are load-bearing and neither is obvious from the
@@ -338,7 +338,7 @@ export type ModelOutcome =
  * already right.
  *
  * **Both sides are resolved, not just the request.** `.omp/crew.json` files
- * written before CREW-53 hold shorthands, so the stored value is as likely
+ * written before resolution existed hold shorthands, so the stored value is as likely
  * to be the un-canonical side as the request is.
  *
  * **Ambiguity is decided before the comparison.** An input matching several
