@@ -56,8 +56,9 @@ bun test packages/extension/src/runtime.test.ts   # one TS file
 bun run typecheck                            # TypeScript compiler gate (own CI job)
 
 # Conformance tests (golden-frame protocol checks, crates/runtime/src/conformance/ + tests/conformance/)
-CREW_DISABLE_VENDOR_CLI=1 cargo test --test conformance   # fixture mode (what CI runs)
-CREW_LIVE_CLAUDE=1 cargo test --test conformance          # live, needs vendor credentials
+cargo test --test conformance                             # fixture mode; .cargo/config.toml supplies the kill switch
+CREW_DISABLE_VENDOR_CLI=0 CREW_LIVE_CWD=<trusted-dir> \
+  cargo test --test conformance                           # live, needs vendor credentials
 
 # Manual exercise against local changes (no publish needed)
 OMP_CREW_BINARY="$PWD/target/debug/crewd" \

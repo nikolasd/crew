@@ -38,7 +38,6 @@ pub mod scenario;
 pub use report::{ConformanceMode, ConformanceReport, ScenarioOutcome, ScenarioResult};
 
 use crate::adapter::{AdapterKind, AdapterMode};
-use crate::env_flag::env_flag;
 
 /// Set to `"1"` to forbid every vendor-CLI process this runtime would
 /// spawn purely to *observe* the CLI -- conformance live *and fixture*
@@ -50,16 +49,35 @@ use crate::env_flag::env_flag;
 /// It deliberately does **not** gate `Adapter::start()`: run execution is
 /// authorized by policy, so a development switch must never be able to
 /// silently stop production work.
+///
+/// `.cargo/config.toml`'s `[env]` sets this to `"1"`, so every
+/// cargo-launched test process has it without anyone remembering. A live
+/// run overrides it from the shell -- see
+/// [`vendor_cli_invocation_disabled`] for exactly which values count.
 pub const DISABLE_VENDOR_CLI_ENV: &str = "CREW_DISABLE_VENDOR_CLI";
 
-/// The pre-rename name for [`DISABLE_VENDOR_CLI_ENV`], still honored as a
-/// fallback so an existing shell or CI job keeps working unchanged.
-pub const DISABLE_VENDOR_CLI_ENV_LEGACY: &str = "BATMAN_DISABLE_VENDOR_CLI";
-
 /// Whether observation-only vendor-CLI invocation is disabled.
+///
+/// **Only the exact value `"1"` disables.** Anything else -- `"0"`, the
+/// empty string, or the variable being absent -- permits the spawn. That
+/// is not incidental: `.cargo/config.toml` now sets this variable for
+/// every cargo-launched process, so it is never *absent* under cargo, and
+/// a deliberate live run has to turn it off by value
+/// (`CREW_DISABLE_VENDOR_CLI=0 cargo test --test conformance`, which cargo
+/// honors because the `[env]` entry omits `force`). A presence test would
+/// make the live path unreachable from inside this repository.
 #[must_use]
 pub fn vendor_cli_invocation_disabled() -> bool {
-    env_flag(DISABLE_VENDOR_CLI_ENV, DISABLE_VENDOR_CLI_ENV_LEGACY).as_deref() == Some("1")
+    disabled_by_value(std::env::var(DISABLE_VENDOR_CLI_ENV).ok().as_deref())
+}
+
+/// The value decision, split out from the environment read so it can be
+/// tested without mutating process-global state -- `set_var` is `unsafe` in
+/// edition 2024, and a test that mutates the environment is a test that can
+/// change another test's result.
+#[must_use]
+fn disabled_by_value(value: Option<&str>) -> bool {
+    value == Some("1")
 }
 
 /// An honest, non-spawning result for a scenario that can only be proven by
@@ -379,6 +397,59 @@ mod tests {
                 NestedCapability::Managed,
                 "{kind} declares Managed nested -- DomainAdapterEventSink's nested_not_managed \
                  flag construction must be revisited now that this is no longer vacuously true"
+            );
+        }
+    }
+
+    /// The `[env]` entry must actually reach a cargo-launched test binary.
+    ///
+    /// Without this, the whole safeguard is a line in a config file that
+    /// nobody has watched work. Deleting `CREW_DISABLE_VENDOR_CLI` from
+    /// `.cargo/config.toml` makes this test fail; nothing else in the suite
+    /// notices, because the fixture suites pass either way -- they pass
+    /// *for a different reason* when the switch is off, having spawned a
+    /// real `<vendor> --version` first. That indistinguishability is what
+    /// let a machine with vendor CLIs installed report four conformance
+    /// failures that a machine without them did not.
+    ///
+    /// Asserts only that the variable is *decided*, not that it is `"1"`:
+    /// a deliberate live run exports `CREW_DISABLE_VENDOR_CLI=0`, and that
+    /// override must keep working. From inside the process the two sources
+    /// are indistinguishable, and that is fine -- what is being pinned here
+    /// is that no cargo-launched process is left with no answer at all.
+    #[test]
+    fn the_cargo_config_supplies_the_kill_switch_to_this_process() {
+        assert!(
+            std::env::var(DISABLE_VENDOR_CLI_ENV).is_ok(),
+            "{DISABLE_VENDOR_CLI_ENV} is unset in a cargo-launched test process -- \
+             `.cargo/config.toml`'s [env] entry is missing or no longer applies, so a \
+             forgotten shell prefix can spawn a real vendor binary again"
+        );
+    }
+
+    /// The kill switch is a **value** test, not a presence test, and the
+    /// live path depends on that.
+    ///
+    /// `.cargo/config.toml`'s `[env]` sets `CREW_DISABLE_VENDOR_CLI = "1"`
+    /// for every cargo-launched process, so under cargo the variable is
+    /// never absent. If this predicate ever became "is it set?", the
+    /// documented live run -- `CREW_DISABLE_VENDOR_CLI=0 cargo test --test
+    /// conformance` -- would silently keep spawning nothing and every
+    /// live-only scenario would report `Skipped` forever, which reads
+    /// exactly like a clean fixture run. Pinned here so that change cannot
+    /// be made quietly.
+    #[test]
+    fn only_the_exact_value_one_disables_vendor_cli_invocation() {
+        assert!(disabled_by_value(Some("1")), "\"1\" must disable");
+
+        // Each of these must permit the spawn. `Some("0")` is the
+        // documented override; `Some("")` is what an exported-but-empty
+        // shell variable produces, which is a plausible way to *try* to
+        // turn the switch off; `None` is the production default.
+        for permitted in [Some("0"), Some(""), None, Some("true"), Some("11")] {
+            assert!(
+                !disabled_by_value(permitted),
+                "{permitted:?} must not disable -- only the exact value \"1\" does"
             );
         }
     }
