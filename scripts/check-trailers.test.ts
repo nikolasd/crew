@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { RULES } from "./check-markers";
-import { markersIn, violationsIn } from "./check-trailers";
+import { commitsAdded, markersIn, violationsIn } from "./check-trailers";
 
 /**
  * The positive control.
@@ -138,5 +142,93 @@ describe("what a clean commit message looks like", () => {
   test("a merge subject naming a branch is not a marker", () => {
     // Git Town merges main into a branch routinely; that subject must pass.
     expect(markersIn("abc1234", "Merge remote-tracking branch 'origin/main' into guard-tracked-only")).toEqual([]);
+  });
+});
+
+/**
+ * A stale exclusion ref is the failure this check has already caused once.
+ *
+ * On the day the marker rules were extended to commit messages, a run
+ * against an unfetched `origin/main` reported six bare pull-request numbers
+ * on a contributor's branch. Every one was a squash-merge commit already on
+ * the target branch, carrying the reference GitHub appends at merge. Nothing
+ * was wrong with their commits, and they rewrote history to satisfy it.
+ *
+ * A confident, specific, wrong list of violations is worse than no check at
+ * all, because someone acts on it. These build real repositories rather than
+ * mocking git, because the whole property under test is that a local
+ * remote-tracking ref and the remote it names can disagree.
+ */
+describe("the exclusion ref is refreshed, not trusted", () => {
+  /** A "remote" repo, a clone of it, and a branch that has merged the remote's newer commit. */
+  const staleClone = (): { clone: string; base: string } => {
+    const root = mkdtempSync(join(tmpdir(), "check-trailers-"));
+    const remote = join(root, "remote");
+    const clone = join(root, "clone");
+    const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe" });
+
+    execFileSync("git", ["init", "--quiet", remote], { stdio: "pipe" });
+    git(remote, "config", "user.email", "t@example.invalid");
+    git(remote, "config", "user.name", "T");
+    writeFileSync(join(remote, "a.txt"), "a\n");
+    git(remote, "add", "--all");
+    git(remote, "commit", "--quiet", "-m", "base");
+    git(remote, "branch", "-M", "main");
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: remote, encoding: "utf8" }).trim();
+
+    execFileSync("git", ["clone", "--quiet", remote, clone], { stdio: "pipe" });
+    git(clone, "config", "user.email", "t@example.invalid");
+    git(clone, "config", "user.name", "T");
+
+    // The remote gains a squash-merge commit, with the reference GitHub
+    // appends at merge -- nobody on the feature branch wrote this subject.
+    writeFileSync(join(remote, "c.txt"), "c\n");
+    git(remote, "add", "--all");
+    git(remote, "commit", "--quiet", "-m", "Some landed change (#146)");
+
+    // The branch picks it up the way this repository's workflow does, by
+    // taking the target branch in rather than rebasing onto it.
+    git(clone, "fetch", "--quiet", "origin");
+    git(clone, "checkout", "--quiet", "-b", "feat", "origin/main");
+    writeFileSync(join(clone, "b.txt"), "b\n");
+    git(clone, "add", "--all");
+    git(clone, "commit", "--quiet", "-m", "feature work, clean message");
+
+    // ...and then the local tracking ref goes stale, exactly as it does for
+    // anyone who has not fetched since the target branch last moved.
+    git(clone, "update-ref", "refs/remotes/origin/main", base);
+    return { clone, base };
+  };
+
+  test("a stale ref is brought up to date, so a landed commit is not read as this branch's own", () => {
+    const { clone, base } = staleClone();
+    const stale = execFileSync("git", ["rev-parse", "refs/remotes/origin/main"], { cwd: clone, encoding: "utf8" }).trim();
+    expect(stale).toBe(base);
+
+    const commits = commitsAdded(`${base}..HEAD`, "origin/main", clone);
+
+    // The refresh happened...
+    expect(execFileSync("git", ["rev-parse", "refs/remotes/origin/main"], { cwd: clone, encoding: "utf8" }).trim()).not.toBe(base);
+    // ...and the landed commit is excluded, leaving only what the branch adds.
+    expect(commits.map((c) => c.message.split("\n")[0])).toEqual(["feature work, clean message"]);
+    expect(commits.flatMap((c) => markersIn(c.sha, c.message))).toEqual([]);
+  });
+
+  test("without the refresh the same repository reports a violation nobody wrote", () => {
+    // The negative control, and the reason the refresh is not cosmetic: read
+    // against the stale ref exactly as it stands, the landed subject is
+    // inside the range and is flagged as a bare pull-request number. This is
+    // the report that caused a history rewrite.
+    const { clone, base } = staleClone();
+    const stale = execFileSync("git", ["log", "--format=%H%x01%B%x00", `${base}..HEAD`, "--not", "origin/main"], { cwd: clone, encoding: "utf8" });
+    const found = stale
+      .split("\0")
+      .map((r) => r.trim())
+      .filter((r) => r.length > 0)
+      .flatMap((record) => {
+        const [sha = "", message = ""] = record.split("\x01");
+        return markersIn(sha, message);
+      });
+    expect(found.map((f) => f.rule)).toContain("bare pull-request number");
   });
 });
