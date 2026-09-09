@@ -29,6 +29,7 @@ use std::time::{Duration, SystemTime};
 
 use tokio::sync::{Mutex as AsyncMutex, broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crew_protocol::{
@@ -769,6 +770,16 @@ pub struct TuiAdapter<V: TuiVendor> {
     /// through a different seam).
     resume: ResumeContext,
     run: AsyncMutex<Option<RunState>>,
+    /// Fired by `cancel`/`dispose` to interrupt a run parked in an
+    /// unbounded wait -- today, `wait_for_readiness`'s gate-escalation
+    /// poll -- without needing `self.run`'s async lock, which that poll
+    /// holds for its entire (potentially unbounded) duration. Replaced
+    /// with a fresh token at the top of every `start`/`resume` (never
+    /// reused across runs, so a previous run's cancellation can never
+    /// poison the next one's). Held in a `std::sync::Mutex`, never across
+    /// an `.await` -- see `cancel`'s own comment for why firing it must
+    /// never itself block on `self.run`.
+    cancel_token: StdMutex<CancellationToken>,
 }
 
 impl<V: TuiVendor> TuiAdapter<V> {
@@ -804,7 +815,21 @@ impl<V: TuiVendor> TuiAdapter<V> {
             timings,
             resume,
             run: AsyncMutex::new(None),
+            cancel_token: StdMutex::new(CancellationToken::new()),
         }
+    }
+
+    /// Swaps in a fresh, unfired token for a new run and returns a clone
+    /// to thread down into this run's own pipeline -- never the same
+    /// token an earlier run may have already cancelled.
+    fn arm_cancel_token(&self) -> CancellationToken {
+        let fresh = CancellationToken::new();
+        let mut slot = self
+            .cancel_token
+            .lock()
+            .expect("cancel-token mutex never poisoned");
+        *slot = fresh.clone();
+        fresh
     }
 
     fn kind(&self) -> &'static str {
@@ -843,6 +868,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
         worker_id: WorkerId,
         session: &VendorSessionRef,
         sink: Arc<dyn AdapterEventSink>,
+        cancel_token: CancellationToken,
     ) -> Result<(), AdapterError> {
         let placeholder = StartSpec {
             run_id,
@@ -901,6 +927,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
             Some(transcript_path),
             tail_from,
             sink,
+            cancel_token,
         )
         .await
     }
@@ -939,6 +966,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
         // re-journal) events an earlier run already committed.
         tail_from: Cursor,
         sink: Arc<dyn AdapterEventSink>,
+        cancel_token: CancellationToken,
     ) -> Result<(), AdapterError> {
         let started_at = SystemTime::now();
         let pty = Arc::new(
@@ -1119,6 +1147,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
             task_id,
             worker_id,
             &sink,
+            &cancel_token,
         )
         .await
         {
@@ -1699,6 +1728,7 @@ async fn wait_for_readiness(
     task_id: TaskId,
     worker_id: WorkerId,
     sink: &Arc<dyn AdapterEventSink>,
+    cancel_token: &CancellationToken,
 ) -> Result<(), AdapterError> {
     let deadline = tokio::time::Instant::now() + cap;
     // Set once this poll journals `FirstRunGateDetected` +
@@ -1804,6 +1834,16 @@ async fn wait_for_readiness(
                             ),
                         });
                     }
+                    _ = cancel_token.cancelled() => {
+                        return Err(AdapterError::process(
+                            kind,
+                            "start",
+                            format!(
+                                "the run was cancelled while a first-run gate was blocking it \
+                                 ({gate:?})"
+                            ),
+                        ));
+                    }
                     _ = tokio::time::timeout(quiet, rx.recv()) => {}
                 }
                 continue;
@@ -1856,6 +1896,13 @@ async fn wait_for_readiness(
                                  appeared",
                             ),
                         });
+                    }
+                    _ = cancel_token.cancelled() => {
+                        return Err(AdapterError::process(
+                            kind,
+                            "start",
+                            "the run was cancelled while waiting for readiness",
+                        ));
                     }
                     // A per-tick receive timeout, or any `rx` outcome
                     // other than a still-hypothetical channel close, is a
@@ -2179,6 +2226,10 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
             // and tailing picks up from the stored position. Fresh ids on
             // the spec are the correlation (the registry binds the same
             // run/task/worker into this adapter at construction).
+            // A fresh, unfired token for this run, before either branch
+            // below -- never the previous run's (already-possibly-fired)
+            // token. See `arm_cancel_token`'s own comment.
+            let cancel_token = self.arm_cancel_token();
             if let Some(session) = spec.resume {
                 return self
                     .resume_from(
@@ -2188,6 +2239,7 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                         spec.worker_id,
                         &session,
                         sink,
+                        cancel_token,
                     )
                     .await;
             }
@@ -2210,6 +2262,7 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                 None,
                 Cursor::start(),
                 sink,
+                cancel_token,
             )
             .await
         })
@@ -2230,6 +2283,7 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                     "adapter already has an active run",
                 ));
             }
+            let cancel_token = self.arm_cancel_token();
             // No `StartSpec` carries this adapter's real ids across
             // `Adapter::resume`'s signature; `self.run_id`/`task_id`/
             // `worker_id` (bound at construction, see `TuiAdapter`'s own
@@ -2243,6 +2297,7 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                 self.worker_id,
                 &session,
                 sink,
+                cancel_token,
             )
             .await
         })
@@ -2349,6 +2404,33 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
 
     fn cancel(&self, scope: CancelScope) -> AdapterFuture<'_, ()> {
         Box::pin(async move {
+            // Fired first, before either branch below touches `self.run`'s
+            // async lock: a run parked in `wait_for_readiness`'s
+            // gate-escalation poll holds that lock for as long as the
+            // poll runs (unbounded, by design -- see that function's own
+            // comment), so a `cancel` that itself waited on the lock
+            // first could never reach a run stuck there at all. Firing
+            // the token needs no lock of its own and always succeeds.
+            //
+            // Firing unconditionally, for every `scope` including `Turn`,
+            // is deliberate and widens `Turn`'s ordinary contract
+            // ("interrupt the current turn, the worker survives") in
+            // exactly one window: while parked at a first-run gate there
+            // is no turn in progress to interrupt, so the only coherent
+            // reading of "stop" at that moment is to stop waiting -- the
+            // poll's cancel arm fails the start, naming the gate, rather
+            // than resuming as a no-op `Turn` would everywhere else. The
+            // alternative -- scoping the fire to `Worker`/`Subtree` only
+            // -- was considered and rejected: `CancelScope::Turn` would
+            // then reach the `match` below and block on `self.run`'s lock
+            // against the very poll this fix exists to make interruptible,
+            // so a `Turn` cancel during a gate park would simply hang
+            // forever. A start that fails with an accurate reason is the
+            // correct trade against a caller that never returns.
+            self.cancel_token
+                .lock()
+                .expect("cancel-token mutex never poisoned")
+                .cancel();
             match scope {
                 CancelScope::Turn => {
                     let guard = self.run.lock().await;
@@ -2415,6 +2497,13 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
 
     fn dispose(&self) -> AdapterFuture<'_, ()> {
         Box::pin(async move {
+            // See `cancel`'s own comment: the same lock-ordering hazard
+            // applies here (`dispose` also opens with `self.run`'s async
+            // lock), so the token is fired first on the same terms.
+            self.cancel_token
+                .lock()
+                .expect("cancel-token mutex never poisoned")
+                .cancel();
             let run = {
                 let mut guard = self.run.lock().await;
                 guard.take()
@@ -3161,6 +3250,7 @@ mod tests {
         let vendor = ClaudeTuiVendor::new(PathBuf::from("/w"), vec![]);
         let sink = GateRecordingSink::new();
         let dyn_sink: Arc<dyn AdapterEventSink> = sink.clone();
+        let cancel_token = CancellationToken::new();
         let run_id = RunId::new();
         let task_id = TaskId::new();
         let worker_id = WorkerId::new();
@@ -3184,6 +3274,7 @@ mod tests {
                 task_id,
                 worker_id,
                 &dyn_sink,
+                &cancel_token,
             )
             .await
         });
@@ -3272,6 +3363,7 @@ mod tests {
 
         let vendor = ClaudeTuiVendor::new(PathBuf::from("/w"), vec![]);
         let sink: Arc<dyn AdapterEventSink> = GateRecordingSink::new();
+        let cancel_token = CancellationToken::new();
         let started = tokio::time::Instant::now();
         let result = wait_for_readiness(
             &mut readiness_rx,
@@ -3290,6 +3382,7 @@ mod tests {
             TaskId::new(),
             WorkerId::new(),
             &sink,
+            &cancel_token,
         )
         .await;
         let elapsed = started.elapsed();
@@ -3354,6 +3447,7 @@ mod tests {
 
         let vendor = ClaudeTuiVendor::new(PathBuf::from("/w"), vec![]);
         let sink: Arc<dyn AdapterEventSink> = GateRecordingSink::new();
+        let cancel_token = CancellationToken::new();
         let started = tokio::time::Instant::now();
         // A long cap: if the closed-channel case were mishandled as a
         // pacing tick, this test would either hang here or take
@@ -3378,6 +3472,7 @@ mod tests {
                 TaskId::new(),
                 WorkerId::new(),
                 &sink,
+                &cancel_token,
             ),
         )
         .await
@@ -3444,6 +3539,7 @@ mod tests {
         };
         let sink = GateRecordingSink::new();
         let dyn_sink: Arc<dyn AdapterEventSink> = sink.clone();
+        let cancel_token = CancellationToken::new();
 
         let result = wait_for_readiness(
             &mut readiness_rx,
@@ -3459,6 +3555,7 @@ mod tests {
             TaskId::new(),
             WorkerId::new(),
             &dyn_sink,
+            &cancel_token,
         )
         .await;
 
@@ -3474,6 +3571,103 @@ mod tests {
                  it on every tick until it clears: {other:?}"
             ),
         }
+    }
+
+    /// Requirement (d): a run parked at a gate is cancellable. This is
+    /// the regression control for the deadlock item 4 fixes -- without
+    /// the `cancel_token.cancelled()` arm in the gate-park `select!`,
+    /// this vendor's gate never clears on its own (`clear_after` is never
+    /// reached) and the PTY sleeps far longer than this test's own outer
+    /// timeout, so removing that arm fails this test by timeout, not by
+    /// a wrong assertion.
+    #[tokio::test]
+    async fn wait_for_readiness_ends_promptly_when_cancelled_while_parked_at_a_gate() {
+        let pty = Arc::new(
+            PtyProcess::spawn(
+                &crate::supervisor::SpawnSpec {
+                    program: PathBuf::from("/bin/sh"),
+                    args: vec!["-c".to_string(), "printf hi && sleep 30".to_string()],
+                    ..crate::supervisor::SpawnSpec::minimal()
+                },
+                EscalationTimings::default(),
+            )
+            .expect("spawn the parked double"),
+        );
+
+        let mut readiness_rx = pty.subscribe_output();
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        {
+            let mut grid_rx = pty.subscribe_output();
+            let grid = Arc::clone(&grid);
+            tokio::spawn(async move {
+                loop {
+                    match grid_rx.recv().await {
+                        Ok(bytes) => grid
+                            .lock()
+                            .expect("terminal-grid mutex never poisoned")
+                            .push(&bytes),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        let vendor = CountingGateVendor {
+            gate: GateKind::ClaudeSignIn,
+            clear_after: u32::MAX,
+            calls: AtomicU32::new(0),
+        };
+        let sink = GateRecordingSink::new();
+        let dyn_sink: Arc<dyn AdapterEventSink> = sink.clone();
+        let cancel_token = CancellationToken::new();
+        let cancel_token_for_wait = cancel_token.clone();
+        let pty_for_wait = Arc::clone(&pty);
+
+        let wait = tokio::spawn(async move {
+            wait_for_readiness(
+                &mut readiness_rx,
+                "counting-gate",
+                &vendor,
+                &grid,
+                Duration::from_millis(15),
+                Duration::from_secs(30),
+                &pty_for_wait,
+                None,
+                tokio::time::Instant::now(),
+                RunId::new(),
+                TaskId::new(),
+                WorkerId::new(),
+                &dyn_sink,
+                &cancel_token_for_wait,
+            )
+            .await
+        });
+
+        assert!(
+            wait_until(|| !sink.payloads().is_empty(), Duration::from_secs(5)).await,
+            "the gate must be escalated before this test cancels it"
+        );
+
+        cancel_token.cancel();
+
+        let result = tokio::time::timeout(Duration::from_secs(2), wait)
+            .await
+            .expect(
+                "cancelling a parked gate must end the poll well within 2s, not hang toward \
+                     the 30s pty sleep or the 30s readiness cap",
+            )
+            .expect("wait_for_readiness task must not panic");
+
+        let _ = pty.terminate().await;
+
+        let message = result
+            .expect_err("a cancelled gate-park must never resolve as ready")
+            .to_string();
+        assert!(
+            message.contains("cancelled"),
+            "the error must say the run was cancelled: {message}"
+        );
     }
 
     // ----------------------------------------------- the bracketed-paste invariant
