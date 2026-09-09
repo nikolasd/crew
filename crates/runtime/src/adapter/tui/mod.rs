@@ -27,6 +27,7 @@ pub mod omp_conformance;
 pub use codex::CodexTuiVendor;
 pub use copilot::CopilotTuiVendor;
 pub use omp::OmpTuiVendor;
+mod classify;
 mod discovery;
 mod grid;
 mod input;

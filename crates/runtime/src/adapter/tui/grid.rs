@@ -651,6 +651,26 @@ fn next_scalar(bytes: &[u8]) -> ScalarScan {
     }
 }
 
+/// The seven committed captures under `fixtures/adapters/tui-screens/`,
+/// the single definition both this file's own tests and `classify.rs`'s
+/// tests use. A hand-maintained list is a check that certifies only what
+/// it happens to list: a fixture added to the directory tomorrow and
+/// never added here would be scanned by nothing that uses this constant,
+/// silently, forever. `tests::all_fixtures_matches_the_committed_directory`
+/// is what makes that impossible instead of merely unlikely -- keeping
+/// this to one definition, rather than one per user, means that one check
+/// covers every user instead of certifying only whichever copy it reads.
+#[cfg(test)]
+pub(super) const ALL_FIXTURES: &[&str] = &[
+    "claude-signin-method.raw",
+    "claude-theme-picker.raw",
+    "claude-trust-to-composer.raw",
+    "claude-workspace-trust.raw",
+    "codex-composer-then-trust.raw",
+    "codex-directory-trust.raw",
+    "codex-signin.raw",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,15 +683,47 @@ mod tests {
         std::fs::read(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
     }
 
-    const ALL_FIXTURES: &[&str] = &[
-        "claude-signin-method.raw",
-        "claude-theme-picker.raw",
-        "claude-trust-to-composer.raw",
-        "claude-workspace-trust.raw",
-        "codex-composer-then-trust.raw",
-        "codex-directory-trust.raw",
-        "codex-signin.raw",
-    ];
+    /// The floor under every other test in this file and in
+    /// `classify.rs`'s own `ever_shows`-based checks: `ALL_FIXTURES` must
+    /// name exactly the `.raw` files actually committed under
+    /// `fixtures/adapters/tui-screens/`, in both directions. A file added
+    /// to the directory and not added here would be compared by nothing
+    /// (the escape-agreement floors, the exhaustive classify table, the
+    /// exclusivity table -- none of them would ever see it, and all of
+    /// them would keep passing, green, having looked at one fixture set
+    /// short). A name removed or renamed on disk without updating this
+    /// list would make every other test here fail with a "file not
+    /// found" that could be mistaken for something else; this test names
+    /// the actual mismatch instead.
+    #[test]
+    fn all_fixtures_matches_the_committed_directory() {
+        use std::collections::BTreeSet;
+        let dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/adapters/tui-screens");
+        let on_disk: BTreeSet<String> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|err| panic!("reading {}: {err}", dir.display()))
+            .map(|entry| {
+                entry.unwrap_or_else(|err| panic!("reading an entry of {}: {err}", dir.display()))
+            })
+            .filter_map(|entry| {
+                let name = entry
+                    .file_name()
+                    .into_string()
+                    .unwrap_or_else(|raw| panic!("non-UTF-8 file name: {raw:?}"));
+                name.ends_with(".raw").then_some(name)
+            })
+            .collect();
+        let listed: BTreeSet<String> = ALL_FIXTURES.iter().map(|s| s.to_string()).collect();
+
+        let missing_from_list: Vec<&String> = on_disk.difference(&listed).collect();
+        let missing_from_disk: Vec<&String> = listed.difference(&on_disk).collect();
+        assert!(
+            missing_from_list.is_empty() && missing_from_disk.is_empty(),
+            "ALL_FIXTURES has drifted from {}: on disk but not listed: {missing_from_list:?}; \
+             listed but not on disk (renamed or removed?): {missing_from_disk:?}",
+            dir.display()
+        );
+    }
 
     // -------------------------------------------------- the point of this module
 
