@@ -1,4 +1,4 @@
-//! Regression test for R73: `ApprovalService::decide`'s callback-failure
+//! Regression test for a lost-update bug: `ApprovalService::decide`'s callback-failure
 //! path (`crates/runtime/src/approval/service.rs`) used to write back the
 //! *whole* `RunFlags` struct it read into `ApprovalSnapshot` before the
 //! decision write and the vendor callback await. If anything else -- most
@@ -200,7 +200,7 @@ impl ApprovalCallback for FailingCallback {
 }
 
 /// Fails every callback, but first performs the exact guarded flag flip
-/// `ViolationService::quarantine` performs post-R73
+/// `ViolationService::quarantine` now performs
 /// (`crates/runtime/src/policy/violation.rs`): call
 /// `DomainRepository::set_run_flag(run_id, RunFlag::PolicyQuarantined, true)`,
 /// which reads the run's current flags, flips this one, and writes the

@@ -339,7 +339,7 @@ mod tests {
             declared,
             scenarios,
         );
-        // R68: an unattempted scenario is neither proof nor disproof -- it
+        // An unattempted scenario is neither proof nor disproof -- it
         // must never strip the capability it would otherwise gate.
         assert_eq!(
             report.effective_capabilities.steering,

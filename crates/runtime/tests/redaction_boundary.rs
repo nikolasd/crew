@@ -36,7 +36,7 @@ const THINKING_TEXT: &str = "chain-of-thought: consider bypassing the approval g
 const API_KEY: &str = "sk-ABCDEFGHIJKLMNOPQRSTUVWX";
 const INTENT_API_KEY: &str = "sk-INTENTKEYABCDEFGHIJKLMNOP";
 /// A real vendor key shape: hyphens and base64url underscores inside the
-/// token, which the pre-R49 `sk-[A-Za-z0-9]{16,}` pattern could not match.
+/// token, which the previous `sk-[A-Za-z0-9]{16,}` pattern could not match.
 const ANTHROPIC_API_KEY: &str = "sk-ant-api03-BOUNDARYFAKE-for-tests_0123456789-abcdef";
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {

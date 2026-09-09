@@ -725,7 +725,7 @@ async fn changing_the_source_profile_after_worker_creation_never_mutates_the_sto
     );
 }
 
-/// R14: a sink whose org redaction patterns do not compile must not be
+/// A sink whose org redaction patterns do not compile must not be
 /// constructed at all -- the old fallback silently degraded to built-in
 /// rules only, one config-reload away from journaling text the org's
 /// redaction rules were meant to remove (invariant 4).

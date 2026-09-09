@@ -387,7 +387,7 @@ fn ceiling_one_policy() -> RuntimePolicy {
     }
 }
 
-/// Defends the R2 fix at the real `AdapterRegistry` wiring level: a
+/// Defends the trait-object slot-release fix at the real `AdapterRegistry` wiring level: a
 /// `PolicyEvaluator` -- the *production* `AdapterAuthorization`, not the
 /// `FixtureAuthorization` every other test in this file uses -- erased
 /// behind `Arc<dyn AdapterAuthorization>`, with a concurrency ceiling of
