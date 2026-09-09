@@ -1028,9 +1028,22 @@ mod tests {
     fn classify_escape_agrees_with_screen_rs_escape_len_on_every_committed_capture() {
         use super::super::screen::{EscapeScan, escape_len};
 
+        // A per-fixture floor, not just a total: this also catches one
+        // capture silently losing its escapes (a bad rewrite, an
+        // accidental re-capture) while the other six still carry plenty --
+        // a total-only floor would let that pass unnoticed. Both numbers
+        // sit far below the real per-fixture counts (the smallest fixture
+        // alone has well over a hundred), so neither is brittle against a
+        // future capture shrinking slightly; they exist to catch zero, not
+        // to pin an exact count.
+        const MIN_PER_FIXTURE: usize = 10;
+        const MIN_TOTAL: usize = 500;
+
+        let mut total_compared = 0usize;
         for name in ALL_FIXTURES {
             let bytes = fixture(name);
             let mut i = 0usize;
+            let mut compared_in_fixture = 0usize;
             while i < bytes.len() {
                 if bytes[i] != 0x1b {
                     i += 1;
@@ -1051,6 +1064,7 @@ mod tests {
                             ours_len, their_len,
                             "{name} at byte {i}: classify_escape and escape_len disagree on this escape's length"
                         );
+                        compared_in_fixture += 1;
                         i += ours_len;
                     }
                     (None, EscapeScan::Incomplete) => break,
@@ -1059,6 +1073,17 @@ mod tests {
                     ),
                 }
             }
+            assert!(
+                compared_in_fixture >= MIN_PER_FIXTURE,
+                "{name}: only {compared_in_fixture} escapes compared -- either this fixture lost \
+                 its escapes, or this assertion would be passing vacuously"
+            );
+            total_compared += compared_in_fixture;
         }
+        assert!(
+            total_compared >= MIN_TOTAL,
+            "only {total_compared} escapes compared across all seven fixtures -- otherwise the \
+             agreement this test exists to check would be passing vacuously"
+        );
     }
 }
