@@ -159,7 +159,7 @@ test("worker question / timeout / budget / escalation are milestones", () => {
   ).toBe(true);
 });
 
-test("CREW-60: a paneDowngraded event is always a milestone", () => {
+test("a paneDowngraded event is always a milestone", () => {
   const t = tracker();
   expect(
     t.isMilestone(
@@ -171,7 +171,7 @@ test("CREW-60: a paneDowngraded event is always a milestone", () => {
   ).toBe(true);
 });
 
-test("CREW-60: paneDowngraded digest names the requested/actual backends and the reason", () => {
+test("paneDowngraded digest names the requested/actual backends and the reason", () => {
   const digest = formatDigest(
     envelope({
       runId: "run-1",
@@ -296,7 +296,7 @@ test("bridge injects a digest for a milestone and stays silent for noise", () =>
   expect(sent.length).toBe(1);
 });
 
-test("CREW-51: a replayed milestone never injects a digest (stale-failure guard)", () => {
+test("a replayed milestone never injects a digest (stale-failure guard)", () => {
   const { sent, dispatch } = fakeBridge();
 
   // A run that failed long ago, delivered as replay catch-up: no digest --
@@ -310,9 +310,9 @@ test("CREW-51: a replayed milestone never injects a digest (stale-failure guard)
   expect(sent[0]).toContain("FAILED");
 });
 
-test("CREW-60/CREW-51: a replayed paneDowngraded never injects a digest either", () => {
+test("a replayed paneDowngraded never injects a digest either", () => {
   // The generic replay-guard test above only exercises `runEvent`. This
-  // pins it for the newest milestone type specifically: CREW-51's guard
+  // pins it for the newest milestone type specifically: that guard
   // in the bridge is generic over every milestone (it gates on
   // `meta.replay` after `isMilestone`, not on the event's own type), but
   // that genericity is exactly what a future "simplify the guard" change
@@ -336,7 +336,7 @@ test("CREW-60/CREW-51: a replayed paneDowngraded never injects a digest either",
   expect(sent[0]).toContain("tmux");
 });
 
-test("CREW-51: a replayed milestone still updates the tracker's one-shot bookkeeping", () => {
+test("a replayed milestone still updates the tracker's one-shot bookkeeping", () => {
   const { sent, dispatch } = fakeBridge();
 
   // Replayed: run-1's first `working` is real history, so it must count

@@ -103,7 +103,7 @@ test("runtime/status reports a healthy, running runtime", async () => {
   }
 });
 
-// CREW-50: `crew_transcript` (packages/extension/src/tools/leader.ts) calls
+// `crew_transcript` (packages/extension/src/tools/leader.ts) calls
 // `events/replay` through the generic `request()` path (via
 // `callOrchestration`), not through `subscribe()`'s own dedicated array
 // validator. `events/replay`'s real result is a bare array, and
@@ -111,7 +111,7 @@ test("runtime/status reports a healthy, running runtime", async () => {
 // requires a JSON *object* -- so every real call from the tool failed
 // validation before this fix, a path the leader.test.ts fakes around by
 // mocking `client.request` itself rather than exercising the real client.
-test("events/replay's array result is validated by the generic request() path, not rejected as a non-object (CREW-50)", async () => {
+test("events/replay's array result is validated by the generic request() path, not rejected as a non-object", async () => {
   const client = new CrewClient({ socketPath });
   try {
     await client.initialize(ompInitParams(repoDir, 1024 * 1024));
@@ -372,7 +372,7 @@ test("a malformed run/result result (runId not a string) is rejected by schema v
   }
 });
 
-test("a malformed message/list result (a message with a misspelled field name) is rejected by schema validation (CREW-43)", async () => {
+test("a malformed message/list result (a message with a misspelled field name) is rejected by schema validation", async () => {
   const fakeSocketPath = mkdtempSync("/tmp/bat-ts-f-") + "/fake.sock";
   let requestCount = 0;
 
@@ -492,7 +492,7 @@ test("JsonRpcRemoteError carries the JSON-RPC error code", () => {
 });
 
 test("onClose fires when the server drops the connection", async () => {
-  // CREW-5: the monitor needs a reactive signal that its subscription's
+  // the monitor needs a reactive signal that its subscription's
   // socket died (a daemon restart) so it can reconnect on its own, instead
   // of only ever repairing on the next explicit tool call or `/crew`.
   const fakeSocketPath = mkdtempSync("/tmp/bat-ts-f-") + "/fake.sock";

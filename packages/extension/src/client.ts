@@ -7,7 +7,7 @@
 // schema-validated (Ajv) before it reaches caller code. Result payloads are
 // schema-validated for every method with a canonical protocol result type
 // (`RESULT_VALIDATORS`, which is not only objects -- `events/replay`'s is a
-// validated array, CREW-50); every other method's result is structurally
+// validated array); every other method's result is structurally
 // validated to be a JSON object, so a null/scalar/array result for one of
 // those can never reach tool logic. Framing is newline-delimited JSON with a
 // 4 MiB bootstrap hard limit, tightened to the negotiated `maxFrameBytes` in
@@ -60,7 +60,7 @@ const RESULT_VALIDATORS: Record<string, ValidateFunction> = {
   "retention/clean": validateRetentionCleanResult,
   "pane/reopen": validatePaneReopenResult,
   "message/list": validateMessageListResult,
-  // CREW-50: `events/replay`'s result is a bare array, not an object --
+  // `events/replay`'s result is a bare array, not an object --
   // `subscribe()` already validated it this way on its own dedicated call
   // path, but a caller reaching `events/replay` through the generic
   // `request()` (as `crew_transcript` does, via `callOrchestration`) hit
@@ -75,7 +75,7 @@ export type Unsubscribe = () => void;
  * Tells a `subscribe()` listener whether the envelope it just received was
  * part of the initial catch-up batch (`events/replay`'s array, delivered
  * before `events/subscribe` is even sent) or arrived live afterward, via a
- * `crew/event` notification. CREW-51: a listener that reacts to an event
+ * `crew/event` notification. A listener that reacts to an event
  * with a side effect meant for "this just happened" (the milestone bridge's
  * digest injection) must not fire on historical backlog -- a session that
  * resumes from sequence 0 (or any gap) replays everything since, including
@@ -160,8 +160,8 @@ export class CrewClient {
 
   /**
    * Sends a JSON-RPC request and resolves with its `result`. Methods with a
-   * canonical protocol result type (including `events/replay`'s array,
-   * CREW-50) are schema-validated via `RESULT_VALIDATORS`; every other
+   * canonical protocol result type (including `events/replay`'s array)
+   * are schema-validated via `RESULT_VALIDATORS`; every other
    * result must at least be a JSON object.
    */
   async request(method: string, params?: unknown): Promise<unknown> {

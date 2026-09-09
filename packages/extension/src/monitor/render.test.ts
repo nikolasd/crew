@@ -178,7 +178,7 @@ test("renderWidgetBox embeds the accent-colored header in the top border", () =>
   expect(lines[0]).toContain(`[accent]${renderWidgetHeader()}[/accent]`);
 });
 
-test("renderWidgetBox wraps the empty-state line in the border, uncolored (CREW-10)", () => {
+test("renderWidgetBox wraps the empty-state line in the border, uncolored", () => {
   const lines = renderWidgetBox({ rows: {}, lastSequence: 0 }, fakeTheme());
   expect(lines).toHaveLength(3); // top border, empty-state line, bottom border
   expect(lines[1]).toContain("[text]Crew active, waiting for task submissions[/text]");
@@ -186,7 +186,7 @@ test("renderWidgetBox wraps the empty-state line in the border, uncolored (CREW-
   expect(lines[1].endsWith("[border]│[/border]")).toBe(true);
 });
 
-test("renderWidgetBox shows submit error in red when there are no rows and an error is pending (CREW-10)", () => {
+test("renderWidgetBox shows submit error in red when there are no rows and an error is pending", () => {
   const lines = renderWidgetBox(
     {
       rows: {},

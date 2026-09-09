@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  # CREW-42: Classify changes to optimize CI cost for docs-only PRs.
+  # Classify changes to optimize CI cost for docs-only PRs.
   # This cheap job runs on every PR/push and exposes `docs_only: true/false`.
   # Expensive jobs (test matrix, security, build) use `if: needs.changes.outputs.docs_only != 'true'`
   # to skip when the PR touches only documentation.

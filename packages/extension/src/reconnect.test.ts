@@ -1,4 +1,4 @@
-// End-to-end test for cached-client reconnection (TODO #73 / R6).
+// End-to-end test for cached-client reconnection.
 //
 // Proves that when the daemon exits (idle timeout or SIGTERM), the next
 // tool call automatically reconnects instead of failing with a stale,
