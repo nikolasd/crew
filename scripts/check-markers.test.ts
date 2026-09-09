@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { RULES, SKIP_DIRS, scanText } from "./check-markers";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { RULES, SKIP_DIRS, scanRepo, scanText } from "./check-markers";
 
 /**
  * The positive control.
@@ -158,5 +162,110 @@ describe("the exceptions the rule itself grants", () => {
     // The sole legitimate collision in the repository. Excluding the
     // directory is what lets the R pattern stay wide enough to catch R2/R6.
     expect(SKIP_DIRS).toContain("assets");
+  });
+});
+
+/**
+ * What the scan considers to be the repository.
+ *
+ * These build a real git repository in a temporary directory rather than
+ * mocking the enumeration, because the property under test is precisely the
+ * one a mock would assume: that `git ls-files` and the filesystem disagree,
+ * and that the scan follows git.
+ *
+ * The defect these pin was live on main. The scanner walked the working tree,
+ * so it read `crates/protocol/bindings/` -- gitignored output that `ts-rs`
+ * writes during a Rust test run, carrying markers copied from the doc comments
+ * it was generated from. `bun run check` failed at its first step on a clean
+ * checkout, reporting 385 markers in files that are not repository content and
+ * do not exist in CI. The rule is about what the repository says; a generated
+ * artifact does not say anything.
+ */
+describe("the scan follows git, not the filesystem", () => {
+  /** A throwaway git repository. Files are staged, never committed -- `git ls-files` reads the index. */
+  const repoWith = (files: Record<string, string>): string => {
+    const root = mkdtempSync(join(tmpdir(), "check-markers-"));
+    execFileSync("git", ["init", "--quiet"], { cwd: root });
+    for (const [rel, contents] of Object.entries(files)) {
+      mkdirSync(dirname(join(root, rel)), { recursive: true });
+      writeFileSync(join(root, rel), contents);
+    }
+    execFileSync("git", ["add", "--all"], { cwd: root });
+    return root;
+  };
+
+  test("a gitignored file carrying a marker is not flagged", () => {
+    const root = repoWith({
+      ".gitignore": "generated/\n",
+      "src/clean.rs": "// The readiness gate fails closed on an unknown surface.\n",
+      "generated/bindings.ts": "// CREW-79: copied from the doc comment this was generated from\n",
+    });
+    // The ignored file is on disk -- this is a test of what the scan reads,
+    // not of what exists. A filesystem walk finds it; the scan must not.
+    expect(existsSync(join(root, "generated/bindings.ts"))).toBe(true);
+    expect(scanRepo(root).findings).toEqual([]);
+  });
+
+  test("a tracked file carrying the same marker IS flagged", () => {
+    // The positive control for the pair above. Without it, "not flagged"
+    // proves nothing: a scan that reads no files at all passes the first
+    // test, and that is the exact bug class this whole file guards against.
+    const root = repoWith({
+      ".gitignore": "generated/\n",
+      "src/tracked.rs": "// CREW-79: copied from the doc comment this was generated from\n",
+      "generated/bindings.ts": "// CREW-79: the same marker, in ignored output\n",
+    });
+    const { findings } = scanRepo(root);
+    expect(findings.map((f) => f.file)).toEqual(["src/tracked.rs"]);
+    expect(findings[0]?.token).toBe("CREW-79");
+  });
+
+  test("an untracked file is not flagged even when nothing ignores it", () => {
+    // `git ls-files` reads the index, so a file that is merely present --
+    // a scratch note, a half-written draft -- is not repository content yet
+    // and cannot fail anyone's build.
+    const root = repoWith({ "src/clean.rs": "// nothing to see\n" });
+    writeFileSync(join(root, "scratch.md"), "// CREW-79 in an unstaged note\n");
+    expect(scanRepo(root).findings).toEqual([]);
+  });
+
+  test("a skipped directory is skipped at any depth, not only at the root", () => {
+    // `packages/extension/dist/index.js` is a tracked, committed bundle,
+    // generated from `packages/extension/src/`. A leading-prefix test would
+    // exempt only a top-level `dist/` and scan the bundle as authored source,
+    // reporting every marker twice -- the second time against a file that
+    // cannot be fixed by editing it.
+    const root = repoWith({
+      "packages/extension/dist/index.js": "// CREW-79: inlined from the source comment\n",
+      "packages/extension/src/index.ts": "// clean\n",
+    });
+    expect(scanRepo(root).findings).toEqual([]);
+    expect(scanRepo(root).scanned).toBe(1);
+  });
+
+  test("a scan that enumerates nothing throws instead of reporting clean", () => {
+    // The enumerator's own control. Zero files is what a missing `git`, a
+    // non-repository directory, or an extension filter edited into
+    // uselessness all produce -- and every one of them would otherwise print
+    // the same all-clear as a clean tree.
+    const empty = mkdtempSync(join(tmpdir(), "check-markers-empty-"));
+    execFileSync("git", ["init", "--quiet"], { cwd: empty });
+    expect(() => scanRepo(empty)).toThrow(/no scannable files/);
+  });
+
+  test("the count reported is the number of files actually read", () => {
+    // The success line carries this number so a scan that read almost
+    // nothing is distinguishable from a clean repository in a CI log.
+    const root = repoWith({
+      ".gitignore": "generated/\n",
+      "src/a.rs": "// clean\n",
+      "src/b.ts": "// clean\n",
+      "generated/c.ts": "// ignored\n",
+      "notes.bin": "not a scanned extension\n",
+    });
+    // `src/a.rs` and `src/b.ts` only: the ignored file is not repository
+    // content, and neither `notes.bin` nor `.gitignore` itself carries an
+    // extension this scan reads.
+    expect(scanRepo(root).scanned).toBe(2);
   });
 });
