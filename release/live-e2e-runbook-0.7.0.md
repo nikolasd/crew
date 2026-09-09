@@ -5,14 +5,18 @@ Supervised live test of crew, gating the v0.7.0 cut — the exact commit under t
 run. Every phase below either verifies a specific class of regression an earlier run surfaced, or
 exercises what has changed since.
 
-**The gate is open and no P1 remains.** CREW-52 made panes work under tmux and herdr for the first
-time and added state root + socket to `/crew health`; CREW-61 closed the redaction class with a
-compile-time guard and fixed four live leaks on the way. CREW-73 and CREW-74 then landed the pane
-half of that work: an attach walks the remaining backend candidates before falling back to hidden,
-and every requested-versus-actual divergence is journaled with the sequence it tried. The exact
-commit under test is the one recorded in [`release/checklist-0.7.0.md`](checklist-0.7.0.md). The
-one open ticket at the time this was last revised is CREW-69 (escalations carrying the worker's
-question, deferred to post-E2E by ruling); it does not block the test.
+**The gate is open and no P1 remains.** The display-placement work made panes work under tmux and
+herdr for the first time and added `runtime/status`'s `state_root`/`socket_path` fields to `/crew
+health` (see [ADR-0029](../docs/adr/0029-placement-follows-the-backend-embedded-deleted.md)); the
+compile-time redaction guard closed the redaction class and fixed four live leaks on the way (see
+[ADR-0006](../docs/adr/0006-type-enforced-redaction-boundary.md)). The pane attach-retry work then
+landed the other half of the placement decision: an attach walks the remaining backend candidates
+before falling back to hidden, and every requested-versus-actual divergence is journaled with the
+sequence it tried (ADR-0029's amendment). The exact commit under test is the one recorded in
+[`release/checklist-0.7.0.md`](checklist-0.7.0.md). The one open item at the time this was last
+revised is escalations not yet carrying the worker's actual question (deferred to post-E2E by
+ruling — see `docs/future-features.md`'s "Escalations Carry the Worker's Actual Question"); it does
+not block the test.
 
 Results from the run go under [`release/live-conformance/`](live-conformance/) once it completes.
 
@@ -33,7 +37,8 @@ Abort the phase immediately and preserve state if any of the following happens:
 
 - **Any redaction leak** — a raw secret, thinking content, or unredacted prompt text visible in the
   journal, dashboard, `/crew`, or an exported artifact. The worst class. Stop, do not clean up,
-  capture `crewd audit export` first. CREW-61 closed four live instances, so these are the fields
+  capture `crewd audit export` first. The compile-time redaction guard's rollout closed four live
+  instances, so these are the fields
   to eyeball in the export: `cleanupFailed.error`, a plan's `subtasks[].description`, and
   `paneDowngraded.reason`. Note the deliberate exception: `leaseAcquired.path` is an absolute
   filesystem path on purpose — it is that event's subject, `run/get` already returns it, and it is
@@ -68,8 +73,8 @@ cargo build                   # a clean build is expected; produces target/debug
 # a stop's message.
 export CREW_STATE_DIR=/tmp/crew-e2e3-state && mkdir -p "$CREW_STATE_DIR"
 # A BRAND-NEW PATH. Do not reuse a state dir from an earlier attempt: if it holds events
-# carrying placement "embedded" (a value CREW-52 deleted), this binary refuses to replay
-# that journal. The refusal is the documented breaking change working correctly (expect a
+# carrying placement "embedded" (a value the display-placement work deleted, see ADR-0029),
+# this binary refuses to replay that journal. The refusal is the documented breaking change working correctly (expect a
 # legible error naming the remedy, not a panic) -- but it would stop the test dead. Start clean.
 export OMP_CREW_BINARY="$PWD/target/debug/crewd"
 unset CREW_DISABLE_VENDOR_CLI  # live test: vendor calls allowed, and billed
@@ -120,18 +125,18 @@ Register a task and a claude worker, submit a short run (a one-paragraph questio
 |---|---|
 | Model selection on first use | Asked once, then persisted to the repository's config; silent on later runs — the ask must appear if no model is configured yet for this adapter |
 | Pane attach | Pane opens in the chosen host — note the pane reference in `/crew` ("pane attached: `<backend>`") |
-| **If the pane is not in the preferred host** (CREW-73/74) | Not a failure by itself — an attach retries the remaining candidates, so a pane in a *different* host is the retry working. What must accompany it: a `paneDowngraded` event whose `requestedBackend` differs from its `actualBackend`, carrying `requestedPlacement`, the `attempted` sequence, and a redacted `reason`. A pane in a non-preferred host **with** that event is correct behaviour; **without** it is the finding, because the divergence then reached nobody. Grep the export for `paneDowngraded` (camelCase, the wire form). |
-| **If no pane opens at all** (CREW-60) | The fallback is typed and journaled, not silent: `actualBackend` is `hidden`, `reason` names how many candidates were tried and the last failure, and `attempted` lists the backends resolution walked or tried in order (an entry means resolution reached that backend, not that a pane was attempted on it). The monitor shows a sticky downgrade flag a later unrelated event cannot overwrite. A missing pane *without* this event is the finding; a missing pane *with* it is the mechanism working, and `reason` says why. |
-| **On `/crew reopen`** (CREW-74) | Reopen is single-attempt by design: pane-creation failure returns an **error to the caller**, not a hidden fallback, so expect a failed command rather than a downgrade event. A reopen that silently reports success with no visible pane is worth noting — the two paths where no backend is available journal a hidden attach and return success. |
-| **Run completion** — the headline check (CREW-47/48) | On the worker's turn end, the run moves to `waitingUser` with the pane still open, and stays there. Only a delivered follow-up or a genuine user turn may resume it, and a thinking-only turn end is not a boundary at all. **Watch for any return to `working` you did not cause — that is a regression, and it is the single most important observation of the run.** |
-| `crew_run` op `"result"` on the parked run (CREW-49) | Returns the full answer text and usage — a `null` result with a visible answer already in the pane is a regression |
-| `crew_transcript` op `"replay"` on the same run (CREW-50) | Returns a normalized digest array — free to check, and the tool to reach for if anything else goes wrong |
+| **If the pane is not in the preferred host** (see [ADR-0029](../docs/adr/0029-placement-follows-the-backend-embedded-deleted.md)'s amendment) | Not a failure by itself — an attach retries the remaining candidates, so a pane in a *different* host is the retry working. What must accompany it: a `paneDowngraded` event whose `requestedBackend` differs from its `actualBackend`, carrying `requestedPlacement`, the `attempted` sequence, and a redacted `reason`. A pane in a non-preferred host **with** that event is correct behaviour; **without** it is the finding, because the divergence then reached nobody. Grep the export for `paneDowngraded` (camelCase, the wire form). |
+| **If no pane opens at all** (see [ADR-0029](../docs/adr/0029-placement-follows-the-backend-embedded-deleted.md)) | The fallback is typed and journaled, not silent: `actualBackend` is `hidden`, `reason` names how many candidates were tried and the last failure, and `attempted` lists the backends resolution walked or tried in order (an entry means resolution reached that backend, not that a pane was attempted on it). The monitor shows a sticky downgrade flag a later unrelated event cannot overwrite. A missing pane *without* this event is the finding; a missing pane *with* it is the mechanism working, and `reason` says why. |
+| **On `/crew reopen`** (see ADR-0029's amendment) | Reopen is single-attempt by design: pane-creation failure returns an **error to the caller**, not a hidden fallback, so expect a failed command rather than a downgrade event. A reopen that silently reports success with no visible pane is worth noting — the two paths where no backend is available journal a hidden attach and return success. |
+| **Run completion** — the headline check (see [ADR-0027](../docs/adr/0027-turn-end-settles-a-run.md)) | On the worker's turn end, the run moves to `waitingUser` with the pane still open, and stays there. Only a delivered follow-up or a genuine user turn may resume it, and a thinking-only turn end is not a boundary at all. **Watch for any return to `working` you did not cause — that is a regression, and it is the single most important observation of the run.** |
+| `crew_run` op `"result"` on the parked run (see ADR-0027's amendment) | Returns the full answer text and usage — a `null` result with a visible answer already in the pane is a regression |
+| `crew_transcript` op `"replay"` on the same run | Returns a normalized digest array — free to check, and the tool to reach for if anything else goes wrong |
 | Journal | Full submit prompt journaled, redacted; check via `/crew run <runId>` or `crewd audit export` — the dashboard shows runs/usage, a prompt column is future work |
 | Widget | Row shows state transitions plus `usage … in / … out ($…)` |
 
 ## P4 — Large prompt
 
-billed · CREW-4
+billed · see [ADR-0030](../docs/adr/0030-paste-delivery-bounded-on-progress.md)
 
 | Step | Expect / verifies |
 |---|---|

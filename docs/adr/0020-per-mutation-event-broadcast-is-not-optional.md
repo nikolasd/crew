@@ -89,6 +89,6 @@ than a change to the actor's own command-handling loop.
 
 ## Links
 
-* Narrated in `../journal.md`, commit `49233a5` (bug #3)
+* Narrated in `../journal.md`, commit `49233a5`
 * Required by [ADR-0019](0019-monitor-is-one-reducer-over-replay-and-live-no-separate-modes.md)
 * Checklist documented in `../development.md`, "Adding a new domain mutation"

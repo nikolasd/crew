@@ -1,4 +1,4 @@
-# Redacted-field inventory — 2026-09-07 (CREW-64)
+# Redacted-field inventory — 2026-09-07
 
 **Verified against:** `main` @ `0aae002bd47bbbd7d84fcdd29ffeb17c196830bb` (2026-09-07).
 
@@ -11,8 +11,9 @@ which this document audits the surface of.
 
 ## Why this exists
 
-CREW-61 added a compile-time guard (`crates/protocol/src/event.rs`,
-`every_reachable_string_field_is_redacted_or_allowlisted`) proving every `String`-typed field
+A compile-time guard (`crates/protocol/src/event.rs`,
+`every_reachable_string_field_is_redacted_or_allowlisted`) — added per
+[ADR-0006](../adr/0006-type-enforced-redaction-boundary.md) — proves every `String`-typed field
 reachable from `RuntimeEvent` is either `Redacted` or explicitly allowlisted with a stated reason.
 That guard's own scope is honest about its limit: it enforces that a field is *typed* `Redacted`,
 never that a `Redacted`-typed field was actually *populated* through the redactor. `Redacted`
@@ -70,18 +71,25 @@ uses `Redacted::assert_runtime_authored`, or (c) neither — a finding.
 
 ## The one finding
 
-`PolicyViolationDecided.resolved_by` is the sole case where a `Redacted` field is populated via
-`assert_runtime_authored` — the "trust me" constructor — on a value that is not actually
-runtime-minted. It is the connecting `ompExtension` client's own `instance_id`, chosen freely at
-connection time with no format, length, or character validation anywhere in the protocol or the
-connection handshake. The claim that this is safe rests entirely on the ownership guard inside
-`resolve_policy_violation`'s transaction (the value written is the one the guard just authorized,
-never free text a caller chose) — `repository.rs:2627-2633` says as much in its own words: *"if
-that guard ever loosens, this claim becomes false and must move to the redactor."* Filed as
-**CREW-66**; not fixed as of this audit. The same root cause (an unvalidated client `instance_id`
-made durable under an identifier's name) also reaches `plans.owner_client_instance_id` and
-`tasks.owner_client_instance_id`, outside this document's `Redacted`-field scope but tracked under
-the same ticket.
+`PolicyViolationDecided.resolved_by` was, as of this audit, the sole case where a `Redacted` field
+was populated via `assert_runtime_authored` — the "trust me" constructor — on a value that is not
+actually runtime-minted. It is the connecting `ompExtension` client's own `instance_id`, chosen
+freely at connection time with no format, length, or character validation anywhere in the protocol
+or the connection handshake. The claim that this was safe rested entirely on the ownership guard
+inside `resolve_policy_violation`'s transaction (the value written is the one the guard just
+authorized, never free text a caller chose) — `repository.rs:2627-2633` said as much in its own
+words: *"if that guard ever loosens, this claim becomes false and must move to the redactor."* The
+same root cause (an unvalidated client `instance_id` made durable under an identifier's name) also
+reached `plans.owner_client_instance_id` and `tasks.owner_client_instance_id`, outside this
+document's `Redacted`-field scope but sharing the same root cause.
+
+**Closed after this audit.** Commit `02a0b54` (2026-09-08) bounds `instance_id` once, at the
+connection handshake, before any of the three columns above receive it: non-empty, at most 128
+bytes, restricted to `[A-Za-z0-9._-]` — a bound rather than a format, chosen so a legitimate client
+whose id scheme changes is never rejected, but excluding whitespace, control characters, and
+base64's `/`/`+`/`=` so the field cannot carry a smuggled multi-line payload or credential. This
+closes the finding without moving the field through the redactor, which the fix's own commit
+message treats as the better answer for an identifier that is bounded rather than free text.
 
 No other `Redacted` field in `crates/protocol/src/` was found populated by a bulk
 `serde_json::from_value`/`from_str` deserialize without a subsequent per-field sanitize call.
@@ -92,21 +100,24 @@ that follows (`:2890-2893`) before the value is used.
 ## Consequence of a dead field
 
 `EscalationRaised.question` being provably unpopulated everywhere had a consequence beyond its own
-row: CREW-61's own allowlist reason for the sibling `EscalationRaised.reason` field
+row: the compile-time guard's own allowlist reason for the sibling `EscalationRaised.reason` field
 (`event.rs:1475`) reads *"the worker's text travels in the sibling `question: Option<Redacted>`"* —
 describing a data flow that, per this audit, does not exist. Nothing leaks because `reason` really
 is a fixed machine code regardless (the safety holds on its own clause), but the second clause did
 rhetorical work it wasn't entitled to. **The lesson generalizes: finding a dead field is only half
-the check — the other half is asking what else cites it as live.** That correction belongs to
-CREW-66, not this document, since it's a claim inside CREW-61's own allowlist rather than a
-`Redacted`-population site.
+the check — the other half is asking what else cites it as live.** That correction was made by the
+same commit (`02a0b54`) that closed "The one finding" above, not this document, since it's a claim
+inside the guard's own allowlist rather than a `Redacted`-population site — the allowlist reason now
+cites `EscalationRaised.reason`'s two actual production construction sites instead.
 
 ## What this document does not cover
 
-- Fields outside `crates/protocol/src/`'s `Redacted` type entirely (plain `String` columns in
-  `plans`/`policy_violations`, audited separately and independently — see the CREW-61 follow-up
-  audit referenced in that ticket).
-- Anything added to the protocol after `0aae002`. The CREW-61 compile-time guard will catch a new
-  *unaccounted* `String` field; it will not catch a new `Redacted` field populated the same way
-  `resolved_by` was. That is exactly the gap this document exists to name, and exactly why it needs
-  re-running from scratch against a current commit rather than trusted as still accurate.
+- Fields outside `crates/protocol/src/`'s `Redacted` type entirely: the plain `String` columns
+  named in "The one finding" above (`plans.owner_client_instance_id`,
+  `tasks.owner_client_instance_id`, `policy_violations.resolved_by`) — closed by the same
+  handshake-bound fix (commit `02a0b54`) rather than by a separate audit.
+- Anything added to the protocol after `0aae002`. The compile-time guard (see
+  [ADR-0006](../adr/0006-type-enforced-redaction-boundary.md)) will catch a new *unaccounted*
+  `String` field; it will not catch a new `Redacted` field populated the same way `resolved_by`
+  was. That is exactly the gap this document exists to name, and exactly why it needs re-running
+  from scratch against a current commit rather than trusted as still accurate.

@@ -283,7 +283,7 @@ The test suite's Rust integration test files (`crates/runtime/tests/`) cover:
 - Approval workflows
 - Audit and redaction
 - All four TUI vendor adapters (Claude, Codex, Copilot, OMP-RPC) — the headless control plane
-  these once ran alongside is retired (crew-v2 gap-closure WP-C; deserializable but rejected, see
+  these once ran alongside is retired (crew-v2 gap-closure; deserializable but rejected, see
   [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md))
 - Configuration and merging
 - Conformance testing

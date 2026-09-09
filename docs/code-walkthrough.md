@@ -64,7 +64,7 @@ Small, dependency-light, and the vocabulary for everything else.
 | `src/service/query.rs` | Read-only lookup closures (`task_get_op`, `run_state_op`, etc.) run through `DatabaseHandle::run_domain_op` |
 | `src/service/run_driver.rs` | `RunDriver` trait, `RunDriverContext`, `FakeRunDriver` (`queued -> starting -> working`) |
 | `src/adapter/trait.rs` | `Adapter` trait with `start`/`resume`/`send`/`cancel`/`dispose` |
-| `src/adapter/registry.rs` | `AdapterRegistry` — implements `RunDriver` against four TUI worker adapters (the headless control plane these once ran alongside is retired; `mode: "headless"` is deserializable but typed-rejected — crew-v2 gap-closure WP-C, `docs/adr/0026-headless-retirement.md`), `AdapterAuthorization` trait, `FixtureAuthorization`/`DenyByDefaultAuthorization` |
+| `src/adapter/registry.rs` | `AdapterRegistry` — implements `RunDriver` against four TUI worker adapters (the headless control plane these once ran alongside is retired; `mode: "headless"` is deserializable but typed-rejected — crew-v2 gap-closure, `docs/adr/0026-headless-retirement.md`), `AdapterAuthorization` trait, `FixtureAuthorization`/`DenyByDefaultAuthorization` |
 | `src/adapter/event_sink.rs` | `DomainAdapterEventSink` — sanitizes, journals, and broadcasts adapter events |
 | `src/adapter/run_lifecycle.rs` | `RunLifecycleSink` — applies `queued -> starting -> working` and the terminal edge from adapter evidence |
 | `src/adapter/error.rs` | `AdapterError` — adapter-specific error types |
@@ -77,7 +77,7 @@ Small, dependency-light, and the vocabulary for everything else.
 | `src/adapter/tui/claude.rs` | `ClaudeTuiVendor` — drives the real interactive `claude` CLI |
 | `src/adapter/tui/codex.rs` | `CodexTuiVendor` — drives the real interactive `codex` CLI |
 | `src/adapter/tui/copilot.rs` | `CopilotTuiVendor` — drives the real interactive `copilot` CLI |
-| `src/adapter/tui/copilot_compatibility.rs` | Copilot CLI/ACP version compatibility checks (moved from the retired headless copilot adapter in WP-C) |
+| `src/adapter/tui/copilot_compatibility.rs` | Copilot CLI/ACP version compatibility checks (moved from the retired headless copilot adapter, see `docs/adr/0026-headless-retirement.md`) |
 | `src/adapter/tui/omp.rs` | `OmpTuiVendor` — drives the real interactive `omp` CLI |
 | `src/adapter/tui/discovery.rs` | Vendor-pane discovery/attach helpers |
 | `src/adapter/tui/tailer.rs` | Session-transcript tailing shared across vendors |
@@ -118,7 +118,7 @@ subsystem (`paths`, `database`, `redaction`, `redaction_boundary`, `ipc`, `lifec
 `crew_config`, `conformance`, `attach`, `dashboard`, `escalations`, `lease_cli`, `lease_db`,
 `recovery`, `run_result`, `run_lifecycle`, `vendor_cli_availability`, `kill_switch_authorization`,
 and the several race-condition-named files, e.g. `approval_decide_race`,
-`task_revision_race`). The four worker adapters are TUI-only now (crew-v2 gap-closure WP-C;
+`task_revision_race`). The four worker adapters are TUI-only now (crew-v2 gap-closure;
 `docs/adr/0026-headless-retirement.md`) — their own real-process coverage lives in `tui_adapter.rs`
 (the shared `TuiAdapter<V>` machinery against a scripted mock vendor), `tui_claude_registry.rs`
 (a real, TUI-mode Claude run through the registry), `tui_tailer.rs`, and `claude_tui_fixture.rs`
@@ -238,7 +238,7 @@ companion to the design-level sequence in
 5. **The adapter seam** — `run_submit` then calls the injected `RunDriver` (the `AdapterRegistry`
    by default): it resolves the worker profile, checks `AdapterAuthorization` (deny-by-default in
    production, configurable in tests), constructs the matching `TuiAdapter<V>` (`V` one of the four
-   vendors — Claude/Codex/Copilot/OMP-RPC, all TUI-driven since crew-v2 gap-closure WP-C), and
+   vendors — Claude/Codex/Copilot/OMP-RPC, all TUI-driven since crew-v2 gap-closure), and
    spawns the vendor CLI on a real PTY via `Supervisor`/`PtyProcess`. With no driver, it returns `adapter_unavailable`
    *after* the queued run already committed in step 3 — the run is never silently dropped just
    because nothing can start it yet. With the registry wired (production,
@@ -360,7 +360,7 @@ provider).
 | Coordination broker behavior (bounds, rate limits, scope tokens) | `crates/runtime/tests/coordination.rs` |
 | Approval ownership, idempotency, callback, recovery | `crates/runtime/tests/approval.rs` |
 | Adapter contract and registry | `crates/runtime/tests/adapter_contract.rs`, `adapter_registry.rs` |
-| Claude/Codex/Copilot/OMP-RPC adapters (TUI-only, WP-C) | `crates/runtime/tests/tui_adapter.rs` (shared `TuiAdapter<V>` machinery), `tui_claude_registry.rs`, `tui_tailer.rs`, `claude_tui_fixture.rs`; per-vendor fixture/live scenario probes are lib-side unit tests under `crates/runtime/src/adapter/tui/{claude,codex,copilot,omp}_conformance.rs` |
+| Claude/Codex/Copilot/OMP-RPC adapters (TUI-only) | `crates/runtime/tests/tui_adapter.rs` (shared `TuiAdapter<V>` machinery), `tui_claude_registry.rs`, `tui_tailer.rs`, `claude_tui_fixture.rs`; per-vendor fixture/live scenario probes are lib-side unit tests under `crates/runtime/src/adapter/tui/{claude,codex,copilot,omp}_conformance.rs` |
 | Supervisor (process management) | `crates/runtime/tests/supervisor.rs` |
 | Workspace operations (lease, apply, materialize) | `crates/runtime/tests/{workspace_lease,workspace_apply,workspace_materialize}.rs` |
 | Display backends (terminal, herdr, tmux) | `crates/runtime/tests/terminal_adapter.rs`, `herdr_display.rs`, `tmux_display.rs`, `display_registry.rs` |
@@ -425,7 +425,7 @@ bun test packages/extension/src/client.test.ts -t "frame"              # TS test
   `cancelled`, `crates/runtime/tests/recovery.rs` is the matrix; `recover_paused`/`recover_waiting`
   are the only knobs. There's no flag to trigger recovery on demand — use `doctor`'s `stale_runs`
   check (five-minute silence threshold, read-only) to see a wedged run without forcing a restart.
-- **Rollout gates are retired (crew-v2 gap-closure WP5).** The old YAML config's six
+- **Rollout gates are retired.** The old YAML config's six
   advisory "rollout gate" booleans (and the `native_discovery_reviewed` gate that actually blocked
   authorization) had no equivalent in `crew.json`'s schema and were config-sourced from a layer
   that was never actually wired up end to end — see

@@ -92,7 +92,7 @@ string is baked into the binary (`CARGO_PKG_VERSION`) and the manifest.
 - [x] Live adapter conformance evidence **carries over from v0.5.0** — no adapter/Rust changes in
       this release, so no new live run is needed. Citing the existing evidence: `probe` +
       `cancellation_scope` proven for claude/codex/copilot/omp-rpc, `read_only_start_and_progress`
-      / `follow_up` proven for claude and omp-rpc, codex re-proven post-#17/#18, copilot blocked
+      / `follow_up` proven for claude and omp-rpc, codex re-proven post-commit fa40af8/2cde61e, copilot blocked
       only on a vendor billing wall (not an adapter defect) — see `release/live-conformance/*.json`
       (`claude-tui.json`, `codex-tui.json`, `codex-tui-post-quota.json`, `copilot-tui.json`,
       `copilot-tui-2026-08-26-transcript-capture.json`, `omp-rpc-tui.json`) and
