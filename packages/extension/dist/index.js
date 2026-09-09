@@ -8736,7 +8736,15 @@ contents, never an absolute socket or filesystem path.`,
           additionalProperties: false
         },
         {
-          description: "A human typed directly into a native pane, bypassing the\nadapter. Sets the run's `RunFlags.needsReconciliation` flag.",
+          description: `A human typed directly into a native pane, bypassing the
+adapter. Sets the run's \`RunFlags.needsReconciliation\` flag.
+
+Coalesced: one row covers every out-of-band input observed during
+one idle window, not one row per keystroke read. Journaled at the
+END of the window it describes, so the window's start is this
+event's own envelope timestamp minus \`spanMs\` -- no separate start
+timestamp is carried, to avoid a second place for the two to
+disagree.`,
           type: "object",
           properties: {
             type: {
@@ -8754,6 +8762,26 @@ contents, never an absolute socket or filesystem path.`,
                 },
                 paneRef: {
                   type: "string"
+                },
+                inputCount: {
+                  description: `How many out-of-band inputs this row coalesces. Absent on
+rows written before coalescing existed; such a row is exactly
+one input, so absence reads as 1, never 0 -- an
+\`outOfBandInput\` event means "a human typed", and zero of
+them is not a state that can be journaled.`,
+                  type: "integer",
+                  format: "uint64",
+                  minimum: 0,
+                  default: 1
+                },
+                spanMs: {
+                  description: `Milliseconds between the first and last input this row
+coalesces. Absent on rows written before coalescing existed;
+such a row is a single input, which spans zero milliseconds.`,
+                  type: "integer",
+                  format: "uint64",
+                  minimum: 0,
+                  default: 0
                 }
               },
               additionalProperties: false,

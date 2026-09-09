@@ -25,6 +25,7 @@ mod herdr;
 mod hidden;
 mod os_window;
 pub mod pane_socket;
+mod terminal_reply;
 mod tmux;
 
 pub use attach::{AttachError, AttachServer, AttachTarget, PumpOutcome};

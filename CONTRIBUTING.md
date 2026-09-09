@@ -179,6 +179,13 @@ Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/
 
 **Release checklist, before tagging:**
 - `packages/extension/dist/index.js` is rebuilt (`bun run build`) and the diff is committed — it's the exact file a marketplace-installed plugin loads, and CI's `bundle-check` job rejects a stale one. The `auto-commit-dist` workflow automatically handles this on PR branches that touch extension/protocol source (App-signed bot commit, then CI re-runs). For fork PRs or local verification, you can manually refresh via the `refresh-bundle` workflow (builds on linux-x64 + pinned Bun and uploads the artifact to commit). **Platform caveat:** the bundle embeds Bun's platform-specific module shim, so a rebuild on a different platform (e.g. macOS/arm64) does **not** byte-match CI's linux-x64 `bundle-check` (observed with Bun 1.3.14) — this is why the automation exists.
+
+  **What makes it stale is not touching `dist/`.** A change under `crates/protocol/` regenerates the
+  TypeScript bindings, and the bundle embeds them — so the committed `dist/index.js` goes stale in a
+  file your diff never mentions. No local command reports it: `bun run check` builds into a temp
+  directory and never compares the committed artifact, so a green local gate is a true statement
+  about a gate that does not cover this file. `bundle-check` is what catches it. The question to ask
+  before pushing is "did I change anything the bundle embeds", not "did I touch `dist/`".
 - `.claude-plugin/marketplace.json`'s versions are enforced automatically: `bun run generate --check` fails on any drift from `packages/extension/package.json`, so no manual check is needed.
 
 ## Documentation

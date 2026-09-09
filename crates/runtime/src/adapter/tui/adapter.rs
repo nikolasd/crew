@@ -1024,28 +1024,38 @@ impl<V: TuiVendor> TuiAdapter<V> {
             Arc::new(StdMutex::new((DisplayBackend::Hidden, String::new())));
         let attach_sink = Arc::clone(&sink);
         let attach_identity = Arc::clone(&pane_identity);
+        // Coalesced (see `oob_coalescer`'s own doc comment): a burst of
+        // out-of-band input reads journals one row, not one per read.
+        let coalescer = super::oob_coalescer::OobCoalescer::spawn(move |input_count, span_ms| {
+            let sink = Arc::clone(&attach_sink);
+            let (backend, pane_ref) = {
+                let guard = attach_identity
+                    .lock()
+                    .expect("pane identity mutex never poisoned");
+                (guard.0, guard.1.clone())
+            };
+            tokio::spawn(async move {
+                emit(
+                    &sink,
+                    run_id,
+                    task_id,
+                    worker_id,
+                    AdapterEventPayload::OutOfBandInput {
+                        backend,
+                        pane_ref,
+                        input_count,
+                        span_ms,
+                    },
+                    None,
+                )
+                .await;
+            });
+        });
         let attach = match AttachServer::start(
             self.socket_path(run_id),
             Arc::clone(&pty) as Arc<dyn AttachTarget>,
             Box::new(move |_bytes: Vec<u8>| {
-                let sink = Arc::clone(&attach_sink);
-                let (backend, pane_ref) = {
-                    let guard = attach_identity
-                        .lock()
-                        .expect("pane identity mutex never poisoned");
-                    (guard.0, guard.1.clone())
-                };
-                tokio::spawn(async move {
-                    emit(
-                        &sink,
-                        run_id,
-                        task_id,
-                        worker_id,
-                        AdapterEventPayload::OutOfBandInput { backend, pane_ref },
-                        None,
-                    )
-                    .await;
-                });
+                coalescer.notify();
             }),
         ) {
             Ok(server) => Arc::new(server),
@@ -1289,10 +1299,10 @@ impl<V: TuiVendor> TuiAdapter<V> {
         // itself indistinguishable from a real vendor session id once
         // journaled) -- `runs.vendor_session_id` simply stays unset until
         // a real `SessionMeta` entry establishes it.
-        if let Some(initial_session_id) = self
+        let initial_session_id = self
             .vendor
-            .session_id_from_transcript_path(&transcript_path)
-        {
+            .session_id_from_transcript_path(&transcript_path);
+        if let Some(initial_session_id) = initial_session_id.clone() {
             emit(
                 &sink,
                 run_id,
@@ -1320,8 +1330,38 @@ impl<V: TuiVendor> TuiAdapter<V> {
 
         let pump_sink = Arc::clone(&sink);
         tokio::spawn(async move {
+            // A transcript format that stamps every entry with its
+            // session id (Claude's does) would otherwise re-derive and
+            // re-journal an identical `VendorSessionEstablished` on
+            // every single entry -- 41 identical rows for one id,
+            // measured on a real transcript. Only a CHANGE reaches
+            // `emit_tui_event`; seeded from the initial guess above so a
+            // first real entry that merely confirms it is a no-op too,
+            // not a second, redundant journal write for the same fact.
+            //
+            // Skipping is gated on `cursor.is_none()` too, never on the
+            // session id alone: `cursor_placements` already gives a
+            // `SessionMeta` paired with another event on its line (the
+            // common shape -- e.g. `SessionMeta` + `AssistantText`) no
+            // cursor at all, since the OTHER event carries it -- that
+            // case is free to skip. The rare "hidden SessionMeta-only
+            // line" this module's tests call out DOES carry a cursor
+            // (nothing else on the line to carry it instead), so it is
+            // still emitted even when redundant: dropping that call
+            // would drop the only commit that advances
+            // `runs.transcript_cursor` past it, which a resume must
+            // never do (see `cursor_placements`'s own doc comment).
+            let mut last_vendor_session_id = initial_session_id;
             while let Some((tagged, _new_cursor)) = batch_rx.recv().await {
                 for (event, cursor) in cursor_placements(tagged) {
+                    if let TuiEvent::SessionMeta { vendor_session_id } = &event {
+                        let unchanged =
+                            last_vendor_session_id.as_deref() == Some(vendor_session_id.as_str());
+                        if unchanged && cursor.is_none() {
+                            continue;
+                        }
+                        last_vendor_session_id = Some(vendor_session_id.clone());
+                    }
                     emit_tui_event(&pump_sink, run_id, task_id, worker_id, event, cursor).await;
                 }
             }

@@ -31,6 +31,7 @@ mod classify;
 mod discovery;
 mod grid;
 mod input;
+pub(crate) mod oob_coalescer;
 mod screen;
 mod tailer;
 mod verify;
