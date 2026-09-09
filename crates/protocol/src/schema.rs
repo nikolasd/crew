@@ -27,11 +27,11 @@ use crate::{
 /// type, so that a single `schemars` invocation produces one JSON Schema
 /// with everything reachable from the wire protocol in `$defs`.
 //
-// CREW-44: this struct and `crates/xtask/src/main.rs`'s TS export
+// This struct and `crates/xtask/src/main.rs`'s TS export
 // allowlist (`export_bindings`'s `export!` call) are two independent
 // lists that must agree on every *wire-message* type (not on bare
 // id/enum/param types -- see that file's `NOT_WIRE_MESSAGE_ROOTS`, which
-// is where those belong instead). CREW-43 found `RunMessage` and
+// is where those belong instead). An earlier audit found `RunMessage` and
 // `MessageListResult` on the TS side with no field here at all, and
 // nothing caught it until a human noticed. Adding a message type to the
 // TS export list without a matching field here (or vice versa) now fails
@@ -41,7 +41,7 @@ use crate::{
 //
 // Deliberately `//`, not `///`: a doc comment here is generated schema
 // content (schemars emits it as this root's `description`), not private
-// engineering commentary -- CREW-44 is a code-organization note for future
+// engineering commentary -- this is a code-organization note for future
 // editors of this file, and belongs out of band from what every schema
 // consumer reads as the file's own description.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -105,13 +105,13 @@ mod tests {
 
     /// Backticked names this test does not require to resolve as a
     /// `$defs` key or a real wire value -- each entry is `(name,
-    /// required_substring, reason)`. `required_substring` is CREW-68(b):
+    /// required_substring, reason)`. `required_substring` exists because
     /// a bare name alone would exempt that word in EVERY shipped
     /// description, anywhere, forever. Scoping the exemption to a phrase
     /// that only appears in the description(s) this entry actually
     /// justifies means an unrelated future mention of the bare word
     /// still gets flagged, exactly as it should. (The `Redactor` entry
-    /// this file once carried is gone along with it: #100 reworded the
+    /// this file once carried is gone along with it: a later change reworded the
     /// two shipped docs that named it so they no longer need the
     /// exemption at all -- see `assert_no_stale_allowlist_entries` below,
     /// which is exactly the check that would have caught it going stale.)
@@ -127,10 +127,10 @@ mod tests {
     /// Same shape and discipline as `ALLOWED_UNRESOLVED_BACKTICKED_NAMES`
     /// (name, required_substring, reason) -- flags a backticked lowercase
     /// name that is either a real property somewhere but not of the object
-    /// its description belongs to (CREW-67's bare-reference check), or a
+    /// its description belongs to (the wrong-object property check), or a
     /// name that no reachable object has as a property at all but is still
     /// referenced in dotted form because the type it actually belongs to
-    /// isn't itself reachable from `ProtocolDocument` (CREW-71's dotted
+    /// isn't itself reachable from `ProtocolDocument` (the dotted
     /// check, e.g. `policyQuarantined` below -- `RunFlags` has no `$defs`
     /// entry, so nothing in the shipped schema's own properties will ever
     /// contain this name, and that's exactly why it needs an entry here
@@ -144,10 +144,10 @@ mod tests {
     /// of a type name).
     ///
     /// This file used to carry a `role` entry for `ClientAuth`
-    /// (internally tagged, `#[serde(tag = "role")]`): CREW-72 found that
+    /// (internally tagged, `#[serde(tag = "role")]`): the walk once missed that
     /// was papering over a real gap in `collect_block`'s scope tracking,
     /// not a genuine cross-object mention, and fixed the walk itself
-    /// (`shared_branch_properties`) instead -- see `#100`'s precedent:
+    /// (`shared_branch_properties`) instead, on the standing precedent:
     /// fix the mechanism, don't exempt around it.
     const ALLOWED_CROSS_OBJECT_PROPERTY_REFERENCES: &[(&str, &str, &str)] = &[
         (
@@ -177,7 +177,7 @@ mod tests {
     /// Every `const` string and every `enum` array element anywhere in
     /// `value`, recursively -- i.e. every string a wire consumer could
     /// legitimately see as a discriminator or literal value. Must walk
-    /// every branch of every `oneOf`/`anyOf`, not just the first: CREW-46's
+    /// every branch of every `oneOf`/`anyOf`, not just the first: the type-name check's
     /// own review nearly shipped a version of this check that read only
     /// `RuntimeEventKind`'s first `oneOf` branch (a 23-value enum) and
     /// missed the other ~20 single-`const` branches, which is exactly how
@@ -212,7 +212,7 @@ mod tests {
     /// with the property keys of its ENCLOSING schema object (the object
     /// whose `properties` map this description is inside), if any.
     ///
-    /// CREW-67: a description's own scope updates every time the walk
+    /// A description's own scope updates every time the walk
     /// enters a node that has its own `properties` map -- both that
     /// node's own top-level description (a struct/variant doc naming one
     /// of its own fields) and every individual field's description found
@@ -267,7 +267,7 @@ mod tests {
                     match key.as_str() {
                         "oneOf" | "anyOf" => {
                             if let serde_json::Value::Array(items) = v {
-                                // CREW-72: internal tagging (`#[serde(tag =
+                                // Internal tagging (`#[serde(tag =
                                 // "role")]`, e.g. `ClientAuth`) folds the
                                 // shared tag property into EVERY branch's
                                 // own `properties`, and puts the enum's
@@ -312,7 +312,7 @@ mod tests {
     /// The property keys common to EVERY branch's own `properties` map --
     /// empty if any branch lacks a `properties` object of its own (nothing
     /// can be claimed shared then). See the call site's comment in
-    /// `collect_block` for why this is the internal-tagging fix (CREW-72).
+    /// `collect_block` for why this is the internal-tagging fix.
     ///
     /// That "any branch without `properties` -> empty" rule is also what
     /// makes reusing this for `anyOf` safe, not merely uniform with
@@ -360,7 +360,7 @@ mod tests {
 
     /// Every `description` string anywhere in `value`, recursively, with
     /// its enclosing-object scope discarded -- for checks that only care
-    /// about the text (the existing CREW-46 type-name check, the "None"
+    /// about the text (the existing type-name check, the "None"
     /// Rust-ism check), not which object it belongs to.
     fn collect_descriptions<'a>(value: &'a serde_json::Value, out: &mut Vec<&'a str>) {
         let mut scoped = Vec::new();
@@ -371,7 +371,7 @@ mod tests {
     /// Every `properties` key anywhere in `value`, recursively -- i.e.
     /// every field name that is a real property of SOME schema object,
     /// regardless of which one. Used only to distinguish "this backticked
-    /// name is a property of a different object" (CREW-67: fail, wrong
+    /// name is a property of a different object" (fail, wrong
     /// scope) from "this backticked name isn't a property anywhere" (not
     /// this check's business -- could be a CLI flag, a config key,
     /// anything).
@@ -396,7 +396,7 @@ mod tests {
 
     /// The outcome of checking one backticked lowercase name against the
     /// object its description actually belongs to. A pure function
-    /// (`resolve_property_reference`) so CREW-67's exact bug shape can be
+    /// (`resolve_property_reference`) so the wrong-object bug shape can be
     /// reproduced and asserted against directly, without depending on the
     /// real derive macros drifting away from the scenario that shipped it.
     #[derive(Debug, PartialEq, Eq)]
@@ -407,11 +407,11 @@ mod tests {
         NotAProperty,
         /// A property of the object the description actually belongs to.
         ResolvedLocally,
-        /// A real property, but of some OTHER object -- CREW-67's exact
+        /// A real property, but of some OTHER object -- the exact
         /// bug shape: right word, wrong object.
         WrongObject,
         /// Not a property anywhere under its own spelling, but its
-        /// camelCase form IS a property somewhere -- CREW-75: a Rust
+        /// camelCase form IS a property somewhere -- a Rust
         /// snake_case field name leaked into shipped prose instead of the
         /// object's actual (camelCase) wire name. Carries the camelCase
         /// form the description should have said instead.
@@ -469,7 +469,7 @@ mod tests {
     /// Every backticked identifier in `text` that starts with a LOWERCASE
     /// ASCII letter -- this codebase's convention reserves PascalCase for
     /// type names and lower-camelCase/snake_case for field/property
-    /// names, so this is the candidate set for CREW-67's sibling-property
+    /// names, so this is the candidate set for the sibling-property
     /// check. Not every match is actually a property reference (a
     /// backticked lowercase word could be a CLI flag, a config key,
     /// anything) -- the caller decides that by checking it against the
@@ -539,7 +539,7 @@ mod tests {
     /// (e.g. `` `Redactor::redact_text` `` has no `.` at all;
     /// `` `message/send` `` has a `/`, not a `.`).
     ///
-    /// CREW-71: `backticked_lower_case_identifiers`'s whole-span-bare-
+    /// `backticked_lower_case_identifiers`'s whole-span-bare-
     /// identifier rule (needed to keep RPC method names and `TypeName.field`
     /// mentions like `` `DisplayEvent.pane_ref` `` out of its own,
     /// different check) had the side effect of excluding EVERY dotted span
@@ -589,14 +589,14 @@ mod tests {
         }
     }
 
-    /// Regression guard for CREW-46: a shipped description's backticked
+    /// Regression guard for the type-name check: a shipped description's backticked
     /// PascalCase name must be either a real `$defs` type reference or an
     /// actual wire value (an enum/const string anywhere in the schema),
     /// unless it's in `ALLOWED_UNRESOLVED_BACKTICKED_NAMES` with a reason.
     /// Anything else is either a miscased wire name (`PlanProposed` where
-    /// the wire says `planProposed` -- CREW-46's first six fixes) or a
+    /// the wire says `planProposed` -- that check's first six fixes) or a
     /// dangling Rust-only name with nothing on the wire to resolve to
-    /// (`Classified`, `RuntimePolicy` -- CREW-46's two `//` moves).
+    /// (`Classified`, `RuntimePolicy` -- its two `//` moves).
     #[test]
     fn shipped_descriptions_only_name_defs_keys_or_real_wire_values() {
         let schema_bytes = render_schema().expect("schema renders");
@@ -650,7 +650,7 @@ mod tests {
             "shipped description(s) name a backticked identifier that is neither a $defs key \
              nor any enum/const value anywhere in the schema, nor listed in \
              ALLOWED_UNRESOLVED_BACKTICKED_NAMES with a matching required_substring -- either \
-             it's a Rust-only name that should move to a `//` comment (see CREW-46's \
+             it's a Rust-only name that should move to a `//` comment (see the \
              `Classified`/`RuntimePolicy` fix), or it needs an allowlist entry explaining why \
              it's deliberately unresolved: {unresolvable:#?}"
         );
@@ -662,12 +662,12 @@ mod tests {
         );
     }
 
-    /// CREW-68(b): an allowlist entry only exempts `name` in a
+    /// An allowlist entry only exempts `name` in a
     /// description that ALSO contains its `required_substring` -- not the
     /// bare word anywhere in any shipped description. Marks the matching
     /// entry used in `entry_used`, for `assert_no_stale_allowlist_entries`
     /// below. Shared by both this file's allowlists (type names and
-    /// property names), so both get CREW-68's discipline, not just the
+    /// property names), so both get that discipline, not just the
     /// one that prompted it.
     fn allowlist_permits(
         allowlist: &[(&str, &str, &str)],
@@ -687,7 +687,7 @@ mod tests {
             })
     }
 
-    /// CREW-68(a): every allowlist entry must actually have fired on some
+    /// Every allowlist entry must actually have fired on some
     /// real shipped description -- otherwise it's a standing
     /// pre-authorization for a name/substring pair nothing needs anymore
     /// (the field it justified was redacted, renamed, or removed),
@@ -734,7 +734,7 @@ mod tests {
         );
     }
 
-    /// CREW-68(b): reproduces the bare-name-matching gap directly. Before
+    /// Reproduces the bare-name-matching gap directly. Before
     /// this fix, exempting `Redactor` for two fields' worth of reasons
     /// exempted the bare word EVERYWHERE, forever -- a wholly unrelated
     /// future description that happened to mention `Redactor` in a
@@ -772,7 +772,7 @@ mod tests {
         );
     }
 
-    /// Regression guard for CREW-67: the check above resolves a
+    /// Regression guard for the wrong-object property bug: the check above resolves a
     /// backticked type name globally (any `$defs` key, any wire value,
     /// anywhere in the schema) -- correct for TYPE names, which really
     /// are global. A backticked PROPERTY name is different: a
@@ -784,7 +784,7 @@ mod tests {
     /// name of `PolicyViolationRecorded`'s own field, not
     /// `AdapterNestedWorkerEvent`'s own (camelCase) `vendorChildId`. Both
     /// objects have a same-shaped field, `vendor_child_id` is a real
-    /// property somewhere, and the CREW-46 check above never looks past
+    /// property somewhere, and the type-name check above never looks past
     /// that -- it has no notion of "somewhere" being the wrong place.
     #[test]
     fn shipped_descriptions_reference_sibling_properties_within_their_own_object() {
@@ -802,7 +802,7 @@ mod tests {
         let mut all_property_keys = HashSet::new();
         collect_all_property_keys(&schema, &mut all_property_keys);
         // A floor, not a non-empty check -- the same "nothing to iterate" trap
-        // CREW-61's `every_reachable_string_field_is_redacted_or_allowlisted`
+        // The `every_reachable_string_field_is_redacted_or_allowlisted`
         // and the wire-contract drift test both close with a minimum-carriers
         // assertion, applied here to a walk this check depends on just as
         // completely. If `collect_all_property_keys` ever returned an empty
@@ -849,7 +849,7 @@ mod tests {
                     }
                 }
             }
-            // CREW-71: a dotted span whose first segment is not a real
+            // A dotted span whose first segment is not a real
             // `$defs` key is not actually using the `TypeName.field`
             // convention, however much it looks like it -- check what it
             // really names (its last segment) the same way a bare
@@ -893,7 +893,7 @@ mod tests {
         assert!(
             snake_case_leak.is_empty(),
             "shipped description(s) name a backticked property by its Rust (snake_case) field \
-             name instead of the object's actual wire (camelCase) name -- CREW-75: the name is \
+             name instead of the object's actual wire (camelCase) name -- the name is \
              not a property of ANY object under its own spelling, but its camelCase form IS a \
              real property, which is what tells this apart from a genuine CLI flag or config \
              key. Each entry below is (snake_case name found, camelCase name it should say, \
@@ -907,7 +907,7 @@ mod tests {
         );
     }
 
-    /// CREW-67's exact bug, reproduced directly against
+    /// The wrong-object property bug, reproduced directly against
     /// `resolve_property_reference` rather than the real derive macros --
     /// this is the shape that shipped: `AdapterNestedWorkerEvent`
     /// (camelCase wire fields: `vendorChildId`, `vendorParentRef`) had a
@@ -968,15 +968,16 @@ mod tests {
         );
     }
 
-    /// CREW-75's exact bug, reproduced directly against
+    /// The Rust-only sibling-name gap, reproduced directly against
     /// `resolve_property_reference`: a real, currently-open case
     /// (`PaneDowngraded.attempted`'s own shipped description) named a
     /// sibling by its RUST field name, `` `requested_backend` `` --
     /// snake_case -- instead of the object's actual (camelCase) wire name,
-    /// `requestedBackend`. Unlike CREW-67's bug, `requested_backend` is not
+    /// `requestedBackend`. Unlike the wrong-object bug, `requested_backend` is not
     /// a property of ANY object anywhere in the schema (every object here
     /// renames to camelCase), so it does not hit `WrongObject` --
-    /// `resolve_property_reference` as it shipped for CREW-67/71 falls all
+    /// `resolve_property_reference` as it shipped for the wrong-object and
+    /// dotted-span cases falls all
     /// the way through to `NotAProperty`, the same bucket a genuine CLI
     /// flag or config key belongs in. That is the exact gap: a Rust-only
     /// name is indistinguishable from an unrelated ordinary word once its
@@ -996,7 +997,7 @@ mod tests {
         .collect();
         // Every object in the shipped schema renames to camelCase, so the
         // snake_case spelling is a property of nothing, anywhere -- unlike
-        // CREW-67's bug shape, there is no OTHER object to blame this on.
+        // the wrong-object bug shape, there is no OTHER object to blame this on.
         let all_property_keys = scope.clone();
 
         assert_eq!(
@@ -1038,7 +1039,7 @@ mod tests {
         assert_eq!(to_camel_case(""), "");
     }
 
-    /// CREW-71's exact evasion, reproduced directly: a dotted span whose
+    /// The dotted-span evasion, reproduced directly: a dotted span whose
     /// first segment is NOT a real `$defs` key reads exactly like the
     /// established `TypeName.field` convention but isn't one -- before the
     /// fix, `backticked_lower_case_identifiers`'s whole-span-bare-identifier
@@ -1068,7 +1069,7 @@ mod tests {
 
         // "payload" is not a $defs key, so the caller must fall through to
         // checking the LAST segment against the enclosing scope -- same
-        // wrong-object shape CREW-67 already catches for a bare reference.
+        // wrong-object shape already caught for a bare reference.
         assert_eq!(
             resolve_property_reference(
                 "vendor_child_id",
@@ -1118,7 +1119,7 @@ mod tests {
         );
     }
 
-    /// CREW-72's exact bug, reproduced directly against
+    /// The internally-tagged-enum gap, reproduced directly against
     /// `shared_branch_properties`: an internally-tagged enum
     /// (`#[serde(tag = "role")]`, e.g. `ClientAuth`) folds the shared tag
     /// property into EVERY branch's own `properties` -- before the fix,
@@ -1199,8 +1200,8 @@ mod tests {
         );
     }
 
-    /// The type-name check (CREW-46) and the property-name check
-    /// (CREW-67) are separated entirely by which extractor feeds them --
+    /// The type-name check and the property-name check are separated
+    /// entirely by which extractor feeds them --
     /// asserts that separation directly, rather than relying on it being
     /// implied by the rest of this file. A legitimate cross-type
     /// reference like `` `RunId` `` must never even reach
@@ -1218,7 +1219,7 @@ mod tests {
         assert_eq!(
             backticked_pascal_case_identifiers(text),
             vec!["RunId".to_string(), "PlanProposed".to_string()],
-            "the PascalCase names stay exactly where the existing CREW-46 check already looks"
+            "the PascalCase names stay exactly where the existing type-name check already looks"
         );
     }
 

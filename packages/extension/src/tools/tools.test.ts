@@ -86,13 +86,13 @@ test("read-only ops resolve to tier read, mutating worker/run ops resolve to tie
   expect(runApproval({ op: "get" })).toBe("read");
   expect(runApproval({ op: "retry" })).toBe("exec");
   expect(runApproval({ op: "result" })).toBe("read");
-  // CREW-35: timeoutAck can abort a run (delegates to run/cancel); finish
+  // timeoutAck can abort a run (delegates to run/cancel); finish
   // settles it (tears down the vendor session). Both mutate, both exec.
   expect(runApproval({ op: "timeoutAck" })).toBe("exec");
   expect(runApproval({ op: "finish" })).toBe("exec");
 });
 
-test("crew_run rejects a decision outside extend/nudge/abort, and an outcome outside succeeded/failed (CREW-35)", () => {
+test("crew_run rejects a decision outside extend/nudge/abort, and an outcome outside succeeded/failed", () => {
   const { api, tools } = createFakeApi();
   registerOrchestrationTools(api, {
     getClient: () => {
@@ -158,7 +158,7 @@ test("crew_run finish calls run/finish with runId and outcome, defaulting outcom
   ]);
 });
 
-test("crew_run finish surfaces run/finish's illegal-transition error verbatim, never swallowed (CREW-35 negative path)", async () => {
+test("crew_run finish surfaces run/finish's illegal-transition error verbatim, never swallowed", async () => {
   const { api, tools } = createFakeApi();
   const { JsonRpcRemoteError } = await import("../client");
   const stubClient = {
@@ -461,7 +461,7 @@ test("crew_worker tool maps a JSON-RPC error to a stable, non-throwing tool erro
   cached?.close();
 });
 
-test("crew_run finish surfaces the real daemon's not-found error for a nonexistent (but well-formed) run id (CREW-35 negative path)", async () => {
+test("crew_run finish surfaces the real daemon's not-found error for a nonexistent (but well-formed) run id", async () => {
   const { api, tools } = createFakeApi();
   let cached: CrewClient | undefined;
   registerOrchestrationTools(api, {

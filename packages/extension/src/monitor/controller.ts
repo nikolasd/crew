@@ -23,7 +23,7 @@ const WIDGET_KEY = "crew-monitor";
 /** The slash command that opens or refreshes the monitor. */
 export const MONITOR_COMMAND_NAME = "crew";
 
-/** CREW-5: delay before the first automatic reconnect attempt after the live
+/** delay before the first automatic reconnect attempt after the live
  *  subscription's client closes unexpectedly (e.g. a daemon restart or idle
  *  exit) -- doubles on each further failed attempt, capped at
  *  {@link RECONNECT_MAX_DELAY_MS}, so the monitor never needs the user to
@@ -47,7 +47,7 @@ export interface MonitorControllerContext {
    * Like `getClient`, but must never spawn a new runtime -- only re-attach
    * to one that is already listening (see `resolveClientWithoutSpawning` in
    * status.ts). Used exclusively by the automatic background reconnect
-   * loop after an unexpected close (CREW-5): a spawn belongs to a
+   * loop after an unexpected close: a spawn belongs to a
    * user-initiated path (`getClient`'s callers: session_start, `/crew`),
    * not to a timer that would otherwise silently convert an intentional
    * daemon idle-exit (ADR-0008) into "never idle" by respawning it forever.
@@ -96,7 +96,7 @@ export class MonitorController {
    *  single live subscription — never a second one. */
   #eventListeners = new Set<(event: EventEnvelope, meta: EventDeliveryMeta) => void>();
   /**
-   * Chains every `#dispatch` call in delivery order. CREW-51's review:
+   * Chains every `#dispatch` call in delivery order. From review:
    * `#dispatch` awaits `enrichRun`'s RPC for a `runEvent` before its
    * listener fan-out, and each delivered event used to kick off its own
    * `#dispatch` independently (`void`-called, fire-and-forgotten) --
@@ -125,7 +125,7 @@ export class MonitorController {
    * this so the model is told about milestones without a second subscription
    * being opened.
    *
-   * Ordering/currency guarantee (CREW-51): `listener` is called once per
+   * Ordering/currency guarantee: `listener` is called once per
    * delivered envelope, strictly in delivery order -- never overtaken by a
    * later event's own async work (see `#tail`). `getState()` called
    * synchronously from inside `listener` reflects state *as of this event*,
@@ -174,7 +174,7 @@ export class MonitorController {
    * Always called through `#tail` (never directly), so a caller can never
    * observe two overlapping `#dispatch` calls.
    *
-   * CREW-51: for a `runEvent`, `enrichRun`'s `worker/get` lookup is
+   * for a `runEvent`, `enrichRun`'s `worker/get` lookup is
    * *awaited* here, before the listener loop, rather than fired-and-forgotten
    * the way it used to be -- previously the milestone bridge's listener ran
    * synchronously on the same tick `enrichRun` was kicked off, so it always
@@ -373,7 +373,7 @@ export function registerMonitor(pi: ExtensionAPI, ctx: MonitorControllerContext)
    * never the spawning resolver, so an intentionally idle-exited daemon
    * (ADR-0008) stays exited instead of being silently respawned forever by a
    * background timer. This is what makes a daemon restart mid-session
-   * recoverable on its own (CREW-5): without it, the live subscription's
+   * recoverable on its own: without it, the live subscription's
    * client silently goes dark and the widget stays blind until the user
    * happens to type `/crew` or invoke a tool. A no-op once shutdown has run,
    * or if a retry is already pending -- one client can only close once, but

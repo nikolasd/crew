@@ -199,7 +199,7 @@ export function registerStopTool(pi: ExtensionAPI, ctx: OrchestrationToolContext
   pi.registerTool({
     name: CREW_STOP_TOOL_NAME,
     label: "Crew Stop",
-    // CREW-35: `outcome: "done"` used to send `run/cancel` a `mode: "soft"`
+    // `outcome: "done"` used to send `run/cancel` a `mode: "soft"`
     // hint implying a gentler stop (finish the current turn, then exit).
     // The daemon never reads a `mode` param on `run/cancel` at all -- both
     // outcomes call the identical immediate-cancel path (CancelScope::Worker,
@@ -236,7 +236,7 @@ export function registerFinishTool(pi: ExtensionAPI, ctx: OrchestrationToolConte
   pi.registerTool({
     name: CREW_FINISH_TOOL_NAME,
     label: "Crew Finish",
-    // CREW-35: this tool only ever calls run/cancel, in a loop, over every
+    // this tool only ever calls run/cancel, in a loop, over every
     // named run id -- it never calls run/finish (the ADR-0027 leader-settle
     // that states an outcome). That's a deliberate scope choice, not an
     // oversight: cancelling a batch needs no per-run judgment, but settling

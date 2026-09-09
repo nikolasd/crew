@@ -6,7 +6,7 @@
 //
 // Milestones: terminal run states (succeeded | failed | cancelled |
 // lost), workerQuestion, workerTimeout, budgetExceeded, escalationRaised,
-// the FIRST transition to `working` per run, and a settled turn (CREW-35 --
+// the FIRST transition to `working` per run, and a settled turn (--
 // ADR-0027's `waitingUser` + `turnSettled`, the leader's cue that an answer
 // is ready without waiting for a terminal state). Everything else (tool
 // activity, message chunks, repeated working transitions) is noise and is
@@ -178,7 +178,7 @@ export function formatDigest(e: EventEnvelope, lookup: RunLookup): string | unde
  * thrown digest/injection error must never break the monitor: it is logged
  * and swallowed.
  *
- * CREW-51 (digest currency guard): `tracker.isMilestone(e)` is called for
+ * Digest currency guard: `tracker.isMilestone(e)` is called for
  * *every* envelope regardless of `meta.replay`, so its one-shot bookkeeping
  * (first `working`, settle episodes) stays correct against the run's full
  * history -- but a digest is only ever formatted and sent for a *live*

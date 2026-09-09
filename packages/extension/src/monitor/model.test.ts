@@ -53,11 +53,11 @@ test("a runEvent creates a row with task/worker/state", () => {
   expect(row?.state).toBe("working");
 });
 
-// CREW-9 review requirement: a pane-creation failure (e.g. an
+// Review requirement: a pane-creation failure (e.g. an
 // unrecognized terminal falling back with no visible mechanism) is
 // journaled as a `diagnostic` event -- this must surface in the widget's
 // row, not be silently dropped, or the operator sees a pane that never
-// appeared with no explanation (the exact failure mode CREW-1/CREW-11
+// appeared with no explanation (the exact failure mode the earlier
 // already fixed once).
 test("a diagnostic event on an existing run sets latestActivity to its message", () => {
   const withRow = reduceEvent(EMPTY_MONITOR_STATE, runEvent("run-1", "task-1", "worker-1", "working"));
@@ -187,7 +187,7 @@ test("a displayPaneAttached event with an empty pane ref (hidden fallback) omits
           kind: "displayPaneAttached",
           runId: "run-1",
           backend: "hidden",
-          // CREW-52: no "embedded" placement exists any more -- a hidden
+          // no "embedded" placement exists any more -- a hidden
           // backend has no pane to place at all, so the value here is
           // moot; any valid placement demonstrates the same (empty
           // pane ref) behavior this test is actually about.
@@ -225,7 +225,7 @@ test("a paneDowngraded event sets the sticky paneDowngraded field and a latestAc
   expect(row?.latestActivity).toContain("hidden");
 });
 
-test("CREW-60: paneDowngraded survives subsequent unrelated events (sticky, like openViolations)", () => {
+test("paneDowngraded survives subsequent unrelated events (sticky, like openViolations)", () => {
   const downgraded = reduceEvent(
     EMPTY_MONITOR_STATE,
     envelope({

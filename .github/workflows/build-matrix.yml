@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  # CREW-42: Duplicate changes classification from ci.yml (two-place seam — both files must be
+  # Duplicate changes classification from ci.yml (two-place seam — both files must be
   # updated together if the docs-only pattern changes). This workflow's build job gates on the
   # same docs_only output; see ci.yml's changes job for full rationale.
   #

@@ -149,7 +149,7 @@ export async function ensureRuntime(options: EnsureRuntimeOptions): Promise<Ensu
  * This is `ensureRuntime`'s step 1 exposed on its own, for callers that must
  * re-attach to a runtime that is still around without resurrecting one that
  * deliberately idle-exited (ADR-0008's self-shutdown). The monitor's
- * automatic background reconnect loop (CREW-5) is the reason this exists:
+ * automatic background reconnect loop is the reason this exists:
  * `ensureRuntime`'s spawn-on-demand belongs to user-initiated paths (a tool
  * call, `/crew`), not to a timer that would otherwise keep respawning an
  * idle daemon forever.
