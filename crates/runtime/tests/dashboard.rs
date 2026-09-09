@@ -132,7 +132,8 @@ async fn seed_run_returning_ids(
             completed_at: None,
         };
         repo.submit_run(&run, None, None)?;
-        // WP19/WP20 projections the dashboard snapshot must now surface.
+        // The turn-budget and open-question-escalation projections the
+        // dashboard snapshot must now surface.
         repo.attach_turn_budget(run_id, task_id, None, 10)?;
         repo.record_escalation_raised(
             run_id,
@@ -266,7 +267,7 @@ async fn api_state_returns_seeded_runs_and_workers() {
         Some(1),
         "the seeded worker must be visible: {state}"
     );
-    // WP19/WP20 projections: the seeded run's budget and its open
+    // These projections: the seeded run's budget and its open
     // question escalation must surface, not just be present as arrays.
     let budgets = state["budgets"].as_array().expect("budgets array");
     assert!(

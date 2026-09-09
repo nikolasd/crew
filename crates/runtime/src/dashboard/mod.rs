@@ -78,7 +78,7 @@ pub struct DashboardDeps {
 /// lifecycle stops it before the journal drain on shutdown.
 pub struct DashboardServer {
     local_addr: SocketAddr,
-    /// WP22 minor, closed: a `watch` channel rather than `Notify`, so a
+    /// A `watch` channel rather than `Notify`, so a
     /// connection task spawned AFTER `stop()` still observes the shutdown
     /// (a `notify_waiters` race left exactly that leak window).
     shutdown: watch::Sender<bool>,
@@ -510,8 +510,8 @@ async fn handle_connection(
 }
 
 /// The `/api/state` snapshot, read through the same domain ops the RPC
-/// layer's `run/list` and `worker/list` use. `budgets` (WP19) and
-/// `pendingEscalations` (WP20) come from their own list ops over the same
+/// layer's `run/list` and `worker/list` use. `budgets` and
+/// `pendingEscalations` come from their own list ops over the same
 /// handle -- never a second connection.
 async fn state_snapshot(deps: &DashboardDeps) -> Result<String, String> {
     let runs = deps

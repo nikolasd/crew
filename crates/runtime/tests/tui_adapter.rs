@@ -1539,7 +1539,7 @@ async fn resume_journals_under_constructor_ids_with_no_injection_and_no_discover
     harness.shutdown().await;
 }
 
-// ------------------------------------------------------------------ WP14
+// ---------------------------------------------------------------- resume
 
 #[tokio::test]
 async fn resume_without_a_known_path_derives_the_transcript_from_the_vendor_root_and_session_id() {
@@ -1557,8 +1557,8 @@ async fn resume_without_a_known_path_derives_the_transcript_from_the_vendor_root
     // long enough ago that nonce discovery structurally cannot find it:
     // `find_transcript_by_nonce` only scans files touched after the
     // discovery window opened. A passing test is therefore proof the path
-    // was *derived* from `transcript_root()` + the session id (the WP11
-    // honest gap, closed in WP14), not that discovery happened to win a
+    // was *derived* from `transcript_root()` + the session id (an honest
+    // gap that was later closed), not that discovery happened to win a
     // race it cannot even enter.
     let transcript = vendor.transcript_path();
     fs::write(
@@ -1724,7 +1724,7 @@ async fn start_with_a_resume_spec_continues_the_session_instead_of_injecting() {
         ResumeContext::default(),
     );
 
-    // A StartSpec that carries a session ref: the WP14 wiring makes this a
+    // A StartSpec that carries a session ref: the resume wiring makes this a
     // continuation, not a fresh launch with a flag. The prompt must never
     // be injected into the continued session.
     let mut spec = spec(run_id, task_id, worker_id, "say hi");

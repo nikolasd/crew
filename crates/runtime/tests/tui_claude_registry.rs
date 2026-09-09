@@ -230,7 +230,7 @@ echo "Welcome to Claude Code!"
 SESSION_ID="11111111-1111-4111-8111-000000000099"
 TRANSCRIPT="{session_dir}/$SESSION_ID.jsonl"
 if [ "$1" = "--resume" ]; then
-  # Resumed continuation (WP14): nothing may ever be written to our stdin.
+  # Resumed continuation: nothing may ever be written to our stdin.
   # Append one fresh post-resume entry so the tailer has something new to
   # journal, then keep reading: if a prompt IS injected anyway, that is an
   # injection regression -- surface it in the transcript as INJECTED text
@@ -402,7 +402,7 @@ async fn journal_count(db: &Arc<DatabaseHandle>, run_id: RunId, marker: &str) ->
 }
 
 /// The stored transcript cursor for this run, parsed back into a `Cursor`
-/// exactly the way WP15's sweep will.
+/// exactly the way the boot-time resume sweep will.
 async fn stored_cursor(db: &Arc<DatabaseHandle>, run_id: RunId) -> Option<Cursor> {
     let run_id_string = run_id.to_string();
     let value = db
@@ -739,7 +739,7 @@ where
     }
 }
 
-// ------------------------------------------------------------------- WP14
+// ------------------------------------------------------------- resume contract
 
 /// The end-to-end resume contract: a crashed TUI run's `resume_run`
 /// respawns the vendor via its resume launch, never injects the prompt,
@@ -917,7 +917,7 @@ async fn resume_run_continues_a_crashed_tui_run_from_its_stored_cursor() {
     db.shutdown().await.expect("shutdown database");
 }
 
-/// WP12 rider, proved at the crash boundary: a batch whose cursor lands on
+/// A crash-boundary case: a batch whose cursor lands on
 /// its `ToolResult` can die between the `ToolStarted` commit and the rest
 /// of the batch. Resuming with no stored cursor re-tails from byte zero
 /// and must tolerate exactly one replayed `ToolStarted` while never

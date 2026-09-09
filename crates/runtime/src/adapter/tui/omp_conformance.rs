@@ -131,7 +131,7 @@ async fn probe_scenario() -> ScenarioResult {
     probe_scenario_with_version().await.0
 }
 
-/// crew-v2 gap-closure WP-C: see `claude_conformance::probe_with_version`'s
+/// See `claude_conformance::probe_with_version`'s
 /// own doc comment -- same role, this vendor.
 pub(crate) async fn probe_with_version() -> (ScenarioResult, Option<String>) {
     probe_scenario_with_version().await

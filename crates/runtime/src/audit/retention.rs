@@ -54,7 +54,6 @@ impl Retention {
         // Age policy: ONE bounded DELETE per [`DatabaseHandle::run_domain_op`]
         // call, yielding the DB actor between batches so concurrent reads,
         // writes, and RPC traffic never queue behind an entire prune pass
-        // (WP26).
         loop {
             let deleted = age_prune_batch(db_handle, &cutoff_text).await?;
             deleted_events += deleted;
@@ -237,7 +236,7 @@ mod tests {
             .unwrap()
     }
 
-    /// WP26: one call == one domain op == at most [`PRUNE_BATCH`] rows.
+    /// One call == one domain op == at most [`PRUNE_BATCH`] rows.
     /// A 2500-row backlog therefore takes three deleting ops and a fourth
     /// confirming-empty op -- each yielding the DB actor between calls --
     /// instead of one op holding the actor across the whole loop.

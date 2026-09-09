@@ -62,7 +62,7 @@ impl Fixture {
 fn doctor_provisions_a_missing_database_and_reports_healthy() {
     // A missing database is not itself a failure: `check_database` opens
     // (and so lazily creates) it same as `serve` would, and -- since
-    // WP9's `display_available` fix (`auto` is healthy without a real
+    // the `display_available` fix (`auto` is healthy without a real
     // backend; see the `display_available_is_healthy_...` tests below) --
     // a fresh repository with no prior state has nothing left to fail on.
     let fixture = Fixture::new();

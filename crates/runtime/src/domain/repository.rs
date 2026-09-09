@@ -94,7 +94,7 @@ pub enum DomainError {
     /// A leader-originated steering message was refused because the run's
     /// turn budget is exhausted (`turns_used >= turn_limit`). Checked
     /// inside [`DomainRepository::record_message`]'s own guarded
-    /// transaction (WP19) -- never a caller-side pre-check. The typed
+    /// transaction -- never a caller-side pre-check. The typed
     /// refusal travels to the RPC caller as `BUDGET_EXCEEDED`; the
     /// durable `BudgetExceeded` fact is journaled (and broadcast) by a
     /// follow-up commit, not inside this rolled-back one.
@@ -1270,7 +1270,7 @@ impl<'c> DomainRepository<'c> {
         let message = message.clone();
         let principal_instance_id = principal_instance_id.map(str::to_string);
         // Set inside the guarded write when this message resolved the
-        // run's open question escalation (WP20) -- read after the commit.
+        // run's open question escalation -- read after the commit.
         let answered = std::rc::Rc::new(std::cell::Cell::new(false));
         let answered_for_tx = std::rc::Rc::clone(&answered);
         let committed = self.append_and_apply(
@@ -1353,12 +1353,13 @@ impl<'c> DomainRepository<'c> {
                         });
                     }
                 }
-                // Turn budget guard (WP19): leader-originated steering
+                // Turn budget guard: leader-originated steering
                 // kinds consume a worker turn. Checked inside this same
                 // guarded transaction -- a caller-side pre-check would
                 // read a snapshot another send could land behind. A run
-                // with no budgets row (submitted before WP19, or via
-                // retry) has no explicit budget and is never refused.
+                // with no budgets row (submitted before turn budgets were
+                // introduced, or via retry) has no explicit budget and is
+                // never refused.
                 if is_turn_consuming(&message.kind) {
                     let row: Option<(i64, i64)> = tx
                         .query_row(
@@ -1450,7 +1451,7 @@ impl<'c> DomainRepository<'c> {
         self.append_and_apply(&event, None, None, Some(run_id), |_tx| Ok(()))
     }
 
-    /// Snapshots a run's turn budget (WP19): records the plan provenance on
+    /// Snapshots a run's turn budget: records the plan provenance on
     /// the run row and creates its `budgets` row with the resolved limit.
     /// Projection-only bookkeeping -- the `RunQueued` event already
     /// committed the submission fact; a budget is a *limit* the leader's
@@ -1486,7 +1487,7 @@ impl<'c> DomainRepository<'c> {
     }
 
     /// Journals the durable `BudgetExceeded` fact for a run whose guard
-    /// just refused a steering message (WP19). Reads the current counter
+    /// just refused a steering message. Reads the current counter
     /// and the run's correlating ids here rather than trusting
     /// caller-carried numbers, so the event always matches the row the
     /// refusal saw. The caller broadcasts the returned envelope; the RPC
@@ -1496,7 +1497,7 @@ impl<'c> DomainRepository<'c> {
     /// Returns [`DomainError::NotFound`] when the run or its budget row is
     /// missing, plus the usual append failures.
     /// Journals the durable `EscalationAnswered` fact for a run whose open
-    /// question escalation a just-recorded Answer message resolved (WP20).
+    /// question escalation a just-recorded Answer message resolved.
     /// Reads the run's correlating ids and the stored answer here rather
     /// than trusting caller-carried values, so the event always matches the
     /// row the resolution wrote.
@@ -1552,7 +1553,7 @@ impl<'c> DomainRepository<'c> {
         )
     }
 
-    /// Journals an `EscalationRaised` fact for `run_id` (WP20): a
+    /// Journals an `EscalationRaised` fact for `run_id`: a
     /// machine-assigned `reason` (`write_violation`, `repeated_failure`)
     /// plus optional redacted `question` text. Projection-only callers --
     /// the sink's write-violation detector and the lifecycle's
@@ -1627,7 +1628,7 @@ impl<'c> DomainRepository<'c> {
     }
 
     /// Whether this run's predecessor for the same task also ended `failed`
-    /// -- WP20's two-consecutive-failures trigger for a `repeated_failure`
+    /// -- the two-consecutive-failures trigger for a `repeated_failure`
     /// escalation. The predecessor is the most-recent prior run by
     /// `(started_at, run_id)` for this task, **regardless of terminality**:
     /// the query does not filter to terminal states, so a concurrently
@@ -1714,7 +1715,7 @@ impl<'c> DomainRepository<'c> {
         )
     }
 
-    /// WP20's write-violation detector: when `tool_name` is a write-shaped
+    /// The write-violation detector: when `tool_name` is a write-shaped
     /// tool AND the run was spawned from an approved plan subtask that
     /// declared `writes: false`, opens a `write_violation` escalation and
     /// journals `EscalationRaised{reason: "write_violation"}`. `None` when
@@ -1778,7 +1779,7 @@ impl<'c> DomainRepository<'c> {
             .map(Some)
     }
 
-    /// Journals a `WorkerTimeout` liveness report for `run_id` (WP19),
+    /// Journals a `WorkerTimeout` liveness report for `run_id`,
     /// unless the run has settled or is unknown -- the sweep snapshots the
     /// clock before this check, so a run that terminated between snapshot
     /// and commit must not receive a timeout fact. Returns the committed
@@ -3065,7 +3066,7 @@ impl<'c> DomainRepository<'c> {
     /// `AdapterVendorSessionEvent`, which also records the run's vendor
     /// session id in the same transaction.
     ///
-    /// `transcript_cursor` (WP12) is `Some(json)` when the caller is a TUI
+    /// `transcript_cursor` is `Some(json)` when the caller is a TUI
     /// adapter's transcript tailer reporting the durable position reached
     /// by the batch this event belongs to (`crate::adapter::tui::Cursor`,
     /// serialized by the sink); it is written to `runs.transcript_cursor`
@@ -3099,7 +3100,7 @@ impl<'c> DomainRepository<'c> {
             } => Some(vendor_session_id.clone()),
             _ => None,
         };
-        // WP20: a journaled WorkerQuestion auto-opens its escalation row in
+        // A journaled WorkerQuestion auto-opens its escalation row in
         // the SAME transaction -- the question event is the durable fact;
         // the open row is the projection a later `message/send {kind:
         // "answer"}` resolves. One open question-escalation per run: the
@@ -3199,7 +3200,7 @@ fn message_kind_str(kind: &crew_protocol::MessageKind) -> &'static str {
 }
 
 /// Whether a message kind originates from (or acts for) the leader and
-/// therefore consumes one of the run's budgeted worker turns (WP19). The
+/// therefore consumes one of the run's budgeted worker turns. The
 /// directives that make a worker take another turn -- assignment, steering,
 /// follow-ups, leader questions, approval decisions resuming a blocked turn
 /// -- consume; worker-side kinds (`answer`, `peerMessage`) and the
@@ -3317,7 +3318,7 @@ mod tests {
         assert_eq!(event_count, 4);
     }
 
-    /// WP12: `record_adapter_event` given a cursor updates
+    /// `record_adapter_event` given a cursor updates
     /// `runs.transcript_cursor` in the same transaction as the event
     /// insert -- the idempotency anchor a crashed daemon reads to re-tail
     /// without duplicating already-journaled events.
@@ -3563,7 +3564,7 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------- WP19 turn budgets
+    // ------------------------------------------------------ turn budgets
 
     /// Seeds a task + worker + queued run with a budgets row of the given
     /// limit, returning the ids.

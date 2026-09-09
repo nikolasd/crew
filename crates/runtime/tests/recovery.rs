@@ -378,7 +378,7 @@ async fn multiple_stuck_runs_are_all_recovered_independently() {
     assert_eq!(run_state(&db, paused_run).await, "cancelled");
 }
 
-/// WP29 gap: a daemon *restart* must not lose the durable transcript. This
+/// A daemon *restart* must not lose the durable transcript. This
 /// drops the live in-memory handle and re-opens the same on-disk journal —
 /// the exact persistence boundary a real `crewd stop` -> `crewd serve` crosses
 /// on restart — then asserts the journaled events for a run are still present
@@ -513,7 +513,7 @@ async fn the_doctors_stale_run_report_names_a_run_silent_past_the_threshold() {
     );
 }
 
-// ------------------------------------------------------------ WP15: resume first
+// ------------------------------------------------------------ resume first
 
 /// The vendor session id the fake `claude` script below always establishes
 /// (mirrors `tests/tui_claude_registry.rs`'s own fixture).
@@ -538,7 +538,7 @@ fn claude_tui_profile_json() -> String {
 /// A Claude profile's resolved JSON with a specific override for the
 /// `mode` key inside `startupOptions.claude`: `Some(literal)` sets it to
 /// that exact string; `None` removes the key entirely, simulating a
-/// genuine pre-WP13 journal entry that predates the `mode` field ever
+/// genuine journal entry that predates the `mode` field ever
 /// existing -- it must still deserialize (per `AdapterMode`'s own
 /// `#[default] Headless`), not fail to parse.
 fn claude_profile_json_with_mode(mode_override: Option<&str>) -> String {
@@ -605,21 +605,25 @@ async fn resume_only_registry(
     (Arc::new(registry), events_tx)
 }
 
-/// crew-v2 gap-closure WP-C ruling 1 -- the pre-drop journal compatibility
-/// test, the heart of this WP: a run whose stored profile OMITS `mode`
-/// entirely (a genuine pre-WP13 journal entry, defaulting to `Headless`
-/// per `AdapterMode`'s own `#[default]`), and one that says `"mode":
-/// "headless"` explicitly, must BOTH terminalize on boot recovery with the
-/// honest retired-mode reason -- NOT "profile unreadable", NOT a
-/// Claude-shaped transcript-path failure. (A pre-WP-C build would have
-/// produced exactly one of those confusing symptoms instead:
+/// The journal-compatibility test for the headless control plane's
+/// retirement (ADR-0026): a run whose stored profile OMITS `mode`
+/// entirely (a genuine journal entry from before the `mode` field
+/// existed, defaulting to `Headless` per `AdapterMode`'s own
+/// `#[default]`), and one that says `"mode": "headless"` explicitly, must
+/// BOTH terminalize on boot recovery with the honest retired-mode reason
+/// -- NOT "profile unreadable", NOT a Claude-shaped transcript-path
+/// failure. (A build predating that retirement would have produced
+/// exactly one of those confusing symptoms instead:
 /// `evaluate_resume_eligibility`'s old Headless branch asked a
 /// since-deleted headless adapter for its declared capabilities.)
 #[tokio::test]
 async fn a_pre_mode_field_and_an_explicit_headless_journal_both_terminalize_with_the_retired_mode_reason()
  {
     for (label, mode_override) in [
-        ("mode omitted entirely (pre-WP13 journal)", None),
+        (
+            "mode omitted entirely (journal predating the mode field)",
+            None,
+        ),
         ("mode: \"headless\" explicit", Some("headless")),
     ] {
         let (_dir, db) = open_db().await;
@@ -775,7 +779,7 @@ async fn journal_count(db: &DatabaseHandle, run_id: crew_protocol::RunId, marker
 
 /// The lowest `sequence` of a journaled event matching `marker` for this
 /// run, or `None` if it never appears. Used to pin ordering between two
-/// markers, not just their presence (M-3 rider, WP-A review).
+/// markers, not just their presence (M-3 rider).
 async fn first_journal_sequence(
     db: &DatabaseHandle,
     run_id: crew_protocol::RunId,
@@ -871,7 +875,7 @@ fn fast_timings() -> TuiTimings {
     }
 }
 
-/// The full WP15 registry fixture: real `AdapterRegistry`, optional
+/// The full resume-first registry fixture: real `AdapterRegistry`, optional
 /// `TuiSupport` pointed at the fake script (`false` models an adapter whose
 /// TUI support is unavailable in this daemon), and `ResumeSupport` wired to
 /// the same db/project/event channel. Returns the broadcast sender so the
@@ -1193,7 +1197,7 @@ async fn terminalize_takes_the_idempotent_branch_when_the_run_is_already_termina
         1
     );
 
-    // M-3 rider (WP-A review): pin the idempotent branch itself, not just
+    // M-3 rider: pin the idempotent branch itself, not just
     // its outcome. The doc comment above claims a specific event order --
     // `ProcessExited` lands (settling the run to `failed` for real) BEFORE
     // `terminalize`'s own `resume_failed` write hits the already-terminal

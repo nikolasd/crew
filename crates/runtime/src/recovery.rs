@@ -2,7 +2,7 @@
 //!
 //! After an unclean shutdown (crash, OOM kill, SIGKILL), runs may be left in
 //! non-terminal states (`queued`, `starting`, `working`, `waitingUser`,
-//! `waitingPeer`, `paused`). Since WP15 the startup sweep is *resume first*:
+//! `waitingPeer`, `paused`). The startup sweep was made resume-first:
 //! before any terminal fallback it tries to continue each stuck run on the
 //! vendor session its previous incarnation already established, through
 //! [`ResumeSeam`]'s [`crate::adapter::AdapterRegistry::resume_run`]. A run
@@ -119,12 +119,12 @@ pub struct RecoveryConfig {
     pub recover_waiting: bool,
 }
 
-/// The resume-first seam (WP15): an [`AdapterRegistry`] whose
+/// The resume-first seam: an [`AdapterRegistry`] whose
 /// `set_tui_support`/`set_resume_support` have both been supplied, plus the
 /// live event broadcast every journaled sweep mutation fans out on.
 /// Constructing a coordinator with one (via
 /// [`RecoveryCoordinator::with_resume`]) turns `recover` into the
-/// resume-first sweep; without one, `recover` keeps the pre-WP15
+/// resume-first sweep; without one, `recover` keeps the original
 /// terminalize-only behavior exactly.
 pub struct ResumeSeam {
     pub(crate) registry: Arc<AdapterRegistry>,
@@ -178,7 +178,7 @@ pub enum RecoveredOutcome {
     /// prior (non-terminal) state under this daemon's own adapter.
     Resumed,
     /// The run could not be resumed and was transitioned to a terminal
-    /// state (the pre-WP15 fallback).
+    /// state (the original terminalize-only fallback).
     Terminalized,
     /// The run could not be resumed but was left untouched -- the
     /// conservative default for `waitingUser`/`waitingPeer`/`paused`.
@@ -193,7 +193,8 @@ pub struct RecoveryCoordinator {
     db: Arc<DatabaseHandle>,
     project_id: ProjectId,
     config: RecoveryConfig,
-    /// The resume-first seam. `None` keeps the pre-WP15 behavior exactly;
+    /// The resume-first seam. `None` keeps the original terminalize-only
+    /// behavior exactly;
     /// `Some` makes every non-terminal run a resume candidate first.
     resume: Option<ResumeSeam>,
     /// `resume_failed` journals the resume attempt's own error, and
@@ -260,7 +261,7 @@ impl RecoveryCoordinator {
     /// 1. Finds every run in a non-terminal state, with no age filter -- see
     ///    the module header for why ownership, not age, is the sound test at
     ///    startup
-    /// 2. With a [`ResumeSeam`] wired (the production boot path since WP15),
+    /// 2. With a [`ResumeSeam`] wired (the production boot path),
     ///    attempts to resume each run on its prior vendor session FIRST; a
     ///    success leaves the run non-terminal in its prior state, and only a
     ///    failed or ineligible resume falls through to --
@@ -360,7 +361,7 @@ impl RecoveryCoordinator {
 
     /// The shared projection behind both sweep scopes. `apply_config_gate`
     /// controls whether the `recover_paused`/`recover_waiting` flags exclude
-    /// waiting/paused runs from the result: `true` for the pre-WP15
+    /// waiting/paused runs from the result: `true` for the original
     /// terminalize-only sweep and the doctor's report, `false` for the
     /// resume-first sweep -- a waiting run is a resume *candidate* even when
     /// its fallback would be skipped, so it must not be filtered here.
@@ -549,7 +550,7 @@ impl RecoveryCoordinator {
         Ok(target)
     }
 
-    /// One stuck run under the pre-WP15 (seam-less) behavior: straight to
+    /// One stuck run under the original, seam-less behavior: straight to
     /// the terminalize fallback, unchanged.
     async fn recover_run_without_seam(&self, stuck: &StuckRun) -> RecoveredRun {
         match self.terminalize(stuck).await {
@@ -567,7 +568,7 @@ impl RecoveryCoordinator {
         }
     }
 
-    /// WP15's resume-first handling of one stuck run: announce the attempt,
+    /// The resume-first handling of one stuck run: announce the attempt,
     /// decide eligibility, resume through the registry -- and only on a
     /// failed or ineligible resume fall back to the terminalize path.
     async fn recover_run_resume_first(&self, stuck: &StuckRun) -> RecoveredRun {
@@ -693,7 +694,7 @@ impl RecoveryCoordinator {
         let Some(session) = vendor_session_id.filter(|s| !s.trim().is_empty()) else {
             return Err("no vendor session was ever established for this run".to_string());
         };
-        // The cursor column holds opaque JSON of a TUI `Cursor` (WP12); an
+        // The cursor column holds opaque JSON of a TUI `Cursor`; an
         // unreadable one fails closed into the fallback rather than risking a
         // fresh-tail duplicate replay.
         let cursor = transcript_cursor_json
@@ -740,20 +741,20 @@ impl RecoveryCoordinator {
                 }
             }
             Some(AdapterMode::Headless) => {
-                // crew-v2 gap-closure WP-C: the headless control plane is
-                // retired (spec §4.6) -- there is no adapter implementation
-                // left to even ask "does it declare session resumption".
-                // Reject here, at the FIRST point recovery inspects this
-                // run's mode, with the same honest reason `gate_profile`
-                // gives a live submit -- never the confusing downstream
-                // symptom a pre-WP-C build would have produced instead (a
+                // The headless control plane is retired (ADR-0026) --
+                // there is no adapter implementation left to even
+                // ask "does it declare session resumption". Reject here, at
+                // the FIRST point recovery inspects this run's mode, with
+                // the same honest reason `gate_profile` gives a live submit
+                // -- never the confusing downstream symptom a build
+                // predating that retirement would have produced instead (a
                 // "profile unreadable" from a since-deleted capability
                 // lookup, or a Claude-shaped transcript-path failure from
                 // treating a headless-mode run as if it were the TUI
                 // continuation it never claimed to be).
                 return Err(format!(
                     "adapter {kind} was requested with mode: \"headless\", which is retired in \
-                     crew v2 (spec §4.6) -- the headless control plane has no adapter \
+                     crew v2 -- the headless control plane has no adapter \
                      implementation to dispatch to; use mode: \"tui\""
                 ));
             }

@@ -46,7 +46,7 @@ pub struct AdapterEvent {
     pub worker_id: WorkerId,
     pub payload: AdapterEventPayload,
     /// A TUI adapter's transcript-tailer position reached by the batch
-    /// this event concludes (WP12), persisted to `runs.transcript_cursor`
+    /// this event concludes, persisted to `runs.transcript_cursor`
     /// in the same transaction as this event's journal insert. `None` for
     /// every non-TUI adapter, and for a TUI event that is not the last one
     /// emitted from its batch -- see
@@ -189,7 +189,7 @@ pub struct DomainAdapterEventSink {
     /// plan Task 1), not merely a journaled observation.
     nested_not_managed: bool,
     violation_service: Arc<crate::policy::ViolationService>,
-    /// Whether this run executes in an isolated workspace (WP20). `false`
+    /// Whether this run executes in an isolated workspace. `false`
     /// means writes land in the shared repo without a lease, so a
     /// write-shaped tool from a subtask that declared `writes: false` is
     /// an escalatable policy violation.
@@ -393,14 +393,13 @@ impl DomainAdapterEventSink {
                 vendor_child_id: self.label(vendor_child_id),
                 vendor_parent_ref: self.label(vendor_parent_ref),
             },
-            // WP12 lifecycle mapping decision: a detected question
-            // journals `RuntimeEvent::WorkerQuestion` (the same event a
-            // headless adapter's own question-detection would use), never
-            // a run-state edge -- `waitingUser` is reserved for the
-            // approval flow (ADR-0012), and idle/busy presentation is
-            // derived by the extension, not tracked as a run state.
-            // Raising an escalation for this (WP20) is deliberately not
-            // done here; this call site only journals the question.
+            // A detected question journals `RuntimeEvent::WorkerQuestion`
+            // (the same event a headless adapter's own question-detection
+            // would use), never a run-state edge -- `waitingUser` is
+            // reserved for the approval flow (ADR-0012), and idle/busy
+            // presentation is derived by the extension, not tracked as a
+            // run state. Raising an escalation for this is deliberately
+            // not done here; this call site only journals the question.
             AdapterEventPayload::QuestionDetected { text } => RuntimeEvent::WorkerQuestion {
                 run_id,
                 task_id,
@@ -513,7 +512,7 @@ impl AdapterEventSink for DomainAdapterEventSink {
             }
 
             if let Some(tool_name) = write_tool.clone() {
-                // WP20: a write-shaped tool ran in a shared (unleased)
+                // A write-shaped tool ran in a shared (unleased)
                 // workspace. Raise only when the run's plan subtask
                 // declared writes:false; the escalation row and its
                 // `EscalationRaised` event commit together.
@@ -1018,13 +1017,13 @@ mod out_of_band_input_tests {
 
 #[cfg(test)]
 mod question_detected_tests {
-    //! WP12 step 3: `AdapterEventPayload::QuestionDetected` journals a
+    //! `AdapterEventPayload::QuestionDetected` journals a
     //! durable `RuntimeEvent::WorkerQuestion` (not a bespoke
     //! `AdapterMessageEvent` kind) through the same redacted path every
     //! other free-text adapter field crosses, and never itself moves the
     //! run to `waitingUser` -- that state is reserved for the approval
     //! flow (ADR-0012). Raising an escalation for a detected question is
-    //! WP20's job, out of scope here.
+    //! out of scope here.
 
     use std::sync::Arc;
 
@@ -1248,7 +1247,7 @@ mod question_detected_tests {
 
 #[cfg(test)]
 mod crash_resume_tests {
-    //! WP12 step 2's crash-resume proof, against the real journal (not
+    //! The crash-resume proof, against the real journal (not
     //! just the in-memory `Cursor` math `tui_tailer.rs` already covers): a
     //! tailer that crashes and restarts from the cursor this sink
     //! persisted in `runs.transcript_cursor` re-tails safely. The
