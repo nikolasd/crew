@@ -1515,9 +1515,35 @@ async fn run_attach(
     .await;
     drop(guard);
 
+    // `tokio::io::stdin()`'s read is backed by a dedicated blocking OS
+    // thread (stdin has no portable non-blocking read), and `pump`
+    // never actually joins that thread -- it just stops polling its
+    // future once the socket side of the `select!` wins. A normal
+    // return from this `#[tokio::main]` function drops the runtime,
+    // which blocks the whole process on every outstanding blocking
+    // task -- including that thread, still parked in a real `read()`
+    // against this pane's terminal. In a real pane that terminal is
+    // never closed after the foreground command exits (that is
+    // ordinary, expected terminal behavior), so nothing ever unblocks
+    // it: the daemon can die by any means -- clean stop, SIGTERM, even
+    // SIGKILL -- and `pump` correctly detects it and returns, but the
+    // process hangs forever anyway, immediately after, on a wait that
+    // has nothing to do with the daemon at all. Verified directly: in a
+    // pty-backed repro, killing the daemon never ends the process, but
+    // closing the pty (simulating the terminal window itself closing)
+    // does. `std::process::exit` terminates immediately without waiting
+    // for that thread, which is safe here because `pump` flushes stdout
+    // after every write and returns `SocketClosed` on a zero-byte read
+    // -- by the time it resolves, the only things left running are a
+    // stdin thread that will never finish on its own and a socket the
+    // OS closes regardless. This stops being true the day anything in
+    // this scope buffers output without flushing it before returning.
     match outcome {
-        Ok(_) => ExitCode::SUCCESS,
-        Err(err) => fail(&err),
+        Ok(_) => std::process::exit(0),
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
     }
 }
 
