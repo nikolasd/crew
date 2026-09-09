@@ -417,6 +417,14 @@ async fn serve_viewer(
     }
 
     let mut buf = [0u8; READ_CHUNK_BYTES];
+    // One filter per connection, spanning its whole read loop: a real
+    // terminal's reply to the vendor's own redraw-driven escape queries
+    // (CPR, DA, focus/paste-mode reports) shares this exact socket with
+    // genuine keystrokes -- see `terminal_reply`'s doc comment for the
+    // incident this exists for -- and a single socket read can split one
+    // reply across two calls, which only a filter carried across reads
+    // can see through (see `ReplyFilter`'s own doc comment).
+    let mut reply_filter = super::terminal_reply::ReplyFilter::new();
     loop {
         tokio::select! {
             read = read_half.read(&mut buf) => {
@@ -424,20 +432,15 @@ async fn serve_viewer(
                     Ok(0) | Err(_) => return,
                     Ok(n) => {
                         let bytes = buf[..n].to_vec();
-                        // A real terminal answering the vendor's own
-                        // redraw-driven escape queries (CPR, DA, focus/
-                        // paste-mode reports) shares this exact socket
-                        // with genuine keystrokes -- see
-                        // `terminal_reply`'s doc comment for the incident
-                        // this filter exists for. Only the residue after
-                        // stripping recognized replies is out-of-band
-                        // INPUT; a read that is nothing but replies never
-                        // reaches `on_user_input` at all, so it neither
-                        // journals an event nor sets
-                        // `needsReconciliation`. The vendor's own PTY
-                        // still gets every byte, unfiltered, below --
-                        // stripping is for the journaling decision only.
-                        let residue = super::terminal_reply::strip_terminal_replies(&bytes);
+                        // Only the residue after stripping recognized
+                        // replies is out-of-band INPUT; a read that is
+                        // nothing but replies never reaches
+                        // `on_user_input` at all, so it neither journals
+                        // an event nor sets `needsReconciliation`. The
+                        // vendor's own PTY still gets every byte,
+                        // unfiltered, below -- stripping is for the
+                        // journaling decision only.
+                        let residue = reply_filter.filter(&bytes);
                         if !residue.is_empty() {
                             on_user_input(residue);
                         }

@@ -978,28 +978,38 @@ impl<V: TuiVendor> TuiAdapter<V> {
             Arc::new(StdMutex::new((DisplayBackend::Hidden, String::new())));
         let attach_sink = Arc::clone(&sink);
         let attach_identity = Arc::clone(&pane_identity);
+        // Coalesced (see `oob_coalescer`'s own doc comment): a burst of
+        // out-of-band input reads journals one row, not one per read.
+        let coalescer = super::oob_coalescer::OobCoalescer::spawn(move |input_count, span_ms| {
+            let sink = Arc::clone(&attach_sink);
+            let (backend, pane_ref) = {
+                let guard = attach_identity
+                    .lock()
+                    .expect("pane identity mutex never poisoned");
+                (guard.0, guard.1.clone())
+            };
+            tokio::spawn(async move {
+                emit(
+                    &sink,
+                    run_id,
+                    task_id,
+                    worker_id,
+                    AdapterEventPayload::OutOfBandInput {
+                        backend,
+                        pane_ref,
+                        input_count,
+                        span_ms,
+                    },
+                    None,
+                )
+                .await;
+            });
+        });
         let attach = match AttachServer::start(
             self.socket_path(run_id),
             Arc::clone(&pty) as Arc<dyn AttachTarget>,
             Box::new(move |_bytes: Vec<u8>| {
-                let sink = Arc::clone(&attach_sink);
-                let (backend, pane_ref) = {
-                    let guard = attach_identity
-                        .lock()
-                        .expect("pane identity mutex never poisoned");
-                    (guard.0, guard.1.clone())
-                };
-                tokio::spawn(async move {
-                    emit(
-                        &sink,
-                        run_id,
-                        task_id,
-                        worker_id,
-                        AdapterEventPayload::OutOfBandInput { backend, pane_ref },
-                        None,
-                    )
-                    .await;
-                });
+                coalescer.notify();
             }),
         ) {
             Ok(server) => Arc::new(server),

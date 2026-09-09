@@ -134,12 +134,17 @@ pub enum AdapterEventPayload {
     /// A human typed directly into a TUI adapter's attached pane,
     /// bypassing the adapter's own input path. Carries no free text (the
     /// keystrokes themselves are never journaled) -- only that it
-    /// happened, on which pane. Maps to [`RuntimeEvent::OutOfBandInput`]
-    /// and additionally sets the run's `needsReconciliation` flag (see
-    /// [`DomainAdapterEventSink::emit`]).
+    /// happened, on which pane, how many times, and over what span.
+    /// Maps to [`RuntimeEvent::OutOfBandInput`] and additionally sets the
+    /// run's `needsReconciliation` flag (see
+    /// [`DomainAdapterEventSink::emit`]). Coalesced by the caller (see
+    /// `adapter::tui::oob_coalescer`) -- one payload per idle window, not
+    /// one per read.
     OutOfBandInput {
         backend: crew_protocol::DisplayBackend,
         pane_ref: String,
+        input_count: u64,
+        span_ms: u64,
     },
 }
 
@@ -406,13 +411,18 @@ impl DomainAdapterEventSink {
                 worker_id,
                 question: self.sanitize(text),
             },
-            AdapterEventPayload::OutOfBandInput { backend, pane_ref } => {
-                RuntimeEvent::OutOfBandInput {
-                    run_id,
-                    backend,
-                    pane_ref,
-                }
-            }
+            AdapterEventPayload::OutOfBandInput {
+                backend,
+                pane_ref,
+                input_count,
+                span_ms,
+            } => RuntimeEvent::OutOfBandInput {
+                run_id,
+                backend,
+                pane_ref,
+                input_count,
+                span_ms,
+            },
         }
     }
 }
@@ -934,6 +944,8 @@ mod out_of_band_input_tests {
             payload: AdapterEventPayload::OutOfBandInput {
                 backend: DisplayBackend::Tmux,
                 pane_ref: "%3".to_string(),
+                input_count: 7,
+                span_ms: 850,
             },
             cursor: None,
         })
@@ -946,10 +958,20 @@ mod out_of_band_input_tests {
                 run_id: got_run_id,
                 backend,
                 pane_ref,
+                input_count,
+                span_ms,
             } => {
                 assert_eq!(*got_run_id, run_id);
                 assert_eq!(*backend, DisplayBackend::Tmux);
                 assert_eq!(pane_ref, "%3");
+                assert_eq!(
+                    *input_count, 7,
+                    "the coalesced count must survive the round trip"
+                );
+                assert_eq!(
+                    *span_ms, 850,
+                    "the coalesced span must survive the round trip"
+                );
             }
             other => panic!("expected OutOfBandInput, got {other:?}"),
         }
@@ -996,6 +1018,8 @@ mod out_of_band_input_tests {
             payload: AdapterEventPayload::OutOfBandInput {
                 backend: DisplayBackend::Hidden,
                 pane_ref: String::new(),
+                input_count: 1,
+                span_ms: 0,
             },
             cursor: None,
         })

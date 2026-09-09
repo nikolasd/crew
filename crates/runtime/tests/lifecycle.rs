@@ -1043,7 +1043,7 @@ done
     path
 }
 
-/// The CREW-81 regression test: a vendor TUI's own redraw-driven escape
+/// The echo-storm regression test: a vendor TUI's own redraw-driven escape
 /// queries, relayed through `crewd attach` to a REAL terminal emulator
 /// (tmux, hosting the attach pane exactly as `display/tmux.rs`'s
 /// production placement does -- a raw pty pair with nobody driving it
@@ -1178,6 +1178,29 @@ async fn attach_never_journals_a_vendors_own_terminal_reply_storm() {
     // tmux (the real terminal emulator for this pane) keeps answering on
     // its own -- this is the storm, reproduced.
     tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // Positive control, asserted BEFORE the real assertion: a scaffold
+    // that emits nothing at all (a vendor that failed to start, a pane
+    // that never attached, a timing change that ends the idle window
+    // before the first burst) would satisfy "zero journaled rows" just
+    // as well as a working filter -- and certify nothing. Prove the
+    // storm actually fired first, independent of the journaling path
+    // under test: capture the pane's own rendered history and count the
+    // DA reply's fixed parameter string, which only appears there if
+    // tmux genuinely answered the fake vendor's queries.
+    let capture = std::process::Command::new("tmux")
+        .args(["capture-pane", "-p", "-S", "-", "-t", &tmux_session])
+        .output()
+        .expect("capture tmux pane history");
+    let captured = String::from_utf8_lossy(&capture.stdout);
+    let reply_occurrences = captured.matches("?1;2;4c").count();
+    const REPLY_FLOOR: usize = 20;
+    assert!(
+        reply_occurrences >= REPLY_FLOOR,
+        "positive control failed: the storm must have produced at least {REPLY_FLOOR} DA replies \
+         visible in the tmux pane's history (a scaffold that produced none would pass the real \
+         assertion below for the wrong reason) -- got {reply_occurrences} in:\n{captured}"
+    );
 
     let _ = std::process::Command::new("tmux")
         .args(["kill-session", "-t", &tmux_session])
