@@ -310,7 +310,7 @@ fn row_to_approval_json(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     }))
 }
 
-/// Lists every run's turn budget for `project_id` (WP19 rows, snapshotted
+/// Lists every run's turn budget for `project_id` (rows snapshotted
 /// at `run/submit`). Project-scoped through the run's task like
 /// [`run_list_op`] -- the `budgets` table itself carries no project column.
 pub fn budget_list_op(project_id: ProjectId) -> DomainClosure {

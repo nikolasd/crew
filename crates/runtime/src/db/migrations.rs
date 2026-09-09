@@ -10,7 +10,7 @@ use super::actor::DbError;
 
 /// Migration 1: the durable event journal and the operation-intent table.
 ///
-/// Known-dead columns (WP26, documented by policy -- never rebuilt away,
+/// Known-dead columns (documented by policy -- never rebuilt away,
 /// SQLite table rebuilds are not worth two vestigial columns):
 /// `events.parent_worker_id` and `events.vendor_event_ref` have had no
 /// writer or reader since the crew rename; every journaled event's
@@ -267,14 +267,14 @@ CREATE TABLE plans (
 );
 ";
 
-/// Migration 12: per-run turn budgets (WP19) plus the `runs.plan_ref`
+/// Migration 12: per-run turn budgets plus the `runs.plan_ref`
 /// provenance column. A budget row is snapshotted once at `run/submit` --
 /// limit resolved from the referenced plan subtask's `turnBudget`, else
 /// the config's `limits.turnBudgetPerSubtask` -- and incremented by every
 /// turn-consuming leader message; the guard inside
 /// [`crate::domain::DomainRepository::record_message`] refuses at the cap.
 /// `plan_ref` carries the `{planId, subtaskId}` JSON a run was spawned
-/// from, so WP20's writes-flag guard can resolve subtask metadata without
+/// from, so the writes-flag guard can resolve subtask metadata without
 /// re-deriving it.
 const MIGRATION_12: &str = "
 CREATE TABLE budgets (
@@ -286,7 +286,7 @@ CREATE TABLE budgets (
 ALTER TABLE runs ADD COLUMN plan_ref TEXT;
 ";
 
-/// Migration 13: worker escalations (WP20). A row is opened in the same
+/// Migration 13: worker escalations. A row is opened in the same
 /// transaction that journals its triggering fact -- a `WorkerQuestion`
 /// event opens a `question` escalation; the write-violation and
 /// repeated-failure detectors open their kinds alongside their
@@ -308,7 +308,7 @@ CREATE TABLE escalations (
 );
 ";
 
-/// Migration 14 (WP26): indexes the journal's two hot read/delete paths.
+/// Migration 14: indexes the journal's two hot read/delete paths.
 /// Retention pruning (`audit/retention.rs`) full-scanned `events` for its
 /// age cutoff and per-run deletes; recovery and stale-run sweeps filtered
 /// by `(run_id, sequence)`. The explorer found zero indexes anywhere.
@@ -668,7 +668,7 @@ mod tests {
     }
 
     /// Exercises migration 10: `runs.transcript_cursor` (the durable TUI
-    /// transcript-tailer position, WP12) does not exist before the
+    /// transcript-tailer position) does not exist before the
     /// migration and exists (nullable) after it.
     #[test]
     fn migration_10_adds_transcript_cursor_column() {
@@ -746,8 +746,8 @@ mod tests {
             Some("{\"offset\":42,\"lastEntryId\":\"abc\"}")
         );
     }
-    /// Exercises migration 11: the `plans` table (run-scoped task plans, WP21
-    /// provenance) does not exist before the migration and is writable after
+    /// Exercises migration 11: the `plans` table (run-scoped task plans)
+    /// does not exist before the migration and is writable after
     /// it, with the nullable decision columns defaulting to NULL for open plans.
     #[test]
     fn migration_11_adds_plans_table() {
@@ -891,7 +891,7 @@ mod tests {
         assert_eq!((turns, turns_limit), (0, 10));
     }
 
-    /// Exercises migration 13: the `escalations` table (WP20 write-violation /
+    /// Exercises migration 13: the `escalations` table (write-violation /
     /// repeated-failure / question-dispatch journal) does not exist before the
     /// migration and is writable after it, with open escalations carrying no
     /// decision columns and `escalations.run_id` enforcing its FK to `runs`.
@@ -988,7 +988,7 @@ mod tests {
         assert!(decided_at.is_none(), "an open escalation has no decided_at");
     }
 
-    /// Exercises migration 14 (WP26): the journal's two hot-path indexes do not
+    /// Exercises migration 14: the journal's two hot-path indexes do not
     /// exist before the migration and exist after it. Asserting the step
     /// succeeds also proves `events(run_id, sequence, timestamp)` exists, since
     /// the `CREATE INDEX` would otherwise fail.

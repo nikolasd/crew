@@ -288,8 +288,8 @@ impl Doctor {
             passed_checks,
             failed_checks,
             notes,
-            // No config surface models a rollout gate any more (crew-v2
-            // gap-closure WP5); always empty. Kept on the result rather
+            // No config surface models a rollout gate any more;
+            // always empty. Kept on the result rather
             // than removed so `packages/extension/src/doctor.ts`'s render
             // of this field needs no change.
             unresolved_gates: Vec::new(),

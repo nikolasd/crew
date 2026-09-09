@@ -27,7 +27,7 @@ use super::{Cursor, TranscriptFormat, TuiEvent, parse_jsonl_chunk};
 /// format assumptions were built and tested against. A probed version
 /// outside this range is reported [`VersionVerdict::Incompatible`] rather
 /// than assumed compatible -- widen it only after a live smoke run
-/// (WP29) confirms a newer/older release still matches this module's
+/// confirms a newer/older release still matches this module's
 /// argv and JSONL assumptions.
 ///
 /// The one version this range is actually validated against is
@@ -236,8 +236,8 @@ impl TuiVendor for ClaudeTuiVendor {
     // `transcript_path_for_session` is not overridden either: the trait's
     // default (`<transcript_root>/<session-id>.jsonl`) *is* this vendor's
     // own on-disk layout -- a resumed session's transcript is derived
-    // deterministically from the session id rather than nonce-discovered
-    // (WP14), and the real CLI's transcript filename stem *is* its
+    // deterministically from the session id rather than nonce-discovered,
+    // and the real CLI's transcript filename stem *is* its
     // session id (a UUID).
     // `session_id_from_transcript_path` is not overridden: the real
     // CLI's own transcript filename stem *is* its session id (a UUID),

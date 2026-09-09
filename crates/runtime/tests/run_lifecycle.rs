@@ -3,7 +3,7 @@
 //! worker process (`fake-worker --mode jsonl`, driven through
 //! `support::spawn_evidence_adapter::SpawnEvidenceAdapter` — see that
 //! module's doc for what it is and why it replaced the real `OmpRpcAdapter`
-//! this file used before crew-v2 gap-closure WP-C) driven through the
+//! this file used before the headless control plane was retired) driven through the
 //! *production* sink chain — `DomainAdapterEventSink` wrapped in
 //! `RunLifecycleSink` — with the run's durable row observed through a real,
 //! migrated `DatabaseHandle` and the real `DomainRepository`. This is the

@@ -1,4 +1,4 @@
-//! Integration tests for the crew JSON config module (spec §10).
+//! Integration tests for the crew JSON config module.
 //!
 //! Layers: built-in defaults → arbitrary ordered file paths → per-run
 //! overrides. Deep merge, later layers win, `security.patterns` is
@@ -22,10 +22,10 @@ fn write_layer(dir: &Path, name: &str, value: &serde_json::Value) -> std::path::
     path
 }
 
-/// Defaults match spec §10. Every built-in adapter defaults to `mode:
-/// "tui"` (WP28 flipped all four; crew-v2 gap-closure WP-C then retired
-/// `headless` as a live mode entirely, leaving `tui` the only one a
-/// reserved adapter kind may configure -- see
+/// Every built-in adapter defaults to `mode:
+/// "tui"` (each vendor's TUI adapter flipped its own default in turn;
+/// `headless` was then retired as a live mode entirely, leaving `tui`
+/// the only one a reserved adapter kind may configure -- see
 /// `headless_mode_is_rejected_for_every_reserved_adapter_kind` below).
 #[test]
 fn defaults_match_spec_with_headless_mode_override() {
@@ -47,8 +47,8 @@ fn defaults_match_spec_with_headless_mode_override() {
             panic!("expected default adapter '{name}'");
         });
         assert!(adapter.enabled);
-        // Every built-in adapter defaults to `mode: tui` since WP28
-        // (all four TuiVendor impls pass fixture-mode conformance).
+        // Every built-in adapter defaults to `mode: tui` now that all
+        // four TuiVendor impls pass fixture-mode conformance.
         assert_eq!(adapter.mode, AdapterMode::Tui, "adapter '{name}' mode");
         assert_eq!(adapter.permission_mode, PermissionMode::Max);
     }
@@ -82,7 +82,7 @@ fn defaults_match_spec_with_headless_mode_override() {
     assert!(cfg.security.patterns.is_empty());
 }
 
-/// crew-v2 gap-closure WP-C: `mode: "headless"` is retired for every one
+/// `mode: "headless"` is retired for every one
 /// of the four reserved adapter kinds (each backed by a real Rust
 /// implementation, all now TUI-only) -- config loading fails closed with
 /// a typed, named error, not a generic deserialize failure, and not a
@@ -352,9 +352,9 @@ fn full_field_round_trip_through_json_survives_validate_shape() {
             AdapterConfig {
                 enabled: false,
                 bin: format!("{name}-custom-bin"),
-                // Tui is the default for these four reserved kinds (WP28),
-                // and crew-v2 gap-closure WP-C retired `headless` as a
-                // live mode for them entirely (load_layers now rejects it
+                // Tui is the default for these four reserved kinds, and
+                // `headless` was retired as a live mode for them entirely
+                // (load_layers now rejects it
                 // -- see headless_mode_is_rejected_for_every_reserved_adapter_kind),
                 // so this field can no longer be exercised at a
                 // non-default value here. The "vertex" entry below (a

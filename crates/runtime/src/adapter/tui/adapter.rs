@@ -126,7 +126,7 @@ pub trait TuiVendor: Send + Sync + 'static {
     /// *is* the session id (a UUID). A vendor whose resumed-session naming
     /// differs overrides this.
     ///
-    /// This is what makes resume reliable (WP14): unlike a fresh start,
+    /// This is what makes resume reliable: unlike a fresh start,
     /// a resume has no freshly injected nonce to discover the transcript
     /// by, and the vendor may never re-touch an existing transcript
     /// within any discovery window -- but the runtime already knows the
@@ -697,7 +697,7 @@ struct RunState {
 /// and re-tails from the exact stored position. The registry supplies
 /// this (from `runs.vendor_session_id`/`runs.transcript_cursor`) when it
 /// constructs an adapter it is about to resume; `Default` (both fields
-/// empty) keeps the pre-WP14 shape: the transcript path is derived
+/// empty) keeps resume's original shape: the transcript path is derived
 /// deterministically from the vendor's own layout
 /// ([`TuiVendor::transcript_path_for_session`]) and tailing starts from
 /// the beginning of the file.
@@ -709,7 +709,7 @@ pub struct ResumeContext {
     /// `None`.
     pub transcript_path: Option<PathBuf>,
     /// The durable tailer position reached before the crash
-    /// (`runs.transcript_cursor`, WP12), resumed from verbatim. `None`
+    /// (`runs.transcript_cursor`), resumed from verbatim. `None`
     /// means nothing was ever durably consumed -- tailing starts at
     /// [`Cursor::start`], which cannot duplicate anything because every
     /// event batch persists its cursor transactionally with the events
@@ -804,7 +804,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
     /// The shared resume continuation, reached from two seams: a caller
     /// that already holds the session ref calls [`Adapter::resume`]
     /// directly, and a caller whose `StartSpec.resume` is set reaches the
-    /// identical path through `start()` (WP14 wiring -- `StartSpec.resume`
+    /// identical path through `start()` (`StartSpec.resume`
     /// is never treated as a fresh launch with a flag bolted on).
     ///
     /// Respawns the vendor via [`TuiVendor::resume_launch`] (no prompt
@@ -833,7 +833,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
         };
         let launch = self.vendor.resume_launch(session, &placeholder, &self.cfg);
         let transcript_root = self.vendor.transcript_root(&placeholder, &self.cfg);
-        // Deterministic derivation first (WP14): the vendor's own layout +
+        // Deterministic derivation first: the vendor's own layout +
         // the already-known session id. An explicitly supplied
         // `ResumeContext::transcript_path` still wins over the derivation.
         let transcript_path = self.resume.transcript_path.clone().unwrap_or_else(|| {
@@ -1852,7 +1852,7 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                 ));
             }
             // A `StartSpec` that carries a session ref is not a fresh
-            // start wearing a flag -- it *is* a resume (WP14 wiring): the
+            // start wearing a flag -- it *is* a resume: the
             // vendor continues its existing session, nothing is injected,
             // and tailing picks up from the stored position. Fresh ids on
             // the spec are the correlation (the registry binds the same
@@ -1937,7 +1937,7 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                 ));
             };
             // A Steer interrupts the in-flight turn before composing: the
-            // leader is REDIRECTING work, not queueing more of it (WP20).
+            // leader is REDIRECTING work, not queueing more of it.
             // Every other kind queues after the current turn.
             if matches!(message, AdapterMessage::Steer { .. }) {
                 run.pty
@@ -2079,7 +2079,7 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
                 state_summary: format!("tui[{}] pane={}", self.kind(), run.pane_ref),
                 children: Vec::new(),
                 // The tailer's durable position no longer needs to be
-                // smuggled out here (WP12 handoff, closed): every adapter
+                // smuggled out here: every adapter
                 // event batch now carries its own `Cursor` through the
                 // sink into `runs.transcript_cursor`, transactionally with
                 // the batch's journaled event(s). `usage: None` matches

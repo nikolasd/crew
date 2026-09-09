@@ -38,7 +38,7 @@ fn claude_profile() -> WorkerProfile {
         adapter: "claude".to_string(),
         model: "sonnet".to_string(),
         permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
-        // crew-v2 gap-closure WP-C: `mode` must be explicit `Tui` --
+        // `mode` must be explicit `Tui` --
         // `Headless` is retired and gate_profile refuses it before the
         // vendor-CLI-availability denial this test is actually about.
         startup_options: StartupOptions::Claude(ClaudeStartupOptions {

@@ -1,4 +1,4 @@
-//! WP20 triage plumbing: escalations.
+//! Escalation triage plumbing.
 //!
 //! Covers the escalation lifecycle end to end at the repository boundary
 //! (the same guarded-write layer the RPC handlers run through):
@@ -11,7 +11,7 @@
 //! * a write-shaped tool from a run whose plan subtask declared
 //!   `writes: false` raises a `write_violation` escalation; declared-writes
 //!   runs and runs without plan provenance never raise;
-//! * two consecutive failed runs for one task trip WP20's repeated-failure
+//! * two consecutive failed runs for one task trip the repeated-failure
 //!   detector;
 //! * concurrent answers race through the FIFO database actor and exactly
 //!   one resolution wins (the `decided_at IS NULL` guard), following the

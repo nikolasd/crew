@@ -41,7 +41,7 @@ use super::{Cursor, TranscriptFormat, TuiEvent, parse_jsonl_chunk};
 /// format assumptions were built and tested against -- same policy as
 /// Codex's gate ([`super::codex`]): one validated point (`18.0.5`, an
 /// installed CLI probed for this module), everything else in the range
-/// an untested extrapolation until WP29's live smoke widens it. The
+/// an untested extrapolation until a live smoke run widens it. The
 /// extrapolation is deliberately tolerated here (rather than an
 /// exact-match gate like Copilot's): an OMP session transcript
 /// self-describes its own schema (`"version": 3` on its `session`
@@ -269,7 +269,7 @@ impl TuiVendor for OmpTuiVendor {
 
     /// A bare Escape byte: the interactive REPL's turn-interrupt key,
     /// same convention as the other vendored REPLs. [INFERENCE] not
-    /// separately confirmed against a live session -- WP29's live smoke
+    /// separately confirmed against a live session -- the live smoke run
     /// only ever exercised `CancelScope::Worker` (process-kill); this
     /// turn-level interrupt remains unconfirmed live, tracked post-0.5.0.
     fn interrupt_sequence(&self) -> Vec<u8> {
@@ -312,9 +312,9 @@ impl TuiVendor for OmpTuiVendor {
     /// Validates `cfg.model` (if set) against the installed CLI's own
     /// `omp models --json` catalog before a fresh start ever spawns the
     /// interactive REPL. Mirrors the rule the retired headless
-    /// `OmpRpcAdapter`'s `probe()` enforced (crew-v2 gap-closure WP-C
-    /// deleted that adapter along with the enforcement living inside it;
-    /// this restores the rule as a genuine pre-spawn gate on the real
+    /// `OmpRpcAdapter`'s `probe()` enforced (deleted along with the rest
+    /// of the headless control plane, ADR-0026, and the enforcement
+    /// living inside it); this restores the rule as a genuine pre-spawn gate on the real
     /// `start()` path -- stricter than the original, which only ran when
     /// `crewd adapters`/`crewd conformance` happened to invoke `probe()`,
     /// never on every real run). `cfg.model` unset means no explicit

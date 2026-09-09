@@ -31,7 +31,7 @@ use super::{Cursor, TranscriptFormat, TuiEvent, parse_jsonl_chunk};
 /// transcript-format assumptions were built and tested against -- same
 /// policy as Claude's gate ([`super::claude`]): one validated point
 /// (`0.149.1`, the fixture's recorded `cli_version`), everything else in
-/// the range an untested extrapolation until WP29's live smoke widens it.
+/// the range an untested extrapolation until a live smoke run widens it.
 const MIN_TESTED_VERSION: (u32, u32, u32) = (0, 100, 0);
 const MAX_TESTED_VERSION: (u32, u32, u32) = (0, 199, 99);
 
@@ -153,8 +153,8 @@ impl TuiVendor for CodexTuiVendor {
     /// transcript root finds the (unique) rollout whose name ends in the
     /// session id. This touches only directory metadata -- no process
     /// spawn, no nonce-grep of file *contents* -- so it stays inside
-    /// WP14's contract for why resume needs a stored-path lookup rather
-    /// than content scanning.
+    /// [`TuiVendor::transcript_path_for_session`]'s own contract for why
+    /// resume needs a stored-path lookup rather than content scanning.
     fn transcript_path_for_session(
         &self,
         session: &VendorSessionRef,
