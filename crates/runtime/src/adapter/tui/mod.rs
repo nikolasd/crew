@@ -28,6 +28,7 @@ pub use codex::CodexTuiVendor;
 pub use copilot::CopilotTuiVendor;
 pub use omp::OmpTuiVendor;
 mod discovery;
+mod grid;
 mod input;
 mod screen;
 mod tailer;

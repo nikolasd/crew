@@ -167,7 +167,14 @@ impl TuiScreen {
     }
 }
 
-enum EscapeScan {
+/// `pub(super)`: `grid.rs` (a sibling module under `tui`) cross-checks its
+/// own richer, content-extracting escape scan against this one on every
+/// committed fixture, so the two byte-grammars cannot silently diverge --
+/// see `grid.rs`'s `classify_escape` doc comment for why it duplicates
+/// this grammar rather than calling `escape_len` directly (it needs
+/// parsed content, this only ever returns a length), and the cross-check
+/// test for what closes the gap that duplication opens.
+pub(super) enum EscapeScan {
     Complete(usize),
     Incomplete,
 }
@@ -186,7 +193,7 @@ enum EscapeScan {
 /// emitted as literal text. `claude-workspace-trust.raw` ends with exactly
 /// that sequence, and the stray character landed at the end of the screen
 /// where no assertion happened to span it.
-fn escape_len(bytes: &[u8]) -> EscapeScan {
+pub(super) fn escape_len(bytes: &[u8]) -> EscapeScan {
     if bytes.len() < 2 {
         return EscapeScan::Incomplete;
     }
