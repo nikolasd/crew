@@ -221,6 +221,30 @@ whether the sentence tells the reader what happened without a lookup.
 line, token and rule for anything it finds. Two directories are exempt and both are deliberate:
 `fixtures/`, whose files are byte-exact terminal recordings that cannot be edited without destroying
 what makes them evidence, and `assets/`, where the logo's parts carry labels of the same shape.
+`release/live-conformance/*.json` is exempt for the same reason as `fixtures/` — those reports are
+harness output copied verbatim — while that directory's README, being authored prose, is not.
+
+### Commit messages carry technical content only
+
+No tool attribution, no agent names, no session links. A trailer of that kind says nothing about the
+change and outlives every context in which it meant anything. The one exception is the dist-refresh
+bot's `Co-authored-by: crew-bot[bot]` line: a real account made a real commit, and that is provenance
+rather than noise.
+
+CI enforces this over **the commits a pull request adds** (`scripts/check-trailers.ts`), never over
+history. The distinction is deliberate and worth understanding, because it is the same distinction
+that governs the citation rule above:
+
+| what | checked by | scope |
+|---|---|---|
+| files | `scripts/check-markers.ts` | the whole tree, must be zero |
+| commit messages | `scripts/check-trailers.ts` | the pull request's own commits |
+| history | nothing | immutable, out of scope |
+
+A file can be edited, so the marker guard demands zero everywhere. History cannot: commits already
+on `main` carry trailers that predate this rule, and rewriting them would be a worse act than the
+trailers are a problem. If the check fails, amend the message and force-push the branch — that is a
+branch you own, not history anyone has built on.
 
 ## Questions?
 
