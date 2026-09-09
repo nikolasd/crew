@@ -404,6 +404,65 @@ pub fn owned_run_ids_op(
     })
 }
 
+/// The run states [`crew_protocol::RunState::is_terminal`] considers
+/// terminal, duplicated here because this is raw SQL rather than a Rust
+/// match -- kept as one named constant, not inlined at each use, so the
+/// two queries below (and any future one) cannot drift from each other
+/// even if they drift from `is_terminal` itself. If `is_terminal`'s own
+/// set ever changes, this is the one place to update.
+const TERMINAL_STATES_SQL: &str = "'succeeded','failed','cancelled','lost'";
+
+/// Non-terminal run ids owned (via `tasks.owner_client_instance_id`) by
+/// `owner_instance_id` -- the leader-disconnect-grace-window teardown's
+/// own query: once a leader has been gone for the grace window, these
+/// are exactly the runs it left behind that still need settling. Unlike
+/// [`owned_run_ids_op`], this filters to non-terminal runs directly in
+/// SQL rather than leaving the caller to filter afterward -- the caller
+/// here (`settle_leader_gone`) has no other use for a terminal run's id.
+pub fn owned_nonterminal_run_ids_op(
+    owner_instance_id: String,
+    project_id: ProjectId,
+) -> DomainClosure {
+    Box::new(move |conn| {
+        let sql = format!(
+            "SELECT r.run_id FROM runs r JOIN tasks t ON r.task_id = t.task_id \
+             WHERE t.project_id = ?1 AND t.owner_client_instance_id = ?2 \
+             AND r.state NOT IN ({TERMINAL_STATES_SQL})"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let ids: Vec<String> = stmt
+            .query_map(
+                rusqlite::params![project_id.to_string(), owner_instance_id],
+                |row| row.get(0),
+            )?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(json!(ids))
+    })
+}
+
+/// Every DISTINCT owner instance id with at least one non-terminal run,
+/// project-wide -- the daemon-restart seed: at startup nothing has
+/// connected yet, so every one of these owners is, from this process's
+/// own perspective, disconnected as of right now (see
+/// `ipc::leader_registry::LeaderRegistry::seed_disconnected_since`'s own
+/// doc comment for why the clock starts at startup, not at the run's
+/// last-seen time).
+pub fn distinct_owners_of_nonterminal_runs_op(project_id: ProjectId) -> DomainClosure {
+    Box::new(move |conn| {
+        let sql = format!(
+            "SELECT DISTINCT t.owner_client_instance_id FROM runs r JOIN tasks t ON r.task_id = t.task_id \
+             WHERE t.project_id = ?1 AND r.state NOT IN ({TERMINAL_STATES_SQL})"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let owners: Vec<String> = stmt
+            .query_map(rusqlite::params![project_id.to_string()], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(json!(owners))
+    })
+}
+
 /// Confirms `expected_instance_id` currently owns the task that owns
 /// `run_id`, for `workspace/acquire`'s ownership arbitration.
 ///

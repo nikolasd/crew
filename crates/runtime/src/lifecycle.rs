@@ -526,6 +526,24 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         }
     });
 
+    // Leader-disconnect grace window, daemon-restart case: at startup no
+    // connection has registered for ANY instance id yet, so every leader
+    // that owns a non-terminal run is -- from THIS process's own
+    // perspective -- disconnected as of right now. Seeding and arming is
+    // `OrchestrationService::seed_leader_registry_after_restart`'s own
+    // job (see its doc comment for the full "why the clock starts at
+    // startup, never at a run's last-seen activity" reasoning) --
+    // extracted there, rather than inlined here, so a test can drive the
+    // restart case directly against a seeded database.
+    server
+        .orchestration_service()
+        .seed_leader_registry_after_restart(
+            &server.leader_registry(),
+            server.leader_disconnect_grace(),
+            Instant::now(),
+        )
+        .await;
+
     // The dashboard is an opt-in, read-only, localhost-only projection; a
     // bind failure (port taken) degrades to "no dashboard" rather than
     // failing a daemon that orchestrates fine without it.

@@ -14,6 +14,7 @@
 //! guarantees that.
 
 mod connection;
+pub(crate) mod leader_registry;
 mod server;
 
 use std::sync::Arc;
@@ -208,6 +209,14 @@ pub struct ServerConfig {
     /// Effective retention policy for `retention/clean`. The daemon sets
     /// this from `crew.json`; absent test/embedded servers refuse the RPC.
     pub retention: Option<crate::audit::Retention>,
+    /// How long a run's owning leader may hold no live connection before
+    /// its non-terminal runs are settled (see
+    /// [`leader_registry::LEADER_DISCONNECT_GRACE_WINDOW`]'s own doc
+    /// comment for the production value and its rationale). A field
+    /// rather than a bare constant reference at each call site so tests
+    /// can shrink it to a few milliseconds instead of waiting out the
+    /// real window.
+    pub leader_disconnect_grace: std::time::Duration,
 }
 
 impl Default for ServerConfig {
@@ -229,6 +238,7 @@ impl Default for ServerConfig {
             activity_clock: None,
             pane_reopen: None,
             retention: None,
+            leader_disconnect_grace: leader_registry::LEADER_DISCONNECT_GRACE_WINDOW,
         }
     }
 }

@@ -258,8 +258,9 @@ fragile about input, opaque about completion, and unverifiable about delivery. E
 answer in the TUI path itself: prompts are delivered as one bracketed paste in paced chunks with a
 bounded write, so a vendor that stops reading fails loudly instead of truncating silently; a run
 reaches a settled state from the vendor's own end-of-turn boundary rather than only from process
-exit, with `run/finish` for the leader and an inactivity backstop for an abandoned turn
-([ADR-0027](adr/0027-turn-end-settles-a-run.md)); and post-submit verification compares what the
+exit, with `run/finish` for the leader and a disconnect-grace-window teardown for a leader that is
+actually gone, never merely quiet ([ADR-0027](adr/0027-turn-end-settles-a-run.md),
+[ADR-0036](adr/0036-leader-disconnect-grace-window.md)); and post-submit verification compares what the
 vendor actually recorded against what was sent, so a truncating composer fails the run rather than
 producing a plausible-looking short answer. A headless plane would have to beat that, not merely
 match a PTY's old weaknesses.

@@ -26,7 +26,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::net::unix::OwnedWriteHalf;
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinHandle;
 
 #[path = "support/spawn_evidence_adapter.rs"]
@@ -5929,14 +5929,16 @@ impl RunDriver for SettlingRunDriver {
     }
 }
 
-/// Submits a run against `adapter: "fake"`, returning its id. Mirrors the
-/// other suites' helper; ids start at 2 because `initialize` consumed 1.
-async fn submit_fake_run(client: &mut Client) -> String {
+/// Submits a run against `adapter: "fake"`, owned by `owner` (which must
+/// match `client`'s own connected instance id -- `task/upsert` refuses a
+/// mismatch), returning its id. Mirrors the other suites' helper; ids
+/// start at 2 because `initialize` consumed 1.
+async fn submit_fake_run(client: &mut Client, owner: &str) -> String {
     let task = client
         .call(
             2,
             "task/upsert",
-            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
+            json!({ "ownerClientInstanceId": owner, "revision": 1 }),
         )
         .await;
     let task_id = task["result"]["taskId"].as_str().unwrap().to_string();
@@ -5984,7 +5986,7 @@ async fn run_finish_settles_a_settled_turn_as_succeeded_and_tears_down_the_worke
     })
     .await;
     let mut client = omp_client(&harness, "omp-1").await;
-    let run_id = submit_fake_run(&mut client).await;
+    let run_id = submit_fake_run(&mut client, "omp-1").await;
     assert!(
         wait_for_state(&mut client, 5, &run_id, "waitingUser").await,
         "the seeded turn boundary must park the run first"
@@ -6034,7 +6036,7 @@ async fn run_finish_can_settle_a_run_as_failed_when_the_leader_says_so() {
     })
     .await;
     let mut client = omp_client(&harness, "omp-1").await;
-    let run_id = submit_fake_run(&mut client).await;
+    let run_id = submit_fake_run(&mut client, "omp-1").await;
     assert!(wait_for_state(&mut client, 5, &run_id, "waitingUser").await);
 
     let finish = client
@@ -6060,7 +6062,7 @@ async fn run_finish_refuses_an_already_terminal_run() {
     })
     .await;
     let mut client = omp_client(&harness, "omp-1").await;
-    let run_id = submit_fake_run(&mut client).await;
+    let run_id = submit_fake_run(&mut client, "omp-1").await;
     assert!(wait_for_state(&mut client, 5, &run_id, "waitingUser").await);
 
     let first = client
@@ -6092,7 +6094,7 @@ async fn run_finish_refuses_an_unknown_outcome() {
     })
     .await;
     let mut client = omp_client(&harness, "omp-1").await;
-    let run_id = submit_fake_run(&mut client).await;
+    let run_id = submit_fake_run(&mut client, "omp-1").await;
     assert!(wait_for_state(&mut client, 5, &run_id, "waitingUser").await);
 
     let finish = client
@@ -6449,4 +6451,274 @@ async fn a_child_denial_reason_is_redacted_before_it_is_journaled() {
         .map(|e| &e["payload"])
         .expect("a childWorkerRequestDenied event");
     assert_reason_masked(denied);
+}
+
+// -------------------------------------------- leader-disconnect grace window
+
+/// The `workerTimeout` `kind` tag values journaled for `run_id` in a replay
+/// response, in emission order. Mirrors `workspace_event_kinds_for_run`'s
+/// shape for the sibling `workerTimeout` event type.
+fn worker_timeout_kinds_for_run(replay: &Value, run_id: &str) -> Vec<String> {
+    replay["result"]
+        .as_array()
+        .expect("events/replay returns an array")
+        .iter()
+        .map(|e| &e["event"])
+        .filter(|e| e["type"] == "workerTimeout" && e["payload"]["runId"] == run_id)
+        .map(|e| e["payload"]["kind"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// A leader that disconnects entirely (drops its only connection) and never
+/// comes back must have its parked run's vendor session torn down once the
+/// grace window elapses -- the same `cancel_run(Worker)` call `run/cancel`
+/// itself makes.
+#[tokio::test]
+async fn a_leader_disconnecting_stops_its_runs_workers() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+        c.leader_disconnect_grace = Duration::from_millis(80);
+    })
+    .await;
+    let mut client = omp_client(&harness, "leader-1").await;
+    let run_id = submit_fake_run(&mut client, "leader-1").await;
+    assert!(
+        wait_for_state(&mut client, 5, &run_id, "waitingUser").await,
+        "the seeded turn boundary must park the run first"
+    );
+
+    drop(client); // the leader disconnects entirely; nobody reconnects
+
+    // Past the grace window, with margin for the timer's own wakeup.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let calls = driver.cancel_calls();
+    assert_eq!(
+        calls.len(),
+        1,
+        "the disconnect teardown must cancel the parked run's worker: {calls:?}"
+    );
+    assert_eq!(calls[0].1, CancelScope::Worker);
+}
+
+/// The same disconnect settles the run's own state through
+/// `OrchestrationService::cancel_and_settle_run` -- the exact helper
+/// `run/cancel` uses -- landing on `RunState::unrendered_verdict()`
+/// (`"cancelled"`), never a literal decided at this call site.
+#[tokio::test]
+async fn a_disconnect_settles_owned_runs_via_the_shared_helper() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+        c.leader_disconnect_grace = Duration::from_millis(80);
+    })
+    .await;
+    let mut client = omp_client(&harness, "leader-2").await;
+    let run_id = submit_fake_run(&mut client, "leader-2").await;
+    assert!(wait_for_state(&mut client, 5, &run_id, "waitingUser").await);
+
+    drop(client);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // `run/get` is not ownership-scoped -- a fresh, unrelated connection
+    // can read the settled state back.
+    let mut checker = omp_client(&harness, "checker").await;
+    let get = checker.call(2, "run/get", json!({ "runId": run_id })).await;
+    assert_eq!(
+        get["result"]["state"], "cancelled",
+        "the shared cancel_and_settle_run helper must settle the run: {get:?}"
+    );
+}
+
+/// A leader that disconnects and reconnects (same instance id) well within
+/// the grace window must never have its run touched, and the grace-window
+/// teardown must journal nothing -- an ordinary reconnect is indistinguishable
+/// from a leader that was never gone.
+#[tokio::test]
+async fn a_reconnect_within_the_window_leaves_the_run_untouched_and_journals_nothing() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+        c.leader_disconnect_grace = Duration::from_millis(150);
+    })
+    .await;
+    let mut client = omp_client(&harness, "leader-3").await;
+    let run_id = submit_fake_run(&mut client, "leader-3").await;
+    assert!(wait_for_state(&mut client, 5, &run_id, "waitingUser").await);
+
+    drop(client); // disconnects...
+    tokio::time::sleep(Duration::from_millis(30)).await; // ...well within the window...
+    let mut reconnected = omp_client(&harness, "leader-3").await; // ...and reconnects.
+
+    // Past the ORIGINAL window, with margin.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    assert!(
+        driver.cancel_calls().is_empty(),
+        "a reconnect within the window must never tear the worker down: {:?}",
+        driver.cancel_calls()
+    );
+
+    let get = reconnected
+        .call(5, "run/get", json!({ "runId": run_id }))
+        .await;
+    assert_eq!(
+        get["result"]["state"], "waitingUser",
+        "a reconnect within the window must leave the run untouched: {get:?}"
+    );
+
+    let replay = reconnected
+        .call(6, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    assert!(
+        worker_timeout_kinds_for_run(&replay, &run_id)
+            .iter()
+            .all(|k| k != "leaderGone"),
+        "a reconnect within the window must journal nothing: {replay:?}"
+    );
+}
+
+/// A run owned by one leader is untouched by a different leader's
+/// connection lifecycle entirely -- disconnecting `leader-4` must never
+/// affect a run owned by `leader-5`, still live.
+#[tokio::test]
+async fn a_run_owned_by_another_live_client_is_not_touched() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+        c.leader_disconnect_grace = Duration::from_millis(80);
+    })
+    .await;
+
+    let mut departing = omp_client(&harness, "leader-4").await;
+    let departing_run = submit_fake_run(&mut departing, "leader-4").await;
+    assert!(wait_for_state(&mut departing, 5, &departing_run, "waitingUser").await);
+
+    let mut staying = omp_client(&harness, "leader-5").await;
+    let staying_run = submit_fake_run(&mut staying, "leader-5").await;
+    assert!(wait_for_state(&mut staying, 5, &staying_run, "waitingUser").await);
+
+    drop(departing); // only leader-4 goes away
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let calls = driver.cancel_calls();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(id, _)| id.to_string() == departing_run)
+            .count(),
+        1,
+        "the departed leader's run must be torn down: {calls:?}"
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(id, _)| id.to_string() == staying_run)
+            .count(),
+        0,
+        "a run owned by a still-connected leader must never be touched: {calls:?}"
+    );
+
+    let get = staying
+        .call(6, "run/get", json!({ "runId": staying_run }))
+        .await;
+    assert_eq!(
+        get["result"]["state"], "waitingUser",
+        "the still-connected leader's own run must be untouched: {get:?}"
+    );
+}
+
+/// A parked run whose leader is still connected must never be settled by
+/// the inactivity sweep alone, however long it stays quiet -- only the
+/// leader's connection actually being gone (`ipc::leader_registry`) may
+/// settle it. This is the maintainer's ruling that removed
+/// `settle_abandoned_turn` (see `timeout_sweep`'s own module doc).
+#[tokio::test]
+async fn a_parked_run_whose_leader_is_alive_is_never_settled_by_inactivity() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "leader-6").await;
+    let run_id_str = submit_fake_run(&mut client, "leader-6").await;
+    assert!(wait_for_state(&mut client, 5, &run_id_str, "waitingUser").await);
+    // `client` is never dropped: the leader stays connected for the whole test.
+
+    let run_id = RunId::parse(&run_id_str).expect("run id round-trips");
+    let clock = ActivityClock::new();
+    // Stale activity: comfortably past even a millisecond-scale threshold.
+    clock.touch(&run_id, std::time::Instant::now() - Duration::from_secs(10));
+
+    let sweep_db = DatabaseHandle::start(harness.database.clone())
+        .await
+        .expect("a second reader/writer handle onto the same WAL-mode database");
+    let (events_tx, _events_rx) = broadcast::channel(16);
+    crew_runtime::timeout_sweep::sweep_once(
+        &sweep_db,
+        harness.project_id,
+        &events_tx,
+        &clock,
+        Duration::from_millis(1),
+        Duration::from_secs(999_999),
+    )
+    .await;
+
+    let get = client
+        .call(6, "run/get", json!({ "runId": run_id_str }))
+        .await;
+    assert_eq!(
+        get["result"]["state"], "waitingUser",
+        "inactivity alone must never settle a run whose leader is still connected: {get:?}"
+    );
+    assert!(
+        driver.cancel_calls().is_empty(),
+        "no teardown may fire from inactivity alone: {:?}",
+        driver.cancel_calls()
+    );
+}
+
+/// The inactivity fact itself is unaffected by `settle_abandoned_turn`'s
+/// removal: the sweep still journals `workerTimeout { kind: inactivity }`
+/// exactly as before, for `run/timeoutAck` to react to -- only the
+/// runtime-side settlement that used to follow it is gone.
+#[tokio::test]
+async fn an_inactivity_timeout_still_journals_the_fact() {
+    let driver = Arc::new(SettlingRunDriver::default());
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::clone(&driver) as Arc<dyn RunDriver>);
+    })
+    .await;
+    let mut client = omp_client(&harness, "leader-7").await;
+    let run_id_str = submit_fake_run(&mut client, "leader-7").await;
+    assert!(wait_for_state(&mut client, 5, &run_id_str, "waitingUser").await);
+
+    let run_id = RunId::parse(&run_id_str).expect("run id round-trips");
+    let clock = ActivityClock::new();
+    clock.touch(&run_id, std::time::Instant::now() - Duration::from_secs(10));
+
+    let sweep_db = DatabaseHandle::start(harness.database.clone())
+        .await
+        .expect("a second reader/writer handle onto the same WAL-mode database");
+    let (events_tx, _events_rx) = broadcast::channel(16);
+    crew_runtime::timeout_sweep::sweep_once(
+        &sweep_db,
+        harness.project_id,
+        &events_tx,
+        &clock,
+        Duration::from_millis(1),
+        Duration::from_secs(999_999),
+    )
+    .await;
+
+    let replay = client
+        .call(6, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    assert_eq!(
+        worker_timeout_kinds_for_run(&replay, &run_id_str),
+        vec!["inactivity".to_string()],
+        "the inactivity fact must still be journaled: {replay:?}"
+    );
 }

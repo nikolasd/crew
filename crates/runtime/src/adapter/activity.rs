@@ -130,6 +130,12 @@ impl ActivityClock {
             match kind {
                 TimeoutKind::Inactivity => entry.inactivity_journaled = true,
                 TimeoutKind::Total => entry.total_journaled = true,
+                // This clock tracks worker/PTY liveness only -- a
+                // leader's connection state is `ipc::leader_registry`'s
+                // concern, tracked separately and never through here.
+                TimeoutKind::LeaderGone => unreachable!(
+                    "ActivityClock has no leader-connection state; every real caller's `kind` comes from `due_timeouts`, which never produces LeaderGone"
+                ),
             }
         }
     }

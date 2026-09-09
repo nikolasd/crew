@@ -88,6 +88,43 @@ pub(crate) async fn handle(stream: UnixStream, ctx: ConnContext, shared: Arc<Sha
         }
     };
 
+    // Registers this connection under its negotiated instance id for the
+    // disconnect-grace-window mechanism (`leader_registry`'s own module
+    // doc). Held for the rest of this function's scope, so it deregisters
+    // however the dispatch loop below ends -- normal close, an error
+    // break, or a panic unwind -- never only on the path that happened to
+    // exist when this was written. See `LeaderConnectionGuard`'s own doc
+    // comment for why that has to be structural rather than a manually
+    // paired decrement at each exit.
+    //
+    // `on_gone` fires when this is the LAST live connection for this
+    // instance id to disconnect -- never on an ordinary reconnect leaving
+    // others live. It arms the grace-window timer rather than settling
+    // immediately: the timer re-checks `gone_for_at_least` itself when it
+    // wakes, which is what actually distinguishes "gone for the whole
+    // window" from "gone right now" (see `LeaderRegistry::gone_for_at_least`'s
+    // own doc comment).
+    let on_gone_shared = Arc::clone(&shared);
+    let _leader_connection =
+        shared
+            .leader_registry
+            .register(principal.instance_id.clone(), move |instance_id| {
+                let shared = Arc::clone(&on_gone_shared);
+                let grace = shared.config.leader_disconnect_grace;
+                tokio::spawn(async move {
+                    tokio::time::sleep(grace).await;
+                    if shared
+                        .leader_registry
+                        .gone_for_at_least(&instance_id, grace)
+                    {
+                        shared
+                            .orchestration
+                            .settle_leader_gone(&instance_id, grace)
+                            .await;
+                    }
+                });
+            });
+
     // ---- switch both directions to the negotiated frame size. ----
     let _ = writer_tx.send(WriterMsg::SetMax(negotiated_frame)).await;
     let parts = framed.into_parts();

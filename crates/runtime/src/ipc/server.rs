@@ -28,6 +28,17 @@ pub(crate) struct Shared {
     /// Number of connections currently admitted and being served. Used to
     /// decide whether the runtime is idle.
     pub(crate) active_connections: Arc<AtomicUsize>,
+    /// Refcounted live-connection registry keyed by leader instance id --
+    /// distinct from [`Self::active_connections`], which counts every
+    /// connection regardless of identity. Populated from inside
+    /// [`super::connection::handle`], not [`Server::admit`]: the
+    /// negotiated instance id doesn't exist until the `initialize`
+    /// handshake completes, deep inside `handle`, so unlike
+    /// `active_connections` this cannot be bookkept from the spawn
+    /// wrapper. See `leader_registry`'s own module doc for the refcount
+    /// rationale and the disconnect-grace-window mechanism this exists
+    /// for.
+    pub(crate) leader_registry: super::leader_registry::LeaderRegistry,
     /// Fired by an in-band `runtime/shutdown` request to trigger a graceful
     /// shutdown of the accept loop.
     pub(crate) shutdown: Arc<Notify>,
@@ -286,6 +297,7 @@ impl Server {
             started_at: Instant::now(),
             events_tx,
             active_connections: Arc::new(AtomicUsize::new(0)),
+            leader_registry: super::leader_registry::LeaderRegistry::new(),
             shutdown: Arc::new(Notify::new()),
             orchestration,
             coordination,
@@ -371,6 +383,35 @@ impl Server {
     #[must_use]
     pub fn violation_service(&self) -> Arc<crate::policy::ViolationService> {
         Arc::clone(&self.shared.violation)
+    }
+
+    /// Routes every orchestration method to the domain repository --
+    /// exposed (like [`Server::coordination_broker`]) so the daemon-restart
+    /// leader-grace-window seeding in `lifecycle.rs` can settle a run
+    /// through the SAME service instance every live disconnect uses,
+    /// never a second one.
+    #[must_use]
+    pub fn orchestration_service(&self) -> Arc<crate::service::OrchestrationService> {
+        Arc::clone(&self.shared.orchestration)
+    }
+
+    /// The refcounted leader-connection registry -- exposed so
+    /// `lifecycle.rs` can seed it with every non-terminal run's owner at
+    /// startup (the daemon-restart case: nothing has connected yet, but a
+    /// leader may already be gone from this process's own perspective).
+    #[must_use]
+    pub(crate) fn leader_registry(&self) -> super::leader_registry::LeaderRegistry {
+        self.shared.leader_registry.clone()
+    }
+
+    /// The configured disconnect grace window -- same value the live
+    /// per-connection teardown in `connection::handle` waits out, so the
+    /// restart-seeding sweep in `lifecycle.rs` never drifts from it (and
+    /// tests can shrink it via [`super::ServerConfig::leader_disconnect_grace`]
+    /// instead of waiting out the real production window).
+    #[must_use]
+    pub(crate) fn leader_disconnect_grace(&self) -> std::time::Duration {
+        self.shared.config.leader_disconnect_grace
     }
 
     /// Accepts and serves connections until `shutdown` resolves.

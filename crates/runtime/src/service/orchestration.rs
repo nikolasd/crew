@@ -8,6 +8,7 @@
 //! evidence, monotonic revision, connected-instance identity).
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crew_protocol::{
     ApprovalId, ApprovalRequest, CrewMethod, DeliveryState, EventEnvelope, IsolationKind,
@@ -1529,14 +1530,40 @@ impl OrchestrationService {
         params: &Value,
     ) -> Result<Value, ServiceError> {
         let run_id = parse_run_id(params.get("runId"))?;
-        let project_id = self.project_id;
         let to = RunState::try_from("cancelled").expect("cancelled is valid");
-        let principal_instance_id = principal.instance_id.clone();
+        self.cancel_and_settle_run(run_id, to, Some(principal.instance_id.clone()))
+            .await
+    }
+
+    /// The mechanical guts shared by two callers with different reasons
+    /// for the same shape of transition: `run_cancel` (an explicit
+    /// request, always `to: "cancelled"`, checked against the requesting
+    /// principal's ownership) and [`Self::settle_leader_gone`] (a
+    /// system-initiated settlement once a run's owning leader has been
+    /// gone for the full disconnect grace window, `to:
+    /// RunState::unrendered_verdict()`, no principal to check --
+    /// `principal_instance_id: None` bypasses `transition_run`'s
+    /// ownership check the same way `settle_abandoned_turn` used to).
+    ///
+    /// Transitions and broadcasts first, then best-effort kills the
+    /// vendor subprocess (`CancelScope::Worker`) -- a kill failure never
+    /// fails the call (the transition already committed); it sets
+    /// `degradedControl` instead. Lease/slot release is not this
+    /// function's job: it happens downstream, evidence-driven, once the
+    /// adapter's own exit/cancel produces a `ProcessExited`/turn-boundary
+    /// event (see `adapter::registry::watch_slot`'s own doc comment).
+    async fn cancel_and_settle_run(
+        &self,
+        run_id: RunId,
+        to: RunState,
+        principal_instance_id: Option<String>,
+    ) -> Result<Value, ServiceError> {
+        let project_id = self.project_id;
         let mut result = self
             .db
             .run_domain_op(Box::new(move |conn| {
                 let mut repo = DomainRepository::new(conn, project_id);
-                repo.transition_run(run_id, &to, Some(&principal_instance_id))
+                repo.transition_run(run_id, &to, principal_instance_id.as_deref())
                     .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
             }))
             .await
@@ -1549,10 +1576,10 @@ impl OrchestrationService {
         {
             // A real kill failure (an absent adapter is the clean
             // `CancelOutcome::NoRunningAdapter`, not an `Err`): the run is
-            // journaled `cancelled` but a vendor process may still be
-            // live. Make that visible to `run/get` and the monitor via
-            // `degradedControl`, mirroring the policy-violation
-            // path's treatment -- guarded write, journaled, broadcast.
+            // journaled but a vendor process may still be live. Make that
+            // visible to `run/get` and the monitor via `degradedControl`,
+            // mirroring the policy-violation path's treatment -- guarded
+            // write, journaled, broadcast.
             tracing::warn!(error = %err, run_id = %run_id, "failed to cancel running adapter subprocess");
             match self
                 .db
@@ -1573,6 +1600,172 @@ impl OrchestrationService {
         }
 
         Ok(result)
+    }
+
+    /// Settles every non-terminal run owned by `instance_id`, once its
+    /// grace-window timer (`ipc::leader_registry`) has confirmed it has
+    /// held no live connection for the full window. Called from exactly
+    /// two places, both re-checking `LeaderRegistry::gone_for_at_least`
+    /// themselves right before this runs: a live disconnect's own timer
+    /// (`ipc::connection::handle`'s `on_gone` callback), and the
+    /// daemon-startup seed for runs whose owner was never reconnected
+    /// after a restart ([`Self::seed_leader_registry_after_restart`]).
+    ///
+    /// `grace` is only for the journaled fact's `since_ms` -- the actual
+    /// decision already happened in the caller's `gone_for_at_least`
+    /// check; this never re-verifies it, and takes the caller's word for
+    /// how long the window it waited out actually was (the configured
+    /// value, which a test may have shrunk well below the production
+    /// [`crate::ipc::leader_registry::LEADER_DISCONNECT_GRACE_WINDOW`]).
+    ///
+    /// For each owned run: journals a `WorkerTimeout { kind: LeaderGone }`
+    /// fact FIRST (the same "report before deciding" shape the inactivity
+    /// sweep uses for `Inactivity`/`Total`), then transitions to
+    /// `RunState::unrendered_verdict()` -- never a literal `"cancelled"`,
+    /// so the one function that owns that word (`run.rs`) is the only
+    /// place it can ever change. A run that already went terminal between
+    /// the query and this loop (the leader finished it just in time) is
+    /// silently skipped: `transition_run`'s own guarded write refuses an
+    /// illegal edge, and that refusal is exactly correct here, not an
+    /// error to surface.
+    pub(crate) async fn settle_leader_gone(&self, instance_id: &str, grace: Duration) {
+        let project_id = self.project_id;
+        let run_ids: Vec<String> = match self
+            .db
+            .run_domain_op(query::owned_nonterminal_run_ids_op(
+                instance_id.to_string(),
+                project_id,
+            ))
+            .await
+        {
+            Ok(value) => value
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Err(err) => {
+                tracing::warn!(error = %err, instance_id, "failed to look up runs owned by a gone leader");
+                return;
+            }
+        };
+
+        for run_id_str in run_ids {
+            let Ok(run_id) = RunId::parse(&run_id_str) else {
+                continue;
+            };
+
+            let mut timeout_fact = match self
+                .db
+                .run_domain_op(Box::new(move |conn| {
+                    let mut repo = DomainRepository::new(conn, project_id);
+                    repo.record_worker_timeout_if_live(
+                        run_id,
+                        crew_protocol::TimeoutKind::LeaderGone,
+                        u64::try_from(grace.as_millis()).unwrap_or(u64::MAX),
+                    )
+                    .map(|committed| {
+                        committed
+                            .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                            .unwrap_or(Value::Null)
+                    })
+                }))
+                .await
+            {
+                Ok(value) => value,
+                Err(err) => {
+                    tracing::warn!(error = %err, run_id = %run_id, "failed to journal a leaderGone timeout fact");
+                    Value::Null
+                }
+            };
+            if !timeout_fact.is_null() {
+                self.broadcast(&mut timeout_fact);
+            }
+
+            if let Err(err) = self
+                .cancel_and_settle_run(run_id, RunState::unrendered_verdict(), None)
+                .await
+            {
+                tracing::warn!(
+                    error = %err.message,
+                    run_id = %run_id,
+                    instance_id,
+                    "failed to settle a run whose leader is gone"
+                );
+            }
+        }
+    }
+
+    /// The daemon-restart half of the disconnect-grace-window feature:
+    /// at startup, nothing has connected to `leader_registry` yet, so
+    /// every leader that owns a non-terminal run is -- from THIS
+    /// process's own perspective -- disconnected as of `startup_instant`.
+    /// Seeds each such owner into the registry and arms the same
+    /// grace-window timer a live disconnect would, so a leader that
+    /// reconnects within the window clears it exactly as an ordinary
+    /// reconnect does (`LeaderRegistry::register`'s own `zero_since =
+    /// None`), and one that never returns gets its runs settled through
+    /// [`Self::settle_leader_gone`] -- the same path a live disconnect
+    /// uses -- rather than being stranded forever, which is the gap this
+    /// method exists to close.
+    ///
+    /// `startup_instant`, never a run's own last-seen activity: a leader
+    /// cannot reconnect to a daemon that is not running, so any time
+    /// this daemon spent stopped is the daemon's own absence, not the
+    /// leader's, and must never be charged against the grace window --
+    /// doing so would settle live, reconnecting leaders' runs on every
+    /// restart that followed a stop longer than the window, which is
+    /// exactly the destructive direction this feature exists to avoid.
+    /// See [`crate::ipc::leader_registry::LeaderRegistry::seed_disconnected_since`]'s
+    /// own doc comment for the same reasoning at the mechanism that
+    /// enforces it.
+    ///
+    /// Extracted from `lifecycle::serve` as its own method (rather than
+    /// inlined at the one call site) so a test can drive it directly
+    /// against a seeded database, without spinning up a second full
+    /// daemon process to exercise a restart.
+    pub(crate) async fn seed_leader_registry_after_restart(
+        self: &Arc<Self>,
+        leader_registry: &crate::ipc::leader_registry::LeaderRegistry,
+        grace: Duration,
+        startup_instant: Instant,
+    ) {
+        let owners: Vec<String> = match self
+            .db
+            .run_domain_op(query::distinct_owners_of_nonterminal_runs_op(
+                self.project_id,
+            ))
+            .await
+        {
+            Ok(value) => value
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to list owners of non-terminal runs at startup");
+                Vec::new()
+            }
+        };
+
+        for owner in owners {
+            leader_registry.seed_disconnected_since(owner.clone(), startup_instant);
+            let leader_registry = leader_registry.clone();
+            let orchestration = Arc::clone(self);
+            tokio::spawn(async move {
+                tokio::time::sleep(grace).await;
+                if leader_registry.gone_for_at_least(&owner, grace) {
+                    orchestration.settle_leader_gone(&owner, grace).await;
+                }
+            });
+        }
     }
     // ------------------------------------------------------- workspace
 
@@ -3491,3 +3684,197 @@ fn parse_message_kind(value: Option<&Value>) -> Result<MessageKind, ServiceError
 use ApprovalRequest as _ApprovalRequest;
 #[allow(unused_imports)]
 use RunSpec as _RunSpec;
+
+#[cfg(test)]
+mod restart_seeding_tests {
+    //! The daemon-restart half of the leader-disconnect grace window
+    //! ([`super::OrchestrationService::seed_leader_registry_after_restart`]).
+    //! Unit tests, not `tests/orchestration_rpc.rs` integration tests,
+    //! because the mechanism under test (`LeaderRegistry`, the seeding
+    //! method itself) is deliberately `pub(crate)` -- an internal
+    //! restart-recovery detail, never a surface a leader talks to -- so
+    //! only same-crate code can construct the fixtures these tests need.
+
+    use super::*;
+    use crate::ipc::leader_registry::LeaderRegistry;
+    use crate::workspace::ArtifactStore;
+
+    /// Builds a minimal but real [`OrchestrationService`] over a fresh
+    /// on-disk database -- no run driver, no policy, nothing this
+    /// module's restart-seeding path touches. Mirrors the construction
+    /// `ipc::server::Server::bind` does in production, trimmed to what
+    /// [`OrchestrationService::seed_leader_registry_after_restart`] and
+    /// [`OrchestrationService::settle_leader_gone`] actually read.
+    async fn build_orchestration(
+        db_path: &std::path::Path,
+        project_id: ProjectId,
+        events_tx: broadcast::Sender<EventEnvelope>,
+    ) -> Arc<OrchestrationService> {
+        let db = Arc::new(DatabaseHandle::start(db_path).await.expect("db starts"));
+        let violation = Arc::new(crate::policy::ViolationService::new(
+            db.clone(),
+            project_id,
+            events_tx.clone(),
+            None,
+            crate::config::NestedViolationAction::default(),
+            crate::security::redaction::Redactor::new(),
+        ));
+        let lease_service = Arc::new(
+            crate::workspace::LeaseService::open_in_memory(project_id).expect("lease service"),
+        );
+        Arc::new(OrchestrationService::new(
+            db,
+            project_id,
+            None,
+            Arc::new(crate::approval::NoopApprovalCallback),
+            violation,
+            events_tx,
+            lease_service,
+            Arc::new(ArtifactStore::new()),
+            std::path::PathBuf::new(),
+            crate::config::crew::Limits::default().turn_budget_per_subtask,
+            Arc::new(crate::adapter::ActivityClock::new()),
+        ))
+    }
+
+    /// Creates a task owned by `owner`, a worker, and a run submitted
+    /// (and left) at `queued` -- non-terminal, no adapter ever started --
+    /// against `orchestration`'s own database. Returns the run id.
+    async fn seed_nonterminal_run(orchestration: &OrchestrationService, owner: &str) -> RunId {
+        let project_id = orchestration.project_id;
+        let db = Arc::clone(&orchestration.db);
+        let owner = owner.to_string();
+        db.run_domain_op(Box::new(move |conn| {
+            let mut repo = DomainRepository::new(conn, project_id);
+            let task_id = TaskId::new();
+            repo.upsert_task(
+                task_id,
+                &TaskRef {
+                    owner_client_instance_id: owner.clone(),
+                    revision: 1,
+                },
+            )?;
+            let worker_id = WorkerId::new();
+            repo.create_worker(&Worker {
+                worker_id,
+                profile_ref: WorkerProfileRef {
+                    id: worker_id,
+                    fingerprint: "sha256:fake".into(),
+                    adapter: "fake".into(),
+                    model: "test".into(),
+                    permission_envelope: serde_json::json!({}),
+                },
+                parent_worker_id: None,
+                created_at: Timestamp::now(),
+            })?;
+            let run_id = RunId::new();
+            repo.submit_run(
+                &Run {
+                    run_id,
+                    task_id,
+                    worker_id,
+                    state: RunState::try_from("queued").expect("queued is valid"),
+                    flags: RunFlags::default(),
+                    vendor_session_id: None,
+                    started_at: None,
+                    completed_at: None,
+                },
+                None,
+                None,
+            )?;
+            Ok(serde_json::json!(run_id.to_string()))
+        }))
+        .await
+        .expect("seed run")
+        .as_str()
+        .and_then(|s| RunId::parse(s).ok())
+        .expect("run id round-trips")
+    }
+
+    async fn run_state(orchestration: &OrchestrationService, run_id: RunId) -> String {
+        orchestration
+            .db
+            .run_domain_op(query::run_get_op(run_id))
+            .await
+            .expect("run_get")["state"]
+            .as_str()
+            .expect("state is a string")
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn a_restart_settles_a_run_whose_leader_never_reconnects_after_the_window() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project_id = ProjectId::new();
+        let (events_tx, mut events_rx) = broadcast::channel(16);
+        let orchestration =
+            build_orchestration(&dir.path().join("db.sqlite"), project_id, events_tx).await;
+        let run_id = seed_nonterminal_run(&orchestration, "leader-gone").await;
+
+        let leader_registry = LeaderRegistry::new();
+        let grace = Duration::from_millis(20);
+        // Nothing has connected to `leader_registry` since it was just
+        // constructed -- exactly the daemon-restart precondition: an
+        // empty in-memory registry sitting on top of a database that
+        // still has this run's owner recorded.
+        orchestration
+            .seed_leader_registry_after_restart(&leader_registry, grace, Instant::now())
+            .await;
+
+        // Past the window, with margin: the leader never reconnects.
+        tokio::time::sleep(grace * 5).await;
+
+        assert_eq!(
+            run_state(&orchestration, run_id).await,
+            "cancelled",
+            "a leader that never returns after a restart must be settled via unrendered_verdict()"
+        );
+
+        let fact = events_rx.try_recv().expect("a fact was broadcast");
+        match fact.event {
+            crew_protocol::RuntimeEvent::WorkerTimeout {
+                run_id: fact_run_id,
+                kind,
+                ..
+            } => {
+                assert_eq!(fact_run_id, run_id);
+                assert_eq!(kind, crew_protocol::TimeoutKind::LeaderGone);
+            }
+            other => panic!("expected a WorkerTimeout{{kind: LeaderGone}} fact, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_restart_leaves_a_run_untouched_when_its_leader_reconnects_within_the_window() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project_id = ProjectId::new();
+        let (events_tx, mut events_rx) = broadcast::channel(16);
+        let orchestration =
+            build_orchestration(&dir.path().join("db.sqlite"), project_id, events_tx).await;
+        let run_id = seed_nonterminal_run(&orchestration, "leader-returns").await;
+
+        let leader_registry = LeaderRegistry::new();
+        let grace = Duration::from_millis(60);
+        orchestration
+            .seed_leader_registry_after_restart(&leader_registry, grace, Instant::now())
+            .await;
+
+        // The leader reconnects well within the window and stays connected
+        // (the guard is held for the rest of the test) -- an ordinary
+        // reconnect, which must clear `zero_since` exactly as a live
+        // disconnect's own reconnect does.
+        let _reconnected = leader_registry.register("leader-returns".to_string(), |_| {});
+
+        tokio::time::sleep(grace * 3).await;
+
+        assert_eq!(
+            run_state(&orchestration, run_id).await,
+            "queued",
+            "a leader that reconnects within the window must leave its runs untouched"
+        );
+        assert!(
+            events_rx.try_recv().is_err(),
+            "a reconnect within the window must journal nothing"
+        );
+    }
+}
