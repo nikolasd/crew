@@ -5,8 +5,8 @@
 //! - Concurrency ceiling (block runs exceeding the ceiling)
 //! - Nested worker policy (deny unexpected child workers)
 //!
-//! Crew-v2 gap-closure WP5 (ruling): the org-governance enforcement this
-//! evaluator used to also apply -- model/adapter allowlists, a
+//! The org-governance enforcement this evaluator used to also apply --
+//! model/adapter allowlists, a
 //! required-capability list, per-run/daily cost ceilings, and the
 //! `native_discovery_reviewed` rollout gate -- is retired along with the
 //! YAML org config layer that was its only source. `CrewConfig`
@@ -61,26 +61,26 @@ pub struct PolicyViolation {
 /// The kind of policy violation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyViolationKind {
-    /// Deprecated: no longer produced since crew v2 (org-governance
-    /// enforcement retired, crew-v2 gap-closure WP5). Kept declared,
-    /// unconstructable in production, because a journaled event from
-    /// before this retirement could carry it.
+    /// Deprecated: no longer produced since crew v2 retired org-governance
+    /// enforcement (see the module doc). Kept declared, unconstructable in
+    /// production, because a journaled event from before this retirement
+    /// could carry it.
     ModelNotAllowed,
     /// The concurrency ceiling has been reached.
     ConcurrencyCeilingExceeded,
     /// A nested/child worker was denied by policy.
     NestedWorkerDenied,
-    /// Deprecated: no longer produced since crew v2 (org-governance
-    /// enforcement retired, crew-v2 gap-closure WP5).
+    /// Deprecated: no longer produced since crew v2 retired org-governance
+    /// enforcement (see the module doc).
     AdapterNotAllowed,
-    /// Deprecated: no longer produced since crew v2 (org-governance
-    /// enforcement retired, crew-v2 gap-closure WP5).
+    /// Deprecated: no longer produced since crew v2 retired org-governance
+    /// enforcement (see the module doc).
     CapabilityMissing,
-    /// Deprecated: no longer produced since crew v2 (org-governance
-    /// enforcement retired, crew-v2 gap-closure WP5).
+    /// Deprecated: no longer produced since crew v2 retired org-governance
+    /// enforcement (see the module doc).
     NativeDiscoveryUnacknowledged,
-    /// Deprecated: no longer produced since crew v2 (org-governance
-    /// enforcement retired, crew-v2 gap-closure WP5).
+    /// Deprecated: no longer produced since crew v2 retired org-governance
+    /// enforcement (see the module doc).
     CostCeiling,
 }
 
@@ -105,10 +105,10 @@ impl std::fmt::Display for PolicyViolationKind {
 /// Errors from policy evaluation.
 #[derive(Debug, thiserror::Error)]
 pub enum PolicyError {
-    /// Deprecated: no longer produced since crew v2 (org-governance
-    /// enforcement retired, crew-v2 gap-closure WP5). Kept declared,
-    /// unconstructable in production, because a journaled event from
-    /// before this retirement could carry it.
+    /// Deprecated: no longer produced since crew v2 retired org-governance
+    /// enforcement (see the module doc). Kept declared, unconstructable in
+    /// production, because a journaled event from before this retirement
+    /// could carry it.
     #[error("model '{model}' is not in the allowlist; allowed: {allowed:?}")]
     ModelNotAllowed { model: String, allowed: Vec<String> },
 
@@ -120,26 +120,26 @@ pub enum PolicyError {
     #[error("nested worker denied: {reason}")]
     NestedWorkerDenied { reason: String },
 
-    /// Deprecated: no longer produced since crew v2 (org-governance
-    /// enforcement retired, crew-v2 gap-closure WP5).
+    /// Deprecated: no longer produced since crew v2 retired org-governance
+    /// enforcement (see the module doc).
     #[error("adapter '{adapter}' is not authorized")]
     AdapterNotAllowed { adapter: String },
 
-    /// Deprecated: no longer produced since crew v2 (org-governance
-    /// enforcement retired, crew-v2 gap-closure WP5).
+    /// Deprecated: no longer produced since crew v2 retired org-governance
+    /// enforcement (see the module doc).
     #[error("adapter '{adapter}' does not provide required capability '{capability}'")]
     CapabilityMissing { adapter: String, capability: String },
 
-    /// Deprecated: no longer produced since crew v2 (org-governance
-    /// enforcement retired, crew-v2 gap-closure WP5).
+    /// Deprecated: no longer produced since crew v2 retired org-governance
+    /// enforcement (see the module doc).
     #[error(
         "adapter '{adapter}' declares native worker discovery, but rollout gate \
          'native_discovery_reviewed' is unresolved"
     )]
     NativeDiscoveryUnacknowledged { adapter: String },
 
-    /// Deprecated: no longer produced since crew v2 (org-governance
-    /// enforcement retired, crew-v2 gap-closure WP5).
+    /// Deprecated: no longer produced since crew v2 retired org-governance
+    /// enforcement (see the module doc).
     #[error("{scope} cost ceiling ${ceiling:.2} reached; ${spent:.2} already spent")]
     CostCeilingExceeded {
         scope: &'static str,
@@ -147,8 +147,8 @@ pub enum PolicyError {
         spent: f64,
     },
 
-    /// Deprecated: no longer produced since crew v2 (org-governance
-    /// enforcement retired, crew-v2 gap-closure WP5).
+    /// Deprecated: no longer produced since crew v2 retired org-governance
+    /// enforcement (see the module doc).
     #[error(
         "adapter '{adapter}' reports no usage, so the configured cost ceiling \
          cannot be enforced for it"
@@ -229,8 +229,7 @@ impl PolicyEvaluator {
         // consumes the worker profile or the conformance-downgraded
         // effective capability set -- unused today because the checks
         // that read them (model allowlist, required capabilities) were
-        // config-sourced org governance, now retired (crew-v2
-        // gap-closure WP5 ruling; see the module doc).
+        // config-sourced org governance, now retired (see the module doc).
         _profile: &WorkerProfile,
         _effective_capabilities: &AdapterCapabilities,
         is_nested: bool,
@@ -527,7 +526,7 @@ mod tests {
         }
     }
 
-    /// WP-B (b1): `authorize()` must be invariant to `effective_capabilities`
+    /// `authorize()` must be invariant to `effective_capabilities`
     /// -- with NO exception clause, not even for `nested`. This holds today
     /// only because `authorize()` (via `evaluate()`) ignores the parameter
     /// entirely, and this test exists to FAIL the instant that stops being

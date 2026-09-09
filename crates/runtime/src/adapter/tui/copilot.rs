@@ -152,7 +152,7 @@ impl TuiVendor for CopilotTuiVendor {
 
     /// A bare Escape byte: the interactive CLI's turn-interrupt key,
     /// same convention as the other vendored REPLs. [INFERENCE] not
-    /// separately confirmed against a live session -- WP29's live smoke
+    /// separately confirmed against a live session -- the live smoke run
     /// only ever exercised `CancelScope::Worker` (process-kill); this
     /// turn-level interrupt remains unconfirmed live, tracked post-0.5.0.
     fn interrupt_sequence(&self) -> Vec<u8> {

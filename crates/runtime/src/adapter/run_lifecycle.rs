@@ -450,7 +450,7 @@ impl RunLifecycle {
         let turn_settled = self.turn_settled().await;
         let terminal = terminal_state_for(exit_code, signal, turn_settled);
         self.walk_to(&terminal).await;
-        // WP20 repeated-failure escalation: a run that just failed for the
+        // A repeated-failure escalation: a run that just failed for the
         // same task whose previous run also failed raises the leader's
         // attention fact. Committed as its own mutation and broadcast here
         // (invariant 7) -- never folded into the transition commit, since
@@ -503,7 +503,7 @@ pub struct RunLifecycleSink {
     /// past `working`): a chatty run then pays no state read for the rest of
     /// its lifetime.
     working_observed: AtomicBool,
-    /// The shared liveness clock (WP19): every journaled non-exit event is
+    /// The shared liveness clock: every journaled non-exit event is
     /// activity, re-arming the inactivity deadline the timeout sweep reads.
     activity: Arc<ActivityClock>,
 }
@@ -554,7 +554,7 @@ impl AdapterEventSink for RunLifecycleSink {
             if result.is_ok() {
                 if let Some((exit_code, signal)) = exit {
                     // The run is settling: drop its liveness clock so a
-                    // later resume starts fresh deadlines (WP19).
+                    // later resume starts fresh deadlines.
                     activity.forget(&run_id);
                     self.lifecycle
                         .observe_process_exited(exit_code, signal.as_deref())

@@ -1,4 +1,4 @@
-//! Retention surface types (`retention/clean`, spec §8.2 `/crew clean`).
+//! Retention surface types (`retention/clean`, `/crew clean`).
 //!
 //! Retention prunes only the EVENTS of terminal (or unassociated) runs --
 //! the run rows themselves stay so `/crew runs` history keeps its shape.

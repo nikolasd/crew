@@ -120,7 +120,7 @@ for you:
 1. **User config** — `~/.omp/crew.json`
 2. **Project config** — `<repo>/.omp/crew.json`
 
-Configuration files are strict JSON (`crew.json`, spec §10) with unknown-key rejection at every
+Configuration files are strict JSON (`crew.json`, see [architecture.md § Configuration and Policy](architecture.md#configuration-and-policy)) with unknown-key rejection at every
 depth, failing closed with the exact JSON path that named the unknown key. Example:
 
 ```json

@@ -49,21 +49,6 @@ impl ServiceError {
             message: msg.into(),
         }
     }
-
-    /// A refusal for a known, role-permitted method whose real handler
-    /// lands in a later work package. Reuses `METHOD_NOT_FOUND` (-32601),
-    /// the same code the ACP-facing Copilot client already returns for a
-    /// recognized-but-unimplemented method
-    /// (`crate::adapter::copilot::client`), rather than inventing a new
-    /// refusal shape; the message text (not the code) is what
-    /// distinguishes "not yet implemented" from "unknown or out of role".
-    #[allow(dead_code)] // retained for future method stubs (WP22+)
-    fn not_yet_implemented(method_name: &str) -> Self {
-        Self {
-            code: error_code::METHOD_NOT_FOUND,
-            message: format!("{method_name} is not yet implemented"),
-        }
-    }
 }
 
 impl From<DomainError> for ServiceError {
@@ -228,7 +213,7 @@ pub struct OrchestrationService {
     /// Resolved once per `run/submit` against the caller's
     /// `displayPreference`, so an adapter never re-probes.
     display: Arc<crate::display::DisplayRegistry>,
-    /// The default per-subtask turn budget (WP19): `config
+    /// The default per-subtask turn budget: `config
     /// limits.turnBudgetPerSubtask`, snapshotted into a run's budgets row
     /// at submit when its plan subtask carries no explicit `turnBudget`.
     turn_budget_default: u32,
@@ -449,8 +434,8 @@ impl OrchestrationService {
             CrewMethod::WorkspaceApply => self.workspace_apply(principal, params).await,
             CrewMethod::ArtifactList => self.artifact_list(principal, params).await,
             CrewMethod::ArtifactFetch => self.artifact_fetch(principal, params).await,
-            // `plan/*` landed in WP17; `run/timeoutAck` is the WP21
-            // leader-decision surface.
+            // `plan/*` and `run/timeoutAck` are the leader-decision surface
+            // methods.
             CrewMethod::PlanPropose => self.plan_propose(principal, params).await,
             CrewMethod::PlanDecide => self.plan_decide(principal, params).await,
             CrewMethod::PlanGet => self.plan_get(params).await,
@@ -981,12 +966,12 @@ impl OrchestrationService {
             .and_then(Value::as_str)
             .map(str::to_string);
 
-        // Turn-budget snapshot (WP19): an optional `planRef {planId,
+        // Turn-budget snapshot: an optional `planRef {planId,
         // subtaskId}` names the approved plan subtask this run executes.
         // Its `turnBudget` wins; the config default fills the gap. The
-        // provenance is stored on the run row (WP20's writes guard reads
-        // it) and the limit into the budgets row, in the same domain op as
-        // submission. A malformed reference is the caller's error.
+        // provenance is stored on the run row (the write-violation detector
+        // reads it) and the limit into the budgets row, in the same domain
+        // op as submission. A malformed reference is the caller's error.
         let plan_ref = params.get("planRef");
         let (plan_ref_json, turn_limit) = if let Some(plan_ref) = plan_ref {
             let plan_id = parse_run_id(plan_ref.get("planId")).map_err(|_| {
@@ -2462,7 +2447,7 @@ impl OrchestrationService {
                 // the delivery diagnostic path already handles a run with
                 // no live adapter (that gate covers only the worker-MCP broker
                 // writes whose doc promises liveness). The turn-budget
-                // guard (WP19) sits in that same transaction.
+                // guard sits in that same transaction.
                 let (committed, answered) =
                     repo.record_message(&message, Some(&principal_instance_id), true, false)?;
                 Ok(embed_envelope(
@@ -2486,8 +2471,8 @@ impl OrchestrationService {
             }
             Err(err) => {
                 // A typed budget refusal must still journal -- and
-                // broadcast -- its durable `BudgetExceeded` fact (WP19):
-                // monitors see the cap trip even though no message row was
+                // broadcast -- its durable `BudgetExceeded` fact: monitors
+                // see the cap trip even though no message row was
                 // written. The refusal itself is then returned as-is with
                 // its `BUDGET_EXCEEDED` code.
                 if err.code == error_code::BUDGET_EXCEEDED {
@@ -2509,7 +2494,7 @@ impl OrchestrationService {
         };
         self.broadcast(&mut sequence);
 
-        // WP20: this Answer resolved the run's open question escalation --
+        // This Answer resolved the run's open question escalation --
         // journal (and broadcast) the durable `EscalationAnswered` fact as
         // its own committed mutation, exactly like every other follow-up
         // fact this handler emits.
@@ -3165,11 +3150,11 @@ impl OrchestrationService {
     }
 
     /// `run/timeoutAck`: the leader's decision surface for a
-    /// [`RuntimeEvent::WorkerTimeout`] fact (WP21, spec §7.5 -- the runtime
-    /// reports; the leader decides).
+    /// [`RuntimeEvent::WorkerTimeout`] fact (the runtime reports; the
+    /// leader decides).
     ///
     /// * `extend` re-arms BOTH of the run's liveness deadlines with a fresh
-    ///   window (the same shared clock WP19's sweep reads). Refused
+    ///   window (the same shared clock the timeout sweep reads). Refused
     ///   (never a fabricated `rearmed: true`) when the run has no tracked
     ///   clock to re-arm -- never submitted, or already settled/forgotten --
     ///   since there is no legitimate pending timeout to act on either way,

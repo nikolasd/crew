@@ -110,8 +110,8 @@ fn parsed_fixture_events() -> Vec<super::TuiEvent> {
 
 /// The scenario result, plus the raw `--version` string observed (`None`
 /// under the kill switch or on a spawn failure) -- the latter is what
-/// [`probe_with_version`] (crew-v2 gap-closure WP-C's
-/// `conformance::probe_availability_with_version` TUI dispatch) stamps its
+/// [`probe_with_version`] (`conformance::probe_availability_with_version`'s
+/// TUI dispatch) stamps its
 /// memoization cache key with.
 async fn probe_scenario_with_version() -> (ScenarioResult, Option<String>) {
     if crate::conformance::vendor_cli_invocation_disabled() {
@@ -159,7 +159,7 @@ async fn probe_scenario() -> ScenarioResult {
     probe_scenario_with_version().await.0
 }
 
-/// crew-v2 gap-closure WP-C: the lightweight version+availability probe
+/// The lightweight version+availability probe
 /// `conformance::probe_availability_with_version` dispatches to for TUI
 /// mode -- the same real `--version` handshake [`fixture_report`]'s own
 /// `PROBE` scenario performs, exposed standalone so the gate's

@@ -344,7 +344,7 @@ pub fn last_emitting_index(events: &[TuiEvent]) -> Option<usize> {
 /// Spawns the *real* vendor binary (never a `/bin/sh` double) on a real PTY
 /// and runs the scenarios that can only be proven against the live CLI: the
 /// TUI control plane actually discovers the vendor's own transcript and
-/// tailers a normalized message back. This is the WP29 "real TUI spawn on
+/// tailers a normalized message back. This is the "real TUI spawn on
 /// PTY -> prompt injection -> transcript discovery -> >=1 normalized message"
 /// smoke, exercised per vendor.
 ///
@@ -354,7 +354,7 @@ pub fn last_emitting_index(events: &[TuiEvent]) -> Option<usize> {
 ///
 /// `resume`/`runtime-restart` are **not** claimed here: a single-process
 /// resume is not a daemon restart. Genuine restart recovery is proven by the
-/// separate serve->stop->serve end-to-end smoke (WP29), not this report.
+/// separate serve->stop->serve end-to-end smoke test, not this report.
 /// Resolves the working directory a live vendor CLI is launched in during a
 /// `crewd conformance --live` smoke. Real vendor CLIs (claude in
 /// particular) refuse to persist a session transcript under the system
@@ -432,8 +432,8 @@ where
     ));
 
     // Live mode leaves `session_dir` unset: real vendor CLIs write
-    // transcripts under their own default roots (the WP28 empirical roots --
-    // ~/.claude/projects/<slug>, ~/.codex/sessions, ~/.copilot/session-state,
+    // transcripts under their own default roots (the empirically confirmed
+    // roots -- ~/.claude/projects/<slug>, ~/.codex/sessions, ~/.copilot/session-state,
     // ~/.omp/agent/sessions/<slug>), not a temp path. `transcript_root`
     // then resolves to the real root and discovery filters by the injected
     // nonce + mtime, so the right transcript is found without redirecting
@@ -583,7 +583,7 @@ where
     let resume_restart = ScenarioResult::skip(
         scenario::SESSION_RESUME,
         "live mode: a single-process resume is not a daemon restart; genuine restart recovery is \
-         proven by the separate serve->stop->serve end-to-end smoke (WP29), not this report",
+         proven by the separate serve->stop->serve end-to-end smoke test, not this report",
     );
 
     let scenarios = vec![

@@ -1,7 +1,7 @@
-//! Per-run liveness clocks (WP19): the activity evidence the timeout sweep
+//! Per-run liveness clocks: the activity evidence the timeout sweep
 //! reduces into `WorkerTimeout{Inactivity|Total}` journal decisions.
 //!
-//! Two independent deadlines per run, per spec §7.5:
+//! Two independent deadlines per run:
 //!
 //! * **Inactivity** — measured from the last vendor event that flowed
 //!   through [`crate::adapter::run_lifecycle::RunLifecycleSink`]. Every
@@ -13,7 +13,7 @@
 //!   it, and it fires at most once.
 //!
 //! The runtime never kills on timeout — it journals the fact and lets the
-//! leader decide (WP21 adds `run/timeoutAck`). The clocks are in-memory:
+//! leader decide via `run/timeoutAck`. The clocks are in-memory:
 //! they describe *this process's* observation window, and a daemon restart
 //! legitimately starts a fresh one. The journaled `WorkerTimeout` events
 //! are the durable record.
@@ -89,7 +89,7 @@ impl ActivityClock {
             .or_insert_with(|| RunActivity::starting(now));
     }
 
-    /// Grants a fresh window for `run_id` (WP21 `run/timeoutAck decision:
+    /// Grants a fresh window for `run_id` (`run/timeoutAck decision:
     /// "extend"`): BOTH deadlines restart from `now` and any journaled
     /// expiries are forgotten.
     ///

@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 /**
  * The shape of a crew.json config layer file, mirroring
- * `crates/runtime/src/config/crew.rs`'s `CrewConfig` (spec §10). Every
+ * `crates/runtime/src/config/crew.rs`'s `CrewConfig`. Every
  * field is optional: a layer file may set any subset, and the daemon deep-
  * merges layers over its own built-in defaults (`security.patterns` is the
  * one exception -- additive, never replaced). Extension-authored input, not

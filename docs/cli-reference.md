@@ -231,7 +231,7 @@ requiring a live runtime connection — see [`user-guide.md`](user-guide.md).
 
 ### `crewd config`
 
-Manages the `crew.json` config layer (spec §10, `crates/runtime/src/config/crew.rs`). Three
+Manages the `crew.json` config layer ([architecture.md § Configuration and Policy](architecture.md#configuration-and-policy), `crates/runtime/src/config/crew.rs`). Three
 subcommands:
 
 ```bash

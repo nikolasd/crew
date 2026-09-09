@@ -24,7 +24,7 @@
 //! for why it cannot be a constructor argument).
 //!
 //! `mode: "tui"` for `claude` now constructs a real
-//! `TuiAdapter<ClaudeTuiVendor>` (WP13) rather than the typed refusal
+//! `TuiAdapter<ClaudeTuiVendor>` rather than the typed refusal
 //! every reserved kind still gets otherwise: [`AdapterRegistry::set_tui_support`]
 //! supplies the [`super::tui::TuiSupport`] bundle a `TuiAdapter` needs
 //! beyond its own vendor impl, for exactly the same "only available
@@ -72,7 +72,8 @@ pub trait AdapterAuthorization: Send + Sync {
     /// **Today's production implementation ([`crate::policy::PolicyEvaluator`])
     /// reads `effective_capabilities` ZERO times** -- the org-governance
     /// checks that once read it (model/adapter allowlists, required
-    /// capabilities) were retired (crew-v2 gap-closure WP5). The parameter
+    /// capabilities) were retired along with the rest of the headless
+    /// control plane (`docs/adr/0026-headless-retirement.md`). The parameter
     /// is retained for signature stability, not because anything gates on
     /// it today.
     ///
@@ -179,8 +180,9 @@ pub enum RegistryError {
          between turns); finish or cancel a run before starting another"
     )]
     LiveSessionCapReached { cap: usize, live: usize },
-    /// `mode: "headless"` was requested for a reserved adapter kind
-    /// (crew-v2 gap-closure WP-C, spec §4.6: crew v2 is TUI-only). This is
+    /// `mode: "headless"` was requested for a reserved adapter kind after
+    /// the headless control plane's retirement (crew v2 is TUI-only;
+    /// `docs/adr/0026-headless-retirement.md`). This is
     /// distinct from [`Self::TuiModeUnavailable`]: that one names a
     /// specific kind's TUI vendor gap (temporary, closes as vendors land
     /// TUI support); this one names a permanently retired control plane
@@ -192,8 +194,8 @@ pub enum RegistryError {
     /// recovery resume (`AdapterRegistry::resume_run`) -- the shared
     /// pre-flight both paths run through.
     #[error(
-        "adapter {0} was requested with mode: \"headless\", which is retired in crew v2 (spec \
-         §4.6) -- the headless control plane has no adapter implementation to dispatch to; use \
+        "adapter {0} was requested with mode: \"headless\", which is retired in crew v2 -- the \
+         headless control plane has no adapter implementation to dispatch to; use \
          mode: \"tui\""
     )]
     HeadlessControlPlaneRetired(String),
@@ -277,7 +279,7 @@ pub struct AdapterRegistry {
     running: Arc<Mutex<HashMap<RunId, Arc<dyn Adapter>>>>,
     /// Org security patterns for redaction.
     org_security_patterns: Vec<String>,
-    /// Per-run liveness clocks (WP19): touched by every event flowing
+    /// Per-run liveness clocks: touched by every event flowing
     /// through each run's [`RunLifecycleSink::wrap`], read by lifecycle's
     /// timeout sweep. Defaults to an empty clock -- a caller that never
     /// calls [`Self::set_activity_clock`] (chiefly tests) simply never
@@ -395,14 +397,14 @@ impl AdapterRegistry {
     /// trait method: `RunDriver` is the run/submit seam (its only other
     /// implementation is the tests' [`FakeRunDriver`], and nothing in
     /// that seam consumes a resume), while resume is the recovery-driven
-    /// continuation of one specific run -- its caller (WP15's boot sweep)
+    /// continuation of one specific run -- its caller (the boot sweep)
     /// already holds this registry concretely. Hanging it anywhere in the
     /// orchestration service instead would re-route it through the
     /// submit-time state machine, but a resume is not a submission: it
     /// creates no run row, takes no prompt, and continues the same run.
     ///
-    /// Eligibility is the caller's judgment (WP15 checks vendor session
-    /// presence and adapter availability before calling); this method
+    /// Eligibility is the caller's judgment (the boot sweep checks vendor
+    /// session presence and adapter availability before calling); this method
     /// re-runs the same policy/authorization/availability pre-flight a
     /// fresh start gets -- authorization is per-spawn, so a resumed run
     /// books its concurrency slot exactly like a new one -- then builds a
@@ -508,7 +510,7 @@ impl AdapterRegistry {
             gate_profile(&self.authorization, &profile, None, mode).await?;
         // Fresh starts launch at the run's isolated workspace when one was
         // materialized; no such path is stored per-run, so a resumed
-        // process lands back at the repository root (disclosed WP14 gap).
+        // process lands back at the repository root (a known, disclosed gap).
         let cwd = self.repo_root.as_path();
         let adapter = match build_adapter(
             &profile,
@@ -543,7 +545,7 @@ impl AdapterRegistry {
             effective_capabilities.nested != NestedCapability::Managed,
             Arc::clone(&support.violation_service),
             // Resume support carries no workspace context; a resumed run
-            // is treated as shared (the conservative side for the WP20
+            // is treated as shared (the conservative side for the
             // write-violation detector).
             false,
         ) {
@@ -690,10 +692,11 @@ impl RunDriver for AdapterRegistry {
             use crew_protocol::MessageKind;
             let message = match kind {
                 // The one kind with dedicated redirect semantics on the
-                // adapters that support it. crew-v2 gap-closure WP-C: the
-                // headless Codex adapter's protocol-level `turn/steer` is
-                // retired along with the rest of the headless control
-                // plane -- `TuiAdapter`'s interrupt-then-compose
+                // adapters that support it. The headless Codex adapter's
+                // protocol-level `turn/steer` was retired along with the
+                // rest of the headless control plane
+                // (`docs/adr/0026-headless-retirement.md`) --
+                // `TuiAdapter`'s interrupt-then-compose
                 // (`TuiVendor::interrupt_sequence` + `compose_input`) is
                 // now the only steer path. Adapters without it refuse
                 // with capability_unsupported rather than silently
@@ -810,9 +813,10 @@ async fn watch_slot(
 /// `resume`/`send`/etc. are never called; it exists only to make
 /// `running.contains_key` true for the duration of construction.
 fn build_placeholder_adapter() -> Arc<dyn Adapter> {
-    // crew-v2 gap-closure WP-C: this used to construct a real (headless)
-    // `OmpRpcAdapter`, deleted along with the rest of the headless
-    // control plane. Any `Adapter` impl works here -- its own doc
+    // This used to construct a real (headless) `OmpRpcAdapter`; that
+    // adapter was deleted along with the rest of the headless control
+    // plane (`docs/adr/0026-headless-retirement.md`). Any `Adapter` impl
+    // works here -- its own doc
     // comment above already establishes that `start`/`resume`/`send`/etc.
     // are never called on this value, so `TerminalAdapter` (already the
     // lightest-weight impl in this crate: a bare harness-name string, no
@@ -961,8 +965,8 @@ async fn resolve_worker_profile(
     serde_json::from_str(&snapshot).map_err(|err| RegistryError::ProfileUnreadable(err.to_string()))
 }
 
-/// WP26: memoized fixture-suite effective capabilities per `(adapter kind,
-/// requested control plane)` -- WP-B added the `AdapterMode` axis, since a
+/// Memoized fixture-suite effective capabilities per `(adapter kind,
+/// requested control plane)` -- the `AdapterMode` axis was added because a
 /// headless and a TUI run of the same kind are gated from materially
 /// different declared profiles and must never share a cache entry.
 /// Stamped with the vendor-CLI version the suite ran against (`None` under
@@ -986,9 +990,9 @@ static CONFORMANCE_CACHE: std::sync::LazyLock<parking_lot::Mutex<ConformanceMemo
 /// (`super::registry::requested_mode(&profile.startup_options)`, resolved
 /// once by the caller and threaded through here rather than re-derived --
 /// find the call sites in [`run_one`]/[`AdapterRegistry::resume_run`]) --
-/// crew-v2 gap-closure WP-B's fix for the WP13 scope boundary this
-/// function used to carry: before WP-B, the conformance dispatch below had
-/// no mode axis at all, so a `mode: "tui"` run was authorized against its
+/// a fix, made while retiring the headless control plane, for a scope
+/// boundary this function used to carry: before the `AdapterMode` axis was added, the conformance dispatch
+/// below had no mode axis at all, so a `mode: "tui"` run was authorized against its
 /// vendor's *headless* fixture suite's effective capabilities, even though
 /// the `TuiAdapter` actually constructed for it declares a materially
 /// different profile (`ProtocolKind::Terminal`, not `Structured`, for
@@ -1015,10 +1019,12 @@ async fn gate_profile(
         let Some(kind) = profile.adapter_kind() else {
             return Err("no adapter kind".to_string());
         };
-        // crew-v2 gap-closure WP-C: the headless control plane is
-        // retired -- `AdapterMode::Headless` stays deserializable (a
-        // pre-WP-C journal entry or profile that never set `mode` at all
-        // defaults to it, per `AdapterMode`'s own doc comment), but there
+        // The headless control plane is retired
+        // (`docs/adr/0026-headless-retirement.md`) --
+        // `AdapterMode::Headless` stays deserializable (a
+        // journal entry or profile written before the retirement, or one
+        // that never set `mode` at all, defaults to it, per `AdapterMode`'s
+        // own doc comment), but there
         // is no adapter implementation left to dispatch to. Reject here,
         // before any conformance dispatch, so this fires identically for
         // a fresh submit and a recovery resume (see this function's own
@@ -1028,7 +1034,7 @@ async fn gate_profile(
                 RegistryError::HeadlessControlPlaneRetired(kind.wire_name().to_string()).into(),
             );
         }
-        // WP26: the full suite is memoized per `(kind, mode)`, stamped
+        // The full suite is memoized per `(kind, mode)`, stamped
         // with the vendor-CLI version the availability probe observed; a
         // changed version (upgrade, downgrade, install) is the
         // invalidation signal. The probe itself stays kind-only
@@ -1041,8 +1047,8 @@ async fn gate_profile(
         // been authorized yet at this point, so a denial here releases
         // nothing.
         //
-        // Both halves of the kill-switch skip-through, on record (WP-B
-        // ruling): under `CREW_DISABLE_VENDOR_CLI=1` this probe itself is
+        // Both halves of the kill-switch skip-through are deliberate:
+        // under `CREW_DISABLE_VENDOR_CLI=1` this probe itself is
         // `Skipped`, not disproved, so `availability.disproved()` below is
         // `false` and this function proceeds -- a kill-switch daemon is
         // never denied here. The fixture suite run below then reports
@@ -1175,7 +1181,7 @@ impl AdapterRegistry {
     /// (`TuiVendor::transcript_path_for_session`), or `None` when this
     /// daemon could not resume a TUI-mode run for this kind at all: no
     /// [`TuiSupport`] was ever supplied, or the kind has no configured
-    /// adapter entry. This is the WP15 sweep's TUI-eligibility check -- the
+    /// adapter entry. This is the boot sweep's TUI-eligibility check -- the
     /// same derivation the resumed adapter itself will perform, evaluated
     /// against the filesystem *before* anything is spawned.
     #[must_use]
@@ -1187,7 +1193,7 @@ impl AdapterRegistry {
         worker_id: WorkerId,
         session: &VendorSessionRef,
     ) -> Option<std::path::PathBuf> {
-        // C1 fix: every reserved kind now has a real `TuiVendor` (WP13/WP27/WP28),
+        // C1 fix: every reserved kind now has a real `TuiVendor`,
         // each with a different on-disk transcript layout -- Claude/Copilot flat
         // `<root>/<session-id>.jsonl`; Codex date-partitioned rollout walk; OMP
         // timestamp-partitioned. Pre-fix this hardcoded the `"claude"` vendor +
@@ -1255,7 +1261,7 @@ fn build_adapter(
     resume_cursor: Option<Cursor>,
 ) -> Result<Arc<dyn Adapter>, RegistryError> {
     // `mode: "tui"` dispatches to a `TuiAdapter<V>` for a vendor with a
-    // `TuiVendor` implementation. Claude's landed (WP13): given both a
+    // `TuiVendor` implementation. Claude's landed first: given both a
     // `TuiSupport` bundle (via `AdapterRegistry::set_tui_support`) and
     // the Claude kind, this constructs a real `TuiAdapter<ClaudeTuiVendor>`.
     // Every other reserved kind (no vendor impl yet) -- and Claude itself
@@ -1346,9 +1352,9 @@ fn build_adapter(
                         display,
                         resume_cursor,
                     ));
-                } // Every reserved kind now has a real `TuiVendor` impl
-                  // (WP13/WP27/WP28); the refusal below is reachable only
-                  // when no `TuiSupport` was ever supplied.
+                } // Every reserved kind now has a real `TuiVendor` impl; the
+                  // refusal below is reachable only when no `TuiSupport`
+                  // was ever supplied.
             }
         }
         return Err(RegistryError::TuiModeUnavailable(
@@ -1356,9 +1362,9 @@ fn build_adapter(
         ));
     }
 
-    // crew-v2 gap-closure WP-C: every reserved kind's Headless fallback
-    // (three headless vendor adapters, plus ompRpc's) is retired along
-    // with the adapter code itself -- `gate_profile` already refuses a
+    // Every reserved kind's Headless fallback (three headless vendor
+    // adapters, plus ompRpc's) was retired along with the adapter code
+    // itself (`docs/adr/0026-headless-retirement.md`) -- `gate_profile` already refuses a
     // Headless-mode profile before either `run_one` or `resume_run` ever
     // calls this function, so reaching here with one is a defense-in-depth
     // boundary (a bug bypassing that earlier gate), not a normal path.
@@ -1389,7 +1395,7 @@ fn build_adapter(
 }
 
 /// Constructs a real `TuiAdapter<ClaudeTuiVendor>` bound to this run's
-/// ids -- the WP11-report plumbing list, filled in: a fresh
+/// ids: a fresh
 /// [`PaneCoordinator`] built from `tui`'s static fields plus this run's
 /// own `db`/`project_id`/`events_tx` (only available from
 /// [`RunDriverContext`], never at registry-construction time -- see
@@ -1400,7 +1406,7 @@ fn build_adapter(
 /// `AdapterConfig`.
 ///
 /// The constructed adapter's `ResumeContext` carries this run's stored
-/// tailer position (WP12's `runs.transcript_cursor`) so a subsequent
+/// tailer position (`runs.transcript_cursor`) so a subsequent
 /// [`Adapter::resume`] re-tails from exactly where the journal says the
 /// previous incarnation stopped; the transcript path itself is derived
 /// deterministically inside the adapter from the vendor's own layout.
@@ -1629,8 +1635,8 @@ mod build_adapter_tests {
     }
 
     /// `mode: "tui"` now constructs a real TuiAdapter for EVERY reserved
-    /// kind (WP13/WP27/WP28); these assert the two newest vendors wire up
-    /// exactly like claude/codex do.
+    /// kind; these assert the two newest vendors (Copilot and OMP-RPC) wire
+    /// up exactly like claude/codex do.
     #[tokio::test]
     async fn copilot_tui_mode_with_tui_support_constructs_a_real_tui_adapter() {
         let options = CopilotStartupOptions {
@@ -1699,8 +1705,8 @@ mod build_adapter_tests {
     }
 
     /// `mode: "tui"` on Claude, with `TuiSupport` supplied, constructs a
-    /// real adapter rather than refusing -- the registry threading this
-    /// WP adds. Asserted via `kind()`/`capabilities()` only: `.start()`
+    /// real adapter rather than refusing -- the registry threading
+    /// Claude's TUI vendor added. Asserted via `kind()`/`capabilities()` only: `.start()`
     /// is never called here (see this module's own doc comment on why),
     /// so this proves construction succeeds and reports the TUI
     /// capability profile, not full runtime behavior (covered instead by
@@ -1738,7 +1744,7 @@ mod build_adapter_tests {
         );
     }
 
-    /// WP27: `mode: "tui"` on Codex now constructs a real
+    /// `mode: "tui"` on Codex now constructs a real
     /// `TuiAdapter<CodexTuiVendor>` the same way claude does.
     #[tokio::test]
     async fn codex_tui_mode_with_tui_support_constructs_a_real_tui_adapter() {
@@ -1773,10 +1779,10 @@ mod build_adapter_tests {
         );
     }
 
-    /// crew-v2 gap-closure WP-C: `mode: "headless"` (still the
-    /// `AdapterMode` default, for wire-compat with pre-WP13 profiles) on
-    /// every reserved adapter kind is now retired -- `build_adapter`
-    /// refuses it with the typed `HeadlessControlPlaneRetired` error,
+    /// `mode: "headless"` (still the `AdapterMode` default, for wire-compat
+    /// with profiles written before TUI mode existed) on every reserved
+    /// adapter kind is now retired (`docs/adr/0026-headless-retirement.md`)
+    /// -- `build_adapter` refuses it with the typed `HeadlessControlPlaneRetired` error,
     /// never silently building a (now-deleted) headless adapter. This
     /// replaces the old
     /// `headless_mode_is_unaffected_on_every_reserved_kind`, which
@@ -2198,7 +2204,7 @@ mod settlement_tests {
         db.shutdown().await.expect("shutdown database");
     }
 }
-/// WP26: the fixture-suite memo. Tests serialize on a shared guard because
+/// Tests for the fixture-suite memo serialize on a shared guard because
 /// both the cache and the suite-run counter are process-global.
 #[cfg(test)]
 mod conformance_cache_tests {
@@ -2230,12 +2236,13 @@ mod conformance_cache_tests {
         }
     }
 
-    /// crew-v2 gap-closure WP-C: `Tui` is the only mode that reaches the
-    /// conformance dispatch at all now (`Headless` is rejected in
+    /// Now that the headless control plane is retired
+    /// (`docs/adr/0026-headless-retirement.md`), `Tui` is the only mode
+    /// that reaches the conformance dispatch at all (`Headless` is rejected in
     /// `gate_profile` before it gets there) -- so every generic
-    /// memoization test in this module drives `Tui` unconditionally,
-    /// unlike WP-B's `omp_rpc_profile()` (which defaulted to `Headless`,
-    /// the pre-WP-C `AdapterMode` default).
+    /// memoization test in this module drives `Tui` unconditionally. This
+    /// helper used to default to `Headless`, matching `AdapterMode`'s own
+    /// default, before that mode was retired.
     fn omp_rpc_profile() -> WorkerProfile {
         omp_rpc_profile_with_mode(AdapterMode::Tui)
     }
@@ -2323,10 +2330,9 @@ mod conformance_cache_tests {
         CONFORMANCE_CACHE.lock().clear();
     }
 
-    /// WP-B Task 5a (still current post-WP-C: `Tui` is the only mode that
-    /// reaches this dispatch at all now): a TUI-mode submit's gate
-    /// consumes the TUI suite's report, pinned at the SOURCE via
-    /// `protocol` (`Terminal` for every TUI adapter).
+    /// `Tui` is the only mode that reaches this dispatch at all now: a
+    /// TUI-mode submit's gate consumes the TUI suite's report, pinned at
+    /// the SOURCE via `protocol` (`Terminal` for every TUI adapter).
     #[tokio::test]
     async fn a_tui_mode_submit_gates_on_the_tui_suites_effective_capabilities() {
         let _serial = SERIAL.lock().await;
@@ -2352,8 +2358,8 @@ mod conformance_cache_tests {
         CONFORMANCE_CACHE.lock().clear();
     }
 
-    /// crew-v2 gap-closure WP-C ruling 1: `mode: "headless"` is retired.
-    /// Supersedes WP-B's `a_headless_mode_submit_still_gates_on_the_headless_suites_effective_capabilities`
+    /// `mode: "headless"` is retired (`docs/adr/0026-headless-retirement.md`).
+    /// Supersedes the old `a_headless_mode_submit_still_gates_on_the_headless_suites_effective_capabilities`
     /// (headless submits used to succeed; now every one is refused) and
     /// `the_memo_key_is_kind_and_mode_not_kind_alone`'s Headless half (the
     /// mode-axis distinctness that test proved is git history now that
@@ -2462,15 +2468,15 @@ mod conformance_cache_tests {
         (task_id, worker_id, run_id)
     }
 
-    /// Reviewer finding on WP-B's first pass: 5a/5b/5c all call
+    /// Reviewer finding: the tests above all call
     /// `gate_profile` directly, passing `mode` as an explicit argument --
     /// they pin that `gate_profile` USES its parameter correctly, but say
     /// nothing about whether the real call sites (`resume_run`/`run_one`)
     /// COMPUTE and pass the right value. A regression at either call site
     /// (a hardcoded `Headless`, or a wrong re-derivation) would leave
     /// every one of those tests green while TUI runs silently revert to
-    /// headless-derived capabilities -- precisely the WP13-F2 bug this WP
-    /// exists to close. This drives the REAL `resume_run` with a genuine
+    /// headless-derived capabilities -- precisely the kind of regression
+    /// this test exists to catch. This drives the REAL `resume_run` with a genuine
     /// Claude TUI-mode worker profile (no `TuiSupport` configured on
     /// purpose -- `build_adapter`'s typed refusal for an unsupported TUI
     /// kind is a clean `Err`, reached only AFTER `gate_profile` already
@@ -2521,7 +2527,7 @@ mod conformance_cache_tests {
         let result = registry
             .resume_run(run_id, VendorSessionRef("sess-1".to_string()), None)
             .await;
-        // WP-B re-review rider: tightened from a bare `is_err()` to the
+        // Tightened from a bare `is_err()` to the
         // specific typed refusal, so an environment availability-disproof
         // (a different failure entirely) would self-diagnose here instead
         // of being misread as a mode-threading regression.
@@ -2607,7 +2613,7 @@ mod conformance_cache_tests {
             activity: Arc::new(crate::adapter::ActivityClock::new()),
         };
         let result = <AdapterRegistry as RunDriver>::start(&registry, ctx).await;
-        // WP-B re-review rider: tightened from a bare `is_err()` (see the
+        // Tightened from a bare `is_err()` (see the
         // matching comment on `resume_run_threads...` above).
         assert_eq!(
             result,

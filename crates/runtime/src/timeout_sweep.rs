@@ -1,7 +1,7 @@
-//! The worker-timeout sweep (WP19): turns the shared [`ActivityClock`]'s
+//! The worker-timeout sweep: turns the shared [`ActivityClock`]'s
 //! liveness state into durable [`RuntimeEvent::WorkerTimeout`] facts.
 //!
-//! Two deadlines per run, per spec §7.5:
+//! Two deadlines per run:
 //!
 //! * **Inactivity** — from the run's last journaled vendor event. Fires
 //!   once per quiet stretch; new activity re-arms it.
@@ -9,7 +9,7 @@
 //!   amount of chatter disarms it.
 //!
 //! The runtime never kills on timeout — it journals and broadcasts the
-//! fact, and the leader decides what to do (WP21's `run/timeoutAck`).
+//! fact, and the leader decides what to do via `run/timeoutAck`.
 //! Every journal decision re-checks liveness inside the database actor
 //! closure (`record_worker_timeout_if_live`), so a run that settled
 //! between the clock snapshot and the write never receives a timeout fact.
