@@ -152,7 +152,7 @@ pub trait TuiVendor: Send + Sync + 'static {
     /// followed by exactly one trailing submit byte. The adapter shell
     /// splits the two and uses only that trailing byte: the text half is
     /// delivered by `write_paste`, which frames it as a bracketed paste
-    /// and chunks it (CREW-4), so a vendor that transformed the text here
+    /// and chunks it, so a vendor that transformed the text here
     /// would have its transformation silently discarded. A vendor needing
     /// a different submit convention changes the trailing byte; one
     /// needing to rewrite the text has no supported way to do it here.
@@ -238,7 +238,7 @@ pub struct TuiTimings {
     /// it in a test makes the test faster. A timeout costs wall-clock time
     /// only when it FIRES, so shrinking this one makes nothing faster and
     /// its only other effect is to manufacture false failures on a loaded
-    /// machine. CREW-65: an accelerated 500ms here failed
+    /// machine: an accelerated 500ms here failed
     /// `a_multi_line_prompt_reaches_the_pty_framed_as_one_intact_paste`
     /// 100% of the time under CPU load and ~8% of the time idle, because
     /// [`PtyProcess::write_input`] awaits an ack from a separate writer
@@ -259,7 +259,7 @@ pub struct TuiTimings {
 }
 
 /// How long a conformance scenario waits to *observe* an expected event
-/// before declaring the scenario unproven (CREW-76).
+/// before declaring the scenario unproven.
 ///
 /// **The invariant, and it is the reason this is one constant rather than
 /// a literal per call site: an observation deadline must strictly dominate
@@ -286,20 +286,19 @@ pub struct TuiTimings {
 pub(crate) const SCENARIO_OBSERVATION_DEADLINE: Duration = Duration::from_secs(20);
 
 /// Asserts that a test harness's [`TuiTimings`] accelerates only *pacing*
-/// fields and leaves every *failure bound* at production's value
-/// (CREW-65, CREW-76).
+/// fields and leaves every *failure bound* at production's value.
 ///
 /// **The distinction, once, for the group.** A pacing field is time a
 /// caller actually spends waiting, so shrinking it is what makes a suite
 /// fast. A failure bound costs wall-clock time only when it FIRES — so
 /// shrinking one makes nothing faster, and its only other effect is
-/// manufacturing false failures on a loaded machine. CREW-65 established
-/// that on `paste_write_timeout` after an accelerated 500ms bound failed
-/// a bracketed-paste test 100% of the time under CPU load; CREW-76 is
-/// the same defect found in three sibling fields of the same struct,
-/// which had been left accelerated in all four conformance harnesses
-/// because the rule was applied to the field that had failed rather than
-/// to the kind it named.
+/// manufacturing false failures on a loaded machine. That was learned once
+/// already on `paste_write_timeout`, after an accelerated 500ms bound
+/// failed a bracketed-paste test 100% of the time under CPU load; the same
+/// defect then turned up in three sibling fields of the same struct, which
+/// had been left accelerated in all four conformance harnesses because the
+/// rule was applied to the field that had failed rather than to the kind
+/// it named.
 ///
 /// **This is a compile-time guard, not only a runtime one.** The
 /// destructuring below is exhaustive on purpose: a field added to
@@ -410,7 +409,7 @@ const ENTER_IDLE_CAP: Duration = Duration::from_secs(90);
 const PASTE_CHUNK_PAUSE: Duration = Duration::from_millis(15);
 
 /// How long the PTY may accept NOT ONE BYTE before a paste is declared
-/// stalled (CREW-70).
+/// stalled.
 ///
 /// This is the primary signal; [`PASTE_CHUNK_WRITE_TIMEOUT`] is only the
 /// backstop behind it. Two seconds because a vendor that has accepted
@@ -419,10 +418,11 @@ const PASTE_CHUNK_PAUSE: Duration = Duration::from_millis(15);
 /// alive by accepting anything at all.
 ///
 /// Deliberately NOT a [`TuiTimings`] field. It is a failure bound, and
-/// CREW-65 is what happens when a failure bound is made configurable and
-/// then accelerated for a whole test suite: an accelerated 500ms paste
-/// bound failed the bracketed-paste test 100% of the time under CPU
-/// load. The one test that wants to trip this pays the two seconds.
+/// making a failure bound configurable and then accelerating it for a
+/// whole test suite is exactly how false failures get manufactured: an
+/// accelerated 500ms paste bound failed the bracketed-paste test 100% of
+/// the time under CPU load. The one test that wants to trip this pays the
+/// two seconds.
 const PASTE_STALL_WINDOW: Duration = Duration::from_secs(2);
 
 /// The absolute backstop behind [`PASTE_STALL_WINDOW`]: how long one
@@ -431,20 +431,20 @@ const PASTE_STALL_WINDOW: Duration = Duration::from_secs(2);
 /// never finishing -- ever reaches it.
 ///
 /// **A backstop must be much larger than the primary signal, or it IS the
-/// primary signal.** CREW-70 nearly shipped with this left at the 10s it
-/// had when it *was* the only bound, which would have made the new
-/// failure set a strict superset of the old one: every write the flat
-/// bound failed, plus every write that paused for two seconds. A progress
+/// primary signal.** This bound nearly shipped left at the 10s it had
+/// when it *was* the only bound, which would have made the new failure
+/// set a strict superset of the old one: every write the flat bound
+/// failed, plus every write that paused for two seconds. A progress
 /// bound underneath an unchanged ceiling is not a progress bound.
 ///
 /// 90 seconds, matching [`ENTER_IDLE_CAP`] rather than being picked as a
 /// round number: both are the same decision -- the point at which crew
 /// stops waiting on a vendor regardless of what it appears to be doing --
 /// and having one figure for it in this file is worth more than tuning
-/// two. It is well above any excursion observed (CREW-65 measured the old
-/// 10s exceeded under 2x CPU oversubscription; nothing has been seen near
-/// 90s) and well below the point where a start reads as hung rather than
-/// slow.
+/// two. It is well above any excursion observed (the old 10s bound was
+/// observed to be exceeded under 2x CPU oversubscription; nothing has
+/// been seen near 90s) and well below the point where a start reads as
+/// hung rather than slow.
 const PASTE_CHUNK_WRITE_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// The prompt-injection half of the readiness gate: the text to type once
@@ -475,7 +475,7 @@ enum ChunkWriteError {
 }
 
 /// Writes one chunk, bounding the time the PTY may accept NOTHING rather
-/// than the time the whole write may take (CREW-70).
+/// than the time the whole write may take.
 ///
 /// The decision logic lives in [`bound_on_progress`]; this supplies the
 /// PTY's own write future and byte counter.
@@ -499,10 +499,10 @@ enum ChunkWriteError {
 /// observed.
 ///
 /// What the bound DOES buy is that the distinction stops mattering for
-/// the failure this ticket exists for: a starved thread needs to accept
+/// the failure the bound exists for: a starved thread needs to accept
 /// one byte per window to keep the write alive, where the previous flat
-/// bound required it to finish a whole 1KB chunk inside 10 seconds.
-/// CREW-65 measured that flat bound failing 3 of 14 runs under 2x CPU
+/// bound required it to finish a whole 1KB chunk inside 10 seconds. That
+/// flat bound was measured failing 3 of 14 runs under 2x CPU
 /// oversubscription.
 async fn write_chunk(
     pty: &Arc<PtyProcess>,
@@ -519,8 +519,8 @@ async fn write_chunk(
 /// be driven directly.
 ///
 /// `write` is the pending write; `progress` reports cumulative bytes the
-/// far side has accepted. Extracted as its own function for the reason
-/// CREW-67's `resolve_property_reference` was: the interesting cases here
+/// far side has accepted. Extracted as its own function for the same
+/// reason `resolve_property_reference` was: the interesting cases here
 /// are timing ones, and a test that has to arrange a real vendor to
 /// dribble bytes at a chosen rate is testing the tty buffer as much as
 /// the bound. Driven directly, "advancing slowly" and "stopped" are two
@@ -575,17 +575,17 @@ where
 /// Writes `text` into the PTY as one bracketed paste, in paced chunks.
 ///
 /// The framing makes every byte of `text` content rather than keystrokes,
-/// so a multi-line prompt is no longer submitted line-by-line (CREW-4).
+/// so a multi-line prompt is no longer submitted line-by-line.
 ///
-/// **CREW-4's invariant, restated (CREW-70).** "Never a silent fragment"
-/// has never meant the write is atomic -- a chunked write can fail after
-/// earlier chunks landed, so bytes may already have reached the vendor.
-/// It means no fragment is ever *silent*, and that is now satisfied at
-/// two distinct points:
+/// **The "never a silent fragment" invariant, restated for the chunked
+/// write.** It has never meant the write is atomic -- a chunked write can
+/// fail after earlier chunks landed, so bytes may already have reached
+/// the vendor. It means no fragment is ever *silent*, and that is now
+/// satisfied at two distinct points:
 ///
 /// - **A truncating vendor** accepts every byte and then drops some in
 ///   its own composer, which is invisible at the PTY boundary. Caught by
-///   comparing the recorded prompt (CREW-13,
+///   comparing the recorded prompt (see
 ///   `a_vendor_that_records_only_part_of_the_prompt_fails_the_start`) --
 ///   untouched by this change, since that write succeeds.
 /// - **A write that does not complete** now reports how many bytes of
@@ -622,7 +622,7 @@ async fn write_paste(
                 // ONE of the things that produces it. The previous wording
                 // ("the vendor stopped consuming input") asserted that one
                 // cause, which sent a reader to the vendor when the machine
-                // being saturated produces the same timeout (CREW-65).
+                // being saturated produces the same timeout.
                 return Err(AdapterError::process(
                     kind,
                     op,
@@ -736,8 +736,10 @@ pub struct TuiAdapter<V: TuiVendor> {
     panes_dir: PathBuf,
     placement: DisplayPlacement,
     forced_backend: Option<DisplayBackend>,
-    /// The submitting caller's own `$TERM_PROGRAM` hint (CREW-9), from the
-    /// run's resolved `DisplaySelection`. Threaded straight through to
+    /// The submitting caller's own `$TERM_PROGRAM` hint, from the run's
+    /// resolved `DisplaySelection`, letting the OS-window display backend
+    /// target the caller's actual terminal application instead of always
+    /// opening Terminal.app. Threaded straight through to
     /// `PaneAttachRequest`; only `OsWindowDisplay` ever reads it.
     launch_program: Option<crew_protocol::HostProgramHint>,
     close_on_exit: CloseOnExit,
@@ -1036,7 +1038,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
         // submit byte; keep only that byte here. The text half is written
         // by `write_paste` from the original string -- framed as a
         // bracketed paste and chunked, so a multi-line prompt is content
-        // rather than a sequence of Enters (CREW-4).
+        // rather than a sequence of Enters.
         let injected_bytes: Option<Vec<u8>> = inject.as_ref().map(|text| {
             let bytes = self.vendor.compose_input(text);
             debug_assert_eq!(
@@ -1135,7 +1137,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
             }
         };
 
-        // CREW-13: confirm the vendor recorded the WHOLE prompt, not just
+        // Confirm the vendor recorded the WHOLE prompt, not just
         // the tail. Discovery only proves the nonce arrived, and the nonce
         // is appended -- so a vendor that accepted every byte and then
         // truncated in its own composer passes discovery and looks like a
@@ -1263,7 +1265,7 @@ impl<V: TuiVendor> TuiAdapter<V> {
     /// evidence so `RunLifecycleSink` settles the run as failed/lost
     /// rather than leaving it stuck, and returns `err` to the caller.
     ///
-    /// CREW-78: the `ProcessExited` this emits is never bare. `err` is
+    /// The `ProcessExited` this emits is never bare. `err` is
     /// the actual reason the start failed (discovery timeout, a
     /// truncation failure, ...) and, before terminate()'s own exit
     /// status is journaled, this records it as its own durable
@@ -1511,7 +1513,7 @@ async fn emit_tui_event(
         TuiEvent::Raw { entry_type } => {
             tracing::debug!(entry_type, run_id = %run_id, "tui transcript: unrecognized entry");
         }
-        // CREW-47 (D1): the sink's own side channel, never `emit` -- see
+        // The sink's own side channel, never `emit` -- see
         // `AdapterEventSink::note_real_user_turn`'s doc comment for why
         // this must not become journaled content.
         TuiEvent::UserTurnStarted => {
@@ -1638,14 +1640,14 @@ async fn wait_for_output_idle(
 /// the caller's prompt plus a tracking tag carrying `nonce`, appended
 /// exactly as before.
 ///
-/// CREW-83: the tag used to be a bare `[crew:<nonce>]` suffix with
+/// The tag used to be a bare `[crew:<nonce>]` suffix with
 /// nothing anywhere saying what it was, and a live E2E worker refused an
 /// otherwise ordinary task citing it as an injection attempt
 /// (`release/live-conformance/2026-09-08-live-e2e-attempt-3.md`, F14) --
 /// a correct reaction to an unexplained bracketed token at the end of a
 /// prompt. That review also names F13/F14 as being in tension: relocating
 /// the tag away from the prompt satisfies discovery, but
-/// [`super::verify::verify_recorded_prompt`] (CREW-13) diffs the *whole*
+/// [`super::verify::verify_recorded_prompt`] diffs the *whole*
 /// injected string against what the vendor recorded to catch silent
 /// truncation, so moving the tag off the tail it currently occupies
 /// would blind that check to exactly the truncation shape it exists to
@@ -1658,12 +1660,13 @@ async fn wait_for_output_idle(
 /// imperative: an early draft ended "...not an instruction; disregard
 /// it", and "disregard it" is itself an instruction -- telling a
 /// safety-trained model to disregard an opaque marker appended after the
-/// user's task is the exact shape CREW-83 exists to stop triggering. A
-/// plainly labelled bookkeeping id needs no instruction at all: there is
-/// nothing to obey, so there is nothing to refuse.
+/// user's task is the exact shape this self-describing wording exists to
+/// stop triggering. A plainly labelled bookkeeping id needs no
+/// instruction at all: there is nothing to obey, so there is nothing to
+/// refuse.
 ///
 /// **ASCII-only, deliberately.** Two reasons, not the one first
-/// considered (CREW-70's chunker cannot split a multi-byte scalar across
+/// considered (the chunker cannot split a multi-byte scalar across
 /// a paste chunk -- see `a_multibyte_scalar_is_never_split_across_chunks`
 /// -- so that specific risk does not exist and is not why this matters):
 /// (1) some terminals/vendor transcripts normalize or re-encode
@@ -1991,7 +1994,7 @@ impl<V: TuiVendor> Adapter for TuiAdapter<V> {
             // after the text has landed behaves like a human's Enter.
             // Only the vendor's submit byte comes from `compose_input`; the
             // text is framed and chunked by `write_paste`, so a multi-line
-            // follow-up cannot be submitted line-by-line (CREW-4).
+            // follow-up cannot be submitted line-by-line.
             let split_at = bytes.len() - 1;
             write_paste(
                 &run.pty,
@@ -2136,7 +2139,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    /// CREW-76: the constant is derived from the bounds it must dominate,
+    /// The constant is derived from the bounds it must dominate,
     /// not chosen. If a production bound is ever raised past it, this fails
     /// rather than a scenario becoming quietly flaky.
     ///
@@ -2146,8 +2149,8 @@ mod tests {
     /// a scenario ever waited behind it this deadline would be inverted.
     /// None does: every harness awaits `adapter.start(spec, sink)`
     /// **unwrapped**, so a stalled paste is consumed inside `start()` and
-    /// surfaces as an `Err` carrying CREW-70's byte-count message — never
-    /// as an expired observation deadline. The only call any harness wraps
+    /// surfaces as an `Err` carrying the paste bound's byte-count message
+    /// — never as an expired observation deadline. The only call any harness wraps
     /// in a deadline is `adapter.cancel(..)`, which sits behind the
     /// escalation total, and that total *is* asserted below.
     ///
@@ -2181,19 +2184,21 @@ mod tests {
         }
     }
 
-    // ----------------------------------------- CREW-70: the progress bound
+    // ----------------------------------------- the paste progress bound
 
-    /// The invariant CREW-70 nearly shipped without, and the reason this
-    /// test exists rather than a comment: the ceiling is a BACKSTOP, and a
-    /// backstop must be much larger than the primary signal or it IS the
-    /// primary signal.
+    /// The invariant this progress bound nearly shipped without, and the
+    /// reason this test exists rather than a comment: the ceiling is a
+    /// BACKSTOP, and a backstop must be much larger than the primary
+    /// signal or it IS the primary signal.
     ///
     /// The first version of this change left the ceiling at the 10s it had
     /// when it was the only bound. That made the new failure set a strict
     /// superset of the old one -- every write the flat bound failed, plus
     /// every write that paused for two seconds -- so it would have made
-    /// the CREW-65 failure it was written to fix strictly more likely. The
-    /// arithmetic was caught in review; this keeps it caught.
+    /// the accelerated-timeout paste failure it was written to fix
+    /// strictly more likely (see `paste_write_timeout`'s own doc comment
+    /// for that failure). The arithmetic was caught in review; this keeps
+    /// it caught.
     #[test]
     fn the_ceiling_is_a_backstop_not_the_primary_bound() {
         assert!(
@@ -2481,7 +2486,7 @@ mod tests {
         assert!(placements.iter().all(|(_, cursor)| cursor.is_none()));
     }
 
-    // ------------------------------------------ CREW-83: self-describing tag
+    // ------------------------------------------ the self-describing tag
 
     /// The wording change must not detach the tag from what discovery and
     /// verification actually key on: both search for `nonce` as a raw
@@ -2547,10 +2552,10 @@ mod tests {
         assert_eq!(found, transcript);
     }
 
-    /// Mirrors CREW-13's own truncation check with the new wording: a
-    /// vendor that recorded the composed prompt byte-for-byte is intact,
-    /// proving the extra explanatory words did not change how the intact
-    /// case is judged.
+    /// Mirrors `verify_recorded_prompt`'s own truncation check with the
+    /// new wording: a vendor that recorded the composed prompt
+    /// byte-for-byte is intact, proving the extra explanatory words did
+    /// not change how the intact case is judged.
     #[test]
     fn an_intact_self_describing_prompt_still_verifies_as_intact() {
         use crate::adapter::tui::{ClaudeTuiVendor, TuiVendor};

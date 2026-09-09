@@ -137,7 +137,7 @@ function configKeyFor(adapter: string): string {
 }
 
 /**
- * CREW-8: the effective `adapters.<adapter>.model` across the crew.json
+ * the effective `adapters.<adapter>.model` across the crew.json
  * layers -- user then repo, later (repo) layer wins, matching every other
  * field's own later-layer-wins merge. `null` (`crew.default.json`'s own
  * unset marker for the three reserved adapters with no default) and a
@@ -162,7 +162,7 @@ export function resolveConfiguredModel(home: string, repository: string, adapter
 }
 
 /**
- * CREW-8: records `model` as `adapters.<adapter>.model` in the *repo*
+ * records `model` as `adapters.<adapter>.model` in the *repo*
  * layer only (`<repository>/.omp/crew.json`) -- never the user's global
  * layer, and never called by `crew_profile` unless
  * {@link resolveConfiguredModel} already found nothing for this adapter.

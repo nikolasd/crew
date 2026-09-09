@@ -369,7 +369,7 @@ impl OrchestrationService {
     }
 
     /// Redacts a caller-supplied free-text field before it becomes durable
-    /// (ADR-0006, CREW-32).
+    /// (ADR-0006).
     ///
     /// A decision rationale is prose a human or leader wrote, so it can
     /// contain anything they had in front of them -- including a key they
@@ -715,7 +715,7 @@ impl OrchestrationService {
         policy: Option<Arc<crate::config::RuntimePolicy>>,
         display: Option<crew_protocol::DisplaySelection>,
     ) -> Result<Option<(std::path::PathBuf, IsolationKind)>, ServiceError> {
-        // CREW-11: no submit-time placeholder `DisplayPaneAttached` is ever
+        // No submit-time placeholder `DisplayPaneAttached` is ever
         // journaled here. It used to be, for any run whose owning adapter
         // doesn't attach through its own `PaneCoordinator` -- keyed on
         // backend *availability* alone, with an admittedly-empty pane ref
@@ -874,7 +874,7 @@ impl OrchestrationService {
         Ok(workspace_path)
     }
 
-    /// CREW-78 belt-and-braces, not the primary mechanism: `RunDriver::
+    /// Belt-and-braces, not the primary mechanism: `RunDriver::
     /// start` failing is normally already durable on its own -- the TUI
     /// adapter's `fail_start` journals a `ProcessExited` before returning
     /// `Err`, and `RunLifecycleSink` settles that as `failed`
@@ -894,7 +894,7 @@ impl OrchestrationService {
                 tracing::warn!(
                     error = %err,
                     run_id = %run_id,
-                    "CREW-78 backstop: failed to read run state after a start error"
+                    "backstop: failed to read run state after a start error"
                 );
                 return;
             }
@@ -912,7 +912,7 @@ impl OrchestrationService {
             run_id = %run_id,
             from = %current,
             "run/submit's start error left the run non-terminal; forcing it to failed \
-             (CREW-78 backstop -- the adapter's own failure path should already have done \
+             (backstop -- the adapter's own failure path should already have done \
              this)"
         );
         // Unlike `succeeded` (`run_finish`'s walk), `failed` is a legal
@@ -939,7 +939,7 @@ impl OrchestrationService {
                 tracing::debug!(
                     error = %err,
                     run_id = %run_id,
-                    "CREW-78 backstop transition did not apply"
+                    "backstop transition did not apply"
                 );
             }
         }
@@ -1074,7 +1074,7 @@ impl OrchestrationService {
             })?
             .unwrap_or(crew_protocol::DisplayPreference {
                 ordered: Vec::new(),
-                // CREW-52 (D27/D3): absent placement, not a hardcoded
+                // Absent placement, not a hardcoded
                 // `Embedded` (deleted) -- the resolved backend picks its
                 // own natural form (`DisplayRegistry::resolve`).
                 placement: None,
@@ -1193,7 +1193,7 @@ impl OrchestrationService {
             result["workspacePath"] = json!(path.to_string_lossy().to_string());
             result["workspaceMode"] = json!(Self::workspace_mode_echo(*kind));
         }
-        // CREW-11: no `display` field here. The registry's resolve-time
+        // No `display` field here. The registry's resolve-time
         // `DisplaySelection` (`selected` from an availability probe,
         // `placement` a verbatim echo of the request) is not an outcome --
         // the real attach, if any, happens later and is only ever
@@ -1319,7 +1319,7 @@ impl OrchestrationService {
             })?
             .unwrap_or(crew_protocol::DisplayPreference {
                 ordered: Vec::new(),
-                // CREW-52 (D27/D3): absent placement, not a hardcoded
+                // Absent placement, not a hardcoded
                 // `Embedded` (deleted) -- the resolved backend picks its
                 // own natural form (`DisplayRegistry::resolve`).
                 placement: None,
@@ -1396,7 +1396,7 @@ impl OrchestrationService {
             result["workspacePath"] = json!(path.to_string_lossy().to_string());
             result["workspaceMode"] = json!(Self::workspace_mode_echo(*kind));
         }
-        // CREW-11: no `display` field here either -- same reasoning as
+        // No `display` field here either -- same reasoning as
         // `run/submit`.
         Ok(result)
     }
@@ -1732,7 +1732,9 @@ impl OrchestrationService {
             AbandonOutcome::ReleasedWithCleanupFailure { message } => {
                 // `message` is teardown-failure text (git/filesystem
                 // error output), never runtime-authored -- same shape as
-                // CREW-60's `PaneDowngraded.reason` (CREW-61).
+                // `PaneDowngraded.reason`, which needs the same full,
+                // org-configured redactor every other journal-text
+                // crossing uses.
                 let error = self.redact_caller_text(message)?;
                 self.emit_workspace_event(
                     crew_protocol::WorkspaceEvent::CleanupFailed {
@@ -2062,7 +2064,9 @@ impl OrchestrationService {
                 .mark_cleanup_failed(request.lease_id.clone());
             // `err.message` is teardown-failure text (git/filesystem
             // error output), never runtime-authored -- same shape as
-            // CREW-60's `PaneDowngraded.reason` (CREW-61).
+            // `PaneDowngraded.reason`, which needs the same full,
+            // org-configured redactor every other journal-text
+            // crossing uses.
             let error = self.redact_caller_text(err.message.clone())?;
             self.emit_workspace_event(
                 crew_protocol::WorkspaceEvent::CleanupFailed {
@@ -2398,7 +2402,7 @@ impl OrchestrationService {
         let sender_worker_id = parse_worker_id(params.get("senderWorkerId"))?;
         let task_id = parse_task_id(params.get("taskId"))?;
         let kind = parse_message_kind(params.get("kind"))?;
-        // CREW-28: the payload is caller-supplied content and becomes
+        // The payload is caller-supplied content and becomes
         // durable in `messages.payload`, so it crosses the ADR-0006
         // boundary here -- it previously reached `INSERT INTO messages`
         // verbatim, which is what made a steer carrying an API key a
@@ -2601,7 +2605,7 @@ impl OrchestrationService {
                             ),
                         }
 
-                        // CREW-47 (D1): a delivered follow-up IS the leader
+                        // A delivered follow-up IS the leader
                         // steering the run -- this is what resumes it, not
                         // an inference from whatever the vendor produces
                         // next. Walk the run back to `working` and clear
@@ -2616,7 +2620,7 @@ impl OrchestrationService {
                         // (`working -> working`), which is exactly the
                         // no-op this wants -- so a failure here is logged,
                         // never propagated.
-                        // CREW-58: read the pre-transition state and attempt
+                        // Read the pre-transition state and attempt
                         // the transition in the SAME closure (same actor
                         // turn, so no other closure can interleave between
                         // the two -- see `current_run_state`'s own doc).
@@ -2669,7 +2673,7 @@ impl OrchestrationService {
                                  the run was already working)"
                             ),
                         }
-                        // A separate, subsequent commit+broadcast (CREW-58),
+                        // A separate, subsequent commit+broadcast,
                         // matching this whole block's own established
                         // pattern (burst-diagnostic / resume-transition /
                         // flag-clear are already three independent calls,
@@ -2743,7 +2747,7 @@ impl OrchestrationService {
                     self.broadcast(&mut sent);
                 }
                 Err(err) => {
-                    // CREW-61: `err` is the ADAPTER's own error text, and an
+                    // `err` is the ADAPTER's own error text, and an
                     // adapter failure routinely names a transcript or socket
                     // path. Redacted here, before the closure, because
                     // `self.redactor` cannot cross the `move` boundary.
@@ -2941,7 +2945,7 @@ impl OrchestrationService {
                 principal.instance_id
             )));
         }
-        // CREW-61: `task_text` is stored verbatim in `plans.task_text` --
+        // `task_text` is stored verbatim in `plans.task_text` --
         // never returned over the wire (`PlanGetResult` has no such
         // field), but still durable and exportable, so it crosses the
         // same boundary as `description` below before it is stored.
@@ -2953,7 +2957,7 @@ impl OrchestrationService {
                 .ok_or_else(|| ServiceError::invalid_params("plan is required"))?,
         )
         .map_err(|e| ServiceError::invalid_params(format!("plan is invalid: {e}")))?;
-        // CREW-61: `description` deserializes as `Redacted` (it accepts a
+        // `description` deserializes as `Redacted` (it accepts a
         // bare wire string by design -- stored events must round-trip),
         // but that is not sanitization: a caller's raw JSON reaches this
         // handler unredacted. Route each subtask's description through
@@ -3164,7 +3168,7 @@ impl OrchestrationService {
     /// reports; the leader decides).
     ///
     /// * `extend` re-arms BOTH of the run's liveness deadlines with a fresh
-    ///   window (the same shared clock WP19's sweep reads). CREW-40: refused
+    ///   window (the same shared clock WP19's sweep reads). Refused
     ///   (never a fabricated `rearmed: true`) when the run has no tracked
     ///   clock to re-arm -- never submitted, or already settled/forgotten --
     ///   since there is no legitimate pending timeout to act on either way,

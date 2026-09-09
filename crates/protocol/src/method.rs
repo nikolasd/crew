@@ -25,7 +25,7 @@ pub enum CrewMethod {
     EventsSubscribe,
     #[serde(rename = "events/replay")]
     EventsReplay,
-    // R82. The out-of-band `crewd stop`/SIGTERM path is deliberately
+    // The out-of-band `crewd stop`/SIGTERM path is deliberately
     // unarbitrated.
     /// Gracefully stops the daemon. Refused with `-32602` while any run is
     /// live or another connection is being served, unless
@@ -135,7 +135,6 @@ pub enum CrewMethod {
     // Policy: violation resolution
     #[serde(rename = "policy/violation/decide")]
     PolicyViolationDecide,
-    // R80.
     /// Lists a project's recorded policy violations with their decision
     /// state, so an operator can find which violation still holds a
     /// quarantine without diffing the raw event stream.

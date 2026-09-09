@@ -1,7 +1,7 @@
 // Tests for the shared cache-then-connect resolver both `resolveClient`
 // (spawn-on-demand, for user-initiated paths) and `resolveClientWithoutSpawning`
-// (never spawns, for the monitor's automatic reconnect loop -- CREW-5's
-// review should-fix against silently defeating ADR-0008's idle self-shutdown)
+// (never spawns, for the monitor's automatic reconnect loop -- a review
+// should-fix against silently defeating ADR-0008's idle self-shutdown)
 // go through.
 
 import { afterEach, beforeAll, expect, test } from "bun:test";
@@ -159,7 +159,7 @@ test("resolveClient (spawning) still spawns when nothing is listening", async ()
   expect(status.running).toBe(true);
 });
 
-// ------------------------------------------------- CREW-35: dashboard URL
+// -------------------------------------------------------- dashboard URL
 
 test("runtime/status reports no dashboard URL when the dashboard is disabled (the default)", async () => {
   const stateDir = newStateDir();
@@ -186,7 +186,7 @@ test("runtime/status reports the dashboard's live URL (token included) when enab
   // 127.0.0.1 only (never a routable interface), an OS-assigned port, and
   // the 32-hex-char token `dashboard::generate_token` mints.
   expect(details.dashboardUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/\?token=[0-9a-f]{32}$/);
-  // CREW-35: the maintainer's explicit choice -- the full URL, token
+  // the maintainer's explicit choice -- the full URL, token
   // included, must appear in the text a leader model actually reads.
   expect(result.content[0].text).toContain(`Dashboard: ${details.dashboardUrl}`);
 });

@@ -62,7 +62,7 @@ impl AdapterErrorCode {
 /// **This is a stated requirement, not a style preference: `detail` MUST
 /// be a short, static description, and MUST NOT echo captured vendor
 /// bytes (PTY output, transcript text, subprocess stderr) verbatim.**
-/// CREW-78 made this load-bearing where it previously was not --
+/// This became load-bearing where it previously was not:
 /// `fail_start` (`adapter/tui/adapter.rs`) now journals a TUI start
 /// failure's `AdapterError::to_string()` as a durable
 /// `ProtocolHealthChanged` diagnostic. Before that, `detail` reached only

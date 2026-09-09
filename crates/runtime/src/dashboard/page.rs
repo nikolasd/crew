@@ -13,7 +13,7 @@
 //! per-event re-fetch ever becomes a cost worth addressing, debounce it;
 //! do not reduce here. See the parent module's own note.
 
-// CREW-55: the four vendor marks are spliced in via `concat!` +
+// The four vendor marks are spliced in via `concat!` +
 // `include_str!` at the one point `PAGE_HTML`'s JS builds its `LOGOS`
 // table, so each file's bytes reach the page exactly as `assets/agents/`
 // stores them -- no recolouring, no reproportioning, the same
@@ -53,7 +53,7 @@ pub const PAGE_HTML: &str = concat!(
   .card { background: #171a20; border: 1px solid #23262d; border-radius: 8px; padding: 10px 12px; }
   .card .title { color: #fff; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; }
   .card .meta { font-size: 12px; color: #8a93a4; }
-  /* CREW-55: the maintainer's ruling was real vendor marks where one is
+  /* The maintainer's ruling was real vendor marks where one is
      available (`LOGOS`, below), falling back to BRAND.md's own cell
      vocabulary (§02) for any adapter that has none -- crew's own colour
      coding, never a guessed brand colour. Square corners and a flat
@@ -183,13 +183,13 @@ pub const PAGE_HTML: &str = concat!(
   };
   const NEUTRAL = "#8a93a4";
   const brand = adapter => BRAND[adapter] || NEUTRAL;
-  // CREW-55: real vendor marks, inline (no external asset, matching
+  // Real vendor marks, inline (no external asset, matching
   // this page's own no-network-at-render constraint). `ompRpc` and
   // `omp` share one file for the same reason `BRAND` lists both keys
   // above -- same runtime, two spellings. An adapter absent here (no
   // supplied mark yet, or one BRAND lists but has no adapter for --
   // `hermes`, `opencode`) falls through to the coloured cell exactly as
-  // before CREW-55.
+  // it did before real vendor marks were added.
   const LOGOS = {
     claude: `"##,
     include_str!("../../../../assets/agents/claude-code.svg"),
@@ -207,7 +207,7 @@ pub const PAGE_HTML: &str = concat!(
     include_str!("../../../../assets/agents/omp.svg"),
     r##"`,
   };
-  // Renders the vendor mark for `adapter` if CREW-55 supplied one,
+  // Renders the vendor mark for `adapter` if `LOGOS` supplied one,
   // coloured via `colour` for the `currentColor` marks (`codex`) --
   // fixed-colour marks (`claude`, `copilot`, `omp`) ignore it, which is
   // correct: their fill is baked in and must never be overridden.
@@ -331,7 +331,7 @@ pub const PAGE_HTML: &str = concat!(
     // has happened since I was launched" from "something happened,
     // possibly including a full recovery I never saw".
     let generation = 0;
-    // CREW-56: a fresh connect (first load, or EventSource's own silent
+    // A fresh connect (first load, or EventSource's own silent
     // reconnect) now replays the whole journal as a burst of ordinary
     // `data:` frames before any live one. Re-fetching `/api/state` per
     // message -- fine for one live event at a time -- would fire one
@@ -343,7 +343,7 @@ pub const PAGE_HTML: &str = concat!(
       clearTimeout(refreshTimer);
       refreshTimer = setTimeout(refresh, 150);
     };
-    // CREW-56: `serve_sse` subscribes to the live broadcast BEFORE
+    // `serve_sse` subscribes to the live broadcast BEFORE
     // querying the replay snapshot, so a mutation landing in that window
     // can arrive twice -- once in the replay array, once live. Sequence
     // numbers are unique and monotonic; a row already rendered is skipped
@@ -364,7 +364,7 @@ pub const PAGE_HTML: &str = concat!(
       live.classList.remove("on");
       live.textContent = "reconnecting…";
       live.title = "the event stream dropped; retrying";
-      // CREW-54: a bare `error` event cannot say WHY the connection
+      // A bare `error` event cannot say WHY the connection
       // dropped -- network blip, a genuinely dead daemon, or (the case
       // that made the "daemon not running" label actively wrong) a
       // daemon that restarted and is very much running, but issued a new
@@ -409,7 +409,7 @@ pub const PAGE_HTML: &str = concat!(
     source.onmessage = message => {
       let label = "event";
       // The envelope's own timestamp, not wall-clock "now": a replayed
-      // row (CREW-56) can be arbitrarily old, and stamping it with the
+      // row can be arbitrarily old, and stamping it with the
       // moment the browser happened to receive it would misreport
       // exactly what this fix exists to get right.
       let when = new Date();

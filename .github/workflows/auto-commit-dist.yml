@@ -53,7 +53,7 @@ jobs:
           # for the compare-and-swap guarantee. Two refs, two reasons:
           # - Job 1 consistency with bundle-check: build same bytes bundle-check verifies
           # - Job 2 parentage guarantee: commit rooted at source SHA, non-fast-forward if branch moved
-          # Unifying them breaks one property or the other. See Checkout Ref Strategy in CREW-26 design.
+          # Unifying them breaks one property or the other; the two reasons above are the whole rationale.
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 

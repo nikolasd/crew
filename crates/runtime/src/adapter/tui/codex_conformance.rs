@@ -390,7 +390,7 @@ done
 fn fast_timings() -> TuiTimings {
     TuiTimings {
         readiness_quiet: Duration::from_millis(80),
-        // CREW-76: production's own values. `readiness_cap`,
+        // Kept at production's own values. `readiness_cap`,
         // `discovery_timeout` and `preflight_timeout` are failure bounds,
         // not pacing delays -- see `assert_only_pacing_is_accelerated`,
         // which is what keeps this true for any field added later.
@@ -723,7 +723,7 @@ pub async fn live_report() -> Result<ConformanceReport, String> {
 mod tests {
     use super::*;
 
-    /// CREW-76: this harness may accelerate pacing fields and must leave
+    /// This harness may accelerate pacing fields and must leave
     /// every failure bound at production's value. The guard's own
     /// destructuring is what covers a field added later; this call is what
     /// covers THIS harness.

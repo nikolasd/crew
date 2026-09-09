@@ -5,7 +5,7 @@ use crew_runtime::display::{
     DisplayBackendTrait, DisplayFuture, DisplayRegistry, PaneHandle, PaneRequest,
 };
 
-/// A backend whose natural placement (CREW-52, D27/D3) is deliberately NOT
+/// A backend whose natural placement is deliberately NOT
 /// the trait default (`SplitRight`), so a test can tell "the resolved
 /// backend's own override ran" apart from "the default happened to match".
 struct NaturalSplitDownBackend;

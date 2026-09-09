@@ -170,7 +170,7 @@ pub struct RuntimeStatus {
     pub uptime_seconds: u64,
     /// Where the running binary was loaded from.
     pub binary_source: BinarySource,
-    // CREW-35: the maintainer explicitly chose to put the live,
+    // The maintainer explicitly chose to put the live,
     // capability-granting token in this field rather than only pointing at
     // the daemon's own log (the narrower-exposure alternative) -- `/crew
     // health`'s output flows into the leader model's own session
@@ -187,7 +187,7 @@ pub struct RuntimeStatus {
     /// The URL includes the dashboard's access token, so it grants whoever
     /// holds it access to the dashboard: treat it as a secret.
     pub dashboard_url: Option<String>,
-    // D25: a two-daemon mixup (two `crewd` processes, each against its own
+    // A two-daemon mixup (two `crewd` processes, each against its own
     // state root, neither aware of the other) cost an operator real
     // debugging time with no way to see which database a running daemon
     // was actually reading/writing. These two fields exist so `/crew

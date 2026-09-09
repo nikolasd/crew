@@ -20,9 +20,9 @@ export const CREW_PROFILE_TOOL_NAME = "crew_profile";
 const RESERVED_ADAPTER_NAMES: readonly string[] = ["claude", "codex", "copilot", "ompRpc"];
 
 /**
- * CREW-8 mode injection: adds `mode: "tui"` to `startupOptions[adapter]`
+ * Mode injection: adds `mode: "tui"` to `startupOptions[adapter]`
  * for a reserved adapter when the caller omitted a mode entirely --
- * headless is retired (CREW-7), so this is the friendly path to the same
+ * headless is retired, so this is the friendly path to the same
  * `mode: "tui"` a caller would otherwise have to remember to spell out
  * every time. Never overrides an *explicit* mode (including an explicit
  * `"headless"`): the daemon's own typed rejection for that stays exactly
@@ -40,7 +40,7 @@ export function injectTuiMode(adapter: string, startupOptions: Record<string, un
 }
 
 /**
- * CREW-8's refusal, shaped once because CREW-53 gave it a second caller.
+ * The stored-model refusal, shaped once because resolution gave it a second caller.
  * `configuredModel` is the RAW text from `.omp/crew.json`: the correction
  * path is to edit that file, so the error has to name what the reader will
  * find in it, not the canonical id it resolves to.
@@ -98,7 +98,7 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
         throw err;
       }
 
-      // A hallucinating leader inventing a model name is CREW-8's original
+      // A hallucinating leader inventing a model name is the original
       // symptom -- crew_profile must never let an explicit param silently
       // clobber (nor silently lose to) an already-persisted choice. An
       // explicit model that *conflicts* with the stored one is refused,
@@ -106,7 +106,7 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
       // value as already stored is a no-op success (nothing to persist,
       // nothing to reject).
       //
-      // CREW-53 puts *resolution* in front of that comparison, for the
+      // Resolution goes in front of that comparison, for the
       // adapters omp catalogues. `haiku` and a stored `claude-haiku-4-5` are
       // one model, so comparing the spellings would refuse a correct call
       // with an error telling the user to edit a file that is already right.
@@ -143,7 +143,7 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
       } else {
         // No catalogue and no alias source for this adapter (`ompRpc`, or a
         // caller-defined one), or no explicit model to resolve: behaviour
-        // here is exactly what it was before CREW-53.
+        // here is exactly what it was before resolution existed.
         if (input.model !== undefined && configuredModel !== undefined && input.model !== configuredModel) {
           return modelConflictResult(input.adapter, configuredModel);
         }
@@ -180,7 +180,7 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
         source: "omp",
       });
 
-      // CREW-53: a resolution is never silent. Whatever the input spelling
+      // a resolution is never silent. Whatever the input spelling
       // was, the caller is told what it became -- or that nothing could
       // confirm it.
       if (result.isError !== true && note !== undefined) {
@@ -189,7 +189,7 @@ export function registerProfileTool(pi: ExtensionAPI, ctx: OrchestrationToolCont
 
       if (result.isError !== true && input.model !== undefined && configuredModel === undefined) {
         if (!mayPersist) {
-          // The failure CREW-53 exists for: an invented dated id became the
+          // The failure resolution exists for: an invented dated id became the
           // repository's durable answer in `.omp/crew.json`. A name omp's
           // catalogue does not know is exactly that value, so it may run
           // this once and is not written down.

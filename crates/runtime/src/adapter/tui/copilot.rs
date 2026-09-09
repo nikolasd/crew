@@ -189,7 +189,7 @@ impl TuiVendor for CopilotTuiVendor {
         match known {
             Some(_) => VersionVerdict::Compatible,
             None => VersionVerdict::Incompatible {
-                // CREW-78 review: never interpolate `probed` here -- it is
+                // Never interpolate `probed` here -- it is
                 // the vendor's raw `--version` prose, and this whole
                 // branch fires precisely when it matched no known-verified
                 // string (an auth error, an update notice, a stack trace
@@ -482,7 +482,7 @@ mod tests {
         ));
     }
 
-    /// CREW-78 review guard: the no-match branch fires precisely when
+    /// This guards against the no-match branch firing precisely when
     /// `--version` matched none of the empirically verified strings -- an
     /// auth error, an update notice, a stack trace are all things a real
     /// vendor CLI could print there instead, and this `detail` can reach

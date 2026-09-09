@@ -344,7 +344,7 @@ test("a second ensureRuntime caller connects to the same runtime", async () => {
   expect(readdirSync(repos).length).toBe(1);
 });
 
-// CREW-5 review should-fix: the monitor's automatic reconnect loop must
+// Review should-fix: the monitor's automatic reconnect loop must
 // never resurrect a runtime that idle-exited on purpose (ADR-0008) --
 // `connectIfRunning` is the no-spawn counterpart `ensureRuntime` lacked.
 

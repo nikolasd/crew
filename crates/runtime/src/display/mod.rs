@@ -59,7 +59,7 @@ pub struct PaneRequest {
     pub title: String,
     pub command: Vec<String>,
     pub placement: DisplayPlacement,
-    /// The submitting caller's own `$TERM_PROGRAM` hint (CREW-9). Read
+    /// The submitting caller's own `$TERM_PROGRAM` hint. Read
     /// only by [`OsWindowDisplay`](crate::display::os_window::OsWindowDisplay)
     /// to target the right terminal application; every other backend
     /// ignores it.
@@ -75,8 +75,8 @@ pub struct PaneRequest {
 pub struct PaneHandle {
     pub backend: DisplayBackend,
     pub pane_ref: String,
-    /// What actually happened, which is not always what was requested
-    /// (CREW-9): `OsWindowDisplay` reports `DisplayPlacement::Window` for
+    /// What actually happened, which is not always what was requested:
+    /// `OsWindowDisplay` reports `DisplayPlacement::Window` for
     /// a plain new window (Terminal.app, or Ghostty predating its
     /// AppleScript tab support) even when a caller asked for `Tab` --
     /// callers must never be told `Tab` happened when it did not. Every
@@ -183,7 +183,7 @@ pub trait DisplayBackendTrait: Send + Sync {
     fn create_pane(&self, req: PaneRequest) -> DisplayFuture<'_, PaneHandle>;
 
     /// This backend's own placement when a caller's [`DisplayPreference`]
-    /// doesn't specify one (CREW-52, D27/D3). Replaces the deleted
+    /// doesn't specify one. Replaces the deleted
     /// `DisplayPlacement::Embedded` default: rather than a server-hardcoded
     /// value every backend was equally (mis)fit for, each backend now
     /// answers with the placement it would naturally create -- the
@@ -288,7 +288,7 @@ impl DisplayRegistry {
             }
         }
 
-        // CREW-52 (D27/D3): an explicit caller placement is honored as-is;
+        // An explicit caller placement is honored as-is;
         // an absent one resolves to the SELECTED backend's own natural
         // form. `selected: None` (headless, every candidate unavailable)
         // has no pane to place at all, so the placement value is moot --

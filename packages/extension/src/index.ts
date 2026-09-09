@@ -59,7 +59,7 @@ export default function crewExtension(pi: ExtensionAPI): void {
   }
 
   /** Like `getClient`, but never spawns -- passed to the monitor's automatic
-   *  background reconnect loop only (CREW-5), so an intentionally
+   *  background reconnect loop only, so an intentionally
    *  idle-exited daemon (ADR-0008) stays exited instead of the loop
    *  respawning it forever. */
   async function getClientWithoutSpawning(extCtx: ExtensionContext): Promise<CrewClient> {

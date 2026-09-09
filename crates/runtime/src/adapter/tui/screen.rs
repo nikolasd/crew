@@ -1,6 +1,6 @@
 //! What a vendor TUI is showing, derived from the bytes it wrote to the PTY.
 //!
-//! CREW-79 slice 1. This module carries only the normalization primitive and
+//! This is the first slice: it carries only the normalization primitive and
 //! its fixtures; it classifies nothing. Vendor predicates (`classify_surface`)
 //! land on top of it in a later slice, so that the matching rule and the
 //! vendor-specific phrases are reviewable separately.
@@ -38,7 +38,7 @@
 //! screen buffer, so a phrase that was drawn and then cleared still matches.
 //!
 //! That is sufficient for detecting a gate that is blocking startup, which is
-//! what CREW-79 needs first. It is **not** sufficient for a predicate of the
+//! what this first slice needs. It is **not** sufficient for a predicate of the
 //! form "the composer is up *and* no gate is up". The reason is worth stating
 //! precisely, because the obvious version of it is wrong:
 //!

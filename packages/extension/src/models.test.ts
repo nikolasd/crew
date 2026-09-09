@@ -1,4 +1,4 @@
-// Tests for CREW-53's model resolution.
+// Tests for model-name resolution.
 //
 // The two fixtures below are the COMPLETE provider lists from
 // `omp models ls --json` (2026-09-07: anthropic 24, openai-codex 6), not a
@@ -53,7 +53,7 @@ test("an exact canonical id resolves as exact, with no note", () => {
   expect(resolutionNote("codex", r)).toBeUndefined();
 });
 
-test("CREW-53: the maintainer's example -- `sol` resolves with no alias entry for it", () => {
+test("the maintainer's example -- `sol` resolves with no alias entry for it", () => {
   const r = resolveModelName("codex", "sol", CODEX);
   expect(r).toEqual({ kind: "match", model: "gpt-5.6-sol", from: "sol" });
   expect(resolutionNote("codex", r)).toContain("gpt-5.6-sol");
@@ -65,7 +65,7 @@ test("CREW-53: the maintainer's example -- `sol` resolves with no alias entry fo
 // substring-first resolver would call the vendor's own unambiguous shorthand
 // ambiguous and refuse it. Swap the alias step after the substring step and
 // this test fails.
-test("CREW-53: a vendor alias wins over an ambiguous substring match", () => {
+test("a vendor alias wins over an ambiguous substring match", () => {
   // Each of claude's four aliases matches several catalogue ids as a
   // substring, so a substring-first resolver would refuse all four as
   // ambiguous. The vendor's own answer has to win.
@@ -157,7 +157,7 @@ test("JSON without a `models` array is unavailable -- a shape change is not an a
   if (!c.available) expect(c.why).toContain("shape has changed");
 });
 
-test("CREW-53: an EMPTY provider list is the instrument failing, not a clean answer", async () => {
+test("an EMPTY provider list is the instrument failing, not a clean answer", async () => {
   // A catalogue that parses, has the right shape, and lists models for
   // other providers but none for ours. Reading that as "validated: nothing
   // is valid" would refuse every model name on a broken read.
@@ -187,7 +187,7 @@ test("ompRpc has no single provider, so it is unavailable by construction rather
 });
 
 // ------------------------------------------------- decideModel: resolution
-// meets CREW-8's stored-model rules
+// meets the stored-model rules
 //
 // `crew_profile` already refuses an explicit model that disagrees with the
 // one recorded in `.omp/crew.json`. Resolution has to happen BEFORE that
@@ -198,20 +198,20 @@ test("ompRpc has no single provider, so it is unavailable by construction rather
 
 const STORED_NONE = undefined;
 
-test("CREW-53: an alias resolves to the canonical id the vendor gets, not the spelling the caller typed", () => {
+test("an alias resolves to the canonical id the vendor gets, not the spelling the caller typed", () => {
   const d = decideModel("claude", "sonnet", STORED_NONE, ANTHROPIC);
   expect(d).toEqual({ kind: "use", model: "claude-sonnet-5", verified: true, note: expect.stringContaining("alias") });
 });
 
-test("CREW-53: a stored shorthand and an explicit canonical id are the same model, not a conflict", () => {
+test("a stored shorthand and an explicit canonical id are the same model, not a conflict", () => {
   // The direction the spec did not mention. `.omp/crew.json` written before
-  // CREW-53 holds shorthands, so this is the common case in existing repos.
+  // Existing files hold shorthands, so this is the common case.
   const d = decideModel("claude", "claude-opus-5", "opus", ANTHROPIC);
   expect(d.kind).toBe("use");
   if (d.kind === "use") expect(d.model).toBe("claude-opus-5");
 });
 
-test("CREW-53: a stored canonical id and an explicit shorthand are the same model, not a conflict", () => {
+test("a stored canonical id and an explicit shorthand are the same model, not a conflict", () => {
   const d = decideModel("claude", "opus", "claude-opus-5", ANTHROPIC);
   expect(d.kind).toBe("use");
   if (d.kind === "use") expect(d.model).toBe("claude-opus-5");
@@ -257,16 +257,16 @@ test("only the adapters omp catalogues are resolvable -- a custom adapter is lef
   expect(isCataloguedAdapter("copilot")).toBe(true);
   // ompRpc has no provider and no aliases, so resolving it could only ever
   // annotate a name it cannot check. Excluded here so `crew_profile`'s
-  // behaviour for it is byte-identical to before CREW-53.
+  // behaviour for it is byte-identical to before resolution existed.
   expect(isCataloguedAdapter("ompRpc")).toBe(false);
   expect(isCataloguedAdapter("terminalDegraded")).toBe(false);
 });
 
-// `verified` exists to gate PERSISTENCE, not registration. CREW-53's
+// `verified` exists to gate PERSISTENCE, not registration. The
 // symptom was an invented dated id becoming the repository's durable answer
 // in `.omp/crew.json`; a name omp's catalogue does not know is exactly that
 // value, so it may run but must not be written down.
-test("CREW-53: a resolved model is verified -- it may be persisted", () => {
+test("a resolved model is verified -- it may be persisted", () => {
   for (const [input, model] of [
     ["gpt-5.6-sol", "gpt-5.6-sol"],
     ["sol", "gpt-5.6-sol"],
@@ -277,7 +277,7 @@ test("CREW-53: a resolved model is verified -- it may be persisted", () => {
   }
 });
 
-test("CREW-53: an unverified model is NOT verified -- it runs but is not written to crew.json", () => {
+test("an unverified model is NOT verified -- it runs but is not written to crew.json", () => {
   const d = decideModel("codex", "gpt-5.9-invented", undefined, CODEX);
   expect(d.kind === "use" && d.verified).toBe(false);
 });

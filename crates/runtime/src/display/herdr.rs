@@ -2,7 +2,7 @@
 //! gating (via `herdr status --json`) and pane-level operations
 //! (split/run/move/close/report-agent) over Herdr's own socket-backed
 //! CLI, grounded against the installed `herdr 0.8.2` binary's real
-//! `--help` output and `status --json` shape (CREW-82; previously
+//! `--help` output and `status --json` shape (previously
 //! verified against 0.7.5). Argv shapes below are additionally gated by
 //! [`MIN_SUPPORTED_PROTOCOL`]: a herdr whose protocol predates the
 //! version these shapes were checked against is never assumed
@@ -128,7 +128,7 @@ impl HerdrStatus {
 }
 
 /// The lowest herdr wire protocol number this backend's argv shapes have
-/// been verified against (herdr 0.8.2, CREW-82). A herdr client or
+/// been verified against (herdr 0.8.2). A herdr client or
 /// server reporting a protocol below this is never treated as
 /// compatible, even when its own `status --json` reports `compatible:
 /// true` -- that field only promises the client and server agree with
@@ -284,7 +284,7 @@ impl HerdrDisplay {
             // `herdr pane report-agent <pane_id> --source ID --agent
             // LABEL --state ...`. Passing it last (the previous shape
             // here) fails against a live 0.8.2 herdr with `unknown
-            // option: crew` (CREW-82, reproduced directly against both
+            // option: crew` (reproduced directly against both
             // a nonexistent pane id and a real live pane).
             self.execute_or_err(
                 &[
@@ -502,7 +502,7 @@ mod tests {
     const MISMATCH_STATUS: &str = r#"{"client":{"version":"0.8.3","channel":"stable","protocol":21},"server":{"status":"running","running":true,"version":"0.8.2","protocol":20,"compatible":false,"socket":"/tmp/herdr.sock"}}"#;
     // Both sides agree with each other (the server itself reports
     // `compatible: true`) but on a protocol older than this backend's
-    // verified minimum -- CREW-82's floor must override that self-report.
+    // verified minimum -- MIN_SUPPORTED_PROTOCOL's floor must override that self-report.
     const BELOW_MINIMUM_STATUS: &str = r#"{"client":{"version":"0.7.5","channel":"stable","protocol":17},"server":{"status":"running","running":true,"version":"0.7.5","protocol":17,"compatible":true,"socket":"/tmp/herdr.sock"}}"#;
 
     #[test]

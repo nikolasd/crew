@@ -3,7 +3,7 @@
 //! it, a real tab) running the pane's command directly through the
 //! desktop's own terminal application, rather than a multiplexer.
 //!
-//! macOS dispatches on [`PaneRequest::launch_program`] (CREW-9), the
+//! macOS dispatches on [`PaneRequest::launch_program`], the
 //! submitting caller's own `$TERM_PROGRAM`, to pick the right terminal
 //! application instead of always assuming Terminal.app:
 //!
@@ -13,7 +13,7 @@
 //! * **Terminal.app**, and the fallback for an absent or unrecognized
 //!   hint: `do script` opens a new window (Terminal.app has no
 //!   externally-triggerable tab-creation command), followed by an
-//!   explicit `activate` -- fixing the pre-CREW-9 bug where the window
+//!   explicit `activate` -- fixing the earlier bug where the window
 //!   opened un-foregrounded.
 //! * **Ghostty**: a real tab via its AppleScript dictionary (shipped in
 //!   1.3.0+, `ghostty.org/docs/features/applescript`) -- `new tab in
@@ -25,7 +25,7 @@
 //!   Ghostty --args -e <cmd>`.
 //!
 //! Every one of these reports its *actual* placement on [`PaneHandle`]
-//! (CREW-9) -- `DisplayPlacement::Tab` for iTerm2's real tab,
+//! -- `DisplayPlacement::Tab` for iTerm2's real tab,
 //! `DisplayPlacement::Window` for a plain new window -- never blindly
 //! echoing back whatever `req.placement` asked for.
 //!
@@ -780,8 +780,8 @@ mod tests {
         assert!(display.owned_pane_ids().is_empty());
     }
 
-    /// Like [`pane_request`], but with `launch_program` set -- CREW-9's
-    /// per-terminal dispatch tests need to force a specific hint.
+    /// Like [`pane_request`], but with `launch_program` set -- the
+    /// per-terminal dispatch tests below need to force a specific hint.
     fn pane_request_with_hint(command: Vec<&str>, launch_program: HostProgramHint) -> PaneRequest {
         PaneRequest {
             launch_program: Some(launch_program),

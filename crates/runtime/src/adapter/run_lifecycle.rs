@@ -14,7 +14,7 @@
 //! | `ProcessExited` with exit 0 after a settled turn (no `run/finish`) | `-> RunState::unrendered_verdict()` (`cancelled`) |
 //! | `ProcessExited` with no code and no signal | `-> lost` |
 //!
-//! CREW-78: a TUI vendor process exiting cleanly is never itself evidence of
+//! A TUI vendor process exiting cleanly is never itself evidence of
 //! success -- only the leader's own `run/finish` call judges that
 //! (`OrchestrationService::run_finish`'s doc comment). The ruling's exact
 //! condition is load-bearing (`release/live-conformance/
@@ -263,7 +263,7 @@ impl RunLifecycle {
     /// caller re-asks on the next event instead of giving up on a transient
     /// database error.
     ///
-    /// CREW-47 (D1): this used to also un-park a turn-settled `waitingUser`
+    /// This used to also un-park a turn-settled `waitingUser`
     /// on ANY vendor output, on the premise that the vendor producing
     /// anything meant the leader had steered it. That premise was never
     /// true: a vendor transcript's bookkeeping entries (session metadata,
@@ -291,7 +291,7 @@ impl RunLifecycle {
         }
     }
 
-    /// A genuine new user-authored transcript entry (CREW-47 D1): the
+    /// A genuine new user-authored transcript entry: the
     /// vendor's own transcript recorded a real follow-up, not the
     /// bookkeeping evidence `observe_vendor_activity` used to (wrongly)
     /// treat the same way. Narrower than that method ever was: the caller
@@ -306,7 +306,7 @@ impl RunLifecycle {
     pub(crate) async fn observe_real_user_turn(&self) {
         if self.turn_settled().await {
             self.set_turn_settled(false).await;
-            // CREW-58: bypasses `walk_to`/`commit` deliberately -- a resume
+            // Bypasses `walk_to`/`commit` deliberately -- a resume
             // is always exactly one hop (`waitingUser -> working`, legal
             // per `RunState::can_transition_to`), and this needs the
             // transition's own success/failure `Result` to decide whether
@@ -372,7 +372,7 @@ impl RunLifecycle {
         if !resumed_from_waiting_user {
             return;
         }
-        // A separate, subsequent commit+broadcast (CREW-58), matching every
+        // A separate, subsequent commit+broadcast, matching every
         // other lifecycle edge in this file: best-effort, since the
         // transition above is already durable and a failure recording
         // *why* costs the audit trail, never correctness.
@@ -438,8 +438,8 @@ impl RunLifecycle {
     /// touching the protocol's transition table (`queued -> lost` and
     /// `waitingUser -> succeeded` are not direct edges; `waitingUser ->
     /// cancelled` and `working -> cancelled` are, so `RunState::
-    /// unrendered_verdict()` never needs one). Reads `turnSettled` first
-    /// (CREW-78): it is the fact `terminal_state_for` branches on, not the
+    /// unrendered_verdict()` never needs one). Reads `turnSettled` first:
+    /// it is the fact `terminal_state_for` branches on, not the
     /// run's current state, since `waitingUser` is also reachable with no
     /// turn ever settled (ADR-0012's approval flow).
     pub(crate) async fn observe_process_exited(
@@ -590,7 +590,7 @@ impl AdapterEventSink for RunLifecycleSink {
         })
     }
 
-    /// CREW-47 (D1): the narrow, caused resumption path. Unlike `emit`'s
+    /// The narrow, caused resumption path. Unlike `emit`'s
     /// generic catch-all (deleted from `observe_vendor_activity` for this
     /// exact reason), this only ever fires when the caller has already
     /// confirmed a real user-authored turn -- so it un-parks unconditionally,
@@ -624,7 +624,7 @@ fn next_hop(from: &RunState, target: &RunState) -> Option<RunState> {
 
 /// The terminal state an exit status is evidence of, given `turn_settled`
 /// -- whether this run's turn had already settled (ADR-0027's
-/// `observe_turn_ended`) with no `run/finish` verdict since. CREW-78's
+/// `observe_turn_ended`) with no `run/finish` verdict since. The
 /// ruling is exact about the condition, not just the exit code
 /// (`release/live-conformance/2026-09-08-live-e2e-attempt-3.md:296`, "a
 /// cleanly exited run that **did no work** is `failed`"):
@@ -1086,7 +1086,7 @@ mod tests {
     /// run that is busy again.
     #[tokio::test]
     async fn a_trailing_session_meta_entry_never_resumes_a_settled_run() {
-        // CREW-47 (D1): `observe_vendor_activity`'s `waitingUser` arm used
+        // `observe_vendor_activity`'s `waitingUser` arm used
         // to treat this MessageChunk (or the bookkeeping entries that
         // actually triggered the bug -- a hook summary, a cost record, a
         // hidden `SessionMeta`-only line -- all of which reach this sink
@@ -1153,7 +1153,7 @@ mod tests {
     }
 
     /// The narrow replacement for the deleted arm above: a real
-    /// user-authored turn -- the ONLY vendor-side evidence CREW-47 (D1)
+    /// user-authored turn -- the ONLY vendor-side evidence this sink
     /// still trusts -- resumes a settled run exactly as the old, wrongly
     /// generic arm used to.
     #[tokio::test]
@@ -1195,9 +1195,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_real_user_turn_resume_journals_its_cause() {
-        // CREW-58/D30: the resume itself was already caused, not inferred
-        // (CREW-47/48) -- this is the evidence a `waitingUser -> working`
-        // edge previously carried none of: why it resumed.
+        // The resume itself was already caused, not inferred -- this is
+        // the evidence a `waitingUser -> working` edge previously carried
+        // none of: why it resumed.
         let (_dir, db) = open_db().await;
         let project_id = ProjectId::new();
         let (task_id, worker_id, run_id) = seed_run(&db, project_id).await;
@@ -1250,7 +1250,7 @@ mod tests {
 
     #[tokio::test]
     async fn starting_to_working_never_journals_a_resume_cause() {
-        // CREW-58: a run's very first `working` transition (queued ->
+        // A run's very first `working` transition (queued ->
         // starting -> working, via ordinary vendor activity) is legal into
         // `working` exactly like a real resume, but it is not a resume --
         // there was never a settled turn to resume FROM. `RunResumed` must
@@ -1297,7 +1297,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_real_user_turn_from_a_non_waiting_user_state_never_journals_a_resume_cause() {
-        // CREW-58: the test above only proves `observe_vendor_activity`'s
+        // The test above only proves `observe_vendor_activity`'s
         // OWN path never journals a resume cause -- it never reaches the
         // new gate at all, so it can't prove the gate itself is
         // load-bearing (confirmed directly: this test failed exactly as
@@ -1358,7 +1358,7 @@ mod tests {
         db.shutdown().await.expect("shutdown database");
     }
 
-    /// Staff's review on #76: the test above composes `RunLifecycleSink`
+    /// The test above composes `RunLifecycleSink`
     /// directly, so deleting `SettlementSink`'s forwarding override would
     /// leave CI green -- nothing exercises the wrapping order production
     /// actually uses. This composes exactly that order
@@ -1489,7 +1489,7 @@ mod tests {
         db.shutdown().await.expect("shutdown database");
     }
 
-    /// CREW-78: a bare zero exit is never itself evidence of success -- a
+    /// A bare zero exit is never itself evidence of success -- a
     /// TUI vendor process exiting is not the leader closing the
     /// conversation via `run/finish` (ADR-0027). This is the "process
     /// exit 0 with no turn on a parked run" shape from the 2026-09-08
@@ -1707,7 +1707,7 @@ mod tests {
         db.shutdown().await.expect("shutdown database");
     }
 
-    /// CREW-78: a human closing a parked worker's terminal must not read as
+    /// A human closing a parked worker's terminal must not read as
     /// success. This reproduces the 2026-09-08 attempt-3 conformance run's
     /// F4/F17 (`01a08216`/`01a08251`/`01a08253`): the run reached
     /// `waitingUser` with `turnSettled` still `false` (`drive_to_state`
@@ -1767,15 +1767,16 @@ mod tests {
         db.shutdown().await.expect("shutdown database");
     }
 
-    /// CREW-78's false-failure regression (staff review of the first
-    /// version of this fix): a run whose turn genuinely settled -- a real
-    /// `TurnEnded` emitted through this sink, exactly `a_turn_end_marks_
+    /// This is the false-failure regression caught by staff review of
+    /// `terminal_state_for`'s first version: a run whose turn genuinely
+    /// settled -- a real `TurnEnded` emitted through this sink, exactly
+    /// `a_turn_end_marks_
     /// the_run_turn_settled`'s setup -- did real work. A bare zero exit
     /// with no `run/finish` call in between must not read as `failed`
     /// either: the leader simply never rendered a verdict (a human closed
     /// the parked worker's terminal instead of answering, or leaving it,
-    /// which is the same "did work, no verdict" shape CREW-80's abandoned-
-    /// leader trigger will also reach through `RunState::
+    /// which is the same "did work, no verdict" shape an abandoned-leader
+    /// trigger would also need to reach through `RunState::
     /// unrendered_verdict()`). `waitingUser -> cancelled` is a legal
     /// direct edge, same as `-> failed`, so no forced hop here either.
     #[tokio::test]

@@ -776,7 +776,7 @@ pub fn run_events_op(run_id: RunId, limit: u32) -> DomainClosure {
 /// run-row fields it already holds.
 ///
 /// Stops at the first turn boundary that already has result text
-/// accumulated before it (CREW-49, ADR-0027 amendment), not the first
+/// accumulated before it (ADR-0027's amendment), not the first
 /// boundary outright: a turn ending with only tool activity has no answer
 /// to protect, so scanning past it can never rewrite one the leader has
 /// already read.
@@ -813,12 +813,13 @@ pub fn run_result_events_op(run_id: RunId) -> DomainClosure {
         let mut final_text: Option<String> = None;
         let mut chunk_text: Option<String> = None;
         let mut usage: Option<(u64, u64, Option<f64>)> = None;
-        // ADR-0027's fold boundary, refined by CREW-49 (D3, amendment
-        // below): the residue is read up to and including the first turn
+        // ADR-0027's fold boundary, refined by its own amendment below:
+        // the residue is read up to and including the first turn
         // boundary that already has some result text accumulated before
         // it, not the first boundary outright. A turn that ends having
-        // produced only tool activity (CREW-48's own content guard still
-        // counts that as a real boundary) has no answer to protect --
+        // produced only tool activity (the turn-boundary detector's own
+        // content guard still counts that as a real boundary) has no
+        // answer to protect --
         // skipping past it can never silently rewrite one the leader has
         // already read, since there was nothing to read yet. The vendor
         // process stays alive after its turn, so a LATER turn that
@@ -873,7 +874,7 @@ pub fn run_result_events_op(run_id: RunId) -> DomainClosure {
         }
 
         Ok(json!({
-            // CREW-49: this now means "some boundary was seen" -- it is
+            // Per ADR-0027's amendment, this now means "some boundary was seen" -- it is
             // set on the FIRST one, content-free or not, never cleared,
             // and no longer implies `resultText` came from a settled
             // turn (a content-free first boundary leaves `resultText`

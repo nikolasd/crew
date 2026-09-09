@@ -123,13 +123,13 @@ pub struct Classified<T> {
     pub value: T,
 }
 
-// CREW-45: history and rationale below in `//`; the `///` block after it
+// History and rationale below in `//`; the `///` block after it
 // is the whole of what schemars lifts into crew.schema.json. A consumer of
 // the schema sees a plain JSON string, so the shipped text says only what
 // that string is; everything about *why* the Rust type exists is for the
 // next reader of this file.
 //
-// Introduced by CREW-29, enforcing ADR-0006's boundary at the field.
+// Introduced to enforce ADR-0006's boundary at the field.
 // ADR-0028 covers the run-intent case.
 //
 // The field is private and there is no `From<String>` or `Deref`, so a
@@ -165,7 +165,7 @@ pub struct Classified<T> {
 // instead means a field DECLARED `Redacted` is a compile error until its
 // author decides how it gets sanitized.
 //
-// CREW-61 corrects what this paragraph used to claim. It said "a new
+// A later correction to what this paragraph used to claim. It said "a new
 // caller-carrying field is a compile error until its author decides how it
 // gets sanitized", which is false and was load-bearing for the wrong
 // belief: the obligation only binds fields whose author already declared
@@ -211,7 +211,7 @@ pub struct Redacted(String);
 ///
 /// This lives on a `#[cfg(doctest)]` item rather than on `Redacted` itself
 /// because a doctest only runs from a `///` comment, and a `///` comment on
-/// `Redacted` is lifted verbatim into `crew.schema.json` (CREW-45). Here the
+/// `Redacted` is lifted verbatim into `crew.schema.json`. Here the
 /// tests still run and the schema stays free of Rust.
 ///
 /// A bare `String` cannot populate a caller-carrying field:
@@ -348,9 +348,9 @@ pub enum TimeoutKind {
     Total,
 }
 
-/// Why a settled run resumed to `working` (CREW-58/D30). The two causes
-/// map exactly to `runResumed`'s two journaling call sites, which race
-/// each other for the same edge -- see that event's own doc comment.
+/// Why a settled run resumed to `working`. The two causes map exactly
+/// to `runResumed`'s two journaling call sites, which race each other
+/// for the same edge -- see that event's own doc comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -359,7 +359,7 @@ pub enum ResumeCause {
     /// the run was parked, waiting on a settled turn.
     FollowUpMessage,
     /// The vendor's own transcript recorded a genuine new user-authored
-    /// turn (CREW-47's `is_real_user_turn`), not bookkeeping evidence.
+    /// turn, not bookkeeping evidence.
     RealUserTurn,
 }
 
@@ -372,7 +372,7 @@ pub struct SubtaskSpec {
     /// distinct from a `TaskId`, since a proposed subtask is not yet a
     /// registered task until (and unless) the plan is approved.
     pub id: String,
-    // CREW-61: the leader's own instruction for what this subtask
+    // The leader's own instruction for what this subtask
     // executes -- the same shape as a run's `prompt` (`RunPromptEvent`,
     // ADR-0028), which already crosses the redaction boundary. This is
     // the one place that class of text reached the journal unguarded.
@@ -418,7 +418,7 @@ pub struct RunFlags {
     pub workspace_dirty: bool,
     #[serde(rename = "childrenActive")]
     pub children_active: bool,
-    // CREW-45: history below, schema text above -- `///` is lifted into
+    // History below, schema text above -- `///` is lifted into
     // crew.schema.json's `description`, `//` is not.
     //
     // ADR-0027 introduced this flag because a finished turn and a worker
@@ -509,7 +509,7 @@ pub enum RuntimeEventKind {
     ApprovalDecided,
     #[serde(rename = "childWorkerRequested")]
     ChildWorkerRequested,
-    // R83. Additive and forward-safe in the usual event-kind sense: a
+    // Additive and forward-safe in the usual event-kind sense: a
     // binary predating this variant fails on it when replaying a journal
     // that contains it, exactly like every other event-kind addition.
     /// OMP accepted a pending child-worker request, binding the created
@@ -590,7 +590,7 @@ pub enum RuntimeEventKind {
         adapter: String,
         model: String,
         violation_kind: String,
-        // CREW-61: `Redacted`, and it cost nothing -- this variant has
+        // `Redacted`, and it cost nothing -- this variant has
         // zero construction sites in the runtime, so closing it now is
         // free, whereas allowlisting it would have meant writing "safe
         // because nobody builds it", which stops being true the moment
@@ -647,7 +647,7 @@ pub enum RuntimeEventKind {
     PolicyViolationDecided {
         violation_id: PolicyViolationId,
         resolution: String,
-        // CREW-61: `Redacted`. This is a client-supplied
+        // `Redacted`. This is a client-supplied
         // `principal_instance_id` and nothing validates its shape at this
         // type, so the honest allowlist reason would have been "safe
         // because we assume the client sends an identifier" -- an
@@ -681,13 +681,13 @@ pub enum RuntimeEvent {
     Diagnostic {
         level: DiagnosticLevel,
         code: String,
-        // CREW-61: `Redacted`, not `String`. Two of this event's producers
+        // `Redacted`, not `String`. Two of this event's producers
         // interpolate third-party error text -- `follow_up_delivery_failed`
         // embeds the adapter's own error, and `resume_failed` embeds the
         // registry's -- and an adapter failure routinely names a transcript
         // or socket path. Typed `String` it carried no obligation and
-        // nobody was asked; that is the same gap CREW-60's
-        // `PaneDowngraded.reason` fell through.
+        // nobody was asked; that is the same gap `PaneDowngraded.reason`
+        // fell through before it.
         /// Operator-facing detail. Already redacted: secret-shaped
         /// substrings are masked before this becomes durable.
         message: Redacted,
@@ -719,8 +719,7 @@ pub enum RuntimeEvent {
         run_id: RunId,
         flags: RunFlags,
     },
-    // CREW-58 (D30): the #76/#77 work (CREW-47/48) made resumption caused,
-    // not inferred, but left the cause itself traceable only via message
+    // Earlier work made resumption caused, not inferred, but left the cause itself traceable only via message
     // rows or the vendor transcript -- a `waitingUser -> working` edge
     // carried no evidence of its own about why. This is that evidence,
     // journaled ONLY when the edge that actually landed was genuinely a
@@ -728,7 +727,8 @@ pub enum RuntimeEvent {
     // `waitingUser` before journaling this, at both of its two call
     // sites) -- both a delivered follow-up and a real user turn race
     // against each other for the same `waitingUser -> working` edge
-    // (#76/#77's own comments call the loser's rejection tolerated), and
+    // (those two call sites' own comments call the loser's rejection
+    // tolerated), and
     // this event must never be journaled for the loser.
     /// A settled run resumed to `working`, and why. Best-effort, not
     /// guaranteed: it is journaled as a separate commit after the
@@ -774,7 +774,7 @@ pub enum RuntimeEvent {
         task_id: TaskId,
         action: String,
         decided_by: Option<DecidedBy>,
-        // R59 added this field; optional in both directions so events
+        // This field was added later; optional in both directions so events
         // persisted before it existed still deserialize.
         /// The decision's rationale, when one was supplied. Absent on
         /// `approvalDecided` events written before this field existed.
@@ -948,7 +948,7 @@ pub enum RuntimeEvent {
         backend: DisplayBackend,
         pane_ref: String,
     },
-    // CREW-60 (D28): the resolved backend's pane creation failed, so the
+    // The resolved backend's pane creation failed, so the
     // run fell back to a hidden pane instead of the one it actually
     // wanted. This used to be journaled only as a free-text `Diagnostic`
     // message -- a durable condition on an ephemeral channel (the
@@ -980,7 +980,7 @@ pub enum RuntimeEvent {
         requested_placement: DisplayPlacement,
         /// The backend actually used instead.
         actual_backend: DisplayBackend,
-        // CREW-73: D28's third channel ("extend `DisplaySelection.attempts`
+        // A once-proposed third channel ("extend `DisplaySelection.attempts`
         // to record post-selection pane-creation failures") named a field
         // with no consumer -- `DisplaySelection` never reaches a wire
         // message or `RuntimeEvent`, so extending it would have built a
@@ -996,7 +996,7 @@ pub enum RuntimeEvent {
         //
         // `#[serde(default)]` is required because the journal is
         // append-only: `PaneDowngraded` payloads written before this field
-        // existed (this event has shipped since #88) must still
+        // existed (it shipped before the field was added) must still
         // deserialize on replay.
         /// The backends this attach tried, in order, before settling on
         /// `actualBackend`.
@@ -1364,7 +1364,7 @@ mod tests {
         // every new free-text field on these variants is a plain
         // `Option<Redacted>`/`Redacted`, never `Classified<String>`, so raw
         // thinking/secret content can only reach these variants already
-        // sanitized. CREW-29 strengthened this from `String`: the field type
+        // sanitized. This was strengthened from `String`: the field type
         // now also names *which* boundary the text crossed, so the pin below
         // asserts something stricter than it used to rather than less.
         let (run_id, task_id, worker_id) = fixture_ids();
@@ -1382,8 +1382,8 @@ mod tests {
         }
     }
 
-    /// CREW-73: mirrors `RunFlags.turn_settled`'s own `#[serde(default)]`
-    /// guarantee (event.rs, ADR-0027/CREW-45) -- the journal is
+    /// Mirrors `RunFlags.turn_settled`'s own `#[serde(default)]`
+    /// guarantee (event.rs, ADR-0027) -- the journal is
     /// append-only, so a `PaneDowngraded` payload journaled before
     /// `attempted` existed must still deserialize, as an empty sequence
     /// rather than a hard replay failure.
@@ -1400,8 +1400,9 @@ mod tests {
                 "reason": "tmux exploded"
             }
         });
-        let event: RuntimeEvent = serde_json::from_value(value)
-            .expect("a pre-CREW-73 PaneDowngraded payload must still deserialize");
+        let event: RuntimeEvent = serde_json::from_value(value).expect(
+            "a PaneDowngraded payload written before this field existed must still deserialize",
+        );
         match event {
             RuntimeEvent::PaneDowngraded { attempted, .. } => {
                 assert_eq!(
@@ -1416,7 +1417,7 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// CREW-61: the redaction obligation, enforced at DECLARATION
+// The redaction obligation, enforced at DECLARATION
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -1424,7 +1425,7 @@ mod redaction_enumeration {
     //! `Redacted` puts the redaction obligation on the field -- but a field
     //! only carries it if its author *declared* it `Redacted`. A new
     //! `String` field is asked nothing. That is how `PaneDowngraded.reason`
-    //! journaled raw subprocess stderr (CREW-60) a week after `Redacted`
+    //! journaled raw subprocess stderr a week after `Redacted`
     //! shipped: nobody walked around the guard, the guard was never
     //! invoked, because invoking it IS the declaration.
     //!
@@ -1488,7 +1489,7 @@ mod redaction_enumeration {
              control characters or base64 into the durable columns it reaches \
              unredacted (`tasks.owner_client_instance_id`, \
              `plans.owner_client_instance_id`, `policy_violations.resolved_by`). \
-             CREW-66: it previously said only \"an OMP-assigned client instance id\", \
+             It previously said only \"an OMP-assigned client instance id\", \
              which described the one client that existed rather than any constraint \
              on the field.",
         ),
@@ -1516,7 +1517,7 @@ mod redaction_enumeration {
              control characters or base64 into the durable columns it reaches \
              unredacted (`tasks.owner_client_instance_id`, \
              `plans.owner_client_instance_id`, `policy_violations.resolved_by`). \
-             CREW-66: it previously said only \"an OMP-assigned client instance id\", \
+             It previously said only \"an OMP-assigned client instance id\", \
              which described the one client that existed rather than any constraint \
              on the field.",
         ),
@@ -1528,7 +1529,7 @@ mod redaction_enumeration {
              control characters or base64 into the durable columns it reaches \
              unredacted (`tasks.owner_client_instance_id`, \
              `plans.owner_client_instance_id`, `policy_violations.resolved_by`). \
-             CREW-66: it previously said only \"an OMP-assigned client instance id\", \
+             It previously said only \"an OMP-assigned client instance id\", \
              which described the one client that existed rather than any constraint \
              on the field.",
         ),
@@ -1586,7 +1587,7 @@ mod redaction_enumeration {
              caller- or vendor-derived: the only two production construction sites pass \
              the literals `repeated_failure` \
              (crates/runtime/src/adapter/run_lifecycle.rs) and `write_violation` \
-             (crates/runtime/src/domain/repository.rs). CREW-66: this reason previously \
+             (crates/runtime/src/domain/repository.rs). This reason previously \
              offered two supports and neither existed -- it cited \"the field's own doc\", \
              which had no doc, and said the worker's text travels in the sibling \
              `question`, which no production site populates. What actually secures the \
@@ -1946,7 +1947,7 @@ mod redaction_enumeration {
             unjustified.is_empty(),
             "field(s) reachable from RuntimeEvent are declared `String` with no stated reason: \
              {unjustified:#?}\n\nA journaled `String` field carries no redaction obligation -- \
-             nothing asks its author anything, which is how CREW-60's `PaneDowngraded.reason` \
+             nothing asks its author anything, which is how `PaneDowngraded.reason` \
              journaled raw subprocess stderr. Either declare it `Redacted` (built via \
              `Redactor::sanitize_fragment` + `Redacted::from_sanitized`, or \
              `Redacted::assert_runtime_authored` when no caller or vendor text can reach it), or \
