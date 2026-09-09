@@ -72,8 +72,32 @@ function fakeClient(handler?: (method: string, params: unknown) => unknown) {
   return { client, calls };
 }
 
-function fakeExtCtx(cwd: string): ExtensionContext {
-  return { cwd } as unknown as ExtensionContext;
+/**
+ * A UI stub for the model-ask dialog. Defaults to "no UI attached" (the
+ * fail-closed case most existing tests don't care about); pass `select` to
+ * simulate an interactive session, and it records every `select()` call so
+ * a test can assert on the title/options/preselection the dialog was
+ * actually given.
+ */
+function fakeUi(select?: (title: string, options: readonly string[], dialogOptions?: { initialIndex?: number }) => string | undefined) {
+  const calls: Array<{ title: string; options: readonly string[]; initialIndex: number | undefined }> = [];
+  return {
+    calls,
+    select: async (title: string, options: readonly string[], dialogOptions?: { initialIndex?: number }): Promise<string | undefined> => {
+      calls.push({ title, options, initialIndex: dialogOptions?.initialIndex });
+      return select?.(title, options, dialogOptions);
+    },
+  };
+}
+
+function fakeExtCtx(cwd: string, ui?: ReturnType<typeof fakeUi>): ExtensionContext {
+  return (ui === undefined ? { cwd, hasUI: false } : { cwd, hasUI: true, ui }) as unknown as ExtensionContext;
+}
+
+/** A `select` that always confirms whatever row the dialog preselected --
+ *  simulates a user who accepts the leader's own suggestion verbatim. */
+function confirmPreselected(_title: string, options: readonly string[], dialogOptions?: { initialIndex?: number }): string | undefined {
+  return dialogOptions?.initialIndex === undefined ? undefined : options[dialogOptions.initialIndex];
 }
 
 function setupProfileTool(client: CrewClient, readModelCatalogue: (adapter: Adapter) => Promise<Catalogue> = stubCatalogue) {
@@ -104,22 +128,26 @@ function writeRepoConfig(repository: string, contents: string): string {
 
 // ------------------------------------------------------- resolution order
 
-// Resolution changed what these two assert. `sonnet` is claude's own alias, so
-// what reaches the daemon is now the canonical id it names -- the adapter
-// gets an unambiguous model, and the value crew records is one whose meaning
-// cannot move (claude's config carries an `alias_migration` map).
-test("crew_profile resolves an explicit alias to the canonical id the daemon receives", async () => {
+// `sonnet` is claude's own alias, so it resolves to the canonical id the
+// daemon receives -- but only once a human confirms it in the dialog, since
+// no model is configured yet for this adapter. The leader's suggestion
+// preselects the row; `confirmPreselected` simulates a user accepting it.
+test("crew_profile resolves an explicit alias to the canonical id the daemon receives, once the dialog confirms it", async () => {
   const repository = tempRepo();
   const { client, calls } = fakeClient();
+  const ui = fakeUi(confirmPreselected);
   const { tool } = setupProfileTool(client);
 
-  const result = await tool({ adapter: "claude", model: "sonnet", startupOptions: { claude: { mode: "tui" } } }, fakeExtCtx(repository));
+  const result = await tool({ adapter: "claude", model: "sonnet", startupOptions: { claude: { mode: "tui" } } }, fakeExtCtx(repository, ui));
 
   expect(result.isError).not.toBe(true);
   const register = calls.find((c) => c.method === "profile/register");
   expect((register!.params as { model: string }).model).toBe("claude-sonnet-5");
   // Never silently: the caller is told what their input became.
   expect(result.content.some((c) => "text" in c && c.text.includes("claude-sonnet-5"))).toBe(true);
+  // The suggestion was resolved to the row it preselected, not accepted raw.
+  expect(ui.calls[0]?.options).toContain("claude-sonnet-5");
+  expect(ui.calls[0]?.options[ui.calls[0]!.initialIndex!]).toBe("claude-sonnet-5");
 });
 
 test("crew_profile treats an explicit model matching the configured one as a no-op success", async () => {
@@ -178,14 +206,31 @@ test("crew_profile returns a typed model-not-configured error, and never calls p
   expect(calls.map((c) => c.method)).not.toContain("profile/register");
 });
 
+// A leader-supplied model must not change this outcome: with no configured
+// model and no interactive UI to ask through, crew fails closed regardless
+// of what (or whether) the leader suggested -- the ask, not the suggestion,
+// is what's missing.
+test("crew_profile returns a typed model-not-configured error even with an explicit model, when there is no UI to ask through", async () => {
+  const repository = tempRepo();
+  const { client, calls } = fakeClient();
+  const { tool } = setupProfileTool(client);
+
+  const result = await tool({ adapter: "claude", model: "claude-sonnet-4-6-20260215", startupOptions: { claude: { mode: "tui" } } }, fakeExtCtx(repository));
+
+  expect(result.isError).toBe(true);
+  expect((result.details as { code: string; reason: string }).reason).toBe("no-ui");
+  expect(calls.map((c) => c.method)).not.toContain("profile/register");
+});
+
 // ------------------------------------------------------------- persistence
 
 test("crew_profile persists an explicit model into the repo layer when none was configured", async () => {
   const repository = tempRepo();
   const { client } = fakeClient();
+  const ui = fakeUi(confirmPreselected);
   const { tool } = setupProfileTool(client);
 
-  await tool({ adapter: "claude", model: "sonnet", startupOptions: { claude: { mode: "tui" } } }, fakeExtCtx(repository));
+  await tool({ adapter: "claude", model: "sonnet", startupOptions: { claude: { mode: "tui" } } }, fakeExtCtx(repository, ui));
 
   const written = JSON.parse(readFileSync(join(repository, ".omp", "crew.json"), "utf8"));
   // The resolved id, not the spelling passed in: a persisted alias is a
@@ -197,9 +242,10 @@ test("crew_profile preserves existing keys when persisting", async () => {
   const repository = tempRepo();
   writeRepoConfig(repository, '{"approval":"auto","adapters":{"codex":{"model":"gpt-5"}}}');
   const { client } = fakeClient();
+  const ui = fakeUi(confirmPreselected);
   const { tool } = setupProfileTool(client);
 
-  await tool({ adapter: "claude", model: "sonnet", startupOptions: { claude: { mode: "tui" } } }, fakeExtCtx(repository));
+  await tool({ adapter: "claude", model: "sonnet", startupOptions: { claude: { mode: "tui" } } }, fakeExtCtx(repository, ui));
 
   const written = JSON.parse(readFileSync(join(repository, ".omp", "crew.json"), "utf8"));
   expect(written.approval).toBe("auto");
@@ -229,8 +275,9 @@ test("crew_profile never persists when profile/register itself failed", async ()
     },
   } as unknown as CrewClient;
   const { tool } = setupProfileTool(rejecting);
+  const ui = fakeUi(confirmPreselected);
 
-  const result = await tool({ adapter: "claude", model: "sonnet", startupOptions: { claude: { mode: "tui" } } }, fakeExtCtx(repository));
+  const result = await tool({ adapter: "claude", model: "sonnet", startupOptions: { claude: { mode: "tui" } } }, fakeExtCtx(repository, ui));
 
   expect(result.isError).toBe(true);
   expect(() => readFileSync(join(repository, ".omp", "crew.json"), "utf8")).toThrow();
@@ -251,8 +298,9 @@ test("crew_profile warns rather than throwing when persistence fails after a suc
     },
   } as unknown as CrewClient;
   const { tool } = setupProfileTool(racy);
+  const ui = fakeUi(confirmPreselected);
 
-  const result = await tool({ adapter: "claude", model: "sonnet", startupOptions: { claude: { mode: "tui" } } }, fakeExtCtx(repository));
+  const result = await tool({ adapter: "claude", model: "sonnet", startupOptions: { claude: { mode: "tui" } } }, fakeExtCtx(repository, ui));
 
   expect(result.isError).not.toBe(true);
   expect(result.content.some((c) => "text" in c && c.text.includes("Warning"))).toBe(true);
@@ -263,9 +311,10 @@ test("crew_profile warns rather than throwing when persistence fails after a suc
 test("crew_profile fills in mode: tui for a reserved adapter when the caller omits it", async () => {
   const repository = tempRepo();
   const { client, calls } = fakeClient();
+  const ui = fakeUi(confirmPreselected);
   const { tool } = setupProfileTool(client);
 
-  await tool({ adapter: "claude", model: "sonnet" }, fakeExtCtx(repository));
+  await tool({ adapter: "claude", model: "sonnet" }, fakeExtCtx(repository, ui));
 
   const register = calls.find((c) => c.method === "profile/register");
   const startupOptions = (register!.params as { startupOptions: Record<string, unknown> }).startupOptions;
@@ -289,12 +338,15 @@ test("injectTuiMode preserves other keys already present on the reserved adapter
 test("`sol` reaches the daemon as gpt-5.6-sol -- the maintainer's example, end to end", async () => {
   // No alias table entry exists for bare `sol`. It resolves because it is
   // the only openai-codex id containing it, which is why crew does not own
-  // a mapping for the shorthand that motivated the ticket.
+  // a mapping for the shorthand that motivated the ticket -- and, since
+  // nothing is configured for codex yet, it only preselects that row; the
+  // dialog still decides.
   const repository = tempRepo();
   const { client, calls } = fakeClient();
+  const ui = fakeUi(confirmPreselected);
   const { tool } = setupProfileTool(client);
 
-  const result = await tool({ adapter: "codex", model: "sol" }, fakeExtCtx(repository));
+  const result = await tool({ adapter: "codex", model: "sol" }, fakeExtCtx(repository, ui));
 
   expect(result.isError).not.toBe(true);
   expect((calls.find((c) => c.method === "profile/register")!.params as { model: string }).model).toBe("gpt-5.6-sol");
@@ -316,8 +368,13 @@ test("a stored shorthand and an explicit canonical id are one model, not a confl
   expect((calls.find((c) => c.method === "profile/register")!.params as { model: string }).model).toBe("claude-opus-5");
 });
 
-test("an ambiguous model is refused by name, and never registered", async () => {
+// Ambiguity is a `decideModel` concern, reachable now only through the
+// configured branch (an explicit override compared against a stored
+// value) -- with nothing configured, an ambiguous suggestion just fails to
+// preselect a dialog row (covered below) rather than refusing outright.
+test("an ambiguous model is refused by name, and never registered, when it conflicts with an already-configured one", async () => {
   const repository = tempRepo();
+  writeRepoConfig(repository, '{"adapters":{"codex":{"model":"gpt-5.5"}}}');
   const { client, calls } = fakeClient();
   const { tool } = setupProfileTool(client);
 
@@ -330,47 +387,85 @@ test("an ambiguous model is refused by name, and never registered", async () => 
   expect(calls.map((c) => c.method)).not.toContain("profile/register");
 });
 
-test("an unverified model registers but is NOT written to crew.json, and says so", async () => {
-  // This is the ticket's actual symptom: an invented dated id became the
-  // repository's durable answer. It may run this once -- the vendor is the
-  // second line of defence -- but nothing confirmed it, so nothing records it.
+// The ticket's actual symptom, closed a second way: an invented dated id
+// can no longer become the repository's durable answer at all, because it
+// can't even be typed into existence -- with nothing configured, a name
+// that isn't a real model just fails to preselect anything, and the human
+// still has to pick one of the real options shown.
+test("an invented model name preselects nothing in the dialog, and the human's real pick -- not the suggestion -- is what registers and persists", async () => {
   const repository = tempRepo();
   const { client, calls } = fakeClient();
+  const ui = fakeUi(() => "claude-opus-5");
   const { tool } = setupProfileTool(client);
 
-  const result = await tool({ adapter: "claude", model: "claude-sonnet-4-6-20260215" }, fakeExtCtx(repository));
+  const result = await tool({ adapter: "claude", model: "claude-sonnet-4-6-20260215", startupOptions: { claude: { mode: "tui" } } }, fakeExtCtx(repository, ui));
 
   expect(result.isError).not.toBe(true);
-  expect((calls.find((c) => c.method === "profile/register")!.params as { model: string }).model).toBe("claude-sonnet-4-6-20260215");
-  expect(() => readFileSync(join(repository, ".omp", "crew.json"), "utf8")).toThrow();
-  const text = result.content.filter((c) => "text" in c).map((c) => (c as { text: string }).text);
-  expect(text.some((t) => t.includes("UNVERIFIED"))).toBe(true);
-  expect(text.some((t) => t.includes("Not persisted"))).toBe(true);
+  expect(ui.calls[0]?.initialIndex).toBeUndefined();
+  expect((calls.find((c) => c.method === "profile/register")!.params as { model: string }).model).toBe("claude-opus-5");
+  expect(JSON.parse(readFileSync(join(repository, ".omp", "crew.json"), "utf8")).adapters.claude.model).toBe("claude-opus-5");
 });
 
-test("an unreachable catalogue still registers -- an absent validator never refuses everything", async () => {
+test("catalogue unavailable for the provider -- the dialog offers the vendor's own family table instead, and says so", async () => {
+  // `gpt-5.6` is codex's own documented alias for `gpt-5.6-sol` -- the
+  // suggestion resolves through the alias table even with the catalogue
+  // down, so it still preselects the matching family-table row.
   const repository = tempRepo();
   const { client, calls } = fakeClient();
+  const ui = fakeUi(confirmPreselected);
   const { tool } = setupProfileTool(client, NO_CATALOGUE);
 
-  const result = await tool({ adapter: "codex", model: "gpt-5.6-sol" }, fakeExtCtx(repository));
+  const result = await tool({ adapter: "codex", model: "gpt-5.6" }, fakeExtCtx(repository, ui));
 
   expect(result.isError).not.toBe(true);
   expect((calls.find((c) => c.method === "profile/register")!.params as { model: string }).model).toBe("gpt-5.6-sol");
-  expect(result.content.some((c) => "text" in c && c.text.includes("could not be verified"))).toBe(true);
-  // Not written down: correct or not, nothing checked it this time.
+  expect(ui.calls[0]?.options).toEqual(["gpt-5.6-sol"]);
+  expect(ui.calls[0]?.title).toContain("vendor's own model family table");
+  expect(result.content.some((c) => "text" in c && c.text.includes("family table"))).toBe(true);
+  expect(JSON.parse(readFileSync(join(repository, ".omp", "crew.json"), "utf8")).adapters.codex.model).toBe("gpt-5.6-sol");
+});
+
+test("a local alias still resolves when the catalogue is unreachable, preselects, and is persisted once confirmed", async () => {
+  const repository = tempRepo();
+  const { client, calls } = fakeClient();
+  const ui = fakeUi(confirmPreselected);
+  const { tool } = setupProfileTool(client, NO_CATALOGUE);
+
+  await tool({ adapter: "claude", model: "haiku" }, fakeExtCtx(repository, ui));
+
+  expect((calls.find((c) => c.method === "profile/register")!.params as { model: string }).model).toBe("claude-haiku-4-5");
+  expect(ui.calls[0]?.options[ui.calls[0]!.initialIndex!]).toBe("claude-haiku-4-5");
+  expect(JSON.parse(readFileSync(join(repository, ".omp", "crew.json"), "utf8")).adapters.claude.model).toBe("claude-haiku-4-5");
+});
+
+test("dialog timeout returns a typed model-not-configured error, and never calls profile/register", async () => {
+  const repository = tempRepo();
+  const { client, calls } = fakeClient();
+  const ui = fakeUi(() => undefined); // simulates extCtx.ui.select resolving undefined on timeout
+  const { tool } = setupProfileTool(client);
+
+  const result = await tool({ adapter: "claude", model: "sonnet" }, fakeExtCtx(repository, ui));
+
+  expect(result.isError).toBe(true);
+  expect((result.details as { code: string; reason: string }).reason).toBe("dialog-timeout");
+  expect(calls.map((c) => c.method)).not.toContain("profile/register");
   expect(() => readFileSync(join(repository, ".omp", "crew.json"), "utf8")).toThrow();
 });
 
-test("a local alias still resolves when the catalogue is unreachable, and is persisted", async () => {
+test("a leader-supplied model never bypasses the dialog -- the pick wins even when it differs from the suggestion", async () => {
   const repository = tempRepo();
   const { client, calls } = fakeClient();
-  const { tool } = setupProfileTool(client, NO_CATALOGUE);
+  // The leader suggests opus; the human picks sonnet instead.
+  const ui = fakeUi(() => "claude-sonnet-5");
+  const { tool } = setupProfileTool(client);
 
-  await tool({ adapter: "claude", model: "haiku" }, fakeExtCtx(repository));
+  const result = await tool({ adapter: "claude", model: "opus" }, fakeExtCtx(repository, ui));
 
-  expect((calls.find((c) => c.method === "profile/register")!.params as { model: string }).model).toBe("claude-haiku-4-5");
-  expect(JSON.parse(readFileSync(join(repository, ".omp", "crew.json"), "utf8")).adapters.claude.model).toBe("claude-haiku-4-5");
+  expect(result.isError).not.toBe(true);
+  // The suggestion was still preselected -- the dialog just wasn't bound to it.
+  expect(ui.calls[0]?.options[ui.calls[0]!.initialIndex!]).toBe("claude-opus-5");
+  expect((calls.find((c) => c.method === "profile/register")!.params as { model: string }).model).toBe("claude-sonnet-5");
+  expect(JSON.parse(readFileSync(join(repository, ".omp", "crew.json"), "utf8")).adapters.claude.model).toBe("claude-sonnet-5");
 });
 
 test("an adapter omp does not catalogue behaves exactly as it did before", async () => {

@@ -443,18 +443,30 @@ cargo test -p crew-runtime --test approval
 
 which drives `ApprovalService` directly, the same way this walkthrough can't.
 
-### 3e. Adapter model selection and persistence (no model call)
+### 3e. Adapter model selection and persistence
 
-`crew_profile` registered with an adapter but **no model** triggers ask-on-first-use in an
-interactive session: the extension asks which model to use, persists the answer to the
-repository's `.omp/crew.json`, and later registrations are silent.
+`crew_profile` registered with an adapter that has **no model configured yet** never accepts a
+model as a decision, whatever the caller passed: in an interactive session, crew opens the
+model-selection dialog itself and asks the human, offering the current models for that adapter
+(omp's own catalogue, or the vendor's own model family table when omp has no catalogue entry for
+that provider — see below for which one you'll see). A leader-supplied `model` only preselects a
+row in that list if it resolves to one of the options shown; the human's own pick is what actually
+gets registered and persisted to the repository's `.omp/crew.json`. Later registrations for that
+adapter reuse the stored answer silently, no dialog.
 
-For `claude`, `codex`, and `copilot` (not `ompRpc`, which has no single catalogue provider to
-check against), an explicit `model` is resolved against omp's own model catalogue
-(`omp models ls --json`, read fresh every call, never refreshed over the network) plus a small
-per-adapter table of vendor-defined aliases, before anything else happens
-(`packages/extension/src/models.ts`). There are five outcomes; each is deterministic and
-free to exercise (no model call, just `crew_profile` calls):
+Without an interactive UI attached, or if the dialog times out with no answer, or if there is
+nothing to offer (no catalogue entry and no vendor family table for that adapter), registration is
+refused with a typed `model-not-configured` error — nothing is registered or persisted.
+`ompRpc` and any caller-defined adapter have no catalogue and no dialog either way: an explicit
+`model` is used exactly as given (this is unchanged from before the dialog existed), and omitting
+it is what triggers the same `model-not-configured` error for them.
+
+**Once a model IS configured for an adapter**, an explicit `model` on a later call is never a
+second decision — it is resolved against omp's own model catalogue (`omp models ls --json`, read
+fresh every call, never refreshed over the network) plus a small per-adapter table of
+vendor-defined aliases (`packages/extension/src/models.ts`), and the result is only ever *compared*
+to the stored answer. There are five outcomes; each is deterministic and free to exercise (write
+`.omp/crew.json` yourself first, then just `crew_profile` calls — no model call, no dialog):
 
 | You call `crew_profile` with... | Resolves to | What you see |
 |---|---|---|
@@ -464,17 +476,30 @@ free to exercise (no model call, just `crew_profile` calls):
 | A shorthand matching **several** catalogue ids | Nothing — refused | `"<input>" matches N models for adapter <adapter>: <id>, <id>, ... -- name one of them exactly.` (a typed `model-ambiguous` error; nothing is registered or persisted) |
 | A name omp's catalogue does not know (typo, or a genuinely new/unlisted model) | Used as given, **not persisted** | `model: <name> (not in omp's catalogue for <provider>; passing through UNVERIFIED -- the vendor will reject it if it is wrong)` |
 
+The same resolution also decides which dialog row a leader's suggestion preselects on
+first use: a suggestion that resolves `exact`, `alias`, or `match` preselects that row; one that
+resolves `ambiguous` or `unverified` (or doesn't resolve at all when the catalogue is down and it
+isn't an alias) preselects nothing, and the dialog still opens with every real option on offer —
+there is no way to preselect, let alone register, a name nothing could confirm.
+
 The alias table itself is small and vendor-sourced (`claude`: `fable`/`opus`/`sonnet`/`haiku`, read
 from the installed binary's own `latest_per_family` config, not its `--help` text; `codex`: the
 single documented `gpt-5.6` → `gpt-5.6-sol`; `copilot`: none, since it defines no aliases crew can
 verify) — see the doc comment on `VENDOR_ALIASES` in `models.ts` before assuming it needs a new
-entry for some other shorthand.
+entry for some other shorthand. A test in `models.test.ts` reads this table's `claude` half back
+out of the installed `claude` binary's own baked catalogue and fails (or skips, visibly, if the
+binary isn't present) when they've drifted apart.
+
+When omp's catalogue has nothing for an adapter's provider (e.g. no `anthropic` credentials in
+omp, so `claude` has none, even though the `claude` binary itself works fine), the dialog falls
+back to that same alias table's values instead of refusing outright — `currentModels` in
+`models.ts` names which source answered, and the dialog says so in its title.
 
 **Persistence follows verification, not success.** An `exact`, `alias`, or `match` resolution is
 confirmed and gets written to `.omp/crew.json` on first use, same as before model resolution was
-added. An `unverified` name runs (the vendor gets the final say) but is deliberately **not**
-recorded — pass it again next session, or add it to `.omp/crew.json` yourself once a run has proven
-it works.
+added — and so is a dialog pick, which is a member of a verified list by construction. An
+`unverified` name (only reachable once a model is already configured, comparing an explicit
+override to it) runs but is deliberately **not** re-recorded.
 
 The existing conflict check still applies, but now compares canonical ids, not raw spelling — a stored
 `claude-opus-5` and an explicit `opus` are recognized as the same model and accepted as a no-op,
