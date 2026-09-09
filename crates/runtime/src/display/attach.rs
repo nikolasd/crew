@@ -417,6 +417,14 @@ async fn serve_viewer(
     }
 
     let mut buf = [0u8; READ_CHUNK_BYTES];
+    // One filter per connection, spanning its whole read loop: a real
+    // terminal's reply to the vendor's own redraw-driven escape queries
+    // (CPR, DA, focus/paste-mode reports) shares this exact socket with
+    // genuine keystrokes -- see `terminal_reply`'s doc comment for the
+    // incident this exists for -- and a single socket read can split one
+    // reply across two calls, which only a filter carried across reads
+    // can see through (see `ReplyFilter`'s own doc comment).
+    let mut reply_filter = super::terminal_reply::ReplyFilter::new();
     loop {
         tokio::select! {
             read = read_half.read(&mut buf) => {
@@ -424,7 +432,18 @@ async fn serve_viewer(
                     Ok(0) | Err(_) => return,
                     Ok(n) => {
                         let bytes = buf[..n].to_vec();
-                        on_user_input(bytes.clone());
+                        // Only the residue after stripping recognized
+                        // replies is out-of-band INPUT; a read that is
+                        // nothing but replies never reaches
+                        // `on_user_input` at all, so it neither journals
+                        // an event nor sets `needsReconciliation`. The
+                        // vendor's own PTY still gets every byte,
+                        // unfiltered, below -- stripping is for the
+                        // journaling decision only.
+                        let residue = reply_filter.filter(&bytes);
+                        if !residue.is_empty() {
+                            on_user_input(residue);
+                        }
                         // A failed keystroke delivery is degraded control,
                         // never silence: the viewer typed and nothing
                         // reached the vendor process (a deferred minor).
@@ -445,6 +464,23 @@ async fn serve_viewer(
                     Err(broadcast::error::RecvError::Lagged(_)) => {}
                     Err(broadcast::error::RecvError::Closed) => return,
                 }
+            }
+            // `ReplyFilter` holds a trailing `ESC` back by volume, not
+            // time (more bytes arriving is what proves it wasn't a
+            // reply) -- a lone Escape keypress with nothing typed after
+            // it would otherwise be held forever, and Escape alone is a
+            // real, consequential out-of-band action (it interrupts a
+            // claude TUI's current turn). Disabled whenever nothing is
+            // held (`if reply_filter.has_pending()`), so an idle
+            // connection with no pending bytes never wakes this loop for
+            // nothing; re-armed fresh every iteration, so it always
+            // measures quiet time since the most recent read, matching
+            // `oob_coalescer`'s own idle-window cadence exactly (see
+            // `ReplyFilter`'s doc comment for why the two share one
+            // constant rather than each inventing their own).
+            () = tokio::time::sleep(crate::adapter::tui::oob_coalescer::IDLE_WINDOW), if reply_filter.has_pending() => {
+                let held = reply_filter.take_pending();
+                on_user_input(held);
             }
         }
     }

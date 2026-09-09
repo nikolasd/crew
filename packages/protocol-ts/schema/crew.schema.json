@@ -1757,7 +1757,7 @@
           "additionalProperties": false
         },
         {
-          "description": "A human typed directly into a native pane, bypassing the\nadapter. Sets the run's `RunFlags.needsReconciliation` flag.",
+          "description": "A human typed directly into a native pane, bypassing the\nadapter. Sets the run's `RunFlags.needsReconciliation` flag.\n\nCoalesced: one row covers every out-of-band input observed during\none idle window, not one row per keystroke read. Journaled at the\nEND of the window it describes, so the window's start is this\nevent's own envelope timestamp minus `spanMs` -- no separate start\ntimestamp is carried, to avoid a second place for the two to\ndisagree.",
           "type": "object",
           "properties": {
             "type": {
@@ -1775,6 +1775,20 @@
                 },
                 "paneRef": {
                   "type": "string"
+                },
+                "inputCount": {
+                  "description": "How many out-of-band inputs this row coalesces. Absent on\nrows written before coalescing existed; such a row is exactly\none input, so absence reads as 1, never 0 -- an\n`outOfBandInput` event means \"a human typed\", and zero of\nthem is not a state that can be journaled.",
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "default": 1
+                },
+                "spanMs": {
+                  "description": "Milliseconds between the first and last input this row\ncoalesces. Absent on rows written before coalescing existed;\nsuch a row is a single input, which spans zero milliseconds.",
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "default": 0
                 }
               },
               "additionalProperties": false,
