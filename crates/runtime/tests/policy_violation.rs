@@ -1,4 +1,4 @@
-//! Regression tests for R54: `ViolationService::decide` must not admit two
+//! Regression tests for a race: `ViolationService::decide` must not admit two
 //! concurrent, contradictory decisions for the same policy violation.
 //!
 //! `DatabaseHandle::run_domain_op` (`crates/runtime/src/db/actor.rs`) sends a
@@ -54,8 +54,8 @@
 //! timing dependency rather than a scheduling guarantee, and the review
 //! was right to reject resting a determinism claim on it. This test
 //! instead settles the run first, sequentially, then calls `decide` --
-//! zero timing dependency, and it still proves exactly the thing R54
-//! changed: `PolicyViolationSnapshot` no longer carries `run_state`, so
+//! zero timing dependency, and it still proves exactly what changed:
+//! `PolicyViolationSnapshot` no longer carries `run_state`, so
 //! the guard's own live read of `runs.state` inside
 //! `resolve_policy_violation`'s transaction is the *only* thing left that
 //! can refuse this release, and this test shows that read is correct on

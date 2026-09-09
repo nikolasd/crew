@@ -108,7 +108,7 @@ mod tests {
         assert!(limiter.check(sender, later).is_ok());
     }
 
-    /// R65: a sender that stops sending must not hold a map entry
+    /// A sender that stops sending must not hold a map entry
     /// forever. One runtime process serves every run of a repository for
     /// as long as it stays resident, so per-retired-worker `Vec<Instant>`
     /// entries are an unbounded leak. Any later check by any other sender

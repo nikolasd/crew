@@ -670,7 +670,7 @@ async fn a_human_required_approval_is_accepted_when_decided_by_a_human() {
     assert_eq!(result["result"]["outcome"], "decided");
 }
 
-/// R92: `decided_by` has been persisted since MIGRATION_7 and `reason`
+/// `decided_by` has been persisted since MIGRATION_7 and `reason`
 /// since MIGRATION_9, both carried on `ApprovalDecided` events -- but
 /// `approval/list` projected neither, so decision provenance was readable
 /// only via `events/replay` or `crewd audit export`. The list must
@@ -792,10 +792,10 @@ async fn an_approval_without_decided_by_defaults_to_model_and_fails_human_requir
 
 #[tokio::test]
 async fn a_decision_persists_the_bare_decided_by_token_and_the_reason() {
-    // R34: `decided_by` was written via serde_json::to_string, storing the
+    // `decided_by` was written via serde_json::to_string, storing the
     // JSON-quoted token `"human"` -- `WHERE decided_by = 'human'` matched
-    // zero rows forever. R59: `reason` was accepted end-to-end and then
-    // discarded (`let _ = reason;`) -- permanent audit-trail loss.
+    // zero rows forever. Separately, `reason` was accepted end-to-end and
+    // then discarded (`let _ = reason;`) -- permanent audit-trail loss.
     let harness = Harness::start(|_| {}).await;
     let mut owner = omp_client(&harness, "omp-owner").await;
     let (approval_id, _run_id, _task_id) =

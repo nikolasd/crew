@@ -407,7 +407,7 @@ mod tests {
         assert!(matches!(err, VerifyError::InvalidToken));
     }
 
-    /// R96: a run whose adapter died before its settlement hook never
+    /// A run whose adapter died before its settlement hook never
     /// gets `revoke_for_run`, so its expired record would leak for the
     /// process lifetime. Any later `verify` -- for any token -- must
     /// sweep drained records, mirroring `RateLimiter::check`.

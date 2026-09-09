@@ -1,8 +1,8 @@
-//! Regression tests for R72: `ViolationService::decide` used to check task
+//! Regression tests for a stale-ownership race: `ViolationService::decide` used to check task
 //! ownership as a caller-side pre-check against a snapshot loaded before
 //! the guarded write, so a `reconcile/omp` ownership rebind landing in the
 //! window between that snapshot and the write left a stale owner's
-//! decision with nothing left to refuse it. This is the same shape R71
+//! decision with nothing left to refuse it. This is the same shape
 //! fixed on the approval path (see `approval_owner_race.rs`'s header for
 //! the full actor-FIFO argument).
 //!
@@ -42,7 +42,7 @@
 //!
 //! Ownership is now arbitrated exclusively inside
 //! `resolve_policy_violation`'s guarded transaction, mirroring
-//! R71's `decide_approval`: the write itself re-reads
+//! the equivalent fix in `decide_approval`: the write itself re-reads
 //! `tasks.owner_client_instance_id` and refuses a caller that no longer
 //! owns the task. That makes the `biased` enqueue ordering this file
 //! still uses no longer load-bearing for correctness -- it now exists
@@ -56,7 +56,7 @@
 //! exactly one `PolicyViolationDecided` event. It asserts only the
 //! resolution contract -- not `Run.flags.policyQuarantined`, which
 //! `decide("release")` also clears via a follow-up round trip after the
-//! guarded write commits; that flag is R73's territory, not this file's.
+//! guarded write commits; that flag belongs to a separate fix, not this file's.
 //!
 //! The third test proves ownership outranks idempotent replay: the guarded
 //! write checks `tasks.owner_client_instance_id` before it checks whether

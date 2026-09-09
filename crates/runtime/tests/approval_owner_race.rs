@@ -1,4 +1,4 @@
-//! Regression tests for R71: `ApprovalService::decide` used to check task
+//! Regression tests for a stale-ownership race: `ApprovalService::decide` used to check task
 //! ownership as a caller-side pre-check against a snapshot loaded before
 //! the guarded write, so a `reconcile/omp` ownership rebind landing in the
 //! window between that snapshot and the write left a stale owner's
@@ -39,7 +39,7 @@
 //!
 //! Ownership is now arbitrated exclusively inside `decide_approval`'s
 //! guarded transaction, alongside the conflict, idempotent-replay,
-//! and settled-run checks R70 already moved there: the write itself
+//! and settled-run checks that an earlier fix already moved there: the write itself
 //! re-reads `tasks.owner_client_instance_id` and refuses a caller that no
 //! longer owns the task. That makes the `biased` enqueue ordering this
 //! file still uses no longer load-bearing for correctness -- it now exists
