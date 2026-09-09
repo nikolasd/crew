@@ -24,6 +24,13 @@ should be discovered by reading documentation, not by trial and error.
 This document is a catalog of lessons that still describe a way the system can fail, not an
 append-only log — pruning it is separate work from writing this rule down, and has not happened yet.
 
+**If you read only one entry, read [A zero is a measurement, and an unchecked instrument reports
+zero](#a-zero-is-a-measurement-and-an-unchecked-instrument-reports-zero).** Most entries here
+describe a way one part of the system can break. That one describes a way *you* can break while
+checking whether anything is broken, and it is the only failure mode in this document that has
+been hit six separate times, by four different people, using three different tools — every time
+producing a clean result that looked exactly like success.
+
 ## Topic index
 
 - [IPC and Client Management](#ipc-and-client-management)
@@ -112,6 +119,9 @@ append-only log — pruning it is separate work from writing this rule down, and
   - [A deletion sweep must sweep claims, not just references](#a-deletion-sweep-must-sweep-claims-not-just-references)
 - [Fixture Integrity](#fixture-integrity)
   - [A byte-exact fixture is not text, and git will rewrite it](#a-byte-exact-fixture-is-not-text-and-git-will-rewrite-it)
+- [Measurement and Instruments](#measurement-and-instruments)
+  - [A zero is a measurement, and an unchecked instrument reports zero](#a-zero-is-a-measurement-and-an-unchecked-instrument-reports-zero)
+  - [A claim about the future has no failure mode when the future arrives](#a-claim-about-the-future-has-no-failure-mode-when-the-future-arrives)
 
 ---
 
@@ -1683,3 +1693,86 @@ The same applies to any future binary-ish fixture: a recording, a compiled artif
 tree, which is the copy that looks correct either way. The protection is the attribute plus the
 staged-blob hash check at the time of adding, recorded in
 `fixtures/adapters/tui-screens/README.md`.
+
+## Measurement and Instruments
+
+### A zero is a measurement, and an unchecked instrument reports zero
+
+**Location:** `scripts/check-markers.ts` and its positive-control test; discovered across the
+repository-wide sweep that produced it
+
+**The bug:** Four separate checks during one piece of work returned a confident zero from an
+instrument that could not have returned anything else. Every one of them looked exactly like a pass.
+
+* `git diff origin/main...HEAD` was run on a branch whose work was **uncommitted**. The three-dot
+  diff compares the merge base to `HEAD`, so it measured the last commit and reported no changes —
+  against a working tree full of them.
+* A shell loop passed `"crates/runtime crates/xtask"` as a **single quoted pathspec**. Git looked
+  for one path containing a space, found none, and reported zero for every row of the table.
+* `git grep -E '\bD[0-9]'` matched nothing at all. POSIX extended regular expressions **have no
+  word-boundary escape**; the pattern is simply unsatisfiable, and the clean result was
+  indistinguishable from a clean tree. The same pattern under `-P`, or in ripgrep, found the
+  matches immediately. This one was used to certify a slice as clean, twice, by two different people.
+* A recursive `rg` from the repository root **skips hidden directories by default**, so it never
+  opened `.github/` and never saw the markers in the workflow files. Naming the path explicitly
+  finds them; traversing to it does not.
+
+The last two were being used to *check a scanner*. One of them disagreed with the scanner, and the
+scanner was right.
+
+**The lesson:** a zero is a measurement, and a measurement is only as good as a demonstration that
+the instrument can produce a non-zero. Before trusting a clean result, run the instrument against a
+case you know should match — a line you can see with your own eyes, a file you just edited. That is
+cheap, and it is the only thing that separates "nothing is wrong" from "nothing was looked at".
+
+For anything that runs repeatedly, build the demonstration in. `check-markers.test.ts` pins every
+rule against text it must catch, and asserts that no rule exists without such a control, so a
+pattern edited into something unsatisfiable fails the control before the repository scan can report
+a false all-clear. This is the same shape as the entry on a fail-closed assertion whose failure path
+is never exercised: an assertion nobody has seen fail, and a search nobody has seen match, are both
+claims resting on an untested mechanism.
+
+**Regression tests:** `scripts/check-markers.test.ts` — the `positive control` block, including
+`every declared rule is exercised by a control above`, which fails if a rule is added without one.
+
+### A claim about the future has no failure mode when the future arrives
+
+**Location:** `crates/protocol/src/method.rs`'s orchestration block, against
+`crates/runtime/src/service/orchestration.rs` and `crates/protocol/src/plan.rs`
+
+**The bug:** A comment on the `plan/*` and `run/timeoutAck` wire methods read:
+
+> The daemon accepts these methods and refuses them with a "not yet implemented"
+> JSON-RPC error until a later work package lands their real handlers.
+
+It was true when written. The handlers then landed -- all four dispatch to real
+implementations in `service::orchestration` -- and nothing anywhere noticed. The
+comment went on describing a daemon that no longer existed, and `plan.rs`'s own
+module doc, two files away, had been saying the opposite in plainer language
+("fully implemented and reachable via the daemon's JSON-RPC interface") for the
+whole intervening period. Two comments in the same crate contradicted each other
+and no reader reconciled them, which is the measure of how little either was
+being read against the code.
+
+**The lesson:** a claim about the future has no failure mode when the future
+arrives. The event that falsifies "not yet implemented" is precisely the event
+nobody re-reads that comment for -- the person landing the handlers is thinking
+about handlers, not about a sentence in a wire-protocol enum three files away.
+The same shape covers "temporary", "for now", "until X ships", and any TODO
+without an owner: each is a prediction, and predictions do not raise errors when
+they expire.
+
+Where such a claim is worth writing at all, tie it to something that *fails*.
+A test that starts passing when the work lands (and is expected to fail until
+then), an assertion that trips, a `#[cfg]` that stops compiling, or a doc the
+implementing change is already forced to touch. If none of those is available,
+prefer describing what the code does now over promising what it will do later --
+a description stays honest by being rewritten alongside the code, which is the
+same reasoning as "documentation follows code, never leads it".
+
+**Regression tests:** none possible for the class -- the defect is a true
+sentence becoming false with no event to observe. The instance is fixed, and the
+practice is the takeaway. Note that the repository-wide identifier sweep is what
+surfaced it: the stale claim was carrying a marker, so a mechanical pass would
+have reworded it into a shorter stale claim. Reading each replacement for truth
+rather than for shape is what caught it.
