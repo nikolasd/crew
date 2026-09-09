@@ -110,8 +110,21 @@ jobs:
         with:
           bun-version: 1.3.14
 
+      # `--frozen-lockfile` on every install in this repository's workflows.
+      # Without it, `bun install` treats a lockfile that disagrees with a
+      # `package.json` as something to silently rewrite: it exits 0, updates
+      # `bun.lock` in the runner, and the job proceeds against a dependency
+      # graph nobody committed. That is not hypothetical -- `bun.lock`
+      # recorded the extension at 0.4.1 and a peer range of `<18` while
+      # `package.json` said 0.6.0 and `<19`, through an unknown number of
+      # green pipelines, because no job ever asked. Measured both ways on
+      # the same drift: plain `bun install` exits 0 and rewrites the file;
+      # `--frozen-lockfile` exits 1 and names the fix.
+      #
+      # When this fails, the lockfile is genuinely out of date: run
+      # `bun install` locally and commit the resulting `bun.lock`.
       - name: Install JS workspace dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       # Biome formats the JS/TS half. `cargo fmt` above covers Rust only,
       # so without this a TypeScript formatting regression reaches main
@@ -170,7 +183,7 @@ jobs:
           bun-version: 1.3.14
 
       - name: Install JS workspace dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Run Rust tests
         run: cargo test --workspace
@@ -188,7 +201,7 @@ jobs:
           bun-version: 1.3.14
 
       - name: Install JS workspace dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       # `strict: true` was declared from day one but never enforced: no local
       # script and no CI job ran `tsc`, so real compile errors shipped in
@@ -206,7 +219,7 @@ jobs:
           bun-version: 1.3.14
 
       - name: Install JS workspace dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Check generated code is up to date
         run: bun run generate --check
@@ -221,7 +234,7 @@ jobs:
           bun-version: 1.3.14
 
       - name: Install JS workspace dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Fail if the bundle is not a tracked file
         run: git ls-files --error-unmatch packages/extension/dist/index.js
@@ -254,7 +267,7 @@ jobs:
           bun-version: 1.3.14
 
       - name: Install JS workspace dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Run dependency audit
         run: |

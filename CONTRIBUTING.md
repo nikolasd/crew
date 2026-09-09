@@ -231,6 +231,14 @@ what makes them evidence, and `assets/`, where the logo's parts carry labels of 
 `release/live-conformance/*.json` is exempt for the same reason as `fixtures/` — those reports are
 harness output copied verbatim — while that directory's README, being authored prose, is not.
 
+### The lockfile is checked, not repaired, by CI
+
+Every workflow installs with `bun install --frozen-lockfile`. If `bun.lock` disagrees with any
+`package.json`, the job fails and says so, rather than quietly resolving a different dependency
+graph and continuing — which is what a plain `bun install` does, exiting 0 and rewriting the
+lockfile in the runner where nobody sees it. Run `bun install` locally and commit the updated
+`bun.lock` in the same change that touched the dependency.
+
 ### Commit messages carry technical content only
 
 No tool attribution, no agent names, no session links. A trailer of that kind says nothing about the
