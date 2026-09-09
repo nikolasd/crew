@@ -1,7 +1,7 @@
 # Live TUI conformance evidence (0.5.0)
 
 Raw `crewd conformance --live --mode tui` reports, copied verbatim from the
-WP29 run harness output (no fields altered — provenance preserved).
+run harness output (no fields altered — provenance preserved).
 
 | File | Source (`/tmp`) | Adapter | runnable scenarios | `session_resume` |
 |---|---|---|---|---|
@@ -46,9 +46,9 @@ The captures behind that record are committed as
 Each raw report's `session_resume` scenario carries the detail:
 
 > genuine restart recovery is proven by the separate serve->stop->serve
-> end-to-end smoke (WP29), not this report
+> end-to-end smoke, not this report
 
-This is **overstated**. The serve->stop->serve smoke that passed in WP29 was
+This is **overstated**. The serve->stop->serve smoke that passed was
 **vendor-free** (`crewd serve -> status -> stop`, no vendor task). The
 *transcript-recovery-across-a-real-daemon-restart* case — i.e. run a vendor
 task, stop the daemon, restart it, and assert the transcript is recovered —
@@ -105,7 +105,7 @@ their sources (`cmp`-verified); the overstatement is corrected here only.
 ## Rerun 2026-08-26 (evening)
 
 Both `codex` and `copilot` live TUI smokes were rerun via
-`crewd conformance --live --mode tui` after the WP29 follow-up work:
+`crewd conformance --live --mode tui` after follow-up work:
 
 - **codex**: 4/4 runnable (credits refilled). `codex-tui.json` replaced with the
   fresh run; `session_resume` skipped by design.

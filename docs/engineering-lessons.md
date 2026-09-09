@@ -233,7 +233,8 @@ hop the legal-edge table forces and never overwriting a terminal state.
 (`process_started_moves_a_queued_run_to_starting` through
 `vendor_output_never_reopens_working_on_a_run_that_started_waiting`) are unaffected. The
 end-to-end proofs against real processes named here at the time this lesson was written drove a
-real process through the *headless* control plane, which crew-v2 gap-closure WP-C retired. The
+real process through the *headless* control plane, which crew-v2 gap-closure retired (see
+[ADR-0026](adr/0026-headless-retirement.md)). The
 headless-specific test files (`crates/runtime/src/adapter/claude/mod.rs`'s `run_state_tests`,
 `crates/runtime/tests/copilot_adapter.rs`) are deleted outright. However, regression coverage
 persists: `crates/runtime/tests/run_lifecycle.rs`'s `a_real_worker_process_walks_its_run_from_queued_into_working`
@@ -1357,13 +1358,13 @@ moves when the point of the move is to reinstate the original.
 
 ### Retiring a journaled wire value is three rules, not one
 
-**Location:** `crates/protocol/src/display.rs` — `DisplayBackend::Terminal` (WP9) and
+**Location:** `crates/protocol/src/display.rs` — `DisplayBackend::Terminal` and
 `DisplayPlacement::Embedded`
 
-**The bug:** WP9 retired the `Terminal` display backend by deleting the enum variant. Nothing else.
+**The bug:** A fix retired the `Terminal` display backend by deleting the enum variant. Nothing else.
 `DisplayBackend` is journaled, so any event log carrying `backend: "terminal"` stops deserializing —
 `events/replay`, crash recovery and `audit export` all fail on it. Nobody noticed because no local
-journal predates WP9; the exposure is entirely other people's data.
+journal predates that retirement; the exposure is entirely other people's data.
 
 A later retirement effort (see [ADR-0029](adr/0029-placement-follows-the-backend-embedded-deleted.md))
 was then about to do it again to `DisplayPlacement::Embedded`, whose removal was approved on
@@ -1442,7 +1443,7 @@ which composes the real production order rather than the inner sink alone.
 **Location:** `crates/runtime/tests/kill_switch_authorization.rs`
 (`the_kill_switch_never_shrinks_effective_capabilities`)
 
-**The bug:** crew-v2 gap-closure WP-C deleted the headless control plane and retargeted
+**The bug:** crew-v2 gap-closure (see [ADR-0026](adr/0026-headless-retirement.md)) deleted the headless control plane and retargeted
 `run_fixture_conformance` from `AdapterMode::Headless` to `AdapterMode::Tui`. Swapping the enum
 value this test passed compiled clean and would have looked done: the type checker has no opinion
 on what a test's assertions actually establish, only on whether the code that produces the values
@@ -1624,13 +1625,14 @@ panic, and the guard becomes a guard.
 
 ### A deletion sweep must sweep claims, not just references
 
-**Location:** crew-v2 gap-closure WP-A/B/C, broadly -- exemplar:
-`crates/runtime/src/adapter/tui/omp.rs`'s `base_args` doc comment (WP-C review round 1, I-1)
+**Location:** the crew-v2 gap-closure deletion work, broadly -- exemplar:
+`crates/runtime/src/adapter/tui/omp.rs`'s `base_args` doc comment (from the headless-retirement
+review, see [ADR-0026](adr/0026-headless-retirement.md))
 
 **The bug:** Across three work packages of deletions, nearly every finding that survived review was
 the same shape: a true prose claim -- "validated by X", "proven by Y", "this module owns that
 confirmation" -- that quietly stopped being true the moment its referent changed or was deleted,
-with nothing in the toolchain forcing anyone to notice. The exemplar: WP-C's own inventory step
+with nothing in the toolchain forcing anyone to notice. The exemplar: the headless-retirement's own inventory step
 (`grep -rn 'adapter::(claude|codex|copilot|omp_rpc)::'`) correctly found and classified every code
 *reference* to the headless adapters before deleting them -- and still missed that
 `adapter/tui/omp.rs`'s `base_args` doc comment made an *assertion about* the headless adapter
@@ -1644,13 +1646,13 @@ deletion sweep's inventory step -- however systematic -- only ever proves refere
 never claim-completeness. Before trusting an inventory as done, separately ask: what does the
 surviving code (or docs, or a release checklist) *say* about the thing being deleted, independent
 of whether it names it directly? That second pass is prose-shaped, not grep-shaped -- it means
-reading, not searching -- and is exactly what this WP's review rounds kept surfacing one deletion
+reading, not searching -- and is exactly what those review rounds kept surfacing one deletion
 sweep after the next: a stale contract comment, a checklist never updated, a schema description
 never touched, a citation pointing at the wrong sibling test. None of these were reference bugs; all
 of them were claims a grep-based inventory has no way to catch.
 
 **Regression tests:** N/A -- this is a review-process lesson, not a single code path. The concrete
-instance this WP left behind is fixed (`OmpTuiVendor::preflight` restores the enforcement `base_args`
+instance that review left behind is fixed (`OmpTuiVendor::preflight` restores the enforcement `base_args`
 claims, with its own tests); the transferable practice is the takeaway.
 
 ## Fixture Integrity

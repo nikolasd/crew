@@ -572,7 +572,7 @@ cargo test -p crew-runtime --test conformance
 cargo test -p crew-runtime --test claude_tui_fixture
 ```
 
-Fixture mode is TUI-sourced now (crew-v2 gap-closure WP-C, spec §4.6) — the headless control
+Fixture mode is TUI-sourced now (crew-v2 gap-closure; see [ADR-0026](adr/0026-headless-retirement.md)) — the headless control
 plane this section used to also exercise via a per-adapter test file
 (`claude_adapter`/`codex_adapter`/`copilot_adapter`/`omp_rpc_adapter`) is retired; those files are
 deleted along with it. Each vendor's own scenario probes live under `adapter::tui::*_conformance`
@@ -619,7 +619,7 @@ papered over with a fabricated pass:
 
 The headless control plane this section used to test directly against a per-adapter test file
 (a real, billed call reached via `cargo test --test claude_live -- --ignored`, etc.) is retired
-(crew-v2 gap-closure WP-C, spec §4.6) — those test files are deleted along with it. **See 4f.1
+(crew-v2 gap-closure; see [ADR-0026](adr/0026-headless-retirement.md)) — those test files are deleted along with it. **See 4f.1
 below**, the TUI live conformance harness (`crewd conformance --live --mode tui`), which is now
 the only live path against a real vendor CLI.
 
@@ -634,10 +634,10 @@ However, whether the registry starts an adapter is still gated by `PolicyEvaluat
 `limits.maxConcurrentWorkers` concurrency ceiling (from `crew.json`), and a nested-worker check
 that denies unexpected child workers pre-authorization. The wider org-governance surface this
 evaluator used to also enforce -- model/adapter allowlists, a required-capability list, cost
-ceilings, and the `native_discovery_reviewed` rollout gate -- is retired (crew-v2 gap-closure WP5;
+ceilings, and the `native_discovery_reviewed` rollout gate -- is retired (crew-v2 gap-closure;
 see
 [`future-features.md`](future-features.md#org-governance-enforcement-modeladapter-allowlists-cost-ceilings-rollout-gates)):
-that surface was config-sourced from the YAML org layer removed in that WP, which was never
+that surface was config-sourced from the YAML org layer removed in that work, which was never
 actually reachable in production.
 
 Practically: submitting a run through a live `omp` session with a real adapter's vendor CLI
@@ -709,7 +709,7 @@ fork-inherited dead socket. See
 
 #### 4f.1 TUI live conformance harness
 
-`crewd conformance --live --mode tui` walks the scenario set against the real interactive vendor CLIs on a PTY (`tui` is the only accepted `--mode` value and its default — the headless control plane this also used to reach is retired, `--mode headless` is a typed rejection now, crew-v2 gap-closure WP-C). `--adapter` takes `all` or one of `claude`, `codex`, `copilot`, `ompRpc`; `--output <path>` writes the JSON report.
+`crewd conformance --live --mode tui` walks the scenario set against the real interactive vendor CLIs on a PTY (`tui` is the only accepted `--mode` value and its default — the headless control plane this also used to reach is retired, `--mode headless` is a typed rejection now, see [ADR-0026](adr/0026-headless-retirement.md)). `--adapter` takes `all` or one of `claude`, `codex`, `copilot`, `ompRpc`; `--output <path>` writes the JSON report.
 
 ```bash
 # billed model calls for claude/codex/copilot; omp-rpc reaches a model only when a turn runs

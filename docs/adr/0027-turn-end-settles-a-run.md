@@ -200,7 +200,7 @@ already exists would be a new and worse failure mode.
   session. Under this design `run/finish` tears the session down before the run becomes retryable, so
   the hazard is contained rather than fixed; if a path to retry-while-alive appears, it must resume
   the live session or refuse with a typed error, never double-spawn silently.
-* The timeout sweep's "journal only, never change state" property (WP19) is deliberately broken by
+* The timeout sweep's "journal only, never change state" property is deliberately broken by
   the wave-3 backstop. That was written when a stuck run was still visibly `working`; once a settled
   turn is distinguishable, silence is actionable evidence rather than an unexplained gap.
 

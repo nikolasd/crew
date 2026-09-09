@@ -40,7 +40,7 @@ Windows equivalent is implemented), and the packaged binaries are built against 
 ## Adapter Compatibility
 
 **The table and the four per-adapter sections immediately below are historical.** They were
-generated from the headless control plane's `--live` conformance runs. crew-v2 gap-closure WP-C
+generated from the headless control plane's `--live` conformance runs. crew-v2 gap-closure
 retired that control plane entirely — deleted, not kept inert (`mode: "headless"` stays
 deserializable for old configs/journals but is typed-rejected;
 [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md)) — so none of the
@@ -134,7 +134,7 @@ v1 field names.
 **Current.** Unlike everything above, this subsection is reproducible against the tree as it
 stands today — `--mode tui` is the only live mode there is now.
 
-WP29 added a TUI-mode live suite (`crewd conformance --live --mode tui`) that spawns the real
+A TUI-mode live suite (`crewd conformance --live --mode tui`) was added that spawns the real
 vendor TUI on a PTY and drives it through the same injection path the runtime uses. It exercises
 `probe`, `read_only_start_and_progress`, `follow_up`, `cancellation_scope`, and `session_resume`.
 `session_resume` is **skipped** on every adapter (a single-process resume is not a daemon
@@ -154,8 +154,8 @@ captures in the table above (same CLIs, later releases; the headless control pla
 is retired, see the historical notice above) — see "TUI vendor CLI version gates" below for the
 exact pins. Gap: there is no recorded recipe for re-capturing the `*-tui` fixtures against future
 CLIs (`capture-manifest.yml` governed recapturing the now-deleted headless fixtures specifically
-and was deleted along with them by crew-v2 gap-closure WP-C; it never covered `*-tui`) — tracked
-with the open WP29 items.
+and was deleted along with them by crew-v2 gap-closure; it never covered `*-tui`) — tracked
+as an open item from that release.
 
 Raw reports (verbatim, with an erratum on the overstated `session_resume` detail):
 [`release/live-conformance/`](../release/live-conformance/).

@@ -5,13 +5,13 @@
 
 ## Control plane
 
-- [x] **v0.5.0 ships TUI-only.** User ruling 2026-08-27 reverses this checklist's own WP29-era
+- [x] **v0.5.0 ships TUI-only.** User ruling 2026-08-27 reverses this checklist's own earlier
       "KEEP ALL FOUR" stance on the headless adapters (see the "Conformance evidence" section
       below, written under that now-superseded stance): the headless control plane
       (`adapter::{claude,codex,copilot,omp_rpc}`, one implementation per vendor, driving each
       vendor's own non-interactive/JSON protocol directly) is retired outright per the crew-v2
       design spec §4.6, in favor of `adapter::tui::*` as the sole control plane
-      (crew-v2 gap-closure WP-C; `docs/adr/0026-headless-retirement.md`).
+      (see `docs/adr/0026-headless-retirement.md`).
 - [x] `mode: "headless"` is deserializable but typed-rejected: an old config/profile/journal entry
       naming it still parses (never a hard crash on history), but every path that would act on it
       -- config validation, adapter-registry dispatch, `crewd conformance --mode headless`, live

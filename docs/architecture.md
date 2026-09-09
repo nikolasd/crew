@@ -110,7 +110,7 @@ graph TB
         end
     end
 
-    subgraph "Worker Process Containers (TUI, WP-C)"
+    subgraph "Worker Process Containers (TUI)"
         CA[Claude Adapter<br/>claude CLI, real PTY]
         COD[Codex Adapter<br/>codex CLI, real PTY]
         CO[Copilot Adapter<br/>copilot CLI, real PTY]
@@ -329,7 +329,7 @@ graph TB
 - **Adapter Registry** ([`crates/runtime/src/adapter/registry.rs`](crates/runtime/src/adapter/registry.rs)): Implements `RunDriver` against four TUI worker adapters. The headless control plane these
   once ran alongside (a direct, non-interactive protocol per vendor) is retired — `mode: "headless"`
   stays deserializable for old configs/journals but is typed-rejected at validation and dispatch
-  time (crew-v2 gap-closure WP-C; see [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md)).
+  time (crew-v2 gap-closure; see [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md)).
 - **Run Lifecycle Sink** ([`crates/runtime/src/adapter/run_lifecycle.rs`](crates/runtime/src/adapter/run_lifecycle.rs)): Applies `RunState` edges from journaled adapter evidence
 - **Claude Adapter** ([`crates/runtime/src/adapter/tui/claude.rs`](crates/runtime/src/adapter/tui/claude.rs)): drives the real interactive `claude` CLI on a PTY
 - **Codex Adapter** ([`crates/runtime/src/adapter/tui/codex.rs`](crates/runtime/src/adapter/tui/codex.rs)): drives the real interactive `codex` CLI on a PTY
@@ -620,7 +620,7 @@ async fn run_one(
 ) -> Result<(Arc<dyn Adapter>, oneshot::Receiver<()>, bool), String> { ... }
 
 /// `mode: "tui"` dispatches to `TuiAdapter<V>` for a vendor with a
-/// `TuiVendor` implementation (all four, since crew-v2 gap-closure WP-C
+/// `TuiVendor` implementation (all four, since crew-v2 gap-closure
 /// retired the headless control plane); every `StartupOptions` variant
 /// that used to reach a headless adapter is now a typed
 /// `RegistryError::HeadlessControlPlaneRetired` refusal instead.
