@@ -152,7 +152,7 @@ jobs:
           bun-version: 1.3.14
 
       - name: Install JS workspace dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
       - name: Run conformance unit tests
         run: bun test tests/conformance
 

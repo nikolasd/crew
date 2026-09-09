@@ -3,10 +3,10 @@
 **Audience & purpose:** maintainers deciding what to build next. A design parking lot for
 consciously deferred features — nice-to-have, not blocking any planned milestone. Each entry
 includes the concrete scenarios that would justify implementation. For genuinely open
-implementation gaps (as opposed to deferred nice-to-haves): the open-items backlog is the
-maintainer's local, gitignored `REVIEW.md` (not present in a fresh clone; its resolution
-history lives in [`docs/adr/`](adr/)) — that record, not this one, is the single
-source of truth for unfinished work.
+implementation gaps (as opposed to deferred nice-to-haves): the release checklists and
+live-conformance evidence under [`release/`](../release/) track what remains before a version
+ships, and [`docs/adr/`](adr/) records how each one was resolved — those, not this document, are
+the source of truth for unfinished work.
 
 **Status:** All deferred. Revisit when a scenario becomes real.
 
@@ -582,30 +582,6 @@ nothing to design, only a date to keep.
 The comment was written against 0.6.0, the version shipped at the time — so "next" is 0.7.0 and "the
 release after next" is 0.8.0. Remove the three forwarders (and this entry) as part of the 0.8.0
 checklist.
-
----
-
-## Copilot/OMP-RPC TUI Adapters Have No First-Run-Gate Predicate Yet
-
-**References:** `crates/runtime/src/adapter/tui/adapter.rs` (`TuiVendor::classify_surface`), `crates/runtime/src/adapter/tui/classify.rs`
-
-### What it is
-
-The TUI readiness gate now classifies what a vendor's terminal is actually showing before typing
-into it, and refuses to paste into (or confirm) a recognized first-run gate — for claude and codex,
-the two vendors with a real `classify_surface` implementation. `CopilotTuiVendor` and `OmpTuiVendor`
-still use the trait's default (`classify_surface` returns `None`), which keeps the pre-existing
-behavior unconditionally: the prompt is delivered to whatever is on screen, gate or not. This is not
-a considered decision to leave those two vendors uncovered — it is scoped, sequenced work not done
-yet. Predicates for both are already planned as a later slice of the same effort that added claude's
-and codex's.
-
-### Not yet covered, on purpose to build later
-
-Nothing to trigger here and nothing being deferred: this entry exists so the gap between "crew has
-gate protection" and "crew has gate protection for two of four TUI vendors" stays visible until the
-remaining two predicates land, rather than being invisible from outside the code. Remove this entry
-once `CopilotTuiVendor`/`OmpTuiVendor` gain real `classify_surface` implementations.
 
 ---
 

@@ -129,6 +129,13 @@ v1 field names.
 - **Live result**: 14 / 14 against `omp/17.2.7`, `passed: true`, reproduced on three consecutive
   runs with zero local providers in `omp`'s catalog.
 
+### TUI First-Run Gate Detection
+
+Claude and Codex TUI sessions classify what the vendor's terminal is actually showing and refuse
+to write into a recognized first-run gate. Copilot and OMP-RPC TUI sessions do not yet — for those
+two, the prompt is still delivered to whatever is on screen. Predicates for both land in a later
+slice of the same effort that added Claude's and Codex's.
+
 ### TUI live conformance (0.5.0)
 
 **Current.** Unlike everything above, this subsection is reproducible against the tree as it
