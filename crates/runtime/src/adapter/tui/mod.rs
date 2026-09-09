@@ -97,7 +97,7 @@ pub struct TuiSupport {
     /// startup -- see `lifecycle.rs`'s own fail-closed `Redactor::with_org_rules`
     /// call). Plain config data, not a built `Redactor`, so each
     /// `PaneCoordinator` this spawns can build its own instance on demand
-    /// (CREW-60: its `PaneDowngraded.reason` embeds subprocess stderr and
+    /// (its `PaneDowngraded.reason` embeds subprocess stderr and
     /// needs the same full, org-configured redactor every other journal-text
     /// crossing uses).
     pub org_security_patterns: Vec<String>,
@@ -168,7 +168,7 @@ pub enum TuiEvent {
     Raw {
         entry_type: String,
     },
-    /// A genuine new user-authored turn (CREW-47 D1): the format has
+    /// A genuine new user-authored turn: the format has
     /// already confirmed the entry is a real user prompt, not a subagent's
     /// sidechain or a tool-result-only bookkeeping entry. Carries no free
     /// text -- unlike every other variant here, this is deliberately
@@ -204,7 +204,7 @@ pub trait TranscriptFormat: Send + Sync {
     fn parse(&self, raw: &[u8], cursor: &Cursor) -> Vec<(TuiEvent, Cursor)>;
 
     /// The user-authored prompt text this transcript entry records, if it
-    /// is one (CREW-13).
+    /// is one.
     ///
     /// Deliberately separate from [`Self::parse`]: a user entry produces
     /// no `TuiEvent` and must not start doing so. For a fresh start it is

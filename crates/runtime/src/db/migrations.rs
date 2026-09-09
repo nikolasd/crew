@@ -317,7 +317,7 @@ CREATE INDEX idx_events_run_seq ON events(run_id, sequence);
 CREATE INDEX idx_events_timestamp ON events(timestamp);
 ";
 
-/// Migration 15 (CREW-3 / ADR-0027): the `turnSettled` run flag.
+/// Migration 15 (ADR-0027): the `turnSettled` run flag.
 ///
 /// A run reaches `waitingUser` two ways -- its vendor finished a turn, or
 /// the worker asked a question -- and a snapshot reader cannot tell them

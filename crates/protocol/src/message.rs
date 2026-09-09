@@ -86,11 +86,11 @@ pub struct RunMessage {
     pub task_id: TaskId,
     /// Semantic message kind.
     pub kind: MessageKind,
-    // Typed `Redacted` (CREW-34) rather than `String`, so "redacted before
+    // Typed `Redacted` rather than `String`, so "redacted before
     // persistence" is enforced by the field rather than asserted by a
     // comment. This comment said exactly that for a long time while nothing
-    // redacted it -- the claim became true at CREW-28, and true by
-    // construction here.
+    // redacted it; the claim became true only when the redaction was
+    // actually implemented, and is true by construction here.
     /// The message payload. Already redacted: secret-shaped substrings are
     /// masked.
     pub payload: crate::Redacted,

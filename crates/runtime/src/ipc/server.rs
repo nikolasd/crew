@@ -44,18 +44,19 @@ pub(crate) struct Shared {
     /// `bind` -- like [`Self::coordination`]/the violation service, the
     /// dashboard only exists post-bind (it subscribes to this same
     /// `events_tx`). `None` until (and unless) a dashboard bind succeeds;
-    /// read by `runtime/status` (CREW-35).
+    /// read by `runtime/status`.
     pub(crate) dashboard_url: std::sync::OnceLock<String>,
     /// The directory the socket and SQLite journal both live in (siblings
     /// under `RuntimePaths::resolve`'s own root) -- named in the remedy for
-    /// a journal that fails to deserialize on replay (CREW-52), and in
-    /// `runtime/status`'s `state_root` (D25).
+    /// a journal that fails to deserialize on replay, and surfaced in
+    /// `runtime/status`'s `state_root` for the same reason `socket_path`
+    /// below is.
     pub(crate) state_dir: PathBuf,
     /// The Unix domain socket path this server is actually bound to.
-    /// `runtime/status`'s `socket_path` (D25): a two-daemon mixup (two
-    /// `crewd` processes against different state roots, neither aware of
-    /// the other) previously had no way to see which one a client was
-    /// actually talking to.
+    /// Surfaced as `runtime/status`'s `socket_path`: a two-daemon mixup
+    /// (two `crewd` processes against different state roots, neither
+    /// aware of the other) previously had no way to see which one a
+    /// client was actually talking to.
     pub(crate) socket_path: PathBuf,
 }
 
@@ -184,7 +185,7 @@ impl Server {
         // `Server::coordination_broker`. `config.run_driver` is already
         // available (constructed by the caller before `bind`), so this
         // has no construction-order cycle with `AdapterRegistry`.
-        // WP26/CREW-60: both the violation service and the pane coordinator
+        // WP26: both the violation service and the pane coordinator
         // journal durable text that reached the daemon from outside it
         // (cancellation intents, subprocess stderr) -- both get the full
         // configured Redactor, built-in rules plus the compiled

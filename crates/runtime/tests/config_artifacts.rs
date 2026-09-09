@@ -83,7 +83,7 @@ fn committed_default_snapshot_points_at_the_committed_schema() {
     );
 }
 
-/// CREW-8: `packages/extension/src/crew-config.ts`'s TS-side model
+/// `packages/extension/src/crew-config.ts`'s TS-side model
 /// resolution reads `crew.json`'s `adapters.*` section keys directly, and
 /// hardcodes the one place they diverge from `AdapterKind::wire_name`
 /// (`"ompRpc"` -> `"omp"`, per `RESERVED_ADAPTER_CONFIG_KEYS`'s own doc

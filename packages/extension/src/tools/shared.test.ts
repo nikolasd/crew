@@ -1,5 +1,5 @@
 // Tests for the shared `launchProgramHint`/`displayPreferenceFragment`
-// helpers (CREW-9): mapping `$TERM_PROGRAM` to the closed set of wire
+// helpers: mapping `$TERM_PROGRAM` to the closed set of wire
 // values `run/submit`/`run/retry`'s `displayPreference.launchProgram`
 // accepts, and never a raw string -- see shared.ts's own doc comments for
 // why.
@@ -41,7 +41,7 @@ test("displayPreferenceFragment is empty when there is no recognized hint", () =
 
 test("displayPreferenceFragment carries the hint alongside the daemon's own no-preference defaults", () => {
   expect(displayPreferenceFragment({ TERM_PROGRAM: "iTerm.app" })).toEqual({
-    // CREW-52: no `placement` key at all -- omitted, not hardcoded, so the
+    // no `placement` key at all -- omitted, not hardcoded, so the
     // resolved backend picks its own natural placement server-side.
     displayPreference: { ordered: [], launchProgram: "iTerm2" },
   });

@@ -574,7 +574,7 @@ fn the_mark_carries_none_of_the_forbidden_treatments() {
     );
 }
 
-/// CREW-55: the maintainer's ruling was real vendor logos, not BRAND.md's
+/// The maintainer's ruling was real vendor logos, not BRAND.md's
 /// own cell colours -- knowingly, given §02 already covers this ground.
 /// Each mark must be embedded verbatim (inline SVG, no network fetch --
 /// `page.rs`'s own no-external-asset constraint) and unaltered: no
@@ -613,14 +613,15 @@ fn the_vendor_marks_render_at_a_fixed_height_with_width_left_free() {
 }
 
 /// An adapter absent from `LOGOS` (no mark supplied, or a future adapter
-/// nobody has added a mark for yet) must keep working exactly as before
-/// CREW-55 -- the coloured cell, never a broken image or a missing icon.
+/// nobody has added a mark for yet) must keep working exactly as it did
+/// before vendor marks were embedded -- the coloured cell, never a broken
+/// image or a missing icon.
 #[test]
 fn an_adapter_with_no_vendor_mark_still_falls_back_to_the_neutral_cell() {
     let page = crew_runtime::dashboard::PAGE_HTML;
     assert!(
         page.contains("const NEUTRAL"),
-        "the pre-CREW-55 colour fallback must still exist for adapters with no mark"
+        "the colour fallback that predates vendor-mark embedding must still exist for adapters with no mark"
     );
 }
 
@@ -645,7 +646,7 @@ async fn index_serves_the_html_page() {
     harness.server.stop();
 }
 
-/// CREW-56 (client half): the feed's displayed clock must be the
+/// The feed's displayed clock must be the
 /// envelope's own `timestamp`, not the moment the browser happened to
 /// receive it -- a replayed row can be arbitrarily old, and stamping it
 /// "now" would misreport exactly what replaying the journal exists to
@@ -661,7 +662,7 @@ fn the_feed_clock_reads_the_envelopes_own_timestamp_not_wall_clock() {
     );
 }
 
-/// CREW-54: a stale dashboard token (the daemon restarted since this
+/// A stale dashboard token (the daemon restarted since this
 /// page's link was issued) makes every `EventSource` reconnect fail
 /// forever with 401 -- a condition `onerror`'s bare event cannot see, and
 /// the pre-fix code's only failure message ("daemon not running") is
@@ -685,7 +686,7 @@ fn the_client_distinguishes_an_expired_token_from_an_unreachable_daemon() {
     );
 }
 
-/// CREW-56 review: `serve_sse` subscribes to the live broadcast before
+/// `serve_sse` subscribes to the live broadcast before
 /// querying the replay snapshot (never a silent gap, at the cost of a
 /// possible duplicate frame for an event straddling the two). The client
 /// must not draw that duplicate twice.
@@ -900,7 +901,7 @@ async fn sse_stream_receives_a_broadcast_envelope() {
     harness.server.stop();
 }
 
-/// CREW-56: the maintainer's own words on the reproduced symptom --
+/// The maintainer's own words on the reproduced symptom --
 /// "starts empty, shows something, empty again, then other events -- I
 /// really don't understand what I am seeing." Root cause: `serve_sse`
 /// subscribed to the live broadcast with no journal replay, so a viewer
@@ -975,18 +976,18 @@ async fn sse_stream_replays_already_committed_events_on_a_fresh_connect() {
     harness.server.stop();
 }
 
-/// A regression guard, not a test of CREW-62's own delta: staff proved by
-/// mutation (`Err(err) => { tracing::warn!(...) }` replaced with the
-/// pre-fix silent `Err(_) => {}`) that this test still passes either way
-/// -- `if let Ok(rows) = ...` already fell through to the live loop on
-/// `Err` before this fix, so the property here was already true on main.
-/// What it protects is real (a viewer that can't get history should
-/// still get what happens next, never a refused or hung connection), and
-/// worth pinning against a future change that starts refusing on a
-/// replay error -- it just is not evidence FOR this PR's change. The
-/// `tracing::warn!` line itself has no assertion: this crate's tests
-/// have no tracing-capture harness, so it is accepted as read-reviewed,
-/// not tested.
+/// A regression guard, not a test of the `tracing::warn!` addition's own
+/// delta: staff proved by mutation (`Err(err) => { tracing::warn!(...) }`
+/// replaced with the previously silent `Err(_) => {}`) that this test still
+/// passes either way -- `if let Ok(rows) = ...` already fell through to the
+/// live loop on `Err` before that addition, so the property here was
+/// already true on main. What it protects is real (a viewer that can't get
+/// history should still get what happens next, never a refused or hung
+/// connection), and worth pinning against a future change that starts
+/// refusing on a replay error -- it just is not evidence FOR the logging
+/// change. The `tracing::warn!` line itself has no assertion: this crate's
+/// tests have no tracing-capture harness, so it is accepted as
+/// read-reviewed, not tested.
 #[tokio::test]
 async fn a_replay_failure_must_not_refuse_the_connection() {
     let harness = start_dashboard().await;
@@ -1076,7 +1077,7 @@ async fn a_replay_failure_must_not_refuse_the_connection() {
     harness.server.stop();
 }
 
-// ----------------------------------------- access control (CREW-12)
+// ----------------------------------------- access control
 
 /// The property that matters: loopback is not access control. A TCP
 /// listener cannot check peer credentials the way the IPC socket does, so
@@ -1231,7 +1232,7 @@ async fn a_malformed_run_id_on_the_transcript_route_is_a_400() {
     harness.server.stop();
 }
 
-// -------------------------------------------- CREW-31: the task column
+// -------------------------------------------- the task column
 
 /// Journals a prompt against a seeded run, the way `run/submit` does. The
 /// text is already redacted by the time it reaches the repository, so the

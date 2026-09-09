@@ -856,3 +856,153 @@ async fn real_daemon_survives_serve_stop_serve_with_ipc_transcript() {
         "run {run_id} events must survive restart in the journal: {events:?}"
     );
 }
+
+/// `crewd attach` must exit promptly once its daemon is gone, by any
+/// means -- clean stop, SIGTERM, or SIGKILL -- rather than hanging
+/// indefinitely after correctly detecting the socket closed.
+///
+/// The mechanism this pins: `attach::pump`'s `tokio::select!` between the
+/// socket and stdin does detect the daemon's socket closing and returns,
+/// but a plain return from `#[tokio::main]`'s `async fn main` drops the
+/// tokio runtime, which blocks the whole process on every outstanding
+/// blocking task -- including the dedicated OS thread `tokio::io::stdin()`
+/// uses for its read, still parked in a real blocking read against this
+/// pty with nothing to unblock it. In a real pane that pty is the
+/// terminal's own controlling terminal, never closed after the foreground
+/// command exits (ordinary terminal behavior) -- so nothing would ever
+/// unblock it there either. Reproduced directly (a standalone pty harness,
+/// not this test) before fixing: killing the daemon by any signal never
+/// ended the process, only closing the pty itself did. The fix calls
+/// `std::process::exit` right after `pump` resolves, bypassing the
+/// runtime's blocking teardown entirely.
+///
+/// A real pty is required to reproduce this at all: a piped stdin (as
+/// `std::process::Command::stdin(Stdio::piped())` would give it) is a
+/// different file description whose read returns 0 the instant nothing
+/// holds the write end open, which never exercises the stuck-thread path
+/// this test exists to catch.
+#[tokio::test]
+async fn attach_exits_promptly_after_its_daemon_stops_not_just_the_socket() {
+    use crew_runtime::supervisor::{EscalationTimings, PtyProcess, SpawnSpec};
+
+    let fixture = Fixture::new();
+    let repo = std::fs::canonicalize(fixture.repo_dir()).unwrap();
+
+    let scripts_dir = tempfile::Builder::new()
+        .prefix("bat-attach-scripts-")
+        .tempdir_in("/tmp")
+        .expect("create scripts dir");
+    let session_dir = tempfile::Builder::new()
+        .prefix("bat-attach-sess-")
+        .tempdir_in("/tmp")
+        .expect("create session dir");
+    let script_path = write_fake_claude_script(scripts_dir.path(), session_dir.path());
+    let crew_json = scripts_dir.path().join("crew.json");
+    std::fs::write(
+        &crew_json,
+        serde_json::to_string(&json!({
+            "adapters": {
+                "claude": {
+                    "enabled": true,
+                    "bin": script_path.to_str().unwrap(),
+                    "mode": "tui",
+                    "permissionMode": "default",
+                    "profile": "test",
+                    "sessionDir": session_dir.path().to_str().unwrap()
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let (mut server, socket) = DaemonGuard::spawn(&fixture, &crew_json);
+    let mut client = IpcClient::connect(&socket).await;
+    let init = client.initialize("omp-1", &repo).await;
+    assert!(init.get("error").is_none(), "initialize failed: {init:?}");
+
+    let upsert = client
+        .call(
+            2,
+            "task/upsert",
+            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
+        )
+        .await;
+    let task_id = upsert["result"]["taskId"].as_str().unwrap().to_string();
+    let register = client
+        .call(
+            3,
+            "profile/register",
+            json!({
+                "adapter": "claude",
+                "model": "test",
+                "permissionEnvelope": {},
+                "startupOptions": { "claude": { "mode": "tui" } },
+                "environmentAllowlist": [],
+                "source": "attach-lifecycle-test"
+            }),
+        )
+        .await;
+    let profile_id = register["result"]["profileId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let wkr = client
+        .call(4, "worker/create", json!({ "profileId": profile_id }))
+        .await;
+    let worker_id = wkr["result"]["workerId"].as_str().unwrap().to_string();
+    let submit = client
+        .call(
+            5,
+            "run/submit",
+            json!({ "taskId": task_id, "workerId": worker_id, "prompt": "[crew:fixture1] say hi" }),
+        )
+        .await;
+    let run_id = submit["result"]["runId"].as_str().unwrap().to_string();
+    assert!(
+        wait_for_run_event(&mut client, &run_id, Duration::from_secs(30)).await,
+        "run {run_id} must journal at least one event before attaching"
+    );
+
+    // A moment for the adapter's AttachServer to be listening -- it starts
+    // early in the run pipeline, before this run's own turn is tailed, so
+    // the wait above already leaves ample margin.
+    let attach = PtyProcess::spawn(
+        &SpawnSpec {
+            program: PathBuf::from(CREWD),
+            args: vec![
+                "attach".to_string(),
+                run_id,
+                "--repo".to_string(),
+                repo.to_str().unwrap().to_string(),
+                "--state-dir".to_string(),
+                fixture.state_dir().to_str().unwrap().to_string(),
+            ],
+            cwd: repo.clone(),
+            env: std::env::vars().collect(),
+            ..SpawnSpec::minimal()
+        },
+        EscalationTimings::default(),
+    )
+    .expect("spawn crewd attach under a real pty");
+
+    // Give it a moment to actually connect before pulling the daemon out
+    // from under it -- the defect this test catches is specific to a
+    // connection that was live and then lost, not a connect-time race.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let (stop_status, _exit_code) = server
+        .shutdown()
+        .expect("daemon must still be live to stop");
+    assert!(
+        stop_status.expect("crewd stop must execute").success(),
+        "crewd stop must exit 0"
+    );
+
+    let exited = tokio::time::timeout(Duration::from_secs(10), attach.wait()).await;
+    assert!(
+        exited.is_ok(),
+        "crewd attach must exit within 10s of its daemon stopping, not hang on a stray stdin \
+         reader thread forever"
+    );
+}

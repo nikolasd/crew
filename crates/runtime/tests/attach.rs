@@ -88,7 +88,7 @@ async fn read_exact_within(
     buf
 }
 
-/// Connects to `path` and consumes CREW-30's liveness marker, which
+/// Connects to `path` and consumes the liveness marker, which
 /// every `AttachServer` in this test file's own binary always sends
 /// first -- these tests exercise real pane content arriving *after* it,
 /// not the marker itself (see `pane_socket.rs`'s own tests, and
@@ -495,7 +495,7 @@ async fn composed_path_against_a_real_pty_process_running_cat() {
 /// connect immediately after, with no bind-race), then spawns a task that
 /// accepts the first connection, writes `bytes`, and holds the socket open
 /// well past any test's bounded read -- simulating an *older* `AttachServer`
-/// (pre-CREW-30) that never sends [`attach::LIVENESS_MARKER`] and whose
+/// (predating the liveness marker) that never sends [`attach::LIVENESS_MARKER`] and whose
 /// first bytes are real pane output the client must reclaim, not discard.
 fn spawn_raw_server_writing(path: &std::path::Path, bytes: &'static [u8]) {
     let listener = tokio::net::UnixListener::bind(path).expect("bind raw server");

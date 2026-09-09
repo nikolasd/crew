@@ -63,7 +63,7 @@ impl std::str::FromStr for DisplayBackend {
     }
 }
 
-// CREW-52 (D27 final ruling): `Embedded` is DELETED, not deprecated in
+// Final ruling: `Embedded` is DELETED, not deprecated in
 // place -- the plugin has no external users yet, so old-journal replay
 // compatibility is a non-goal (the maintainer falsified the invariants
 // argument for keeping it as a product fact). This is a BREAKING CHANGE: a
@@ -94,7 +94,7 @@ pub enum DisplayPlacement {
     Tab,
     /// A new workspace (Herdr only; unsupported by tmux).
     Workspace,
-    // CREW-9. `OsWindowDisplay` reports this rather than echoing `Tab`.
+    // `OsWindowDisplay` reports this rather than echoing `Tab`.
     /// A new, separate OS-level window -- not a tab or split of the
     /// caller's own terminal at all. Reported when the target terminal has
     /// no tab-creation mechanism Crew can drive (e.g. Terminal.app, or
@@ -161,7 +161,7 @@ impl DisplayStatus {
 pub struct DisplayPreference {
     /// Backends to try, most-preferred first. Empty means "any available".
     pub ordered: Vec<DisplayBackend>,
-    // CREW-52 (D27/D3): absent means "no explicit placement" -- the chosen
+    // Absent means "no explicit placement" -- the chosen
     // backend resolves its own natural form (e.g. herdr/tmux create a pane;
     // osWindow opens a tab or window) rather than a caller-supplied or
     // server-hardcoded default. This replaces the deleted `Embedded`
@@ -172,7 +172,7 @@ pub struct DisplayPreference {
     /// chosen backend pick its own natural placement.
     #[serde(default)]
     pub placement: Option<DisplayPlacement>,
-    // CREW-9. Used only by `OsWindowDisplay`, to target the right terminal
+    // Used only by `OsWindowDisplay`, to target the right terminal
     // application instead of always assuming Terminal.app. tmux/herdr are
     // self-detecting (they query whatever server already exists,
     // independent of who spawned the daemon), so this only matters once
@@ -233,7 +233,7 @@ pub struct DisplaySelection {
     /// Every backend tried, in order, so an operator can see why the
     /// preferred one lost.
     pub attempts: Vec<DisplayBackend>,
-    // CREW-9. Carried here, rather than as a separate parameter threaded
+    // Carried here, rather than as a separate parameter threaded
     // alongside `Option<DisplaySelection>` through `build_adapter`'s
     // already-long argument list, because this struct is already the one
     // bundle that survives that exact call chain down to

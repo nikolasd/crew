@@ -1,4 +1,4 @@
-//! CREW-30 regression test: the fd-inheritance-through-fork race that made
+//! Regression test for the fd-inheritance-through-fork race that made
 //! the old bare-`connect()` liveness probe false-positive.
 //!
 //! **Mechanism (proven, not speculative):** macOS has no atomic
@@ -25,13 +25,13 @@
 //! failing under the same load, at roughly that same ~1% rate.
 //!
 //! Bounded to a few thousand iterations (not the 40k/~30min the original
-//! investigation ran) -- but bounded is not the same as fast, see CREW-38
-//! below. This test's job is catching a regression, not re-discovering the
-//! bug; the deterministic leg in `pane_socket.rs` (a bare listener that
-//! never speaks the protocol reads as not-live) is what actually carries
-//! that protection in the default gate.
+//! investigation ran) -- but bounded is not the same as fast, see the
+//! `#[ignore]`d note below. This test's job is catching a regression, not
+//! re-discovering the bug; the deterministic leg in `pane_socket.rs` (a bare
+//! listener that never speaks the protocol reads as not-live) is what
+//! actually carries that protection in the default gate.
 //!
-//! **CREW-38: this test is `#[ignore]`d, not part of the default suite.**
+//! **This test is `#[ignore]`d, not part of the default suite.**
 //! `MAX_DURATION` below is checked only at the top of each loop iteration,
 //! so it bounds the *number of iterations attempted*, not the test's own
 //! wall-clock time -- a single iteration that blocks for minutes (inside
@@ -42,9 +42,9 @@
 //! already pinning cores) and 5+ minutes at 917% CPU on an otherwise
 //! settled machine (load ~7) -- so the busy-loops were an aggravator, not
 //! the cause. This is a real property of the test, not a fluke: it has
-//! also passed cleanly in CI at least three times since it landed (CREW-30,
-//! PR #54), so this is variance containment against a slow/flaky default-suite
-//! entry, not a test that is expected to fail. Run it manually with
+//! also passed cleanly in CI at least three times since it landed, so this
+//! is variance containment against a slow/flaky default-suite entry, not a
+//! test that is expected to fail. Run it manually with
 //! `cargo test -p crew-runtime --test pane_socket_liveness_race -- --ignored --nocapture`.
 //! A per-iteration timeout (so the ceiling actually binds) plus
 //! instrumentation to identify which call blocks is deliberately deferred
@@ -58,7 +58,8 @@ use std::time::{Duration, Instant};
 use crew_runtime::display::pane_socket::is_live;
 
 /// Bounds the number of iterations *attempted* and, best-effort, the
-/// wall-clock time -- but see this file's CREW-38 module doc: a single
+/// wall-clock time -- but see this file's module doc on why this test is
+/// `#[ignore]`d: a single
 /// stalled iteration is not interrupted by this check, so this is not
 /// currently a hard ceiling on the test's own runtime.
 const ITERATIONS: usize = 4_000;
@@ -110,7 +111,7 @@ fn spawn_fork_load(stop: Arc<AtomicBool>) -> std::thread::JoinHandle<u64> {
 }
 
 #[tokio::test]
-#[ignore = "CREW-38: not wall-clock bounded (see this file's module doc); run manually \
+#[ignore = "not wall-clock bounded (see this file's module doc); run manually \
             with `cargo test -p crew-runtime --test pane_socket_liveness_race -- --ignored --nocapture`"]
 async fn is_live_has_no_false_positives_under_fork_and_cpu_load() {
     let dir = tempfile::Builder::new()
@@ -157,7 +158,7 @@ async fn is_live_has_no_false_positives_under_fork_and_cpu_load() {
     if !false_positives.is_empty() {
         for (iteration, gap) in &false_positives {
             eprintln!(
-                "CREW-30 regression: is_live falsely reported iteration {iteration} live \
+                "regression: is_live falsely reported iteration {iteration} live \
                  {gap:?} after its listener was dropped"
             );
         }
@@ -167,7 +168,7 @@ async fn is_live_has_no_false_positives_under_fork_and_cpu_load() {
         false_positives.is_empty(),
         "is_live must never report a dropped/stale socket as live, even under fork+CPU load \
          ({} false positives out of {i} iterations, {children_spawned} children spawned during \
-         the run) -- this is the exact CREW-30 regression: a bare connect can complete against \
+         the run) -- exactly the regression this test guards against: a bare connect can complete against \
          an fd a raced fork()'d child inherited, so the probe must require the liveness marker, \
          not just a completed connect",
         false_positives.len()

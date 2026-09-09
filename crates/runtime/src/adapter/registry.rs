@@ -434,7 +434,7 @@ impl AdapterRegistry {
                 // A resumed TUI run owns its own pane lifecycle through
                 // its adapter, same as a fresh one -- `watch_settlement`
                 // journals no display event of its own for any run,
-                // resumed or fresh (CREW-11).
+                // resumed or fresh.
                 tokio::spawn(watch_settlement(settled, running_for_watcher, run_id));
                 Ok(())
             }
@@ -637,7 +637,7 @@ impl RunDriver for AdapterRegistry {
             )
             .await
             {
-                // CREW-11: `watch_settlement` no longer journals a
+                // `watch_settlement` no longer journals a
                 // placeholder `DisplayPaneDetached` for anyone -- the
                 // submit-time placeholder `DisplayPaneAttached` it would
                 // have paired with is gone too (`start_queued_run`), for
@@ -757,7 +757,7 @@ impl RunDriver for AdapterRegistry {
 /// that path: there is no settlement to record, and a release without one
 /// would hand this run's slot to another.
 ///
-/// CREW-11: this used to also journal a placeholder `DisplayPaneDetached`
+/// This used to also journal a placeholder `DisplayPaneDetached`
 /// for a run not owned by its adapter, paired with `start_queued_run`'s
 /// now-removed placeholder `DisplayPaneAttached` -- an append-only journal
 /// must never carry either half of an attach/detach pair for a pane that
@@ -1362,7 +1362,7 @@ fn build_adapter(
     // calls this function, so reaching here with one is a defense-in-depth
     // boundary (a bug bypassing that earlier gate), not a normal path.
     // `TerminalDegraded` carries no adapter kind and is unaffected by any
-    // of this -- it never took the `if` branch above either. CREW-11:
+    // of this -- it never took the `if` branch above either.
     // `WorkerProfile::validate` refuses a *new* `terminalDegraded` profile
     // at `profile/register` (`TerminalDegradedNotImplemented`), but a
     // historical row stored before that check existed can still reach
@@ -1428,7 +1428,7 @@ fn build_tui_adapter<V: TuiVendor>(
             "omp" => default_omp_tui_config(),
             _ => default_claude_tui_config(),
         });
-    // CREW-60: same patterns already validated once at startup
+    // Same patterns already validated once at startup
     // (`lifecycle.rs`'s fail-closed `Redactor::with_org_rules` call) --
     // a compile error building this second instance from the same
     // config can only be a bug.

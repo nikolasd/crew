@@ -648,8 +648,10 @@ async fn run_lease_release(
     let event_lease_id = lease_id.clone();
     // `teardown_error` is git/filesystem error text (see the `map_err`
     // calls above), never runtime-authored -- routed through the
-    // redactor before it can reach the journal, same as CREW-60's
-    // `PaneDowngraded.reason`. `sanitize_fragment` on a `Visible`
+    // redactor before it can reach the journal, the same treatment
+    // `PaneDowngraded.reason` needs since it also embeds raw subprocess
+    // stderr that must never reach the journal unredacted.
+    // `sanitize_fragment` on a `Visible`
     // fragment only returns `None` for `Thinking`/`Secret` classes, so
     // this is unreachable here -- matching the three `redact_caller_text`
     // call sites in orchestration.rs, this fails loud rather than
@@ -1441,7 +1443,7 @@ async fn run_attach(
     use crew_runtime::display::attach;
     use crew_runtime::paths::RuntimePaths;
 
-    // CREW-18: resolved alongside the socket path, only on the `--repo`
+    // Resolved alongside the socket path, only on the `--repo`
     // path -- `--socket` (mainly for tests, per `run_attach`'s own doc)
     // carries no repository/project context to look a run's worker and
     // adapter up from, so it just skips the title; a raw socket path is
@@ -1477,7 +1479,7 @@ async fn run_attach(
 
     println!("crewd attach: connected. Press Ctrl+] to detach.");
 
-    // CREW-30: consume the server's liveness marker if it sent one --
+    // Consume the server's liveness marker if it sent one --
     // every current daemon does, right after accepting. An older daemon
     // (predating the marker) never sends it at all; whatever bytes this
     // reads in that case are real pane output, not a marker, and must be
@@ -1513,9 +1515,35 @@ async fn run_attach(
     .await;
     drop(guard);
 
+    // `tokio::io::stdin()`'s read is backed by a dedicated blocking OS
+    // thread (stdin has no portable non-blocking read), and `pump`
+    // never actually joins that thread -- it just stops polling its
+    // future once the socket side of the `select!` wins. A normal
+    // return from this `#[tokio::main]` function drops the runtime,
+    // which blocks the whole process on every outstanding blocking
+    // task -- including that thread, still parked in a real `read()`
+    // against this pane's terminal. In a real pane that terminal is
+    // never closed after the foreground command exits (that is
+    // ordinary, expected terminal behavior), so nothing ever unblocks
+    // it: the daemon can die by any means -- clean stop, SIGTERM, even
+    // SIGKILL -- and `pump` correctly detects it and returns, but the
+    // process hangs forever anyway, immediately after, on a wait that
+    // has nothing to do with the daemon at all. Verified directly: in a
+    // pty-backed repro, killing the daemon never ends the process, but
+    // closing the pty (simulating the terminal window itself closing)
+    // does. `std::process::exit` terminates immediately without waiting
+    // for that thread, which is safe here because `pump` flushes stdout
+    // after every write and returns `SocketClosed` on a zero-byte read
+    // -- by the time it resolves, the only things left running are a
+    // stdin thread that will never finish on its own and a socket the
+    // OS closes regardless. This stops being true the day anything in
+    // this scope buffers output without flushing it before returning.
     match outcome {
-        Ok(_) => ExitCode::SUCCESS,
-        Err(err) => fail(&err),
+        Ok(_) => std::process::exit(0),
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -1739,7 +1767,7 @@ mod tests {
         );
     }
 
-    /// CREW-18: `resolve_pane_title` joins a run to its worker's adapter
+    /// `resolve_pane_title` joins a run to its worker's adapter
     /// exactly the way `pane/reopen`'s own handler does, then formats it
     /// through `attach::pane_title` -- this pins the join, not the
     /// formatting (already covered directly in `attach.rs`'s own tests).

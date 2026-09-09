@@ -49,7 +49,7 @@ interface FakeClient {
   client: CrewClient;
   /** Fires every listener registered via the client's `onClose` and marks it
    *  closed -- simulates the daemon dropping the connection out from under
-   *  the monitor (CREW-5), as opposed to `client.close()`, which is the
+   *  the monitor, as opposed to `client.close()`, which is the
    *  monitor's own side initiating it. Both route through the same
    *  close-notification path, exactly like the real `CrewClient`. */
   simulateClose(): void;
@@ -111,7 +111,7 @@ function createFakeClient(): FakeClient {
 
 /**
  * Waits for `MonitorController`'s serialized `#tail` dispatch chain to
- * drain (CREW-51 review). `fake.onEvent?.(...)` only *schedules* a
+ * drain (from review). `fake.onEvent?.(...)` only *schedules* a
  * `runEvent`'s dispatch now -- reduceEvent/onUpdate no longer run
  * synchronously on the same tick, because the whole dispatch (including
  * the `enrichRun` await) is chained through `#tail` to keep listeners in
@@ -172,7 +172,7 @@ function fakeCommandContext(widgetCalls: unknown[][], hasUI: boolean): { ctx: Ex
   return { ctx, notifications };
 }
 
-test("session_start shows the empty-state widget when crew is active (CREW-10)", async () => {
+test("session_start shows the empty-state widget when crew is active", async () => {
   const { api, handlers } = createFakeApi();
   const fake = createFakeClient();
   registerMonitor(api, { getClient: async () => fake.client });
@@ -191,7 +191,7 @@ test("session_start shows the empty-state widget when crew is active (CREW-10)",
   expect(widgetCalls[0]?.[2]).toEqual({ placement: "aboveEditor" });
 });
 
-test("the widget updates from empty-state to run rows (CREW-10)", async () => {
+test("the widget updates from empty-state to run rows", async () => {
   const { api, handlers } = createFakeApi();
   const fake = createFakeClient();
   registerMonitor(api, { getClient: async () => fake.client });
@@ -329,7 +329,7 @@ test("a session_shutdown followed by a new session_start resubscribes instead of
 test("a closed client is repaired on the next connect even without the shutdown clear (production's index.ts close path)", async () => {
   // Production closes the cached client in its own session_shutdown handler
   // (index.ts), so connect()'s pre-existing repair branch (isClosed check)
-  // fires regardless of R39's clear. This pins that path: even if the
+  // fires regardless of that clear. This pins that path: even if the
   // subscribedClient reference survives, a closed client must be dropped
   // and resubscribed.
   const { api, handlers } = createFakeApi();
@@ -351,8 +351,8 @@ test("a closed client is repaired on the next connect even without the shutdown 
   expect(fake.subscribeCalls).toBe(2);
 });
 
-test("CREW-5: an unexpected client close reconnects on its own, with no new session_start or /crew", async () => {
-  // The gap this closes: before CREW-5, connect() only ever ran from
+test("an unexpected client close reconnects on its own, with no new session_start or /crew", async () => {
+  // The gap this closes: before the reconnect loop, connect() only ever ran from
   // session_start or the /crew command -- a daemon restart mid-session
   // left the widget silently blind until the user happened to type /crew.
   const { api, handlers } = createFakeApi();
@@ -383,7 +383,7 @@ test("CREW-5: an unexpected client close reconnects on its own, with no new sess
   expect(fake.subscribeCalls).toBe(2);
 });
 
-test("CREW-5: session_shutdown cancels a pending automatic reconnect", async () => {
+test("session_shutdown cancels a pending automatic reconnect", async () => {
   const { api, handlers } = createFakeApi();
   const fake = createFakeClient();
   registerMonitor(api, {
@@ -407,7 +407,7 @@ test("CREW-5: session_shutdown cancels a pending automatic reconnect", async () 
   expect(fake.subscribeCalls).toBe(1);
 });
 
-test("CREW-5 review should-fix: a close firing AFTER session_shutdown does not re-arm a reconnect", async () => {
+test("a close firing AFTER session_shutdown does not re-arm a reconnect", async () => {
   // Production's own session_shutdown handler (index.ts) runs *after*
   // registerMonitor's -- it closes the shared cached client, which fires
   // this listener's onClose after the monitor's own cleanup already ran.
@@ -438,7 +438,7 @@ test("CREW-5 review should-fix: a close firing AFTER session_shutdown does not r
   expect(fake.subscribeCalls).toBe(1);
 });
 
-test("CREW-5 review should-fix: automatic reconnect uses a no-spawn client resolver, never the spawning one (ADR-0008)", async () => {
+test("automatic reconnect uses a no-spawn client resolver, never the spawning one (ADR-0008)", async () => {
   // Without this, the automatic loop calling the same spawn-on-demand
   // resolver as session_start/`/crew` would silently convert an
   // intentional daemon idle-exit into "never idle": the loop would just
@@ -475,7 +475,7 @@ test("CREW-5 review should-fix: automatic reconnect uses a no-spawn client resol
   expect(spawningCalls).toBe(1); // unchanged -- the automatic path never spawns
 });
 
-test("CREW-5 review should-fix: a new session_start re-arms automatic reconnect after a prior session's shutdown", async () => {
+test("a new session_start re-arms automatic reconnect after a prior session's shutdown", async () => {
   // Guards against a too-blunt fix for the shutdown-ordering hazard: the
   // shuttingDown flag must not stay stuck forever once set -- a fresh
   // session in the same extension instance needs its own working
@@ -729,7 +729,7 @@ test("a management subcommand's rejection surfaces through respond, never as an 
   expect(notifications[0]?.level).toBe("error");
 });
 
-test("reportSubmitFailure shows the error in the widget when there are no rows (CREW-10)", async () => {
+test("reportSubmitFailure shows the error in the widget when there are no rows", async () => {
   const { api, handlers } = createFakeApi();
   const fake = createFakeClient();
   const monitor = registerMonitor(api, { getClient: async () => fake.client });
@@ -752,7 +752,7 @@ test("reportSubmitFailure shows the error in the widget when there are no rows (
   expect(errorWidget.some((line) => line.includes("run/submit failed: invalid task"))).toBe(true);
 });
 
-test("error is cleared on the first run row (CREW-10)", async () => {
+test("error is cleared on the first run row", async () => {
   const { api, handlers } = createFakeApi();
   const fake = createFakeClient();
   const monitor = registerMonitor(api, { getClient: async () => fake.client });
@@ -781,7 +781,7 @@ test("error is cleared on the first run row (CREW-10)", async () => {
 /** A fake `CrewClient` whose `request()` answers `worker/get`/`run/get` for
  *  `enrichRun`, with an artificial delay so a listener race would actually
  *  be observable (a same-tick race would pass even against a same-tick
- *  fake -- CREW-51's bug needed a real async gap to manifest). */
+ *  fake -- the bug needed a real async gap to manifest). */
 function createEnrichingFakeClient(adapter: string, delayMsByWorkerId: Record<string, number> = {}): { client: CrewClient; onEvent: (event: EventEnvelope, meta?: EventDeliveryMeta) => Promise<void> | void } {
   let onEvent: ((event: EventEnvelope, meta?: EventDeliveryMeta) => void) | undefined;
   const client = {
@@ -796,7 +796,7 @@ function createEnrichingFakeClient(adapter: string, delayMsByWorkerId: Record<st
     },
     async request(method: string, params?: { workerId?: string }) {
       // A real RPC round trip always costs at least a tick; without this,
-      // a same-tick fake could never reproduce the race CREW-51 fixes. A
+      // a same-tick fake could never reproduce the race this fixes. A
       // per-worker delay lets a test make one run's enrichment slower than
       // another's, to prove ordering survives that race rather than just
       // happening to pass under a uniform delay.
@@ -820,7 +820,7 @@ function createEnrichingFakeClient(adapter: string, delayMsByWorkerId: Record<st
   };
 }
 
-test("CREW-51: a milestone listener sees the enriched adapter, not the unknown-adapter race (milestones.ts:117)", async () => {
+test("a milestone listener sees the enriched adapter, not the unknown-adapter race (milestones.ts:117)", async () => {
   // Before the fix, `enrichRun`'s `worker/get`/`run/get` lookup was fired
   // and forgotten *before* the listener loop on the same synchronous tick,
   // so a run's very first milestone (its first `working` transition) always
@@ -848,8 +848,8 @@ test("CREW-51: a milestone listener sees the enriched adapter, not the unknown-a
   expect(seenAdapters).toEqual(["claude"]);
 });
 
-test("CREW-51 review: dispatch is serialized, so a slower-enriching event never lets a faster one overtake it", async () => {
-  // Staff's finding on #84: before serializing, two runEvents delivered
+test("dispatch is serialized, so a slower-enriching event never lets a faster one overtake it", async () => {
+  // A review finding: before serializing, two runEvents delivered
   // back-to-back each kicked off their own independent `enrichRun` and
   // raced on it -- a later event with a FASTER enrichment lookup could have
   // its listener notification (and its reduceEvent) land before an earlier

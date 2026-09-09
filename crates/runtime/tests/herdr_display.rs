@@ -2,7 +2,7 @@
 //! gating and pane-lifecycle operations, using injected command
 //! executors keyed off `fixtures/displays/herdr/*.txt` -- the exact
 //! `status --json` shape captured from the installed `herdr 0.8.2`
-//! binary (CREW-82; mismatch fixture's server side edited to a
+//! binary (mismatch fixture's server side edited to a
 //! plausible protocol-19 workstation state, and the below-minimum
 //! fixture preserved verbatim from the previously verified 0.7.5/17
 //! state to exercise the minimum-protocol floor).
@@ -103,7 +103,7 @@ async fn a_below_minimum_protocol_fixture_makes_the_backend_unavailable_and_issu
     );
     // The fixture's client and server agree with each other
     // (`compatible: true`) on protocol 17 -- self-agreement alone must
-    // not clear the verified-minimum floor (CREW-82).
+    // not clear the verified-minimum floor.
     assert!(!herdr.is_available());
 
     let result = herdr

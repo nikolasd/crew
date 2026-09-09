@@ -8,7 +8,7 @@
 //! its PTY and [`super::AttachServer`] exist for the pane command to
 //! actually point at, and [`PaneCoordinator::detach`] once the run
 //! settles. `start_queued_run` (`crate::service::orchestration`) itself
-//! journals no submit-time placeholder attach event (CREW-11) -- the only
+//! journals no submit-time placeholder attach event -- the only
 //! honest attach event is the real one, journaled here by whatever
 //! component actually performs it. This module is fully exercised here
 //! against a fake [`super::DisplayBackendTrait`].
@@ -55,9 +55,10 @@ fn ordered_candidates(forced: Option<DisplayBackend>) -> Vec<DisplayBackend> {
 }
 
 /// One redacted sentence summarizing every failed `create_pane` attempt
-/// in a `PaneCoordinator::attach` walk -- CREW-74: concatenating each
-/// candidate's own stderr would multiply the CREW-60 leak shape by the
-/// number of candidates tried. The typed `attempted` field on
+/// in a `PaneCoordinator::attach` walk -- once retries across candidates
+/// were added, concatenating each candidate's own stderr would multiply
+/// the same raw-subprocess-stderr leak surface by the number of
+/// candidates tried. The typed `attempted` field on
 /// `PaneDowngraded` already says WHICH backends were tried and in what
 /// order; this says only how many create_pane calls failed and shows the
 /// LAST one's own text, never every one's.
@@ -86,7 +87,7 @@ pub struct PaneAttachRequest {
     /// `Auto`; see `crate::config::protocol_display_backend`). `None`
     /// for `Auto`, meaning "try the default chain".
     pub forced_backend: Option<DisplayBackend>,
-    /// The submitting caller's own `$TERM_PROGRAM` hint (CREW-9), from the
+    /// The submitting caller's own `$TERM_PROGRAM` hint, from the
     /// run's `displayPreference.launchProgram`. Only `OsWindowDisplay`
     /// reads it; every other backend ignores it entirely.
     pub launch_program: Option<crew_protocol::HostProgramHint>,
@@ -94,7 +95,7 @@ pub struct PaneAttachRequest {
 
 /// What a run's pane resolved to. `backend` is `Hidden` whenever every
 /// real candidate was either unavailable or its own `create_pane` call
-/// failed (CREW-74: `attach` retries the remaining candidates in order
+/// failed (`attach` retries the remaining candidates in order
 /// before giving up) -- never an error on its own; `pane_ref` is empty
 /// in exactly that case. Pass this to [`PaneCoordinator::detach`] once
 /// the run settles.
@@ -136,7 +137,7 @@ pub struct PaneCoordinator {
     /// detach cannot double-decrement.
     live_panes: Arc<Mutex<HashSet<RunId>>>,
     max_live_panes: usize,
-    // CREW-60 review: `PaneDowngraded.reason` embeds subprocess stderr
+    // `PaneDowngraded.reason` embeds subprocess stderr
     // (tmux/herdr's own error text), never runtime-authored -- the same
     // full, configured redactor (built-in rules plus compiled
     // `security.patterns`) every other journal-text crossing uses, never
@@ -234,7 +235,7 @@ impl PaneCoordinator {
     /// attach <run-id> ...`, and journals `DisplayPaneAttached` with the
     /// real pane reference. A `create_pane` failure on the resolved
     /// backend is never fatal to the run: it retries the remaining
-    /// candidates in order (CREW-74) before falling all the way back to
+    /// candidates in order before falling all the way back to
     /// `Hidden` (an empty `pane_ref`), which never fails.
     ///
     /// `req.placement` is honored as-is only for the FIRST candidate --
@@ -351,7 +352,7 @@ impl PaneCoordinator {
             match display.create_pane(pane_request).await {
                 Ok(handle) => {
                     let pane_ref = handle.pane_ref.clone();
-                    // The actual placement, not the requested one (CREW-9):
+                    // The actual placement, not the requested one:
                     // OsWindowDisplay may report `Window` for a `Tab` request.
                     let placement = handle.placement;
                     let requested_backend =
@@ -360,7 +361,8 @@ impl PaneCoordinator {
                     // diverges from the one first requested, even though
                     // THIS attempt succeeded -- an operator needs to see
                     // that the preferred backend lost, not just a total
-                    // failure (D28's whole intent: requested vs. actual).
+                    // failure: that divergence, requested vs. actual, is
+                    // the whole reason this event exists.
                     // Journaled BEFORE the attach event, matching the
                     // single-attempt shape this replaces: "why" precedes
                     // "what happened".
@@ -468,7 +470,7 @@ impl PaneCoordinator {
         {
             Ok(handle) => {
                 let pane_ref = handle.pane_ref.clone();
-                // The actual placement, not the requested one (CREW-9):
+                // The actual placement, not the requested one:
                 // OsWindowDisplay may report `Window` for a `Tab` request.
                 let placement = handle.placement;
                 self.journal_attach_guarded(
@@ -541,7 +543,7 @@ impl PaneCoordinator {
     }
 
     /// `placement` is passed explicitly, not read from `req.placement`
-    /// directly: CREW-74's retry loop asks each candidate for a placement
+    /// directly: `attach`'s own retry loop asks each candidate for a placement
     /// re-derived per-candidate (see [`Self::attach`]'s own doc comment),
     /// so the caller picks which value applies -- `attach_owned`, which
     /// never retries, always passes `req.placement` unchanged.
@@ -666,7 +668,7 @@ impl PaneCoordinator {
             .await;
     }
 
-    /// CREW-60/D28: journals a pane-creation-failure fallback with typed
+    /// Journals a pane-creation-failure fallback with typed
     /// fields, replacing the generic `Diagnostic` this used to be --
     /// see [`crate::domain::DomainRepository::record_pane_downgraded`].
     async fn journal_pane_downgraded(
@@ -784,7 +786,7 @@ impl PaneCoordinator {
         self.commit_and_broadcast(committed, "PaneDowngraded").await;
     }
 
-    /// CREW-61: takes `Redacted`, not `String`, so each caller states where
+    /// Takes `Redacted`, not `String`, so each caller states where
     /// its text came from rather than this helper deciding for all of them.
     async fn journal_diagnostic(&self, run_id: RunId, message: crew_protocol::Redacted) {
         let project_id = self.project_id;
@@ -849,7 +851,7 @@ mod tests {
         create_result: Arc<Mutex<Option<Result<PaneHandle, String>>>>,
         create_calls: AtomicUsize,
         /// Every `PaneRequest` this backend's `create_pane` actually
-        /// received, in call order -- CREW-74's retry test needs this to
+        /// received, in call order -- the retry test needs this to
         /// prove which PLACEMENT a candidate was asked for, not just that
         /// it was asked. `Arc` so a test can hold its own handle to read
         /// this back AFTER the backend itself has been boxed and moved
@@ -858,7 +860,7 @@ mod tests {
         close_calls: Mutex<Vec<PaneHandle>>,
         /// What [`DisplayBackendTrait::natural_placement`] reports for
         /// this fake -- defaults to the trait's own default (`SplitRight`)
-        /// so existing tests are unaffected; CREW-74's retry test sets
+        /// so existing tests are unaffected; the retry test sets
         /// this to something else on the SECOND candidate to prove a
         /// retry re-derives placement per-candidate rather than carrying
         /// the first candidate's requested value forward.
@@ -884,7 +886,7 @@ mod tests {
         }
 
         /// Like [`Self::succeeding`], but lets a test control the *actual*
-        /// placement the fake reports -- CREW-9's honest-reporting tests
+        /// placement the fake reports -- the honest-reporting tests
         /// need this to differ from whatever was requested.
         fn succeeding_with_placement(self, pane_ref: &str, placement: DisplayPlacement) -> Self {
             *self.create_result.lock() = Some(Ok(PaneHandle {
@@ -1038,7 +1040,7 @@ mod tests {
         db.shutdown().await.expect("shutdown database");
     }
 
-    /// CREW-9: the outcome (and the journaled event) must reflect what the
+    /// The outcome (and the journaled event) must reflect what the
     /// backend actually did, not what was requested -- `OsWindowDisplay`
     /// can report `Window` for a `Tab` request, and this must be visible
     /// all the way out through `PaneAttachOutcome`, not silently
@@ -1206,7 +1208,7 @@ mod tests {
         db.shutdown().await.expect("shutdown database");
     }
 
-    /// CREW-74's own trap, caught before it shipped: `req.placement` is a
+    /// The retry loop's own trap, caught before it shipped: `req.placement` is a
     /// concrete value already resolved for the FIRST candidate (herdr's
     /// natural form here, `SplitRight`, and irrelevant to this test only
     /// because we never ask herdr to honor it). A naive retry that just
@@ -1262,12 +1264,12 @@ mod tests {
     #[tokio::test]
     async fn every_candidate_failing_journals_a_typed_pane_downgraded_event_and_falls_back_to_hidden()
      {
-        // CREW-60/D28: this used to journal a free-text `Diagnostic` --
-        // the exact "durable condition on an ephemeral channel" bug the
-        // design note named. A listener now gets typed fields instead of
+        // This used to journal a free-text `Diagnostic` -- the exact
+        // "durable condition on an ephemeral channel" bug typed events
+        // exist to close. A listener now gets typed fields instead of
         // a message meant for a human to read.
         //
-        // CREW-74: renamed from "a create_pane failure ... falls back to
+        // Renamed from "a create_pane failure ... falls back to
         // hidden" -- a single failure no longer falls back to hidden, it
         // retries the next candidate (see
         // `a_retry_re_derives_placement_from_the_next_candidates_own_natural_form`
@@ -1310,7 +1312,7 @@ mod tests {
                 assert_eq!(requested_backend, DisplayBackend::Herdr);
                 assert_eq!(requested_placement, DisplayPlacement::SplitRight);
                 assert_eq!(actual_backend, DisplayBackend::Hidden);
-                // CREW-74: herdr fails, so the retry walks the rest of
+                // herdr fails, so the retry walks the rest of
                 // the default chain -- tmux and os_window are never
                 // registered here, so resolve() finds them unavailable
                 // and keeps walking, landing on hidden. `attempted` is
@@ -1341,12 +1343,12 @@ mod tests {
         db.shutdown().await.expect("shutdown database");
     }
 
-    /// CREW-74 ruling 2: a `PaneDowngraded` fires whenever the actual
+    /// A `PaneDowngraded` fires whenever the actual
     /// backend diverges from the one first requested, EVEN THOUGH a
     /// later candidate succeeded -- a run landing in tmux when herdr was
     /// preferred is a divergence an operator needs to see, and staying
     /// silent on it (because the run technically got a real pane) would
-    /// hide exactly the case D28 exists to surface.
+    /// hide exactly the case `PaneDowngraded` exists to surface.
     #[tokio::test]
     async fn a_later_candidate_succeeding_still_journals_the_downgrade() {
         let (db, _dir) = harness().await;
@@ -1400,7 +1402,7 @@ mod tests {
         db.shutdown().await.expect("shutdown database");
     }
 
-    /// CREW-74 ruling 3: the reservation is held once for the whole
+    /// The reservation is held once for the whole
     /// attach and released only if EVERY candidate fails -- proven here
     /// by two REAL candidates (not just one, as
     /// `a_failed_pane_creation_does_not_hold_a_slot` already covers)
@@ -1458,7 +1460,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_create_pane_failures_secret_shaped_stderr_is_actually_redacted_before_journaling() {
-        // Staff's review on #88: `PaneDowngraded.reason` embeds subprocess
+        // `PaneDowngraded.reason` embeds subprocess
         // stderr -- tmux/herdr's own error text, never runtime-authored --
         // and a `Redacted` type alone only proves *some* sanitization
         // happened, not that it actually masked anything. This drives a
@@ -1488,7 +1490,7 @@ mod tests {
                     "the journaled reason must never carry an unredacted API-key-shaped \
                      substring: {reason:?}"
                 );
-                // CREW-61 (from #88's review): absence of the secret is
+                // Absence of the secret is
                 // satisfied just as well by an EMPTY reason -- including via
                 // the `None` branch that yields `from_sanitized(String::new())`.
                 // Asserting the surrounding message survived turns "no secret"
@@ -1591,7 +1593,7 @@ mod tests {
         );
         db.shutdown().await.expect("shutdown database");
     }
-    // ------------------------------ live-pane cap (CREW-3 wave 3)
+    // ------------------------------ live-pane cap
 
     fn working_registry() -> DisplayRegistry {
         let mut registry = DisplayRegistry::new();
@@ -1717,7 +1719,7 @@ mod tests {
         // coordinator has its own fresh `live_panes` set regardless of
         // what the first one reserved or released, so comparing against
         // one proves nothing about release actually happening. Found via
-        // CREW-74 mutation testing (a sibling test had the identical
+        // mutation testing (a sibling test had the identical
         // shape); fixed here rather than left standing next to it.
         let (db, _dir) = harness().await;
         let (events_tx, _events_rx) = broadcast::channel(64);

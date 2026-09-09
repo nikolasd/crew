@@ -1,5 +1,5 @@
 //! Nonce-based transcript discovery: a TUI adapter injects a unique,
-//! self-describing `[crew:<nonce> — ...]` tag (CREW-83; see
+//! self-describing `[crew:<nonce> — ...]` tag (see
 //! `adapter::compose_injected_prompt`) into its first prompt, then finds
 //! the vendor's session transcript by polling the vendor's session root
 //! for a `.jsonl` file, modified at/after the worker started, that

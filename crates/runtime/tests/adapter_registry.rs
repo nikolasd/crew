@@ -102,7 +102,7 @@ fn terminal_profile() -> WorkerProfile {
 }
 
 /// Genuinely `StartupOptions::TerminalDegraded` -- unlike this function's
-/// pre-CREW-11 body, which actually built a `Codex`/`mode: "tui"` profile
+/// original body, which actually built a `Codex`/`mode: "tui"` profile
 /// (a stale mismatch between the name and what it constructed; the loose
 /// "may succeed or fail" assertion its one caller used never caught it).
 fn terminal_degraded_profile() -> WorkerProfile {
@@ -224,7 +224,7 @@ async fn a_terminal_profile_uses_terminal_adapter() {
     assert!(result.is_ok() || result.is_err());
 }
 
-/// CREW-11: `TerminalDegraded` is refused at dispatch, not just at
+/// `TerminalDegraded` is refused at dispatch, not just at
 /// `profile/register` -- a defense-in-depth backstop for a historical row
 /// stored before `WorkerProfile::validate` learned to reject it. This is
 /// no longer host-dependent (no tmux probe is ever reached): every host

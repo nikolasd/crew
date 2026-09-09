@@ -99,9 +99,9 @@ fn workspace_state_serializes_as_camel_case() {
 
 #[test]
 fn decided_by_as_str_matches_its_serde_tokens() {
-    // R34's fix hand-mirrors the serde rename in `DecidedBy::as_str`; a
-    // future `#[serde(rename = ...)]` silently re-creates R34 unless the
-    // two are pinned together.
+    // The fix hand-mirrors the serde rename in `DecidedBy::as_str`; a
+    // future `#[serde(rename = ...)]` silently re-creates the mismatch
+    // unless the two are pinned together.
     use crew_protocol::DecidedBy;
     for variant in [DecidedBy::Human, DecidedBy::Model] {
         assert_eq!(serialise(&variant).as_str().unwrap(), variant.as_str());

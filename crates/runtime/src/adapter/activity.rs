@@ -95,7 +95,7 @@ impl ActivityClock {
     ///
     /// Returns `true` if a tracked clock existed and was re-armed, `false`
     /// if the run's clock is already gone (never started, or settled).
-    /// CREW-40: this used to be a silent no-op with no way for the caller
+    /// This used to be a silent no-op with no way for the caller
     /// to tell the difference -- `run_timeout_ack` reported `rearmed: true`
     /// unconditionally, which a leader cannot distinguish from a real
     /// re-arm. The caller must not report success when this returns
@@ -299,7 +299,7 @@ mod tests {
         clock.mark_journaled(&run_id, TimeoutKind::Total);
     }
 
-    /// CREW-40: `extend` must report whether it actually did anything.
+    /// `extend` must report whether it actually did anything.
     /// A tracked run genuinely gets a fresh window (both `started_at` and
     /// `last_activity` reset), and the caller is told so honestly.
     #[test]
@@ -328,7 +328,7 @@ mod tests {
         );
     }
 
-    /// CREW-40: a run with no tracked clock -- never started, or already
+    /// A run with no tracked clock -- never started, or already
     /// forgotten (settled) -- has nothing for `extend` to re-arm. Reporting
     /// `false` here (not a fabricated `true`) is what `run_timeout_ack`
     /// relies on to refuse honestly instead of lying about success.
