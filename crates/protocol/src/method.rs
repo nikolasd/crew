@@ -143,9 +143,8 @@ pub enum CrewMethod {
 
     // Orchestration: leader/subtask plan lifecycle (crew v2). Role-gated
     // to `ompExtension` only (`crate::ipc::ClientPrincipal::allowed_methods`
-    // in the runtime crate). The daemon accepts these methods and refuses
-    // them with a "not yet implemented" JSON-RPC error until a later work
-    // package (WP17/WP21) lands their real handlers.
+    // in the runtime crate), and each dispatches to a real handler in
+    // `crate::service::orchestration`.
     /// Proposes a decomposition of a run into subtasks, persisting a
     /// `planProposed` event pending `plan/decide`.
     #[serde(rename = "plan/propose")]

@@ -122,7 +122,7 @@ uuid_id!(
     PolicyViolationId
 );
 uuid_id!(
-    /// Identifies a blocking condition a worker escalated (WP20): an open
+    /// Identifies a blocking condition a worker escalated: an open
     /// question, a write-policy violation, or repeated failures.
     EscalationId
 );

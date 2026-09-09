@@ -51,8 +51,8 @@ export interface CombinedReport {
 }
 
 /**
- * Adapter report labels. crew-v2 gap-closure WP-C: fixture mode is
- * TUI-sourced now (spec §4.6) -- the headless control plane and its
+ * Adapter report labels. Fixture mode is TUI-sourced (see
+ * `docs/adr/0026-headless-retirement.md`) -- the headless control plane and its
  * `claude`/`codex`/`copilot`/`ompRpc` labels are retired. `ompRpc`'s TUI
  * label is `"omp-tui"`, not a mechanical `<wire_name>-tui`.
  */
