@@ -75,6 +75,7 @@ use crew_runtime::config::NestedViolationAction;
 use crew_runtime::db::DatabaseHandle;
 use crew_runtime::domain::DomainRepository;
 use crew_runtime::policy::{DecideOutcome, ViolationError, ViolationService};
+use rusqlite::OptionalExtension;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::broadcast;
@@ -237,6 +238,83 @@ async fn decided_event_count(db: &DatabaseHandle) -> i64 {
     .expect("count is an integer")
 }
 
+/// The journal sequence of the `reconcileEvent` row rebinding `task_id`, if
+/// one has been committed. Diagnostic only, for
+/// [`a_stale_owner_is_refused_by_the_guarded_write_after_a_rebind`]'s
+/// failure message -- this event always commits unconditionally
+/// (`reconcile_ownership` has no ownership guard of its own), so its
+/// absence would itself be informative.
+async fn reconcile_event_sequence(db: &DatabaseHandle, task_id: TaskId) -> Option<i64> {
+    db.run_domain_op(Box::new(move |conn| {
+        let sequence: Option<i64> = conn
+            .query_row(
+                "SELECT sequence FROM events WHERE task_id = ?1 AND event_json LIKE '%reconcileEvent%'",
+                [task_id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(json!(sequence))
+    }))
+    .await
+    .expect("query reconcile event sequence")
+    .as_i64()
+}
+
+/// The journal sequence of the `policyViolationDecided` row for
+/// `violation_id`, if the guarded write actually committed one. Diagnostic
+/// only, for the same failure message as
+/// [`reconcile_event_sequence`] -- comparing the two sequences (when both
+/// exist) tells a reader which write the actor actually processed first,
+/// which is the fact the enqueue-order argument in this file's header
+/// claims is fixed and this diagnostic exists to confirm or refute on an
+/// actual recurrence rather than a rerun of the same argument.
+async fn decided_event_sequence(
+    db: &DatabaseHandle,
+    violation_id: PolicyViolationId,
+) -> Option<i64> {
+    db.run_domain_op(Box::new(move |conn| {
+        let sequence: Option<i64> = conn
+            .query_row(
+                "SELECT sequence FROM events WHERE event_json LIKE ?1",
+                [format!("%policyViolationDecided%{violation_id}%")],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(json!(sequence))
+    }))
+    .await
+    .expect("query decided event sequence")
+    .as_i64()
+}
+
+/// The task's currently stored owner. Diagnostic only: since
+/// `resolve_policy_violation`'s guarded write never writes this column
+/// (only reads and compares it), whatever this reads back after the race
+/// has settled is exactly the value the last committed `reconcile_ownership`
+/// call wrote -- useful alongside the two sequences above to tell whether
+/// the guarded write's own re-read (not observable directly from the test)
+/// plausibly saw the same value.
+async fn current_task_owner(db: &DatabaseHandle, task_id: TaskId) -> Option<String> {
+    db.run_domain_op(Box::new(move |conn| {
+        let owner: Option<String> = conn
+            .query_row(
+                "SELECT owner_client_instance_id FROM tasks WHERE task_id = ?1",
+                [task_id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(json!(owner))
+    }))
+    .await
+    .expect("query current task owner")
+    .as_str()
+    .map(str::to_string)
+}
+
+/// Intermittent once on CI (macOS), unreproduced locally across 1,030 runs
+/// spanning three contention profiles; on recurrence, read the sequence
+/// numbers, the guarded-write outcome, and the current owner printed below
+/// rather than re-running the enqueue-order argument in this file's header.
 #[tokio::test]
 async fn a_stale_owner_is_refused_by_the_guarded_write_after_a_rebind() {
     let (_state_dir, db) = open_db().await;
@@ -257,9 +335,24 @@ async fn a_stale_owner_is_refused_by_the_guarded_write_after_a_rebind() {
         rebind_owner(&db, project_id, task_id, "omp-2", 1),
     );
 
+    // Gathered unconditionally, not only on failure -- `assert!`'s message
+    // is a synchronous expression and cannot itself await a query. The
+    // extra reads cost nothing the test doesn't already pay for and give a
+    // future failure exactly what a debugger would ask for first: which
+    // write the actor actually processed first, not another restatement
+    // of which order it is supposed to.
+    let reconcile_seq = reconcile_event_sequence(&db, task_id).await;
+    let decided_seq = decided_event_sequence(&db, violation_id).await;
+    let owner_now = current_task_owner(&db, task_id).await;
+
     assert!(
         matches!(decide_result, Err(ViolationError::Forbidden { .. })),
-        "a stale owner must be refused once the guarded write observes the rebind, not accepted: {decide_result:?}"
+        "a stale owner must be refused once the guarded write observes the rebind, not accepted: \
+         {decide_result:?} -- reconcileEvent sequence: {reconcile_seq:?}, policyViolationDecided \
+         sequence: {decided_seq:?} (present means the guarded write committed instead of refusing; \
+         a lower number than the reconcile sequence means it was processed first), current stored \
+         owner: {owner_now:?} (the guarded write never writes this column, only reads it, so this is \
+         exactly what `reconcile_ownership` last committed)"
     );
     assert_eq!(
         violation_resolution(&db, violation_id).await,
