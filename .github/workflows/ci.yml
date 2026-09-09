@@ -268,3 +268,28 @@ jobs:
           # PR scans; the workflow-level `permissions: contents: read`
           # does not propagate into the action's env.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Attribution trailers in the commits a pull request ADDS. Deliberately
+  # narrow: `check-markers` scans files and demands zero across the whole
+  # tree, but a commit message is not a file and history cannot be edited --
+  # commits already on main carry trailers predating this rule, and rewriting
+  # them would be worse than the trailers are. So this reads exactly the range
+  # the PR proposes to add, and nothing else. Skipped on push, where there is
+  # no proposed range to read.
+  trailers:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The default merge-ref checkout has no history to walk; the base
+          # commit must be reachable for the range below to resolve.
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Check commit messages for attribution trailers
+        run: bun scripts/check-trailers.ts ${{ github.event.pull_request.base.sha }}..HEAD
