@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { violationsIn } from "./check-trailers";
+import { RULES } from "./check-markers";
+import { markersIn, violationsIn } from "./check-trailers";
 
 /**
  * The positive control.
@@ -75,5 +76,67 @@ describe("reporting", () => {
   test("a message with two trailers reports both", () => {
     const message = "x\n\nClaude-Session: a\nCo-authored-by: Someone <s@example.invalid>";
     expect(violationsIn("abc1234", message)).toHaveLength(2);
+  });
+});
+
+/**
+ * The marker rules, applied to the other surface.
+ *
+ * The maintainer's ruling is "no ids anywhere, commits included", so the
+ * identifiers a file may not carry are identifiers a commit message may not
+ * carry either. The rules themselves are imported from `check-markers` rather
+ * than restated, which is what stops the two surfaces from drifting into
+ * enforcing different things under one name -- and the last test in this block
+ * is what makes that guarantee checkable rather than merely intended.
+ */
+describe("positive control: every marker rule rejects its own commit message", () => {
+  const mustReject: ReadonlyArray<readonly [string, string]> = [
+    ["ticket id", "fix: close the readiness gate\n\nPart of CREW-79, the escalation work."],
+    ["decision label", "refactor: fold the third channel in\n\nPer D28 the channel is redundant."],
+    ["review-register marker", "fix: the fabricated disproof\n\nCloses R52."],
+    ["review sub-finding", "test: guard the finding\n\nCovers W2."],
+    ["work-package label", "chore: retire the shim\n\nRetired by gap-closure WP-C."],
+    ["bare pull-request number", "fix: follow up the guard\n\nShipped since #88."],
+    ["external spec citation", "feat: drop the headless plane\n\nRetired in crew v2 (spec §4.6)."],
+  ];
+
+  for (const [rule, message] of mustReject) {
+    test(`${rule} is rejected in a commit message`, () => {
+      expect(markersIn("abc1234", message).map((v) => v.rule)).toContain(rule);
+    });
+  }
+
+  test("every marker rule is exercised by a control above", () => {
+    // The same guard `check-markers.test.ts` carries: a rule added to the
+    // shared list without a control here would silently apply to commit
+    // messages with nothing proving it can fire on one.
+    expect(new Set(mustReject.map(([rule]) => rule))).toEqual(new Set(RULES.map((r) => r.name)));
+  });
+
+  test("a marker in the subject line is caught, not just in the body", () => {
+    // The subject is the half a squash merge keeps, so it is the half most
+    // likely to outlive the branch.
+    expect(markersIn("abc1234", "fix: the thing CREW-79 asked for").map((v) => v.rule)).toEqual(["ticket id"]);
+  });
+
+  test("a violation reports the line the marker sits on", () => {
+    const found = markersIn("deadbeef1234", "fix: a thing\n\nCloses R52 after review.");
+    expect(found[0]?.commit).toBe("deadbeef1234");
+    expect(found[0]?.line).toBe("Closes R52 after review.");
+  });
+});
+
+describe("what a clean commit message looks like", () => {
+  test("reasoning, not pointers, passes both halves", () => {
+    // Deliberately the shape CONTRIBUTING.md asks for: name the defect and
+    // the mechanism, cite an in-repo path, point at nothing outside.
+    const message = ["Scan what git tracks, not what is on disk", "", "The guard walked the filesystem, so it read gitignored generated output", "and failed on a clean checkout. `git ls-files` is the repository's own", "definition of its content. See scripts/check-markers.ts."].join("\n");
+    expect(violationsIn("abc1234", message)).toEqual([]);
+    expect(markersIn("abc1234", message)).toEqual([]);
+  });
+
+  test("a merge subject naming a branch is not a marker", () => {
+    // Git Town merges main into a branch routinely; that subject must pass.
+    expect(markersIn("abc1234", "Merge remote-tracking branch 'origin/main' into guard-tracked-only")).toEqual([]);
   });
 });

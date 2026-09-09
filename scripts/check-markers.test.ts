@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { RULES, SKIP_DIRS, scanRepo, scanText } from "./check-markers";
+import { RULES, SKIP_DIRS, SKIP_FILES, scanRepo, scanText } from "./check-markers";
 
 /**
  * The positive control.
@@ -156,6 +156,14 @@ describe("the exceptions the rule itself grants", () => {
     // at capture time did. Editing a recording to satisfy a text rule would
     // destroy the property that makes it evidence.
     expect(SKIP_DIRS).toContain("fixtures");
+  });
+
+  test("both guards' own tests are exempt -- they must contain literal markers", () => {
+    // A positive control has to spell out the thing it catches. These two
+    // files pin the same rules against the two surfaces (files, and commit
+    // messages), so each contains one instance of every marker family by
+    // necessity. Nothing else in the repository may.
+    expect(SKIP_FILES).toEqual(["scripts/check-markers.test.ts", "scripts/check-trailers.test.ts"]);
   });
 
   test("assets are skipped -- the logo's legs are labelled R1-R4", () => {

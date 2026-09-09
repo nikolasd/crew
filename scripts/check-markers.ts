@@ -113,11 +113,13 @@ export const SKIP_DIRS: readonly string[] = [".git", "node_modules", "target", "
 /**
  * Files exempt by name.
  *
- * The guard's own test must contain literal markers -- that is what proves the
- * matcher fires rather than silently matching nothing. It is the one file whose
- * content this scan cannot take at face value.
+ * A guard's own test must contain literal markers -- that is what proves the
+ * matcher fires rather than silently matching nothing. These are the files
+ * whose content this scan cannot take at face value: this scanner's test, and
+ * the commit-message checker's test, which pins the same rules against the
+ * other surface and therefore has to spell out one instance of each.
  */
-export const SKIP_FILES: readonly string[] = ["scripts/check-markers.test.ts"];
+export const SKIP_FILES: readonly string[] = ["scripts/check-markers.test.ts", "scripts/check-trailers.test.ts"];
 
 /**
  * Directories whose files are recorded artifacts rather than authored text.
