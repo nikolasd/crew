@@ -122,6 +122,7 @@ producing a clean result that looked exactly like success.
 - [Measurement and Instruments](#measurement-and-instruments)
   - [A zero is a measurement, and an unchecked instrument reports zero](#a-zero-is-a-measurement-and-an-unchecked-instrument-reports-zero)
   - [The same blindness one level out: a check nobody runs, and a scan that reads nothing](#the-same-blindness-one-level-out-a-check-nobody-runs-and-a-scan-that-reads-nothing)
+  - [An anchor is a narrowing, and it narrows the answer as well as the search](#an-anchor-is-a-narrowing-and-it-narrows-the-answer-as-well-as-the-search)
   - [A documented switch that no code reads is a control that only exists in the reader's head](#a-documented-switch-that-no-code-reads-is-a-control-that-only-exists-in-the-readers-head)
   - [A claim about the future has no failure mode when the future arrives](#a-claim-about-the-future-has-no-failure-mode-when-the-future-arrives)
 
@@ -1794,6 +1795,51 @@ code: the replacement matched the skip list as a leading path prefix, which exem
 second time against a file that cannot be fixed by editing it. Changing what a check examines is a
 change to the check, and needs the same scrutiny as changing what it matches. The "nobody runs it" half has no unit test by
 nature; its guard is the `markers` job, which runs the control tests alongside the scan.
+
+### An anchor is a narrowing, and it narrows the answer as well as the search
+
+**Location:** the `bun install --frozen-lockfile` sweep across `.github/workflows/`; found by a
+reviewer, one commit after the sweep claimed to be complete
+
+**The bug:** Having added `--frozen-lockfile` to every install in the workflows, the check that none
+had been missed was:
+
+    grep -rn "run: bun install$" .github/
+
+It printed nothing, and nothing was read as "all of them". A reviewer's wider pattern found one
+left: a `bun install` inside a header comment, in the documented `docker run …` command that
+produces the **committed** extension bundle when the workflow it substitutes for is unavailable.
+
+Both anchors in that pattern excluded it, independently. `run:` meant a line in a comment could
+never match, however much it mattered. The trailing `$` meant `bun install &&` could never match,
+because the command continued. Either anchor alone would have hidden it. And the directory scope hid
+a second site: `scripts/setup.sh`, which only a repository-wide `git grep` reveals.
+
+The zero was a property of where the instrument was pointed, not of the repository — on a branch
+whose entire subject was checks that report clean because nobody asked them the right question,
+written the same day as the entry above it.
+
+**The lesson:** an anchor is a narrowing, and every narrowing needs the same justification as the
+search itself. `^`, `$`, a `run:` prefix, a directory argument, a file-extension filter — each is a
+claim that nothing outside it can matter, and each is made silently, usually while thinking about
+something else. Before trusting a zero, re-run without the anchors and confirm that every extra hit
+is one you can explain. That is a few seconds, it is the only step that distinguishes "there is
+nothing there" from "I did not look there", and it is exactly the step that feels unnecessary
+because the pattern was written deliberately.
+
+The narrower point that came with it, and that the fix turned on: the discriminator for "does this
+site need the guard" was never *who types the command*. It is whether the output is committed or
+verified. The docker command in a comment produces a committed artifact and needed freezing;
+`scripts/setup.sh` bootstraps a developer's own environment, commits nothing, and is the normal path
+by which a lockfile legitimately gets updated — freezing it would have blocked the very repair the
+other sites instruct you to perform. The first classification was made by asking "is this a
+pipeline?", which is a question about the runner rather than about the artifact.
+
+**Regression tests:** none possible — the defect is in how a search is written, not in shipped code.
+The instance is fixed (ten frozen sites, `scripts/setup.sh` deliberately excluded and documented as
+such), and the practice is the takeaway. It belongs beside the entry on a scan that returns zero:
+that one is about an instrument that cannot match, this one about an instrument that can, aimed
+slightly away from the thing it was meant to find.
 
 ### A documented switch that no code reads is a control that only exists in the reader's head
 
