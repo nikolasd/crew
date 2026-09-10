@@ -23,19 +23,59 @@ behind it is not reviewable.
 
 ## Contents
 
-| File | Vendor | Gate |
+| File | Vendor | Size | Gate |
+|---|---|---|---|
+| `claude-theme-picker.raw` | claude 2.1.265 | 120x40 | First-run theme selection |
+| `claude-signin-method.raw` | claude 2.1.265 | 120x40 | Login-method selection |
+| `claude-workspace-trust.raw` | claude 2.1.265 | 120x40 | Workspace trust ("Accessing workspace:") |
+| `codex-signin.raw` | codex-cli 0.153.4 | 120x40 | Sign-in method selection — **captured pre-splash**: codex 0.154.0 paints an ASCII-art splash before this panel, which this file does not contain. It is not evidence that the current sign-in rendering is covered |
+| `codex-directory-trust.raw` | codex-cli 0.153.4 | 120x40 | Directory trust |
+| `codex-composer-empty.raw` | codex-cli 0.154.0 | 120x32 | The composer with an **empty** box — shows `Ask Codex to do anything`. The positive half of the pair below |
+| `codex-composer-holding.raw` | codex-cli 0.154.0 | 120x32 | The same composer **holding a pasted prompt** — the placeholder is gone, replaced in place by the text. The screen codex's Enter-time re-check actually faces |
+| `codex-composer-then-trust.raw` | codex-cli 0.153.4 | 120x40 | Composer painted, prompt accepted, **then** the trust gate |
+| `claude-trust-to-composer.raw` | claude 2.1.265 | 120x40 | Trust gate **answered**, then the alternate-screen switch and the composer |
+| `copilot-folder-trust.raw` | Copilot CLI 1.0.83 | 120x40 | Folder trust ("Confirm folder trust"), focused on **Yes** |
+| `copilot-composer.raw` | Copilot CLI 1.0.83 | 120x40 | The normal prompt after trust is granted — what copilot's predicate must recognise as `PromptReady`. **The not-signed-in variant**: key on auth-independent chrome, never the status line |
+| `omp-composer.raw` | omp 18.1.16 | 120x40 | The normal prompt — what omp's predicate must recognise as `PromptReady` |
+| `omp-setup-step1.raw` | omp 18.1.15 | 120x40 | First-run setup wizard, step 1 of 5 — a **negative** sample: the predicate must return `Undecided` on it |
+
+## Size is part of a capture, not a detail
+
+A capture is only meaningful replayed into a grid of the size it was recorded
+at: the vendor laid the screen out for that geometry, so a different height
+puts its content on different rows and a different width changes where lines
+break. The `Size` column above is therefore load-bearing, and a new capture
+must record its own.
+
+The two 120x32 rows are the first captured at the geometry `crewd` actually
+gives a worker (`DEFAULT_COLS`/`DEFAULT_ROWS` in `supervisor/pty.rs`).
+Everything above them was recorded at 120x40 by a probe harness, which is not
+a size production ever uses -- worth knowing before reading an older capture as
+though it showed what a real run sees.
+
+## What the composer pair proves
+
+`codex-composer-empty.raw` and `codex-composer-holding.raw` are one capture
+taken twice, before and after a prompt was pasted, and the difference between
+them is the whole point:
+
+| phrase | empty | holding |
 |---|---|---|
-| `claude-theme-picker.raw` | claude 2.1.265 | First-run theme selection |
-| `claude-signin-method.raw` | claude 2.1.265 | Login-method selection |
-| `claude-workspace-trust.raw` | claude 2.1.265 | Workspace trust ("Accessing workspace:") |
-| `codex-signin.raw` | codex-cli 0.153.4 | Sign-in method selection |
-| `codex-directory-trust.raw` | codex-cli 0.153.4 | Directory trust |
-| `codex-composer-then-trust.raw` | codex-cli 0.153.4 | Composer painted, prompt accepted, **then** the trust gate |
-| `claude-trust-to-composer.raw` | claude 2.1.265 | Trust gate **answered**, then the alternate-screen switch and the composer |
-| `copilot-folder-trust.raw` | Copilot CLI 1.0.83 | Folder trust ("Confirm folder trust"), focused on **Yes** |
-| `copilot-composer.raw` | Copilot CLI 1.0.83 | The normal prompt after trust is granted — what copilot's predicate must recognise as `PromptReady`. **The not-signed-in variant**: key on auth-independent chrome, never the status line |
-| `omp-composer.raw` | omp 18.1.16 | The normal prompt — what omp's predicate must recognise as `PromptReady` |
-| `omp-setup-step1.raw` | omp 18.1.15 | First-run setup wizard, step 1 of 5 — a **negative** sample: the predicate must return `Undecided` on it |
+| `Ask Codex to do anything` | present | **absent** |
+| `>_ OpenAI Codex` | present | present |
+| `/model to change` | present | present |
+
+Codex's readiness predicate keyed on the first of those -- the composer's
+**empty-state placeholder** -- which by construction cannot survive a prompt
+being put in the box. Every other vendor keys on chrome that a paste leaves
+alone. The pair exists so that predicate can be re-keyed against measured
+bytes rather than a guess, and so a future change to it fails a test rather
+than a live run.
+
+Measure phrases through `TuiScreen`'s normalizing matcher, never by grepping
+the `.raw`: the header above is split across escape sequences, so a raw-byte
+search reports it absent from both files. That is the same trap this whole
+directory exists for, and it catches people who know about it.
 
 The codex composer-then-trust capture is not a duplicate. Codex paints its
 composer first, accepts a pasted prompt into it, and only then raises its trust
