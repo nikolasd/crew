@@ -371,6 +371,7 @@ pub enum FirstRunGateKind {
     ClaudeSignIn,
     CodexDirectoryTrust,
     CodexSignIn,
+    CopilotFolderTrust,
 }
 
 /// Why a settled run resumed to `working`. The two causes map exactly

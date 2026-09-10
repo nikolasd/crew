@@ -2049,6 +2049,7 @@ fn protocol_gate_kind(gate: GateKind) -> crew_protocol::FirstRunGateKind {
         GateKind::ClaudeSignIn => crew_protocol::FirstRunGateKind::ClaudeSignIn,
         GateKind::CodexDirectoryTrust => crew_protocol::FirstRunGateKind::CodexDirectoryTrust,
         GateKind::CodexSignIn => crew_protocol::FirstRunGateKind::CodexSignIn,
+        GateKind::CopilotFolderTrust => crew_protocol::FirstRunGateKind::CopilotFolderTrust,
     }
 }
 
@@ -3308,19 +3309,24 @@ mod tests {
     }
 
     /// A vendor with no real predicate yet (`classify_surface` returns
-    /// `None`) must keep the pre-classification behavior: this slice
-    /// cannot recognize a gate for copilot/omp, so it must not withhold
-    /// their Enter on the strength of a classification it never made.
+    /// `None`) must keep the pre-classification behavior: it must not
+    /// withhold Enter on the strength of a classification it never made.
+    /// Copilot had this exact shape until this slice gave it a real
+    /// predicate (see `wait_for_readiness_escalates_and_then_fails_when_
+    /// the_process_exits_under_a_replayed_copilot_gate_capture`, which
+    /// proves the opposite for copilot now); omp is the vendor still in
+    /// this state -- its own predicate is the second half of this slice,
+    /// not yet built.
     #[test]
     fn enter_precondition_proceeds_unconditionally_for_a_vendor_with_no_predicate() {
-        use crate::adapter::tui::CopilotTuiVendor;
+        use crate::adapter::tui::OmpTuiVendor;
 
-        let copilot = CopilotTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let omp = OmpTuiVendor::new(PathBuf::from("/w"), vec![]);
         // Content is irrelevant here -- even a screen showing a claude
         // gate must not affect a vendor that has no predicate to read it
         // with.
         assert_eq!(
-            enter_precondition(&copilot, &grid_from("claude-workspace-trust.raw")),
+            enter_precondition(&omp, &grid_from("claude-workspace-trust.raw")),
             EnterPrecondition::Proceed
         );
     }
@@ -3441,6 +3447,119 @@ mod tests {
                 let message = err.to_string();
                 assert!(
                     message.contains("ClaudeWorkspaceTrust"),
+                    "the error must name the gate it saw: {message}"
+                );
+            }
+            Ok(()) => {
+                panic!("a replayed gate capture must never be classified as ready to paste into")
+            }
+        }
+    }
+
+    /// Slice 5's own instance of the fixture-driven proof above, extended
+    /// to copilot's gate: the same replay-and-force-exit shape, against
+    /// `copilot-folder-trust.raw` (a REAL capture of copilot's dialog, not
+    /// a synthetic double) and `CopilotTuiVendor`. Proves the wiring this
+    /// slice adds -- `CopilotTuiVendor::classify_surface` ->
+    /// `classify_copilot_surface` -> the park-and-escalate path slice 4
+    /// built -- end to end, not just that `classify_copilot_surface`
+    /// itself returns the right `Surface` (already covered in
+    /// `classify.rs`'s own tests).
+    #[tokio::test]
+    async fn wait_for_readiness_escalates_and_then_fails_when_the_process_exits_under_a_replayed_copilot_gate_capture()
+     {
+        use crate::adapter::tui::CopilotTuiVendor;
+
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/adapters/tui-screens/copilot-folder-trust.raw");
+        let pty = Arc::new(
+            PtyProcess::spawn(
+                &crate::supervisor::SpawnSpec {
+                    program: PathBuf::from("/bin/sh"),
+                    args: vec![
+                        "-c".to_string(),
+                        format!("cat '{}' && sleep 30", fixture_path.display()),
+                    ],
+                    ..crate::supervisor::SpawnSpec::minimal()
+                },
+                EscalationTimings::default(),
+            )
+            .expect("spawn the replay double"),
+        );
+
+        let mut readiness_rx = pty.subscribe_output();
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        {
+            let mut grid_rx = pty.subscribe_output();
+            let grid = Arc::clone(&grid);
+            tokio::spawn(async move {
+                loop {
+                    match grid_rx.recv().await {
+                        Ok(bytes) => grid
+                            .lock()
+                            .expect("terminal-grid mutex never poisoned")
+                            .push(&bytes),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        let vendor = CopilotTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let sink = GateRecordingSink::new();
+        let dyn_sink: Arc<dyn AdapterEventSink> = sink.clone();
+        let cancel_token = CancellationToken::new();
+        let run_id = RunId::new();
+        let task_id = TaskId::new();
+        let worker_id = WorkerId::new();
+
+        let pty_for_wait = Arc::clone(&pty);
+        let wait = tokio::spawn(async move {
+            wait_for_readiness(
+                &mut readiness_rx,
+                "copilot",
+                &vendor,
+                &grid,
+                Duration::from_millis(50),
+                Duration::from_secs(30),
+                &pty_for_wait,
+                Some(PromptInjection {
+                    text: "this must never be written",
+                    write_timeout: Duration::from_secs(1),
+                }),
+                tokio::time::Instant::now(),
+                run_id,
+                task_id,
+                worker_id,
+                &dyn_sink,
+                &cancel_token,
+            )
+            .await
+        });
+
+        assert!(
+            wait_until(|| !sink.payloads().is_empty(), Duration::from_secs(5)).await,
+            "a replayed copilot gate capture must escalate, not silently fail closed or hang"
+        );
+        match &sink.payloads()[..] {
+            [AdapterEventPayload::FirstRunGateDetected { kind }] => {
+                assert_eq!(*kind, crew_protocol::FirstRunGateKind::CopilotFolderTrust);
+            }
+            other => panic!("expected exactly one FirstRunGateDetected, got {other:?}"),
+        }
+
+        let _ = pty.terminate().await;
+        let result = tokio::time::timeout(Duration::from_secs(5), wait)
+            .await
+            .expect("must return promptly once the process exits")
+            .expect("wait_for_readiness task must not panic");
+
+        match result {
+            Err(err) => {
+                let message = err.to_string();
+                assert!(
+                    message.contains("CopilotFolderTrust"),
                     "the error must name the gate it saw: {message}"
                 );
             }

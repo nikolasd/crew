@@ -449,23 +449,51 @@ impl DomainAdapterEventSink {
 /// every word here is a fixed template plus a closed-enum-derived phrase,
 /// never vendor or captured content, so it may cross the redaction
 /// boundary without going through [`Redactor`]. Wording is pinned by
-/// `first_run_gate_question_names_the_vendor_and_the_gate` below --
+/// `first_run_gate_detected_journals_the_kind_and_raises_a_populated_escalation`
+/// and `a_copilot_folder_trust_gate_names_the_one_time_step` below --
 /// changing it is a deliberate edit, not a refactor side effect.
 fn first_run_gate_question(kind: crew_protocol::FirstRunGateKind) -> crew_protocol::Redacted {
     use crew_protocol::FirstRunGateKind::{
         ClaudeSignIn, ClaudeThemePicker, ClaudeWorkspaceTrust, CodexDirectoryTrust, CodexSignIn,
+        CopilotFolderTrust,
     };
-    let (vendor, phrase) = match kind {
-        ClaudeWorkspaceTrust => ("Claude", "workspace-trust prompt"),
-        ClaudeThemePicker => ("Claude", "theme-selection prompt"),
-        ClaudeSignIn => ("Claude", "sign-in prompt"),
-        CodexDirectoryTrust => ("Codex", "directory-trust prompt"),
-        CodexSignIn => ("Codex", "sign-in prompt"),
+    // `config_file` names the vendor's own trust-config file for a gate
+    // that has a one-time pre-empting step: trusting the repository once
+    // with the vendor in its own session, or adding an entry to that
+    // file (the exact entry per vendor is `docs/compatibility.md`'s "TUI
+    // First-Run Gate Detection" table -- naming the file here, not the
+    // JSON/TOML syntax, points a human somewhere real without the
+    // message drifting if that syntax ever changes). `None` for a gate
+    // with no such equivalent: signing in or choosing a theme still
+    // needs an interactive answer regardless of any config file, so
+    // there is nothing to point at beyond the pane.
+    let (vendor, phrase, config_file) = match kind {
+        ClaudeWorkspaceTrust => ("Claude", "workspace-trust prompt", Some("~/.claude.json")),
+        ClaudeThemePicker => ("Claude", "theme-selection prompt", None),
+        ClaudeSignIn => ("Claude", "sign-in prompt", None),
+        CodexDirectoryTrust => (
+            "Codex",
+            "directory-trust prompt",
+            Some("~/.codex/config.toml"),
+        ),
+        CodexSignIn => ("Codex", "sign-in prompt", None),
+        CopilotFolderTrust => (
+            "Copilot",
+            "folder-trust prompt",
+            Some("~/.copilot/config.json"),
+        ),
+    };
+    let one_time_sentence = match config_file {
+        Some(file) => format!(
+            " To avoid this next time, trust the repository once with {vendor} in its own \
+             session, or add its documented entry to {file}."
+        ),
+        None => String::new(),
     };
     crew_protocol::Redacted::assert_runtime_authored(format!(
         "The {vendor} CLI is waiting on its first-run {phrase} and cannot proceed until it is \
-         answered. Answer it in the worker's pane, or cancel the run. Crew will not answer it \
-         for you."
+         answered. Answer it in the worker's pane, or cancel the run.{one_time_sentence} Crew \
+         will not answer it for you."
     ))
 }
 
@@ -2326,6 +2354,67 @@ mod first_run_gate_tests {
                 assert!(
                     question.contains("Codex") && question.contains("sign-in prompt"),
                     "unexpected question for CodexSignIn: {question}"
+                );
+                assert!(
+                    !question.contains("avoid this next time"),
+                    "a sign-in gate has no config entry that pre-empts it -- the one-time-step \
+                     sentence must not appear: {question}"
+                );
+            }
+            other => panic!("expected EscalationRaised, got {other:?}"),
+        }
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// `CopilotFolderTrust` names copilot's own dialog phrase, and -- unlike
+    /// `CodexSignIn` above -- is a trust gate, so its question also carries
+    /// the one-time step that pre-empts it on future runs: trusting the
+    /// repository once with copilot in its own session, or adding its
+    /// documented config entry. This is the wording new to this slice;
+    /// `first_run_gate_detected_journals_the_kind_and_raises_a_populated_escalation`
+    /// above still pins the original template's closing sentence, unchanged.
+    #[tokio::test]
+    async fn a_copilot_folder_trust_gate_names_the_one_time_step() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_working_run(&db, project_id).await;
+        let (events_tx, mut events_rx) = broadcast::channel(16);
+        let sink = sink(Arc::clone(&db), project_id, events_tx);
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::FirstRunGateDetected {
+                kind: FirstRunGateKind::CopilotFolderTrust,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+
+        let _ = events_rx.try_recv().expect("FirstRunGateDetected");
+        let escalation = events_rx.try_recv().expect("EscalationRaised");
+        match &escalation.event {
+            RuntimeEvent::EscalationRaised { question, .. } => {
+                let question = question.as_ref().expect("question").as_str();
+                assert!(
+                    question.contains("Copilot") && question.contains("folder-trust prompt"),
+                    "unexpected question for CopilotFolderTrust: {question}"
+                );
+                assert!(
+                    question.contains(
+                        "trust the repository once with Copilot in its own session, or add its \
+                         documented entry to ~/.copilot/config.json"
+                    ),
+                    "a trust gate's question must name the one-time step and the actual file: \
+                     {question}"
+                );
+                assert!(
+                    question.contains("Crew will not answer it for you."),
+                    "the one-time step is an addition, not a replacement for the closing \
+                     sentence: {question}"
                 );
             }
             other => panic!("expected EscalationRaised, got {other:?}"),
