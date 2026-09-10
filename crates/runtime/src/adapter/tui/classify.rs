@@ -224,6 +224,19 @@ pub(crate) fn classify_copilot_surface(grid: &TerminalGrid) -> Surface {
 /// [`super::omp::OmpTuiVendor`] for the resulting failure's remedy, and
 /// `docs/compatibility.md`'s "TUI First-Run Gate Detection" section for
 /// the same fact stated as a prerequisite.
+///
+/// Not keyed on the persistent status line instead, even though the line
+/// survives `startup.quiet` and the welcome panel does not: counted as
+/// literal bytes in `omp-composer.raw`, the status line's words are
+/// escape-interleaved and never appear as a contiguous run, only the
+/// welcome panel's do. A phrase has to match the same way every other
+/// vendor's does here -- as bytes actually adjacent in the capture, not
+/// words that merely render adjacent on screen (see
+/// `fixtures/adapters/tui-screens/README.md`'s "Why these are captures
+/// and not hand-written strings", the claude/codex per-word escape trap
+/// this same rule already guards against) -- so the panel is not a
+/// compromise beside a spared status line; it is the only phrase in this
+/// capture that was ever eligible.
 const OMP_PROMPT_READY_TIP: &str = "for prompt actions";
 
 /// Classifies omp's current terminal surface. Unlike every other
