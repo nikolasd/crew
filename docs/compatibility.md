@@ -140,13 +140,23 @@ unattended Enter or Esc could grant); its predicate recognizes its normal prompt
 fails closed — including on the wizard itself, which gets no special-cased gate — per
 `release/live-conformance/2026-09-10-copilot-omp-first-run.md`.
 
-**omp prerequisite:** its ready-screen predicate keys on the welcome screen's own Tips panel, which
-omp's own `startup.quiet` config setting suppresses entirely (it "suppresses all startup chrome
-including the splash", per omp's settings documentation). An operator who has set `startup.quiet`
-in their omp config must unset it for a crew worker to ever be recognized as ready — crew's own
-launch never requests quiet mode, but it cannot override a user's existing config. A run that fails
-with "no recognizable prompt or first-run gate appeared" naming `startup.quiet` in the message is
-this exact case, not a genuinely novel screen.
+**omp prerequisites**, both operator-side, since crew never drives the wizard and never launches
+omp under a fresh home:
+
+1. **Run omp once by hand first.** A never-configured profile shows the five-step setup wizard on
+   every launch until it is completed or skipped past (`OMP_SKIP_SETUP=1`, or a `setupVersion`
+   entry in `config.yml`, both faster than stepping through it); a profile left mid-wizard raises
+   it again on the next launch. Crew's predicate returns `Undecided` on every step of it by design
+   — the maintainer's ruling is that a machine showing this wizard was never configured, which is
+   an operator error, not a decision for a human to make through a worker pane — and fails the
+   start closed with a typed error rather than pressing Enter into a provider sign-in.
+2. **`startup.quiet` must be off.** The ready-screen predicate keys on the welcome screen's own
+   Tips panel, which this omp config setting suppresses entirely (it "suppresses all startup
+   chrome including the splash", per omp's settings documentation). Crew's own launch never
+   requests quiet mode, but it cannot override a user's existing config, so an operator who has set
+   it must unset it for a crew worker to ever be recognized as ready. A run that fails with "no
+   recognizable prompt or first-run gate appeared" naming `startup.quiet` in the message is this
+   exact case, not a genuinely novel screen.
 
 All three trust-shaped gates (Claude's workspace trust, Codex's directory trust, Copilot's folder
 trust) resolve the same way: trust the repository once with that vendor, in its own session
