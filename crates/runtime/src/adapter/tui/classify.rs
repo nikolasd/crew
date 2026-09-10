@@ -341,7 +341,19 @@ mod tests {
             (CODEX_SIGNIN_TITLE, &["codex-signin.raw"]),
             (
                 CODEX_PROMPT_READY,
-                &["codex-composer-then-trust.raw", "codex-directory-trust.raw"],
+                // `codex-composer-empty.raw` owns this phrase; its pair
+                // `codex-composer-holding.raw` is deliberately NOT an owner.
+                // The two are one capture taken either side of a paste, and
+                // the placeholder's absence from the second is the whole
+                // reason they exist -- so this table is already the
+                // regression guard for it: list `holding` here, or key a
+                // predicate on a phrase that vanishes when the composer
+                // fills, and this test fails.
+                &[
+                    "codex-composer-then-trust.raw",
+                    "codex-directory-trust.raw",
+                    "codex-composer-empty.raw",
+                ],
             ),
             (COPILOT_FOLDER_TRUST_TITLE, &["copilot-folder-trust.raw"]),
             (COPILOT_PROMPT_READY_FOOTER, &["copilot-composer.raw"]),
@@ -599,6 +611,22 @@ mod tests {
                 "codex-composer-then-trust.raw",
                 Surface::Gate(GateKind::CodexDirectoryTrust),
             ),
+            ("codex-composer-empty.raw", Surface::PromptReady),
+            // NOT a typo and not a passing case dressed up as one: this is
+            // the defect, pinned. The composer is genuinely up and usable
+            // here -- it simply holds a pasted prompt, which is why
+            // `CODEX_PROMPT_READY` (the box's EMPTY-state placeholder) no
+            // longer matches. Codex is the only vendor keyed on a phrase
+            // that a paste erases, so its Enter-time re-check faces this
+            // screen and refuses to submit.
+            //
+            // Re-keying the predicate onto chrome that survives a paste
+            // (`>_ OpenAI Codex`, measured present on both halves of this
+            // pair) flips this expectation to `PromptReady`. That is the
+            // point of writing it down: the fix cannot land without
+            // changing this line, so nobody can believe the bug is gone
+            // while this still says `Undecided`.
+            ("codex-composer-holding.raw", Surface::Undecided),
         ] {
             assert_eq!(
                 classify_codex_surface(&grid_from(name)),
