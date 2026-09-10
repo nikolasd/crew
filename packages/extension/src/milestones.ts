@@ -34,6 +34,33 @@ const QUESTION_TRIAGE = "Answer via crew_send if run context suffices; escalate 
 const TWO_FAILURES_RULE = "Two consecutive failures on the same task require escalation to the user.";
 
 /**
+ * How a leader reads a finished run's report.
+ *
+ * A terminal digest is a *notification*: it says the run ended, not what it
+ * produced. The report itself is only reachable through `run/result`, which
+ * nothing pushes -- so a digest that names the state and stops leaves the
+ * leader knowing a run succeeded and holding none of its output. The
+ * settled-turn digest below has always carried this instruction; the
+ * terminal ones did not, which is the asymmetry this closes.
+ */
+const READ_THE_REPORT = 'Read it via crew_run { op: "result", runId }.';
+
+/**
+ * The same pointer for a run that did NOT succeed.
+ *
+ * `run/result` accepts every terminal state, not just `succeeded`
+ * (`service::orchestration::run_result` gates on `is_terminal`), and returns
+ * whatever visible text the journal accumulated before the run ended
+ * (`query::run_result_events_op`'s `final_text.or(chunk_text)`). For a
+ * failed, cancelled or lost run that is usually partial output and is often
+ * the most useful diagnostic there is -- but it can also be null, when the
+ * worker produced nothing before it died. The wording therefore offers it
+ * without promising it: a digest that said "read the output" and returned
+ * nothing would be worse than one that never mentioned it.
+ */
+const READ_ANY_PARTIAL_OUTPUT = 'Any partial output it produced is readable via crew_run { op: "result", runId }, though there may be none.';
+
+/**
  * The monitor's run rows, keyed by run id. Lets the digest name the run's
  * adapter / task instead of emitting bare ids.
  */
@@ -123,16 +150,16 @@ export function formatDigest(e: EventEnvelope, lookup: RunLookup): string | unde
       const state = event.payload.state;
       if (state === "failed") {
         const reason = row?.latestActivity ?? "see runtime";
-        return `${capitalize(who)} FAILED: ${reason}. ${TWO_FAILURES_RULE}`;
+        return `${capitalize(who)} FAILED: ${reason}. ${TWO_FAILURES_RULE} ${READ_ANY_PARTIAL_OUTPUT}`;
       }
       if (state === "succeeded") {
-        return `${capitalize(who)} succeeded.`;
+        return `${capitalize(who)} succeeded. ${READ_THE_REPORT}`;
       }
       if (state === "cancelled") {
-        return `${capitalize(who)} was cancelled.`;
+        return `${capitalize(who)} was cancelled. ${READ_ANY_PARTIAL_OUTPUT}`;
       }
       if (state === "lost") {
-        return `${capitalize(who)} was lost (worker process died).`;
+        return `${capitalize(who)} was lost (worker process died). ${READ_ANY_PARTIAL_OUTPUT}`;
       }
       if (state === "working") {
         return `${capitalize(who)} started working.`;
@@ -205,6 +232,26 @@ export function attachMilestoneBridge(pi: ExtensionAPI, monitor: MonitorControll
     }
   ).sendMessage;
 
+  // Warned at most once per session, the first time a digest is actually
+  // due. Without this the unavailable-API path is the only silent branch in
+  // the bridge: `send` is looked up through a cast so a renamed or removed
+  // omp method "degrades to no digest", the `typeof` guard below is then
+  // false forever, and every milestone for the whole session is dropped
+  // with nothing logged -- the surrounding catch only covers digests that
+  // throw. An omp version bump could switch the leader's notifications off
+  // entirely and look identical to a quiet run.
+  //
+  // Logged lazily -- at the first digest actually due -- rather than at
+  // attach time, and the reason is where the reader will be, not noise:
+  // this warning exists to explain an ABSENCE to someone who has noticed a
+  // milestone did not arrive, and that person is reading the log around
+  // the moment it should have fired. Attach can be hours earlier, when
+  // nobody is troubleshooting anything, so a warning there is filed before
+  // the question exists. Lazily also means a session that never reaches a
+  // milestone stays quiet, and once-per-session means a long run cannot
+  // flood the log with one unchanging fact.
+  let warnedMissingSendMessage = false;
+
   return monitor.subscribeEvents((e: EventEnvelope, meta: EventDeliveryMeta) => {
     const milestone = tracker.isMilestone(e);
     if (!milestone || meta.replay) {
@@ -218,6 +265,9 @@ export function attachMilestoneBridge(pi: ExtensionAPI, monitor: MonitorControll
       }
       if (typeof send === "function") {
         void send.call(pi, digest, { deliverAs: "followUp", triggerTurn: true });
+      } else if (!warnedMissingSendMessage) {
+        warnedMissingSendMessage = true;
+        pi.logger.warn("crew milestone bridge: this omp build exposes no sendMessage on ExtensionAPI, so run milestones will not be delivered to the leader for the rest of this session");
       }
     } catch (err) {
       pi.logger.error("crew milestone bridge: digest injection failed", {
