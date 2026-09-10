@@ -352,10 +352,21 @@ async fn harness() -> Harness {
 /// `session_dir`, and on any further line another acknowledging
 /// assistant message. Never traps signals, so default termination works
 /// exactly like a real, well-behaved CLI.
+///
+/// The second `echo` is load-bearing, not decorative: `OmpTuiVendor` now
+/// has a real `classify_surface` (`classify_omp_surface`), which looks
+/// for the welcome screen's own Tips-panel text rather than treating any
+/// output as ready -- the same reason codex's and copilot's own fixture
+/// doubles needed their real chrome added when each vendor's readiness
+/// poll stopped accepting any output as proof of life. Without this line
+/// every scenario using this double sits `Undecided` forever, since the
+/// double's first (real, unchanged) banner alone no longer reads as a
+/// recognized surface.
 fn write_double(scripts_dir: &std::path::Path, session_dir: &std::path::Path) -> PathBuf {
     let script = format!(
         r#"#!/bin/sh
 echo "Welcome to omp!"
+echo "Tips: # for prompt actions"
 SESSION_ID="77777777-7777-4777-8777-000000000042"
 SESSION="{session_dir}/2026-01-01T00-00-00-000Z_$SESSION_ID.jsonl"
 printf '%s\n' '{{"type":"session","version":3,"id":"'"$SESSION_ID"'","timestamp":"2026-01-01T00:00:00.100Z","cwd":"/workspace/crew"}}' >> "$SESSION"
