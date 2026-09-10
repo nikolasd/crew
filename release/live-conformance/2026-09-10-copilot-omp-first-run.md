@@ -294,6 +294,19 @@ way.
   `Yes, and remember this folder`) occur **zero** times in either copilot post-trust capture. A
   false positive on a normal screen would park a ready run rather than write into a gate — it fails
   safe — but it is no longer unmeasured.
+- **Copilot's committed ready screen is the *not-signed-in* variant.** `copilot-composer.raw` was
+  captured under a throwaway home whose account is unauthenticated, and its status line says so
+  (`Please use /login to sign in to use Copilot`). The screen is a genuine composer — the input
+  area, tab bar and `← open sidebar · / commands · ? help · tab next tab` footer are all present —
+  but **a signed-in composer's exact rendering is unmeasured**. The consequence is directional and
+  worth stating: a predicate keyed on the status line, or on anything else auth-shaped, would fail
+  closed on every normal signed-in machine, which is the common case. That is the opposite failure
+  direction from the one this work exists to prevent, and just as real. A copilot predicate must
+  therefore key on chrome the composer shows regardless of sign-in state, and say in the test which
+  bytes it keys on and that the status line is excluded. The signed-in rendering is a verification
+  item rather than a fixture gap: copilot runs in the supervised end-to-end exercise, where a
+  signed-in ready screen is observed for free — cheaper and more honest than another probe under a
+  real home.
 - **Copilot showed no sign-in gate, and this record does not claim it has none.** Isolation covered
   `HOME` and the XDG variables but *not* the macOS Keychain, so existing operator credentials may
   have satisfied it. The status is the same as claude's unobserved sign-in gate: not observed, not

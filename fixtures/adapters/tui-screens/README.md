@@ -33,7 +33,7 @@ behind it is not reviewable.
 | `codex-composer-then-trust.raw` | codex-cli 0.153.4 | Composer painted, prompt accepted, **then** the trust gate |
 | `claude-trust-to-composer.raw` | claude 2.1.265 | Trust gate **answered**, then the alternate-screen switch and the composer |
 | `copilot-folder-trust.raw` | Copilot CLI 1.0.83 | Folder trust ("Confirm folder trust"), focused on **Yes** |
-| `copilot-composer.raw` | Copilot CLI 1.0.83 | The normal prompt after trust is granted — what copilot's predicate must recognise as `PromptReady` |
+| `copilot-composer.raw` | Copilot CLI 1.0.83 | The normal prompt after trust is granted — what copilot's predicate must recognise as `PromptReady`. **The not-signed-in variant**: key on auth-independent chrome, never the status line |
 | `omp-composer.raw` | omp 18.1.16 | The normal prompt — what omp's predicate must recognise as `PromptReady` |
 | `omp-setup-step1.raw` | omp 18.1.15 | First-run setup wizard, step 1 of 5 — a **negative** sample: the predicate must return `Undecided` on it |
 
