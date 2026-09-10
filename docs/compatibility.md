@@ -131,12 +131,22 @@ v1 field names.
 
 ### TUI First-Run Gate Detection
 
-Claude, Codex, and Copilot TUI sessions classify what the vendor's terminal is actually showing
-and refuse to write into a recognized first-run gate: Copilot's folder-trust dialog defaults its
-selection to "Yes", so an unattended Enter would grant filesystem trust — the same hazard already
-closed for Codex. OMP-RPC has no comparable trust dialog (its own first-run flow is a global,
-skippable setup wizard, not a per-repository gate); its predicate recognizes its normal prompt and
-otherwise fails closed, per `release/live-conformance/2026-09-10-copilot-omp-first-run.md`.
+Claude, Codex, Copilot, and OMP-RPC TUI sessions all classify what the vendor's terminal is
+actually showing and refuse to write into anything they don't recognize: Copilot's folder-trust
+dialog defaults its selection to "Yes", so an unattended Enter would grant filesystem trust — the
+same hazard already closed for Codex. OMP-RPC has no comparable trust dialog (its own first-run
+flow is a global, skippable setup wizard, not a per-repository gate, and never blocks anything an
+unattended Enter or Esc could grant); its predicate recognizes its normal prompt and otherwise
+fails closed — including on the wizard itself, which gets no special-cased gate — per
+`release/live-conformance/2026-09-10-copilot-omp-first-run.md`.
+
+**omp prerequisite:** its ready-screen predicate keys on the welcome screen's own Tips panel, which
+omp's own `startup.quiet` config setting suppresses entirely (it "suppresses all startup chrome
+including the splash", per omp's settings documentation). An operator who has set `startup.quiet`
+in their omp config must unset it for a crew worker to ever be recognized as ready — crew's own
+launch never requests quiet mode, but it cannot override a user's existing config. A run that fails
+with "no recognizable prompt or first-run gate appeared" naming `startup.quiet` in the message is
+this exact case, not a genuinely novel screen.
 
 All three trust-shaped gates (Claude's workspace trust, Codex's directory trust, Copilot's folder
 trust) resolve the same way: trust the repository once with that vendor, in its own session

@@ -401,6 +401,25 @@ impl TuiVendor for OmpTuiVendor {
             }
         })
     }
+
+    fn classify_surface(
+        &self,
+        grid: &super::grid::TerminalGrid,
+    ) -> Option<super::classify::Surface> {
+        Some(super::classify::classify_omp_surface(grid))
+    }
+
+    /// See `OMP_PROMPT_READY_TIP`'s own doc comment in `classify.rs`: a
+    /// user's own `startup.quiet` setting suppresses the exact welcome
+    /// chrome this predicate keys on, with no other symptom -- an
+    /// operator who never sees `PromptReady` from omp needs to be told
+    /// this exists, not left to read the classifier's source.
+    fn readiness_failure_hint(&self) -> Option<&'static str> {
+        Some(
+            "if omp's own `startup.quiet` setting is on, unset it for crew workers -- it \
+             suppresses the composer chrome omp's ready-screen predicate looks for",
+        )
+    }
 }
 
 /// Whether `catalog` (the parsed `omp models --json` response) reports
