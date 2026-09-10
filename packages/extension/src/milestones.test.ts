@@ -193,7 +193,14 @@ test("noise never fires", () => {
   expect(t.isMilestone(run("run-1", "working"))).toBe(false);
 });
 
-test("failed digest contains the two-consecutive-failures rule and reason", () => {
+test("failed digest names the reason but never claims a failure count on its own", () => {
+  // A plain runEvent(failed) carries no information about whether this is
+  // the task's first failure or its fifth -- that fact lives only in
+  // whether the runtime's own repeated_failure escalation fired (a
+  // separate milestone, see the escalationRaised tests below). Asserting
+  // its absence here pins the bug this replaces: a "two consecutive
+  // failures" sentence used to be appended unconditionally, true on a
+  // task's very first failure as much as its second.
   const rows: RunLookup = {
     "run-1": { ...ROWS["run-1"], latestActivity: "process exited 1" } as MonitorRow,
   };
@@ -201,7 +208,34 @@ test("failed digest contains the two-consecutive-failures rule and reason", () =
   expect(digest).toBeDefined();
   expect(digest).toContain("FAILED");
   expect(digest).toContain("process exited 1");
-  expect(digest).toContain("Two consecutive failures");
+  expect(digest).not.toContain("consecutive");
+});
+
+test("escalation digest for a genuine repeat failure carries the runtime's own question", () => {
+  // The runtime only raises this escalation when the run genuinely just
+  // transitioned to `failed` and its task's immediately preceding run also
+  // failed (`previous_run_for_task_also_failed`) -- so unlike the old
+  // unconditional sentence, this digest existing at all already means the
+  // count is real.
+  const digest = formatDigest(
+    envelope({
+      runId: "run-1",
+      event: {
+        type: "escalationRaised",
+        payload: {
+          runId: "run-1",
+          taskId: "task-1",
+          workerId: "w1",
+          reason: "repeated_failure",
+          question: "This task's previous run also failed, and this run has now failed too -- two consecutive failures on the same task. Read this run's output (and the one before it) before deciding whether to retry with the same prompt or escalate to the user; crew will not retry it for you.",
+        },
+      },
+    }),
+    ROWS,
+  );
+  expect(digest).toBeDefined();
+  expect(digest).toContain("repeated_failure");
+  expect(digest).toContain("two consecutive failures");
 });
 
 test("succeeded digest tells the leader how to read the report", () => {

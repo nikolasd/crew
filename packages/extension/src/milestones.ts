@@ -30,8 +30,17 @@ const TERMINAL_STATES: Record<string, true> = {
 /** The instruction appended to a worker-question digest. */
 const QUESTION_TRIAGE = "Answer via crew_send if run context suffices; escalate to the user only for genuinely human decisions.";
 
-/** The rule text appended to a failed-run digest. */
-const TWO_FAILURES_RULE = "Two consecutive failures on the same task require escalation to the user.";
+// A "two consecutive failures" rule used to be appended to every plain
+// `failed` digest below, unconditionally -- on a task's very first failure
+// as much as its second. It read as a count no one had actually taken. The
+// runtime now raises its own `EscalationRaised { reason: "repeated_failure"
+// }` (with a populated `question`) precisely when, and only when, this
+// run's task also failed last time (`previous_run_for_task_also_failed`,
+// gated on the run genuinely having transitioned to `failed`, not merely
+// computed as if it had). That escalation is a milestone of its own and
+// gets its own digest below (the `escalationRaised` case), so the
+// two-failures guidance now only ever appears when it is actually true --
+// no separate constant or count-tracking needed here.
 
 /**
  * How a leader reads a finished run's report.
@@ -150,7 +159,7 @@ export function formatDigest(e: EventEnvelope, lookup: RunLookup): string | unde
       const state = event.payload.state;
       if (state === "failed") {
         const reason = row?.latestActivity ?? "see runtime";
-        return `${capitalize(who)} FAILED: ${reason}. ${TWO_FAILURES_RULE} ${READ_ANY_PARTIAL_OUTPUT}`;
+        return `${capitalize(who)} FAILED: ${reason}. ${READ_ANY_PARTIAL_OUTPUT}`;
       }
       if (state === "succeeded") {
         return `${capitalize(who)} succeeded. ${READ_THE_REPORT}`;
