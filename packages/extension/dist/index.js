@@ -10166,7 +10166,8 @@ own (see that event's doc comment).`,
         "claudeThemePicker",
         "claudeSignIn",
         "codexDirectoryTrust",
-        "codexSignIn"
+        "codexSignIn",
+        "copilotFolderTrust"
       ]
     },
     AnsweredBy: {
