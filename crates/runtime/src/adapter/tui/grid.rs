@@ -319,6 +319,19 @@ impl TerminalGrid {
         }
     }
 
+    /// `CSI 1 K` -- erase from the start of the line through the cursor
+    /// **inclusive**, which is why the slice is `..=cursor_col` and not
+    /// `..cursor_col`. The off-by-one matters: the cursor cell is the one
+    /// a vendor is most likely to be rewriting when it emits this, so
+    /// excluding it leaves exactly the character the sequence was sent to
+    /// clear.
+    fn erase_from_start_of_line_to_cursor(&mut self) {
+        if let Some(row) = self.cells.get_mut(self.cursor_row) {
+            let last = self.cursor_col.min(row.len().saturating_sub(1));
+            row[..=last].fill(' ');
+        }
+    }
+
     // ------------------------------------------------------------- CSI
 
     /// Dispatches one parsed CSI sequence (the bytes between `[` and the
@@ -376,10 +389,26 @@ impl TerminalGrid {
             b'J' => match params {
                 b"" | b"0" => self.erase_from_cursor_to_end_of_screen(),
                 b"2" => self.erase_whole_screen(),
+                // `CSI 3 J` erases the terminal's *saved lines* -- the
+                // scrollback -- and leaves the visible screen alone. This
+                // grid is a fixed-height window with no scrollback to
+                // erase, so there is nothing here for it to do. That is a
+                // property of the model, not an assumption about the
+                // sequence: were a scrollback ever added, this arm would
+                // have to clear it. Reached first by the omp composer
+                // capture, which emits it alongside `2 J` on entry.
+                b"3" => {}
                 other => self.mark_unsupported(unhandled_csi_message(b'J', other)),
             },
             b'K' => match params {
                 b"" | b"0" => self.erase_from_cursor_to_end_of_line(),
+                // Reached first by the copilot capture. Unlike the query
+                // sequences above this one genuinely clears cells, so it
+                // is implemented rather than ignored -- treating an erase
+                // as a no-op would leave text on the model that the real
+                // terminal has removed, which is the failure this grid
+                // exists to avoid.
+                b"1" => self.erase_from_start_of_line_to_cursor(),
                 b"2" => self.erase_whole_line(),
                 other => self.mark_unsupported(unhandled_csi_message(b'K', other)),
             },
@@ -394,7 +423,20 @@ impl TerminalGrid {
                 }
             }
             // Content-neutral families: see the doc comment above.
-            b'm' | b'q' | b'c' | b'n' | b'u' => {}
+            // Presentation, queries and window operations: none of them
+            // change a cell, so a model of cell content ignores them.
+            //
+            // `t` and `p` joined this list with the copilot capture, which
+            // is the first committed fixture to emit either. `CSI 22;0 t`
+            // pushes the window title onto the terminal's own title stack;
+            // `CSI ? Ps $ p` is DECRQM, asking the terminal to report
+            // whether a mode is set (copilot asks about 12, cursor blink,
+            // and 2026, synchronized output). A query is answered by the
+            // terminal, not by the screen -- and the replies are what the
+            // viewer-socket filter in `display::terminal_reply` exists to
+            // discard, so the two halves of that exchange are both
+            // accounted for and neither reaches a grid cell.
+            b'm' | b'q' | b'c' | b'n' | b'u' | b't' | b'p' => {}
             b'h' | b'l' if params.starts_with(b"?") => {}
             other => self.mark_unsupported(unhandled_csi_message(other, params)),
         }
@@ -675,6 +717,10 @@ pub(super) const ALL_FIXTURES: &[&str] = &[
     "codex-composer-then-trust.raw",
     "codex-directory-trust.raw",
     "codex-signin.raw",
+    "copilot-composer.raw",
+    "copilot-folder-trust.raw",
+    "omp-composer.raw",
+    "omp-setup-step1.raw",
 ];
 
 #[cfg(test)]
@@ -1027,7 +1073,58 @@ mod tests {
     #[should_panic(expected = "unhandled CSI final byte")]
     fn an_unrecognized_erase_parameter_on_k_panics_rather_than_being_ignored() {
         let mut grid = TerminalGrid::new();
+        // `3` rather than `1`: this test used `1K` until the copilot
+        // capture arrived emitting it for real, at which point it stopped
+        // being unrecognized and had to be implemented. The test's subject
+        // is the refusal to guess at an unknown parameter, not that
+        // parameter in particular, so it moves to one nothing emits.
+        grid.push(b"\x1b[3K");
+    }
+
+    /// `CSI 3 J` clears the scrollback and must leave the visible screen
+    /// standing. The distinction is the entire reason it is a no-op here
+    /// rather than an alias for `2 J`: a model that cleared the screen on
+    /// it would lose a surface the terminal still shows, and a predicate
+    /// reading that model would report an empty screen for a populated
+    /// one.
+    #[test]
+    fn erase_scrollback_on_j_leaves_the_visible_screen_alone() {
+        let mut grid = TerminalGrid::new();
+        grid.push(b"a visible line");
+        grid.push(b"\x1b[3J");
+        assert!(
+            grid.shows("a visible line"),
+            "3J erases saved lines, not the screen the grid models"
+        );
+        assert!(
+            grid.unsupported().is_none(),
+            "3J is handled, not marked unsupported"
+        );
+    }
+
+    /// The parameter the test above used to carry, now that a committed
+    /// capture emits it: erase from the start of the line through the
+    /// cursor, inclusive of the cursor cell.
+    #[test]
+    fn erase_to_cursor_on_k_clears_the_line_start_including_the_cursor_cell() {
+        let mut grid = TerminalGrid::new();
+        grid.push(b"abcdef");
+        grid.push(b"\x1b[1;4H"); // cursor onto the 'd'
         grid.push(b"\x1b[1K");
+        let first_row = grid
+            .rendered()
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            first_row.trim_end(),
+            "    ef",
+            "columns 1..=4 must be cleared and 'e','f' left standing"
+        );
+        // The negative half: the cursor cell itself is gone, not merely
+        // the cells before it -- the `..=` in the helper is the point.
+        assert!(!grid.shows("d"), "the cursor cell 'd' must be cleared too");
     }
 
     #[test]
