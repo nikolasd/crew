@@ -37,9 +37,8 @@ deliberately: **nothing in this section was observed on a PTY.**
 all key folder trust on the git main-checkout root and treat a `git worktree add` workspace as the
 same repository. A crew worker running in a worktree of an already-trusted repository therefore
 sees no dialog. Claude and codex document this. Copilot's changelog claims it from 1.0.60, but the
-resolution lives in a compiled module and 1.0.72 added a separate write for its own worktree
-command — so for copilot this is **intended-but-unverified**, and one supervised live launch from
-being a fact.
+resolution lives in a compiled module — so it was unverifiable by reading, and **was measured
+instead**; see *Copilot worktree trust inheritance* below.
 
 This reframes the dialog seen during the third live end-to-end attempt: it appeared because the
 target repository had never been trusted, not because worktrees defeat trust inheritance.
@@ -216,6 +215,47 @@ as a worker.
 That is why step 1 is committed as a negative sample: the predicate must be shown returning
 `Undecided` on a real capture of the screen it is most likely to be wrong about. Steps 2–5 add
 nothing to that proof, so they stay here as prose.
+
+## Copilot worktree trust inheritance — measured
+
+**A copilot worker in a linked worktree inherits the main checkout's trust and sees no dialog. The
+stored path is the repository root, not the worktree.**
+
+This one *was* observed on a PTY, unlike the section above. A real git repository was created under
+a neutral scratch path with a `git worktree add` worktree, all under a throwaway `HOME`:
+
+| Step | Result |
+|---|---|
+| grant trust in the main checkout | dialog shown; "Yes, and remember this folder" selected |
+| relaunch in the main checkout | **no dialog** — the control: trust persisted |
+| launch in the worktree | **no dialog** — the worktree inherits |
+
+`~/.copilot/config.json` gained exactly one entry:
+
+```json
+"trustedFolders": [ "<repo root>" ]
+```
+
+stored as the **realpath** of the repository root. Nothing was written naming the worktree. That
+confirms the 1.0.60 changelog claim, which until now rested on a compiled module, and it is why an
+operator seeding this file by hand should write both the path and its realpath.
+
+### The control is the only reason this is not the opposite finding
+
+The first attempt sent Down then Enter on a timer to select "Yes, and remember". **The Down never
+registered.** Enter took option 1 — session-only trust — nothing persisted, and the worktree then
+showed the dialog. That reads exactly like "a worktree does not inherit trust", with a clean
+capture behind it. Only re-launching in the *main checkout* first revealed that there was no
+persisted trust to inherit.
+
+The fix was to interlock on the intermediate state rather than the outcome: after the dialog is
+confirmed present, wait for the paint to settle, send Down, and **refuse to press Enter until the
+selection marker is verifiably on option 2**. The committed reasoning is that a keystroke is not an
+event you can assume landed — the capture must show the screen responding to it before the next key
+is sent. The final capture shows the marker on option 1 and then on option 2.
+
+This is the same failure as the settle detector in *Method* above: a step that silently did nothing,
+leaving an artefact that looked exactly like a successful run.
 
 ## Neither vendor positions words individually
 
