@@ -346,6 +346,12 @@ pub enum AnsweredBy {
 pub enum TimeoutKind {
     Inactivity,
     Total,
+    /// The run's owning leader has held no live connection for the full
+    /// disconnect grace window. Distinct from `inactivity`/`total`,
+    /// which describe the worker's own liveness -- this describes the
+    /// leader's, and is the fact a grace-window teardown journals before
+    /// the run is settled.
+    LeaderGone,
 }
 
 // Mirrored 1:1 from the TUI adapter's own internal `GateKind`
@@ -365,6 +371,7 @@ pub enum FirstRunGateKind {
     ClaudeSignIn,
     CodexDirectoryTrust,
     CodexSignIn,
+    CopilotFolderTrust,
 }
 
 /// Why a settled run resumed to `working`. The two causes map exactly

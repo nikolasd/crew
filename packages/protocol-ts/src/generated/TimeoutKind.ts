@@ -3,4 +3,4 @@
 /**
  * Which liveness deadline a `workerTimeout` event reports.
  */
-export type TimeoutKind = "inactivity" | "total";
+export type TimeoutKind = "inactivity" | "total" | "leaderGone";

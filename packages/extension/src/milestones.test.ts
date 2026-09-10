@@ -204,6 +204,33 @@ test("failed digest contains the two-consecutive-failures rule and reason", () =
   expect(digest).toContain("Two consecutive failures");
 });
 
+test("succeeded digest tells the leader how to read the report", () => {
+  // The whole point of a terminal notification: it says the run ended, not
+  // what it produced. Nothing pushes the report, so a digest that names the
+  // state and stops leaves the leader holding none of the output. The
+  // settled-turn digest below has always carried this instruction and had a
+  // test pinning it; the terminal digests carried neither, which is how the
+  // omission survived.
+  const digest = formatDigest(run("run-1", "succeeded"), ROWS);
+  expect(digest).toBeDefined();
+  expect(digest).toContain("succeeded");
+  expect(digest).toContain('crew_run { op: "result"');
+});
+
+test("non-succeeded terminal digests offer partial output without promising it", () => {
+  // `run/result` accepts every terminal state and returns whatever visible
+  // text the journal accumulated, which for a run that died is usually
+  // partial and is sometimes null. The wording must offer it without
+  // claiming it exists.
+  for (const state of ["failed", "cancelled", "lost"]) {
+    const rows: RunLookup = { "run-1": { ...ROWS["run-1"], latestActivity: "process exited 1" } as MonitorRow };
+    const digest = formatDigest(run("run-1", state), rows);
+    expect(digest, `${state} must produce a digest`).toBeDefined();
+    expect(digest, `${state} must point at run/result`).toContain('crew_run { op: "result"');
+    expect(digest, `${state} must not promise output exists`).toContain("there may be none");
+  }
+});
+
 test("a settled turn (runFlagsEvent turnSettled:true) is a milestone, once per settle episode", () => {
   const t = tracker();
   // First settle: milestone.
@@ -327,6 +354,43 @@ test("bridge injects a digest for a milestone and stays silent for noise", () =>
   unsubscribe();
   dispatch(run("run-2", "succeeded")); // detached: no further injection
   expect(sent.length).toBe(1);
+});
+
+test("an omp build with no sendMessage warns once, not silently and not per event", () => {
+  // The only branch in the bridge that could fail silently. `send` is looked
+  // up through a cast so a renamed or removed omp method degrades to "no
+  // digest"; without this warning every milestone for the session is dropped
+  // with nothing logged, because the surrounding catch only covers digests
+  // that throw. An omp version bump could switch the leader's notifications
+  // off entirely and look exactly like a quiet run.
+  const warnings: string[] = [];
+  const fakePi = {
+    logger: { debug() {}, info() {}, warn: (m: string) => warnings.push(m), error() {} },
+    // deliberately no sendMessage
+  } as unknown as { logger: { [k: string]: (...a: unknown[]) => void } };
+  const listeners: Array<(e: EventEnvelope, meta: { replay: boolean }) => void> = [];
+  const controller = {
+    subscribeEvents(cb: (e: EventEnvelope, meta: { replay: boolean }) => void) {
+      listeners.push(cb);
+      return () => {};
+    },
+    getState() {
+      return { rows: ROWS };
+    },
+  } as unknown as MonitorController;
+  attachMilestoneBridge(fakePi as never, controller);
+
+  // Nothing logged before a milestone is actually due.
+  expect(warnings.length).toBe(0);
+
+  listeners[0]?.(run("run-1", "succeeded"), { replay: false });
+  expect(warnings.length).toBe(1);
+  expect(warnings[0]).toContain("sendMessage");
+
+  // A second milestone must not repeat it -- a long run would otherwise
+  // flood the log with one unchanging fact.
+  listeners[0]?.(run("run-2", "failed"), { replay: false });
+  expect(warnings.length).toBe(1);
 });
 
 test("a replayed milestone never injects a digest (stale-failure guard)", () => {

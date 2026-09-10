@@ -580,9 +580,17 @@ async fn mock_process_scenarios(harness: &Harness) -> Vec<ScenarioResult> {
              pty; the double's own acknowledgement (a fresh AssistantText) was tailed back, \
              proving the delivery mechanism end to end",
         ),
-        (result, saw_ack) => ScenarioResult::fail(
+        (Err(err), _) => ScenarioResult::fail(
             scenario::FOLLOW_UP,
-            format!("send() result={result:?} saw_ack={saw_ack}"),
+            format!("send(FollowUp) failed: observed Err({err:?}), expected Ok(())"),
+        ),
+        (Ok(()), false) => ScenarioResult::fail(
+            scenario::FOLLOW_UP,
+            format!(
+                "deadline elapsed waiting for the double's acknowledgement (a fresh \
+                 AssistantText starting with \"ack:\") after send(FollowUp) succeeded, capped \
+                 at {SCENARIO_OBSERVATION_DEADLINE:?}"
+            ),
         ),
     });
 

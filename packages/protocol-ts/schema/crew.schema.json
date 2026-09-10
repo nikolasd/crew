@@ -3111,7 +3111,8 @@
         "claudeThemePicker",
         "claudeSignIn",
         "codexDirectoryTrust",
-        "codexSignIn"
+        "codexSignIn",
+        "copilotFolderTrust"
       ]
     },
     "AnsweredBy": {
@@ -3124,10 +3125,19 @@
     },
     "TimeoutKind": {
       "description": "Which liveness deadline a `workerTimeout` event reports.",
-      "type": "string",
-      "enum": [
-        "inactivity",
-        "total"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "inactivity",
+            "total"
+          ]
+        },
+        {
+          "description": "The run's owning leader has held no live connection for the full\ndisconnect grace window. Distinct from `inactivity`/`total`,\nwhich describe the worker's own liveness -- this describes the\nleader's, and is the fact a grace-window teardown journals before\nthe run is settled.",
+          "type": "string",
+          "const": "leaderGone"
+        }
       ]
     },
     "DisplayConfig": {

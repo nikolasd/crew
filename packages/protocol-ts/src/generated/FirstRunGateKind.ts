@@ -6,4 +6,4 @@
  * `firstRunGateDetected` event carries no redaction obligation of its
  * own (see that event's doc comment).
  */
-export type FirstRunGateKind = "claudeWorkspaceTrust" | "claudeThemePicker" | "claudeSignIn" | "codexDirectoryTrust" | "codexSignIn";
+export type FirstRunGateKind = "claudeWorkspaceTrust" | "claudeThemePicker" | "claudeSignIn" | "codexDirectoryTrust" | "codexSignIn" | "copilotFolderTrust";

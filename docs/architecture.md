@@ -766,9 +766,12 @@ sequenceDiagram
    A TUI vendor never exits, so `ProcessExited` alone would leave such a run non-terminal forever.
    `TurnEnded` is the vendor's own end-of-turn boundary, journaled as durable evidence and driving a
    **non-terminal** edge: the boundary says the *turn* ended, never that the *task* succeeded, so
-   only the leader closes a run (`run/finish`), with an inactivity backstop settling an abandoned one
-   to `lost`. A run parked this way carries the `turnSettled` flag, which is what lets a snapshot
-   reader tell "the answer is ready" from "the worker asked a question" — both are `waitingUser`.
+   only the leader closes a run (`run/finish`) — or, if the leader's own connection is gone for the
+   full disconnect grace window, the runtime settles it via `RunState::unrendered_verdict()`
+   ([ADR-0036](adr/0036-leader-disconnect-grace-window.md)); silence alone, with the leader still
+   connected, never settles a parked run. A run parked this way carries the `turnSettled` flag, which
+   is what lets a snapshot reader tell "the answer is ready" from "the worker asked a question" — both
+   are `waitingUser`.
 
    Two ordering properties hold. The state edge is committed durably before the signal it triggers,
    as it always was. And the concurrency slot is released on the **first of a turn boundary or a
