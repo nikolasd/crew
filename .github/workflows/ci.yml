@@ -262,12 +262,18 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
-
-      - name: Install JS workspace dependencies
-        run: bun install --frozen-lockfile
+      # No bun/JS install here, deliberately: `cargo audit` below reads only
+      # `Cargo.lock`, and `gitleaks-action` scans the checkout directly --
+      # neither touches `node_modules`. A JS dependency install step used to
+      # sit here too; its failure aborted the job before either real check
+      # ran, printing the same red as an actual audit finding or a leaked
+      # secret with nothing to tell them apart. Removing it does not change
+      # what this job audits; it removes a failure mode neither check ever
+      # depended on. Do not restore it to re-cover CONTRIBUTING's
+      # frozen-lockfile rule -- this job never touches the JS workspace, so
+      # there is no install here to freeze, and every job that actually
+      # does still runs `bun install --frozen-lockfile` against the same
+      # lockfile.
 
       - name: Run dependency audit
         run: |
