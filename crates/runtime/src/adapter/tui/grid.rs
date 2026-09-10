@@ -717,6 +717,7 @@ pub(super) const ALL_FIXTURES: &[&str] = &[
     "codex-composer-then-trust.raw",
     "codex-directory-trust.raw",
     "codex-signin.raw",
+    "copilot-composer.raw",
     "copilot-folder-trust.raw",
     "omp-composer.raw",
     "omp-setup-step1.raw",

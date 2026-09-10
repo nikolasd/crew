@@ -283,10 +283,17 @@ way.
 
 ## Limits
 
-- **Neither vendor's post-setup screen was reached.** omp's composer is blocked by the wizard on a
-  fresh profile, and copilot's was not exercised. So no claim is made that these phrases are absent
-  from either vendor's normal operating screens. A false positive there would park a ready run
-  rather than write into a gate — it fails safe — but it is unmeasured.
+- **Both vendors' normal screens were reached, and the phrase-absence claim is measured for both.**
+  This bullet previously said the opposite; it predated the composer captures and was corrected.
+  omp's composer was reached with a sixth `Esc` past the last wizard step, in the throwaway
+  profile, and is committed as `omp-composer.raw`. Copilot's was reached by the two no-dialog
+  launches of the worktree-inheritance check, and the main-checkout one is committed as
+  `copilot-composer.raw`. Counted as literal bytes: omp's wizard constants (`Setup step`,
+  `ctrl+c exit setup`, `Select provider to login`) occur **zero** times in omp's composer, and
+  copilot's dialog phrases (`Confirm folder trust`, `Do you trust the files in this folder?`,
+  `Yes, and remember this folder`) occur **zero** times in either copilot post-trust capture. A
+  false positive on a normal screen would park a ready run rather than write into a gate — it fails
+  safe — but it is no longer unmeasured.
 - **Copilot showed no sign-in gate, and this record does not claim it has none.** Isolation covered
   `HOME` and the XDG variables but *not* the macOS Keychain, so existing operator credentials may
   have satisfied it. The status is the same as claude's unobserved sign-in gate: not observed, not
@@ -295,7 +302,8 @@ way.
 
 ## Fixture sizes
 
-`copilot-folder-trust.raw` is 4,517 bytes, `omp-setup-step1.raw` 7,685, `omp-composer.raw` 17,488.
+`copilot-folder-trust.raw` is 4,517 bytes, `copilot-composer.raw` 3,242, `omp-setup-step1.raw`
+7,685, `omp-composer.raw` 17,488.
 All sit inside the range the existing corpus already occupied (1,289–11,012 bytes) except the
 composer, which is larger because it paints a full welcome panel. Every file is well under the 2 MB
 threshold at which `scripts/check-markers.ts` skips a file — a 2.85 MB from-spawn omp recording
