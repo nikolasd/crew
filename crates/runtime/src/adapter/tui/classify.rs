@@ -12,10 +12,10 @@
 //! -- a first-run gate answered and cleared would still classify as
 //! blocking, forever, on the accumulator's read.
 //!
-//! `ClaudeTuiVendor`/`CodexTuiVendor`/`CopilotTuiVendor`'s own
-//! `TuiVendor::classify_surface` overrides are this module's real
+//! `ClaudeTuiVendor`/`CodexTuiVendor`/`CopilotTuiVendor`/`OmpTuiVendor`'s
+//! own `TuiVendor::classify_surface` overrides are this module's real
 //! production callers, wiring
-//! `classify_claude_surface`/`classify_codex_surface`/`classify_copilot_surface`
+//! `classify_claude_surface`/`classify_codex_surface`/`classify_copilot_surface`/`classify_omp_surface`
 //! into `wait_for_readiness`'s poll (`adapter.rs`) and the Enter-time
 //! re-check both depend on.
 
@@ -177,6 +177,81 @@ pub(crate) fn classify_copilot_surface(grid: &TerminalGrid) -> Surface {
     Surface::Undecided
 }
 
+// -------------------------------------------------------------- omp
+
+/// omp raises no per-directory trust dialog anywhere in its source
+/// (verified by reading it, not by absence of a capture -- `trust` occurs
+/// zero times across every observed screen). What it raises instead is a
+/// global, five-step first-run setup wizard that blocks the composer
+/// until it completes or is skipped; the maintainer's ruling is that
+/// crew never launches omp under a fresh home, so a machine showing this
+/// wizard is one where omp was never configured -- an operator error,
+/// not a decision waiting for a human to make through crew. There is
+/// therefore no `GateKind` for omp: the wizard, and everything else this
+/// module does not positively recognize, falls through to `Undecided`
+/// and fails the start closed with a typed error, exactly like a
+/// genuinely novel screen would.
+///
+/// This phrase is drawn from omp's own "Tips" panel (`# for prompt
+/// actions`), not the welcome banner, the LSP-servers list, or the
+/// recent-sessions list beside it -- those two are conditional on empty
+/// state (`if (this.lspServers.length === 0)` /
+/// `if (this.recentSessions.length === 0)`, oh-my-pi
+/// `packages/coding-agent/src/modes/components/welcome.ts:340-341` and
+/// `:314-315` at tag `v18.1.16`) and would read differently once
+/// providers or sessions exist. The Tips lines are hardcoded into the
+/// same render pass with no such condition
+/// (`welcome.ts:363-367`). That the whole welcome panel is itself a
+/// startup-only element -- constructed only when `!preferences.quiet`
+/// and retired once the transcript fills the screen
+/// (`packages/coding-agent/src/modes/composer.ts:242`, `:405-426`) -- is
+/// true and does not weaken this: `classify_omp_surface` is reached from
+/// exactly two call sites in this codebase, `wait_for_readiness` and
+/// `enter_precondition`, both scoped to the startup window before the
+/// first prompt is delivered, which is precisely the window in which
+/// this panel is what is actually on screen.
+///
+/// The one config key that defeats this: `startup.quiet` (omp's own
+/// `config.yml`, schema documented as suppressing "all startup chrome
+/// including the splash") reaches the same `preferences.quiet` check
+/// above end to end (`packages/coding-agent/src/main.ts:1602-1603` and
+/// `interactive-mode.ts:1228-1229`, both feeding
+/// `Composer.setPreferences`) -- a user who has set it gets no welcome
+/// panel at all, and this predicate never sees `PromptReady`. Crew's own
+/// launch never requests quiet mode (`OmpTuiVendor::launch` passes no
+/// such flag), but an operator's own config can still set it; see
+/// [`TuiVendor::readiness_failure_hint`]'s override on
+/// [`super::omp::OmpTuiVendor`] for the resulting failure's remedy, and
+/// `docs/compatibility.md`'s "TUI First-Run Gate Detection" section for
+/// the same fact stated as a prerequisite.
+///
+/// Not keyed on the persistent status line instead, even though the line
+/// survives `startup.quiet` and the welcome panel does not: counted as
+/// literal bytes in `omp-composer.raw`, the status line's words are
+/// escape-interleaved and never appear as a contiguous run, only the
+/// welcome panel's do. A phrase has to match the same way every other
+/// vendor's does here -- as bytes actually adjacent in the capture, not
+/// words that merely render adjacent on screen (see
+/// `fixtures/adapters/tui-screens/README.md`'s "Why these are captures
+/// and not hand-written strings", the claude/codex per-word escape trap
+/// this same rule already guards against) -- so the panel is not a
+/// compromise beside a spared status line; it is the only phrase in this
+/// capture that was ever eligible.
+const OMP_PROMPT_READY_TIP: &str = "for prompt actions";
+
+/// Classifies omp's current terminal surface. Unlike every other
+/// classifier in this module, there is no gate branch at all -- see
+/// [`OMP_PROMPT_READY_TIP`]'s own doc comment for why.
+pub(crate) fn classify_omp_surface(grid: &TerminalGrid) -> Surface {
+    if grid.unsupported().is_some() {
+        return Surface::Undecided;
+    }
+    if grid.shows(OMP_PROMPT_READY_TIP) {
+        return Surface::PromptReady;
+    }
+    Surface::Undecided
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,6 +345,7 @@ mod tests {
             ),
             (COPILOT_FOLDER_TRUST_TITLE, &["copilot-folder-trust.raw"]),
             (COPILOT_PROMPT_READY_FOOTER, &["copilot-composer.raw"]),
+            (OMP_PROMPT_READY_TIP, &["omp-composer.raw"]),
         ];
 
         for (phrase, owners) in CASES {
@@ -466,6 +542,29 @@ mod tests {
         );
     }
 
+    // ----------------------------------------------------------- omp, positive
+
+    #[test]
+    fn classifies_omp_prompt_ready_from_the_tips_panel() {
+        assert_eq!(
+            classify_omp_surface(&grid_from("omp-composer.raw")),
+            Surface::PromptReady
+        );
+    }
+
+    /// The negative half of requirement (b) for omp: its five-step setup
+    /// wizard has no `GateKind` at all (see [`OMP_PROMPT_READY_TIP`]'s own
+    /// doc comment), so a capture of it must classify `Undecided` --
+    /// recognized as "not ready", never paste-worthy, and never a novel
+    /// gate this module invents a variant for.
+    #[test]
+    fn classifies_omp_setup_wizard_as_undecided_not_a_gate() {
+        assert_eq!(
+            classify_omp_surface(&grid_from("omp-setup-step1.raw")),
+            Surface::Undecided
+        );
+    }
+
     // --------------------------------------------------------- exhaustive
 
     /// Every committed capture's classify result under its own vendor's
@@ -520,6 +619,16 @@ mod tests {
                 "{name} under classify_copilot_surface"
             );
         }
+        for (name, expected) in [
+            ("omp-composer.raw", Surface::PromptReady),
+            ("omp-setup-step1.raw", Surface::Undecided),
+        ] {
+            assert_eq!(
+                classify_omp_surface(&grid_from(name)),
+                expected,
+                "{name} under classify_omp_surface"
+            );
+        }
     }
 
     /// A surface with no recognizable gate and no prompt-ready banner is
@@ -531,6 +640,7 @@ mod tests {
         assert_eq!(classify_claude_surface(&grid), Surface::Undecided);
         assert_eq!(classify_codex_surface(&grid), Surface::Undecided);
         assert_eq!(classify_copilot_surface(&grid), Surface::Undecided);
+        assert_eq!(classify_omp_surface(&grid), Surface::Undecided);
     }
 
     /// `TerminalGrid::unsupported` is not decorative: once it is set,

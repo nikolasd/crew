@@ -220,11 +220,28 @@ pub trait TuiVendor: Send + Sync + 'static {
     /// falls back to its legacy behavior for it (any output means
     /// ready, no gate can be recognized), rather than fail-closing on a
     /// vendor this slice was never asked to cover. This is a DIFFERENT
-    /// claim from [`Surface::Undecided`], which a real classifier (claude,
-    /// codex) returns when the screen genuinely matches no known gate or
-    /// prompt yet -- conflating the two would fail-close every copilot/omp
-    /// start the day this default stops being overridden for them too.
+    /// claim from [`Surface::Undecided`], which a real classifier returns
+    /// when the screen genuinely matches no known gate or prompt yet --
+    /// conflating the two would fail-close every start for a vendor this
+    /// default is still covering. Every shipped vendor (claude, codex,
+    /// copilot, omp) now overrides this; the default exists for a future
+    /// vendor added before its own predicate is written, not for any of
+    /// the four today.
     fn classify_surface(&self, _grid: &TerminalGrid) -> Option<Surface> {
+        None
+    }
+
+    /// An additional, vendor-specific hint appended to the failure text
+    /// when [`wait_for_readiness`]'s poll never resolves to a known
+    /// surface (`Surface::Undecided` at the readiness cap, with no gate
+    /// ever seen). Default: no hint -- most vendors have no known
+    /// "the screen looks unrecognizable because of this setting" cause,
+    /// only a genuinely novel screen. Overridden by omp, whose
+    /// `startup.quiet` config key suppresses the exact composer chrome
+    /// its own classifier keys on (see that classifier's own doc comment
+    /// for the citation) -- an operator hitting this needs to be told
+    /// where to look, not just that nothing was recognized.
+    fn readiness_failure_hint(&self) -> Option<&'static str> {
         None
     }
 }
@@ -1923,17 +1940,22 @@ async fn wait_for_readiness(
                 }
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
                 if remaining.is_zero() {
-                    return Err(AdapterError::process(
-                        kind,
-                        "start",
-                        if escalated_gate.is_some() {
-                            "no recognizable prompt appeared within a fresh readiness window \
-                             after a first-run gate was left"
-                        } else {
-                            "no recognizable prompt or first-run gate appeared before the \
-                             readiness cap elapsed"
-                        },
-                    ));
+                    let detail = if escalated_gate.is_some() {
+                        "no recognizable prompt appeared within a fresh readiness window after a \
+                         first-run gate was left"
+                            .to_string()
+                    } else {
+                        match vendor.readiness_failure_hint() {
+                            Some(hint) => format!(
+                                "no recognizable prompt or first-run gate appeared before the \
+                                 readiness cap elapsed ({hint})"
+                            ),
+                            None => "no recognizable prompt or first-run gate appeared before \
+                                      the readiness cap elapsed"
+                                .to_string(),
+                        }
+                    };
+                    return Err(AdapterError::process(kind, "start", detail));
                 }
                 // Raced against `pty.exit_watcher()`, not detected via
                 // the output channel closing: a broadcast `Receiver`
@@ -2681,6 +2703,52 @@ mod tests {
         }
     }
 
+    /// A test-only vendor that never overrides `classify_surface`,
+    /// deliberately: every shipped `TuiVendor` (claude, codex, copilot,
+    /// omp) now has a real predicate, so the trait's own `None` default
+    /// -- "no real predicate yet, fall back to the legacy behavior" --
+    /// has no production vendor left to exercise it. This struct exists
+    /// only to keep that default itself under test, independent of which
+    /// real vendors currently override it.
+    struct NoPredicateVendor;
+
+    impl TuiVendor for NoPredicateVendor {
+        fn kind(&self) -> &'static str {
+            "no-predicate"
+        }
+        fn launch(&self, _spec: &StartSpec, _cfg: &AdapterConfig) -> LaunchSpec {
+            unreachable!("enter_precondition never calls TuiVendor::launch")
+        }
+        fn resume_launch(
+            &self,
+            _session: &VendorSessionRef,
+            _spec: &StartSpec,
+            _cfg: &AdapterConfig,
+        ) -> LaunchSpec {
+            unreachable!("enter_precondition never calls TuiVendor::resume_launch")
+        }
+        fn transcript_root(&self, _spec: &StartSpec, _cfg: &AdapterConfig) -> PathBuf {
+            unreachable!("enter_precondition never calls TuiVendor::transcript_root")
+        }
+        fn format(&self) -> Arc<dyn TranscriptFormat> {
+            unreachable!("enter_precondition never calls TuiVendor::format")
+        }
+        fn compose_input(&self, _message: &str) -> Vec<u8> {
+            unreachable!("enter_precondition never calls TuiVendor::compose_input")
+        }
+        fn interrupt_sequence(&self) -> Vec<u8> {
+            unreachable!("enter_precondition never calls TuiVendor::interrupt_sequence")
+        }
+        fn permission_args(&self, _mode: crate::config::crew::PermissionMode) -> Vec<String> {
+            unreachable!("enter_precondition never calls TuiVendor::permission_args")
+        }
+        fn version_gate(&self, _probed: &str) -> VersionVerdict {
+            unreachable!("enter_precondition never calls TuiVendor::version_gate")
+        }
+        // `classify_surface` deliberately not overridden -- the trait
+        // default (`None`) is exactly what this stub exists to exercise.
+    }
+
     /// A test-only vendor whose `classify_surface` deterministically
     /// reports a fixed [`GateKind`] for its first `clear_after` calls,
     /// then `Surface::PromptReady` forever after -- lets the gate-park
@@ -3311,22 +3379,22 @@ mod tests {
     /// A vendor with no real predicate yet (`classify_surface` returns
     /// `None`) must keep the pre-classification behavior: it must not
     /// withhold Enter on the strength of a classification it never made.
-    /// Copilot had this exact shape until this slice gave it a real
-    /// predicate (see `wait_for_readiness_escalates_and_then_fails_when_
-    /// the_process_exits_under_a_replayed_copilot_gate_capture`, which
-    /// proves the opposite for copilot now); omp is the vendor still in
-    /// this state -- its own predicate is the second half of this slice,
-    /// not yet built.
+    /// No shipped vendor has this shape anymore -- copilot and omp both
+    /// gained real predicates in this slice (see
+    /// `wait_for_readiness_escalates_and_then_fails_when_the_process_
+    /// exits_under_a_replayed_copilot_gate_capture` and
+    /// `classify_omp_prompt_ready_from_the_tips_panel` for the opposite
+    /// proof on each) -- so this test exercises the trait's own default
+    /// directly, via [`NoPredicateVendor`], rather than a real vendor
+    /// that happens not to have a predicate yet.
     #[test]
     fn enter_precondition_proceeds_unconditionally_for_a_vendor_with_no_predicate() {
-        use crate::adapter::tui::OmpTuiVendor;
-
-        let omp = OmpTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let vendor = NoPredicateVendor;
         // Content is irrelevant here -- even a screen showing a claude
         // gate must not affect a vendor that has no predicate to read it
         // with.
         assert_eq!(
-            enter_precondition(&omp, &grid_from("claude-workspace-trust.raw")),
+            enter_precondition(&vendor, &grid_from("claude-workspace-trust.raw")),
             EnterPrecondition::Proceed
         );
     }
@@ -3567,6 +3635,170 @@ mod tests {
                 panic!("a replayed gate capture must never be classified as ready to paste into")
             }
         }
+    }
+
+    /// omp's fixture-driven proof, mirroring the claude/codex/copilot
+    /// ones above but with no gate to escalate: `wait_for_readiness` must
+    /// resolve `Ok(())` against a real replayed capture of omp's welcome
+    /// screen, proving `OmpTuiVendor::classify_surface` ->
+    /// `classify_omp_surface` -> the ordinary readiness path end to end,
+    /// not just that the classifier function itself returns the right
+    /// `Surface` (already covered in `classify.rs`'s own tests).
+    #[tokio::test]
+    async fn wait_for_readiness_succeeds_against_a_replayed_omp_composer_capture() {
+        use crate::adapter::tui::OmpTuiVendor;
+
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/adapters/tui-screens/omp-composer.raw");
+        let pty = Arc::new(
+            PtyProcess::spawn(
+                &crate::supervisor::SpawnSpec {
+                    program: PathBuf::from("/bin/sh"),
+                    args: vec![
+                        "-c".to_string(),
+                        format!("cat '{}' && sleep 30", fixture_path.display()),
+                    ],
+                    ..crate::supervisor::SpawnSpec::minimal()
+                },
+                EscalationTimings::default(),
+            )
+            .expect("spawn the replay double"),
+        );
+
+        let mut readiness_rx = pty.subscribe_output();
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        {
+            let mut grid_rx = pty.subscribe_output();
+            let grid = Arc::clone(&grid);
+            tokio::spawn(async move {
+                loop {
+                    match grid_rx.recv().await {
+                        Ok(bytes) => grid
+                            .lock()
+                            .expect("terminal-grid mutex never poisoned")
+                            .push(&bytes),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        let vendor = OmpTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let sink: Arc<dyn AdapterEventSink> = GateRecordingSink::new();
+        let cancel_token = CancellationToken::new();
+
+        let result = wait_for_readiness(
+            &mut readiness_rx,
+            "omp-rpc",
+            &vendor,
+            &grid,
+            Duration::from_millis(50),
+            Duration::from_secs(5),
+            &pty,
+            Some(PromptInjection {
+                text: "this must never be written",
+                write_timeout: Duration::from_secs(1),
+            }),
+            tokio::time::Instant::now(),
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            &sink,
+            &cancel_token,
+        )
+        .await;
+
+        let _ = pty.terminate().await;
+
+        result.expect("a real replayed omp welcome screen must classify as ready to paste into");
+    }
+
+    /// The negative half: omp's five-step setup wizard has no `GateKind`,
+    /// so it must fail closed once `cap` elapses, exactly like a
+    /// genuinely novel surface would -- and the failure must name the
+    /// `startup.quiet` cause via [`TuiVendor::readiness_failure_hint`],
+    /// since a real operator hitting this has no other way to learn it.
+    #[tokio::test]
+    async fn wait_for_readiness_fails_closed_on_the_omp_setup_wizard_naming_the_quiet_setting() {
+        use crate::adapter::tui::OmpTuiVendor;
+
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/adapters/tui-screens/omp-setup-step1.raw");
+        let pty = Arc::new(
+            PtyProcess::spawn(
+                &crate::supervisor::SpawnSpec {
+                    program: PathBuf::from("/bin/sh"),
+                    args: vec![
+                        "-c".to_string(),
+                        format!("cat '{}' && sleep 30", fixture_path.display()),
+                    ],
+                    ..crate::supervisor::SpawnSpec::minimal()
+                },
+                EscalationTimings::default(),
+            )
+            .expect("spawn the replay double"),
+        );
+
+        let mut readiness_rx = pty.subscribe_output();
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        {
+            let mut grid_rx = pty.subscribe_output();
+            let grid = Arc::clone(&grid);
+            tokio::spawn(async move {
+                loop {
+                    match grid_rx.recv().await {
+                        Ok(bytes) => grid
+                            .lock()
+                            .expect("terminal-grid mutex never poisoned")
+                            .push(&bytes),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        let vendor = OmpTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let sink = GateRecordingSink::new();
+        let dyn_sink: Arc<dyn AdapterEventSink> = sink.clone();
+        let cancel_token = CancellationToken::new();
+
+        let result = wait_for_readiness(
+            &mut readiness_rx,
+            "omp-rpc",
+            &vendor,
+            &grid,
+            Duration::from_millis(30),
+            Duration::from_millis(300),
+            &pty,
+            Some(PromptInjection {
+                text: "this must never be written",
+                write_timeout: Duration::from_secs(1),
+            }),
+            tokio::time::Instant::now(),
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            &dyn_sink,
+            &cancel_token,
+        )
+        .await;
+
+        let _ = pty.terminate().await;
+
+        let message = result
+            .expect_err("omp's setup wizard must never be classified as ready to paste into")
+            .to_string();
+        assert!(
+            message.contains("startup.quiet"),
+            "the failure must name the setting that could be causing it: {message}"
+        );
+        assert!(
+            sink.payloads().is_empty(),
+            "the wizard has no GateKind, so nothing should ever escalate for it: {:?}",
+            sink.payloads()
+        );
     }
 
     /// A truly unrecognized surface must fail closed once `cap` elapses --
