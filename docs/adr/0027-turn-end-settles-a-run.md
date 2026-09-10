@@ -1,6 +1,6 @@
 # A run is a conversation the leader closes; a vendor's turn-end is durable evidence, not a terminal state
 
-* Status: Accepted
+* Status: Accepted; Decision point 3's backstop-settles-on-silence half superseded by [0036](0036-leader-disconnect-grace-window.md) -- its "never `succeeded`" half stands, unamended.
 * Date: 2026-08-29
 * Amends: [0023](0023-run-state-edges-from-adapter-evidence.md)
 
@@ -84,8 +84,10 @@ current bug under a nicer name — a leader that dies or loses interest leaves r
 Turn-end is journaled and broadcast as evidence, driving `working -> waitingUser` — an
 already-legal, already-modelled non-terminal state meaning "the runtime is not the blocker", which
 `next_hop` already routes through. `run/result` becomes readable for a run in `waitingUser` that has
-at least one turn-end. The leader settles explicitly via `run/finish`; an inactivity backstop settles
-an abandoned run without one.
+at least one turn-end. The leader settles explicitly via `run/finish`; an inactivity backstop settled
+an abandoned run without one until [0036](0036-leader-disconnect-grace-window.md) replaced that
+backstop with a disconnect-grace-window teardown -- silence alone was never sufficient evidence that
+a leader had given up, only its connection actually being gone is.
 
 Against it: it is two-phase rather than one change, and it borrows `waitingUser`, whose existing
 meaning in the monitor is "the worker asked a question" — so the two need to be distinguishable.

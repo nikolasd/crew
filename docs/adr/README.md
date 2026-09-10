@@ -69,7 +69,7 @@ rather than behind a number nobody can resolve.
 | [0024](0024-project-scoped-reads-are-open-ownership-gates-writes.md) | Project-scoped reads are open; ownership gates writes | Accepted |
 | [0025](0025-crew-v2-tui-control-plane.md) | Crew v2 TUI control plane | Accepted |
 | [0026](0026-headless-retirement.md) | Headless control plane retirement | Accepted |
-| [0027](0027-turn-end-settles-a-run.md) | A run is a conversation the leader closes; a vendor's turn-end is durable evidence, not a terminal state | Accepted |
+| [0027](0027-turn-end-settles-a-run.md) | A run is a conversation the leader closes; a vendor's turn-end is durable evidence, not a terminal state | Accepted, Decision point 3 partially superseded by [0036](0036-leader-disconnect-grace-window.md) |
 | [0028](0028-submit-prompt-is-journaled-redacted-run-intent.md) | The submit prompt is journaled, redacted, as durable run intent | Accepted |
 | [0029](0029-placement-follows-the-backend-embedded-deleted.md) | Display placement is the backend's natural form, and `Embedded` is deleted rather than deprecated | Accepted |
 | [0030](0030-paste-delivery-bounded-on-progress.md) | Paste delivery is bounded on progress, not on elapsed time | Accepted |
@@ -77,6 +77,7 @@ rather than behind a number nobody can resolve.
 | [0032](0032-model-names-are-resolved-and-persisted-on-confirmation.md) | A worker's model name is resolved against the host's catalogue, and persisted only once confirmed | Accepted |
 | [0034](0034-dashboard-bearer-token-over-loopback.md) | A daemon-hosted web dashboard, authenticated by a per-run bearer token over loopback | Accepted |
 | [0035](0035-protocol-doc-comment-sigil-split.md) | Protocol doc comments split by sigil: `///` ships, `//` stays internal | Accepted |
+| [0036](0036-leader-disconnect-grace-window.md) | A parked run is settled on its leader's connection actually being gone, never on silence alone | Accepted |
 
 ## When to add one
 

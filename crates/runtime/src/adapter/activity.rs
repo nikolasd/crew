@@ -130,6 +130,22 @@ impl ActivityClock {
             match kind {
                 TimeoutKind::Inactivity => entry.inactivity_journaled = true,
                 TimeoutKind::Total => entry.total_journaled = true,
+                // This clock tracks worker/PTY liveness only -- a
+                // leader's connection state is `ipc::leader_registry`'s
+                // concern, tracked separately and never through here.
+                // Should be unreachable on that invariant (the sweep's
+                // own `since_ms` computation already skips this kind
+                // before ever calling here), but this is a `pub fn` a
+                // future caller could reach directly with a bad `kind` --
+                // logging and doing nothing costs a call that flags
+                // nothing, never a panic in a long-lived background task.
+                TimeoutKind::LeaderGone => {
+                    tracing::error!(
+                        run_id = %run_id,
+                        "mark_journaled called with LeaderGone -- ActivityClock has no \
+                         leader-connection state to flag; ignoring"
+                    );
+                }
             }
         }
     }
