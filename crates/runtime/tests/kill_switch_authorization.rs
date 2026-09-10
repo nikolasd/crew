@@ -40,19 +40,62 @@
 //! `a_skip_never_masks_a_real_disproof_of_a_different_gate` additionally
 //! proves a skip on one gate never masks a genuine disproof on another).
 //!
-//! This file deliberately contains exactly **one** test. It mutates the
-//! process-global `CREW_DISABLE_VENDOR_CLI` variable, which
-//! `std::env::set_var` may only change soundly while no other thread is
-//! running (edition 2024 makes it `unsafe` for precisely this reason);
-//! `cargo test` runs `#[test]` functions in a binary concurrently, so a
-//! single `#[tokio::test]` with the phases sequenced inside it is the only
-//! sound shape -- the same argument as `vendor_cli_availability.rs`.
+//! This file contains exactly **one** test that touches the process
+//! environment. It mutates the process-global `CREW_DISABLE_VENDOR_CLI`
+//! variable, which `std::env::set_var` may only change soundly while no
+//! other thread is running (edition 2024 makes it `unsafe` for precisely
+//! this reason); `cargo test` runs `#[test]` functions in a binary
+//! concurrently, so a single `#[tokio::test]` with the phases sequenced
+//! inside it is the only sound shape for that mutation -- the same
+//! argument as `vendor_cli_availability.rs`. `outcome_diff_tests` below
+//! adds ordinary, environment-independent unit tests of `outcome_diff`
+//! itself; none of them read or write `CREW_DISABLE_VENDOR_CLI`, so they
+//! carry none of that hazard and may run concurrently with each other
+//! and with the one test that does.
 //!
 //! Never invokes a model: `run_fixture_conformance` is the zero-model-call
 //! fixture suite.
 
 use crew_runtime::adapter::{AdapterKind, AdapterMode};
-use crew_runtime::conformance::{DISABLE_VENDOR_CLI_ENV, run_fixture_conformance, scenario};
+use crew_runtime::conformance::{
+    ConformanceReport, DISABLE_VENDOR_CLI_ENV, ScenarioOutcome, run_fixture_conformance, scenario,
+};
+
+/// Every scenario in `report` whose outcome differs from what the kill
+/// switch is expected to produce -- every scenario `Pass`es except
+/// `PROBE`, which the switch forces to `Skipped` -- as one line per
+/// scenario: `"name: expected X, observed Y -- detail"`. Empty when the
+/// report matches expectation exactly.
+///
+/// This is what a failure here actually needs: which scenario broke and
+/// why, not the two capability structs `effective_capabilities` and
+/// `declared_capabilities` corrupt into differing -- a reader diffing
+/// those by eye learns that SOMETHING failed, never which scenario or
+/// what it observed.
+fn outcome_diff(report: &ConformanceReport) -> String {
+    let lines: Vec<String> = report
+        .scenarios
+        .iter()
+        .filter_map(|s| {
+            let expected = if s.name == scenario::PROBE {
+                ScenarioOutcome::Skipped
+            } else {
+                ScenarioOutcome::Pass
+            };
+            (s.outcome != expected).then(|| {
+                format!(
+                    "{}: expected {expected:?}, observed {:?} -- {}",
+                    s.name, s.outcome, s.detail
+                )
+            })
+        })
+        .collect();
+    if lines.is_empty() {
+        "(no scenario outcome differs from expectation)".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn the_kill_switch_never_shrinks_effective_capabilities() {
@@ -83,10 +126,11 @@ async fn the_kill_switch_never_shrinks_effective_capabilities() {
             .map(|s| (s.name, s.detail.clone()))
             .collect();
         assert_eq!(
-            report.effective_capabilities, report.declared_capabilities,
-            "{kind}: a skipped (unattempted) scenario must never downgrade a \
-             capability; declared={:?} effective={:?} skipped={skipped:?}",
-            report.declared_capabilities, report.effective_capabilities
+            report.effective_capabilities,
+            report.declared_capabilities,
+            "{kind}: a skipped (unattempted) scenario must never downgrade a capability -- \
+             scenarios that differ from expectation:\n{}",
+            outcome_diff(&report)
         );
         if !skipped.is_empty() {
             any_skipped = true;
@@ -118,4 +162,96 @@ async fn the_kill_switch_never_shrinks_effective_capabilities() {
     );
 
     unsafe { std::env::remove_var(DISABLE_VENDOR_CLI_ENV) };
+}
+
+#[cfg(test)]
+mod outcome_diff_tests {
+    use super::*;
+    use crew_runtime::adapter::{
+        AdapterCapabilities, ApprovalsCapability, DurabilityCapability, NativeViewCapability,
+        NestedCapability, ProtocolKind, ResumeCapability, SteeringCapability, UsageCapability,
+        WorkspaceControlCapability,
+    };
+    use crew_runtime::conformance::report::AdapterKindLabel;
+    use crew_runtime::conformance::{ConformanceMode, ScenarioResult};
+
+    fn minimal_capabilities() -> AdapterCapabilities {
+        AdapterCapabilities {
+            protocol: ProtocolKind::Terminal,
+            resume: ResumeCapability::None,
+            steering: SteeringCapability::None,
+            approvals: ApprovalsCapability::None,
+            structured_result: false,
+            usage: UsageCapability::None,
+            nested: NestedCapability::None,
+            native_view: NativeViewCapability::None,
+            workspace_control: WorkspaceControlCapability::ReadOnly,
+            durability: DurabilityCapability::ParentScoped,
+        }
+    }
+
+    fn report(scenarios: Vec<ScenarioResult>) -> ConformanceReport {
+        ConformanceReport::new(
+            AdapterKindLabel::from(AdapterKind::Claude),
+            ConformanceMode::Fixture,
+            None,
+            minimal_capabilities(),
+            scenarios,
+        )
+    }
+
+    /// Verifies the instrument on a case known to match expectation
+    /// exactly (PROBE skipped, everything else passing) before trusting
+    /// it on a real failure -- a positive control.
+    #[test]
+    fn a_report_matching_expectation_exactly_diffs_to_nothing() {
+        let report = report(vec![
+            ScenarioResult::skip(scenario::PROBE, "vendor CLI probe skipped"),
+            ScenarioResult::pass(scenario::FOLLOW_UP, "ok"),
+        ]);
+        assert_eq!(
+            outcome_diff(&report),
+            "(no scenario outcome differs from expectation)"
+        );
+    }
+
+    /// The negative control this instrument exists for: a scenario that
+    /// failed (not skipped) must show up by name, with its own detail,
+    /// not be lost inside a capability-struct diff.
+    #[test]
+    fn a_failed_scenario_names_itself_and_carries_its_detail() {
+        let report = report(vec![
+            ScenarioResult::skip(scenario::PROBE, "vendor CLI probe skipped"),
+            ScenarioResult::fail(
+                scenario::FOLLOW_UP,
+                "deadline elapsed waiting for the double's acknowledgement",
+            ),
+        ]);
+        assert_eq!(
+            outcome_diff(&report),
+            format!(
+                "{}: expected Pass, observed Fail -- deadline elapsed waiting for the double's \
+                 acknowledgement",
+                scenario::FOLLOW_UP
+            )
+        );
+    }
+
+    /// PROBE itself is held to the opposite expectation from every other
+    /// scenario: passing it (not skipping it) is what must be flagged
+    /// here, since that would mean the kill switch had no effect at all.
+    #[test]
+    fn probe_passing_instead_of_skipping_is_itself_a_diff() {
+        let report = report(vec![ScenarioResult::pass(
+            scenario::PROBE,
+            "the real vendor CLI answered --version",
+        )]);
+        assert_eq!(
+            outcome_diff(&report),
+            format!(
+                "{}: expected Skipped, observed Pass -- the real vendor CLI answered --version",
+                scenario::PROBE
+            )
+        );
+    }
 }
