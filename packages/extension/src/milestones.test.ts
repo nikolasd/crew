@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import type { EventEnvelope, RuntimeEvent, RuntimeEventKind } from "@nikolasd/crew-protocol";
+import type { Component } from "@oh-my-pi/pi-tui";
 import { attachMilestoneBridge, formatDigest, MilestoneTracker, type RunLookup } from "./milestones";
 import type { MonitorController } from "./monitor/controller";
 import type { MonitorRow } from "./monitor/model";
@@ -307,16 +308,25 @@ test("escalation digest with a question appends it after the reason", () => {
 
 function fakeBridge(): {
   sent: string[];
+  sentCustomTypes: string[];
   dispatch: (e: EventEnvelope, meta?: { replay: boolean }) => void;
   unsubscribe: () => void;
 } {
   const sent: string[] = [];
+  const sentCustomTypes: string[] = [];
   const fakePi = {
     logger: { debug() {}, info() {}, warn() {}, error() {} },
-    sendMessage: (message: string) => {
-      sent.push(message);
+    // The bridge now sends `{ customType, content }` rather than a bare
+    // string -- captures both, so a test can pin the digest text (as
+    // before) or the wire shape (customType), independently.
+    sendMessage: (message: { customType: string; content: string }) => {
+      sent.push(message.content);
+      sentCustomTypes.push(message.customType);
     },
-  } as unknown as { logger: { [k: string]: (...a: unknown[]) => void }; sendMessage: (m: string) => void };
+  } as unknown as {
+    logger: { [k: string]: (...a: unknown[]) => void };
+    sendMessage: (m: { customType: string; content: string }) => void;
+  };
   const listeners: Array<(e: EventEnvelope, meta: { replay: boolean }) => void> = [];
   const controller = {
     subscribeEvents(cb: (e: EventEnvelope, meta: { replay: boolean }) => void) {
@@ -339,7 +349,7 @@ function fakeBridge(): {
     }
   };
   expect(listeners.length).toBe(1);
-  return { sent, dispatch, unsubscribe };
+  return { sent, sentCustomTypes, dispatch, unsubscribe };
 }
 
 test("bridge injects a digest for a milestone and stays silent for noise", () => {
@@ -354,6 +364,17 @@ test("bridge injects a digest for a milestone and stays silent for noise", () =>
   unsubscribe();
   dispatch(run("run-2", "succeeded")); // detached: no further injection
   expect(sent.length).toBe(1);
+});
+
+test("every digest is sent under crew's own customType, not a bare string", () => {
+  // A bare string falls back to oh-my-pi's generic "custom-message"
+  // header, indistinguishable from any other extension's notice. Every
+  // digest must carry `customType: "crew"` so the registered renderer
+  // (see the rendering tests below) actually applies to it.
+  const { sentCustomTypes, dispatch } = fakeBridge();
+  dispatch(run("run-1", "failed"));
+  dispatch(run("run-2", "succeeded"));
+  expect(sentCustomTypes).toEqual(["crew", "crew"]);
 });
 
 test("an omp build with no sendMessage warns once, not silently and not per event", () => {
@@ -449,4 +470,85 @@ test("a replayed milestone still updates the tracker's one-shot bookkeeping", ()
   // A different run's first `working`, live, is still a real milestone.
   dispatch(run("run-2", "working"), { replay: false });
   expect(sent.length).toBe(1);
+});
+
+function fakePiWithRenderer(): {
+  pi: { logger: { [k: string]: (...a: unknown[]) => void } };
+  registered: Array<{ customType: string; renderer: (message: { content: unknown }) => Component | undefined }>;
+} {
+  const registered: Array<{ customType: string; renderer: (message: { content: unknown }) => Component | undefined }> = [];
+  const pi = {
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    registerMessageRenderer: (customType: string, renderer: (message: { content: unknown }) => Component | undefined) => {
+      registered.push({ customType, renderer });
+    },
+    // No sendMessage needed for these tests -- only the renderer registration
+    // and its output are under test here.
+  };
+  return { pi, registered };
+}
+
+function controllerWithNoEvents(): MonitorController {
+  return {
+    subscribeEvents() {
+      return () => {};
+    },
+    getState() {
+      return { rows: ROWS };
+    },
+  } as unknown as MonitorController;
+}
+
+test("attaching the bridge registers a renderer for crew's own customType", () => {
+  const { pi, registered } = fakePiWithRenderer();
+  attachMilestoneBridge(pi as never, controllerWithNoEvents());
+  expect(registered.length).toBe(1);
+  expect(registered[0]?.customType).toBe("crew");
+});
+
+test("the registered renderer draws crew's icon, label, and the digest text", () => {
+  // The actual proof of content: the renderer this bridge registers,
+  // invoked the way oh-my-pi itself would invoke it, must produce a real
+  // component whose rendered rows show crew's own icon and label rather
+  // than the generic "custom-message" fallback header -- and still carry
+  // the digest text verbatim, since the digest wording itself is out of
+  // scope for this change.
+  const { pi, registered } = fakePiWithRenderer();
+  attachMilestoneBridge(pi as never, controllerWithNoEvents());
+  const renderer = registered[0]?.renderer;
+  expect(renderer).toBeDefined();
+
+  const component = renderer?.({ content: "run run-1 (claude adapter) for task task-1 FAILED: boom." });
+  expect(component).toBeDefined();
+  const rows = component?.render(80).join("\n") ?? "";
+  expect(rows).toContain("👥");
+  expect(rows).toContain("Crew");
+  expect(rows).toContain("run run-1 (claude adapter) for task task-1 FAILED: boom.");
+});
+
+test("the registered renderer degrades to the stringified content on a non-string payload rather than throwing", () => {
+  // Every digest this bridge sends is a plain string, but `content` is
+  // typed as `CustomMessageContent` in general (a string or a content-part
+  // array). A future or third-party sender of this customType with rich
+  // content must still render something rather than crash the renderer.
+  const { pi, registered } = fakePiWithRenderer();
+  attachMilestoneBridge(pi as never, controllerWithNoEvents());
+  const renderer = registered[0]?.renderer;
+  const component = renderer?.({ content: [{ type: "text", text: "hi" }] });
+  expect(component).toBeDefined();
+  const rows = component?.render(80).join("\n") ?? "";
+  expect(rows).toContain("👥");
+  expect(rows.length).toBeGreaterThan(0);
+});
+
+test("an omp build with no registerMessageRenderer degrades quietly, not a crash", () => {
+  // The counterpart to the missing-sendMessage test: an older/newer omp
+  // build without this method must still let the bridge attach and deliver
+  // digests -- losing only the custom header, never the notification
+  // itself, and never throwing at attach time.
+  const pi = {
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    // deliberately no registerMessageRenderer
+  };
+  expect(() => attachMilestoneBridge(pi as never, controllerWithNoEvents())).not.toThrow();
 });

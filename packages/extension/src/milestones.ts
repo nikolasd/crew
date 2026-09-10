@@ -14,10 +14,68 @@
 
 import type { EventEnvelope, RuntimeEvent } from "@nikolasd/crew-protocol";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { Box, type Component, Text } from "@oh-my-pi/pi-tui";
 
 import type { EventDeliveryMeta } from "./client";
 import type { MonitorController } from "./monitor/controller";
 import type { MonitorRow } from "./monitor/model";
+
+/**
+ * The `customType` crew's own injected notices are sent under. Every
+ * extension-injected message that omits `customType` (a bare string,
+ * which is what every digest here used to be) falls back to oh-my-pi's own
+ * `DEFAULT_CUSTOM_MESSAGE_TYPE` ("custom-message") and renders under a
+ * generic header naming no extension at all -- indistinguishable from any
+ * other extension's notice. Sending under this type instead, paired with
+ * `registerCrewMessageRenderer` below, is what lets a digest render as
+ * crew's own rather than that generic fallback.
+ */
+const CREW_MESSAGE_TYPE = "crew";
+
+/**
+ * Icon and label crew's own notices render under. Provisional pending the
+ * maintainer's final wording on the label -- "Crew" is the agreed default
+ * to ship with.
+ */
+const CREW_ICON = "👥";
+const CREW_LABEL = "Crew";
+
+/**
+ * Registers a custom renderer for `CREW_MESSAGE_TYPE`: a small box with
+ * crew's own icon + label as its header and the digest text as its body,
+ * standing in for the generic "custom-message" fallback header every
+ * extension-injected message without a registered renderer gets.
+ *
+ * Defensive lookup, the same convention `attachMilestoneBridge` already
+ * uses for `sendMessage`: `registerMessageRenderer` is accessed through a
+ * cast so a renamed or removed method on a different omp build degrades to
+ * "no custom renderer" (the generic fallback header) rather than a crash.
+ * Unlike a missing `sendMessage`, this never warns on its own absence --
+ * losing it is a cosmetic regression (the digest still arrives, under a
+ * less legible header), not a silently dropped notification.
+ */
+function registerCrewMessageRenderer(pi: ExtensionAPI): void {
+  const register = (
+    pi as unknown as {
+      registerMessageRenderer?: (customType: string, renderer: (message: { content: unknown }) => Component | undefined) => void;
+    }
+  ).registerMessageRenderer;
+  if (typeof register !== "function") {
+    return;
+  }
+  register.call(pi, CREW_MESSAGE_TYPE, (message: { content: unknown }) => {
+    // `content` is `CustomMessageContent = string | (TextContent | ImageContent)[]`
+    // in general, but every digest this bridge ever sends is a plain
+    // string -- the array shape is defended against rather than assumed
+    // absent, since a future digest carrying rich content should still
+    // render something instead of throwing.
+    const text = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+    const box = new Box(1, 0);
+    box.addChild(new Text(`${CREW_ICON} ${CREW_LABEL}`));
+    box.addChild(new Text(text));
+    return box;
+  });
+}
 
 /** A run-state value that ends the run. */
 const TERMINAL_STATES: Record<string, true> = {
@@ -221,14 +279,18 @@ export function formatDigest(e: EventEnvelope, lookup: RunLookup): string | unde
  */
 export function attachMilestoneBridge(pi: ExtensionAPI, monitor: MonitorController): () => void {
   const tracker = new MilestoneTracker();
+  registerCrewMessageRenderer(pi);
 
   // The oh-my-pi `ExtensionAPI` surface is version-gated; access
   // `sendMessage` defensively so a renamed/removed method degrades to
   // "no digest" rather than a crash. The documented signature is
-  // `sendMessage(message, { deliverAs, triggerTurn })`.
+  // `sendMessage(message, { deliverAs, triggerTurn })`; `message` is now an
+  // object naming `CREW_MESSAGE_TYPE`, not the bare string it used to be,
+  // so the digest renders under crew's own header via the renderer just
+  // registered instead of oh-my-pi's generic "custom-message" fallback.
   const send = (
     pi as unknown as {
-      sendMessage?: (message: string, options?: { deliverAs?: string; triggerTurn?: boolean }) => unknown;
+      sendMessage?: (message: { customType: string; content: string }, options?: { deliverAs?: string; triggerTurn?: boolean }) => unknown;
     }
   ).sendMessage;
 
@@ -264,7 +326,7 @@ export function attachMilestoneBridge(pi: ExtensionAPI, monitor: MonitorControll
         return;
       }
       if (typeof send === "function") {
-        void send.call(pi, digest, { deliverAs: "followUp", triggerTurn: true });
+        void send.call(pi, { customType: CREW_MESSAGE_TYPE, content: digest }, { deliverAs: "followUp", triggerTurn: true });
       } else if (!warnedMissingSendMessage) {
         warnedMissingSendMessage = true;
         pi.logger.warn("crew milestone bridge: this omp build exposes no sendMessage on ExtensionAPI, so run milestones will not be delivered to the leader for the rest of this session");
