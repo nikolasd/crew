@@ -13612,6 +13612,8 @@ var TERMINAL_STATES = {
 };
 var QUESTION_TRIAGE = "Answer via crew_send if run context suffices; escalate to the user only for genuinely human decisions.";
 var TWO_FAILURES_RULE = "Two consecutive failures on the same task require escalation to the user.";
+var READ_THE_REPORT = 'Read it via crew_run { op: "result", runId }.';
+var READ_ANY_PARTIAL_OUTPUT = 'Any partial output it produced is readable via crew_run { op: "result", runId }, though there may be none.';
 function capitalize(s) {
   return s.length === 0 ? s : `${s[0].toUpperCase()}${s.slice(1)}`;
 }
@@ -13673,16 +13675,16 @@ function formatDigest(e, lookup) {
       const state = event.payload.state;
       if (state === "failed") {
         const reason = row?.latestActivity ?? "see runtime";
-        return `${capitalize(who)} FAILED: ${reason}. ${TWO_FAILURES_RULE}`;
+        return `${capitalize(who)} FAILED: ${reason}. ${TWO_FAILURES_RULE} ${READ_ANY_PARTIAL_OUTPUT}`;
       }
       if (state === "succeeded") {
-        return `${capitalize(who)} succeeded.`;
+        return `${capitalize(who)} succeeded. ${READ_THE_REPORT}`;
       }
       if (state === "cancelled") {
-        return `${capitalize(who)} was cancelled.`;
+        return `${capitalize(who)} was cancelled. ${READ_ANY_PARTIAL_OUTPUT}`;
       }
       if (state === "lost") {
-        return `${capitalize(who)} was lost (worker process died).`;
+        return `${capitalize(who)} was lost (worker process died). ${READ_ANY_PARTIAL_OUTPUT}`;
       }
       if (state === "working") {
         return `${capitalize(who)} started working.`;
@@ -13720,6 +13722,7 @@ function formatDigest(e, lookup) {
 function attachMilestoneBridge(pi, monitor) {
   const tracker = new MilestoneTracker;
   const send = pi.sendMessage;
+  let warnedMissingSendMessage = false;
   return monitor.subscribeEvents((e, meta) => {
     const milestone = tracker.isMilestone(e);
     if (!milestone || meta.replay) {
@@ -13733,6 +13736,9 @@ function attachMilestoneBridge(pi, monitor) {
       }
       if (typeof send === "function") {
         send.call(pi, digest, { deliverAs: "followUp", triggerTurn: true });
+      } else if (!warnedMissingSendMessage) {
+        warnedMissingSendMessage = true;
+        pi.logger.warn("crew milestone bridge: this omp build exposes no sendMessage on ExtensionAPI, so run milestones will not be delivered to the leader for the rest of this session");
       }
     } catch (err) {
       pi.logger.error("crew milestone bridge: digest injection failed", {
