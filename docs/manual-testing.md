@@ -92,12 +92,20 @@ Several environment variables control Crew's behavior. Set these once per shell 
 export CREW_STATE_DIR=/path/to/state
 
 # Vendor CLIs (claude, codex, copilot, the local omp model server) are ordinary installed
-# dependencies. Live conformance and the availability probe run by default -- no gate needs to be
-# set to exercise a real vendor CLI. Set this only to forbid observation-only vendor invocation
-# (live conformance suites, the availability probe, #[ignore]d live tests) on a machine without
-# the CLIs installed, or in CI. This variable gates the conformance harness and test suite only --
-# a running daemon's run/submit spawns the real vendor CLI regardless, so any live run through
-# omp/crewd in the sections below is a real, possibly billed, vendor launch:
+# dependencies, and this variable forbids the observation-only invocations -- live conformance
+# suites, the availability probe, #[ignore]d live tests. Only the exact value "1" disables; "0",
+# empty, and absent all permit.
+#
+# You do not normally need to set it. `.cargo/config.toml`'s [env] block sets it for every
+# CARGO-LAUNCHED process, so `cargo test` is already gated and a forgotten prefix can no longer
+# spawn a vendor binary. Setting it in your shell is only needed for something cargo did not
+# start. To run live conformance deliberately, turn it off by VALUE, because [env] means it is
+# never absent under cargo:
+#   CREW_DISABLE_VENDOR_CLI=0 CREW_LIVE_CWD=<trusted-dir> cargo test --test conformance
+#
+# It gates the conformance harness and test suite ONLY. A running daemon's run/submit spawns the
+# real vendor CLI regardless of this variable, so any live run through omp/crewd in the sections
+# below is a real, possibly billed, vendor launch:
 export CREW_DISABLE_VENDOR_CLI=1
 
 # Path override for the crewd binary (bypasses packaged binary discovery)
@@ -142,7 +150,7 @@ depth, failing closed with the exact JSON path that named the unknown key. Examp
 - `security.patterns` is additive across layers (concatenated, never replaced), so a lower layer's
   redaction patterns can never be silently dropped by a higher one. An org pattern that fails to
   compile as a regex refuses the daemon's startup rather than degrading to built-in rules only.
-- Vendor CLIs are ordinary installed dependencies; live conformance and the availability probe run by default. `CREW_DISABLE_VENDOR_CLI=1` should always be set in CI jobs or unattended runs — it forbids observation-only vendor invocation and guarantees no billed model call is made.
+- Vendor CLIs are ordinary installed dependencies. `CREW_DISABLE_VENDOR_CLI=1` forbids observation-only vendor invocation, and `.cargo/config.toml`'s `[env]` block now sets it for every cargo-launched process, so `cargo test` is gated without anyone remembering; CI sets it explicitly as well. It does **not** gate a running daemon — `run/submit` spawns the real vendor CLI regardless, so an unattended run through `omp`/`crewd` can still make a billed model call.
 
 ## Owning what you test
 
