@@ -39,9 +39,9 @@ pub use display::{
 };
 pub use event::RunFlags;
 pub use event::{
-    AnsweredBy, Classified, ContentClass, DiagnosticLevel, EventEnvelope, EventSource, PlanSpec,
-    Redacted, ResumeCause, RuntimeEvent, RuntimeEventKind, SubtaskSpec, TimeoutKind, Timestamp,
-    TimestampParseError, TurnOutcome,
+    AnsweredBy, Classified, ContentClass, DiagnosticLevel, EventEnvelope, EventSource,
+    FirstRunGateKind, PlanSpec, Redacted, ResumeCause, RuntimeEvent, RuntimeEventKind, SubtaskSpec,
+    TimeoutKind, Timestamp, TimestampParseError, TurnOutcome,
 };
 pub use ids::{
     ApprovalId, ArtifactId, EscalationId, MessageId, OperationId, PolicyViolationId, ProjectId,

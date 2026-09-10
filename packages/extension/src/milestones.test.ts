@@ -245,6 +245,39 @@ test("question digest contains the question text and triage instruction", () => 
   expect(digest).toContain("Answer via crew_send");
 });
 
+test("escalation digest with no question renders exactly today's sentence", () => {
+  const digest = formatDigest(
+    envelope({
+      runId: "run-1",
+      event: { type: "escalationRaised", payload: { runId: "run-1", taskId: "task-1", workerId: "w1", reason: "write_violation", question: null } },
+    }),
+    ROWS,
+  );
+  expect(digest).toBe("Escalation raised on run run-1 (claude adapter) for task task-1: write_violation.");
+});
+
+test("escalation digest with a question appends it after the reason", () => {
+  const digest = formatDigest(
+    envelope({
+      runId: "run-1",
+      event: {
+        type: "escalationRaised",
+        payload: {
+          runId: "run-1",
+          taskId: "task-1",
+          workerId: "w1",
+          reason: "vendorFirstRunGate",
+          question: "The Claude CLI is waiting on its first-run workspace-trust prompt and cannot proceed until it is answered. Answer it in the worker's pane, or cancel the run. Crew will not answer it for you.",
+        },
+      },
+    }),
+    ROWS,
+  );
+  expect(digest).toBeDefined();
+  expect(digest).toContain("vendorFirstRunGate");
+  expect(digest).toContain("Crew will not answer it for you.");
+});
+
 function fakeBridge(): {
   sent: string[];
   dispatch: (e: EventEnvelope, meta?: { replay: boolean }) => void;

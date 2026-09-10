@@ -32,6 +32,10 @@ behind it is not reviewable.
 | `codex-directory-trust.raw` | codex-cli 0.153.4 | Directory trust |
 | `codex-composer-then-trust.raw` | codex-cli 0.153.4 | Composer painted, prompt accepted, **then** the trust gate |
 | `claude-trust-to-composer.raw` | claude 2.1.265 | Trust gate **answered**, then the alternate-screen switch and the composer |
+| `copilot-folder-trust.raw` | Copilot CLI 1.0.83 | Folder trust ("Confirm folder trust"), focused on **Yes** |
+| `copilot-composer.raw` | Copilot CLI 1.0.83 | The normal prompt after trust is granted — what copilot's predicate must recognise as `PromptReady`. **The not-signed-in variant**: key on auth-independent chrome, never the status line |
+| `omp-composer.raw` | omp 18.1.16 | The normal prompt — what omp's predicate must recognise as `PromptReady` |
+| `omp-setup-step1.raw` | omp 18.1.15 | First-run setup wizard, step 1 of 5 — a **negative** sample: the predicate must return `Undecided` on it |
 
 The codex composer-then-trust capture is not a duplicate. Codex paints its
 composer first, accepts a pasted prompt into it, and only then raises its trust
@@ -113,3 +117,45 @@ Verify the staged blob's hash against the source capture before committing
 The `-text` attribute prevents end-of-line rewriting, but the hash comparison is
 what proves it worked; see the fixture-integrity entry in
 `docs/engineering-lessons.md`.
+
+## The copilot and omp captures (2026-09-10)
+
+`copilot-folder-trust.raw` is recorded **from spawn**, like the codex composer-then-trust capture,
+because the transition into the dialog is worth more than the bytes it costs.
+
+`omp-setup-step1.raw` is a **settled repaint**, not a from-spawn recording. omp animates its first
+paint — about 2.85 MB in three seconds, a hundred times this whole directory — so the frame was
+taken by letting the PTY fall quiet, resizing one column, sending `SIGWINCH`, and recording only
+the redraw. The grid is the one a predicate classifies against; the animation that produced it is
+not. `SIGWINCH` is a signal, not terminal input, and advances no dialog.
+
+It is here as a **negative** sample. omp's first-run setup wizard is not a gate crew escalates on:
+the maintainer ruled that crew never launches omp under a fresh home, so the wizard means the
+machine was never configured. The predicate recognises omp's *normal prompt* and returns
+`PromptReady`; anything else, this capture included, stays `Undecided` and fails the start closed
+with a typed error rather than pressing Enter into a provider sign-in. Steps 2–5 of the wizard were
+observed and are described in the record, but are deliberately not fixtures — nothing classifies
+against them.
+
+Unlike claude and codex, **neither vendor positions words individually**: their prose survives
+escape-stripping with spaces intact. The whitespace-stripped comparison still matches them, but the
+reason it exists does not apply here.
+
+Note the direction the stripping trap runs in these two. Against claude and codex it *loses* spaces
+and hides a phrase that is on screen. Against omp's animated paint it *joined* fragments into a
+legend (`press enter to skip`) that was never on screen at all and would have inverted the security
+reading of step 1. Check a candidate phrase as contiguous bytes in the capture before trusting it.
+
+Full method, per-step focused defaults and the stated limits are in
+`release/live-conformance/2026-09-10-copilot-omp-first-run.md`.
+
+Both new vendors' captures were taken from a neutral `/tmp` scratch directory, not from a path
+under a home directory. Copilot's dialog prints the directory it is asking about, so the first
+recording carried an absolute home path in its bytes; every other fixture here contains none. A
+byte-exact recording of a dialog that displays its own working directory will bake that path into
+this repository, and the marker guard cannot catch it because `fixtures/` is exempt by design.
+
+Both vendors also self-updated during the session that produced these files (copilot 1.0.81 →
+1.0.83, omp 18.1.15 → 18.1.16). The copilot and composer captures each carry their version string
+in-band, so they can be pinned from the bytes; `omp-setup-step1.raw` does not, and is 18.1.15 on
+the record's word alone.

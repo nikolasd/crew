@@ -6,6 +6,7 @@ import type { DecidedBy } from "./DecidedBy";
 import type { DiagnosticLevel } from "./DiagnosticLevel";
 import type { DisplayBackend } from "./DisplayBackend";
 import type { DisplayPlacement } from "./DisplayPlacement";
+import type { FirstRunGateKind } from "./FirstRunGateKind";
 import type { MessageId } from "./MessageId";
 import type { PlanSpec } from "./PlanSpec";
 import type { Redacted } from "./Redacted";
@@ -90,7 +91,7 @@ reason: Redacted, } } | { "type": "planProposed", "payload": { runId: RunId, tas
 /**
  * `null` when no rationale was given for the decision.
  */
-reason: Redacted | null, } } | { "type": "workerQuestion", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, question: Redacted | null, } } | { "type": "escalationRaised", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, 
+reason: Redacted | null, } } | { "type": "workerQuestion", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, question: Redacted | null, } } | { "type": "firstRunGateDetected", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, kind: FirstRunGateKind, } } | { "type": "escalationRaised", "payload": { runId: RunId, taskId: TaskId, workerId: WorkerId, 
 /**
  * Why the run was escalated, as a short machine-assigned code from
  * a closed set -- never a worker's or a caller's own words.

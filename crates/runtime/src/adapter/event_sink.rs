@@ -146,6 +146,15 @@ pub enum AdapterEventPayload {
         input_count: u64,
         span_ms: u64,
     },
+    /// A TUI adapter's readiness poll recognized a vendor first-run gate
+    /// blocking the run. Carries only the closed-set `kind` -- never
+    /// captured PTY text. Maps to [`RuntimeEvent::FirstRunGateDetected`]
+    /// and additionally raises the paired `EscalationRaised { reason:
+    /// "vendorFirstRunGate" }` with a runtime-authored `question` (see
+    /// [`DomainAdapterEventSink::emit`]).
+    FirstRunGateDetected {
+        kind: crew_protocol::FirstRunGateKind,
+    },
 }
 
 /// Adapters push ordered normalized events into the runtime journal
@@ -423,8 +432,41 @@ impl DomainAdapterEventSink {
                 input_count,
                 span_ms,
             },
+            AdapterEventPayload::FirstRunGateDetected { kind } => {
+                RuntimeEvent::FirstRunGateDetected {
+                    run_id,
+                    task_id,
+                    worker_id,
+                    kind,
+                }
+            }
         }
     }
+}
+
+/// The runtime-authored escalation question for a recognized first-run
+/// gate, built via [`crew_protocol::Redacted::assert_runtime_authored`]:
+/// every word here is a fixed template plus a closed-enum-derived phrase,
+/// never vendor or captured content, so it may cross the redaction
+/// boundary without going through [`Redactor`]. Wording is pinned by
+/// `first_run_gate_question_names_the_vendor_and_the_gate` below --
+/// changing it is a deliberate edit, not a refactor side effect.
+fn first_run_gate_question(kind: crew_protocol::FirstRunGateKind) -> crew_protocol::Redacted {
+    use crew_protocol::FirstRunGateKind::{
+        ClaudeSignIn, ClaudeThemePicker, ClaudeWorkspaceTrust, CodexDirectoryTrust, CodexSignIn,
+    };
+    let (vendor, phrase) = match kind {
+        ClaudeWorkspaceTrust => ("Claude", "workspace-trust prompt"),
+        ClaudeThemePicker => ("Claude", "theme-selection prompt"),
+        ClaudeSignIn => ("Claude", "sign-in prompt"),
+        CodexDirectoryTrust => ("Codex", "directory-trust prompt"),
+        CodexSignIn => ("Codex", "sign-in prompt"),
+    };
+    crew_protocol::Redacted::assert_runtime_authored(format!(
+        "The {vendor} CLI is waiting on its first-run {phrase} and cannot proceed until it is \
+         answered. Answer it in the worker's pane, or cancel the run. Crew will not answer it \
+         for you."
+    ))
 }
 
 impl AdapterEventSink for DomainAdapterEventSink {
@@ -441,6 +483,10 @@ impl AdapterEventSink for DomainAdapterEventSink {
         // block below (this function cannot `?` here -- it returns the
         // future itself, not a `Result`).
         let cursor_json = event.cursor.as_ref().map(serde_json::to_string).transpose();
+        let first_run_gate_kind = match &event.payload {
+            AdapterEventPayload::FirstRunGateDetected { kind } => Some(*kind),
+            _ => None,
+        };
         let write_tool = match &event.payload {
             AdapterEventPayload::ToolStarted { name, .. }
                 if !self.isolated_workspace
@@ -556,6 +602,35 @@ impl AdapterEventSink for DomainAdapterEventSink {
                             error = %err,
                             run_id = %run_id,
                             "failed to record write-violation escalation"
+                        );
+                    }
+                }
+            }
+
+            if let Some(kind) = first_run_gate_kind {
+                // The escalation row and its `EscalationRaised` event
+                // commit together, as a second mutation after the
+                // `FirstRunGateDetected` event above -- same shape as the
+                // write-violation escalation, and for the same reason:
+                // this call site is the first to actually populate
+                // `EscalationRaised.question` (see that field's own doc).
+                let question = first_run_gate_question(kind);
+                let raise_result = db
+                    .run_domain_op(Box::new(move |conn| {
+                        DomainRepository::new(conn, project_id)
+                            .record_escalation_raised(run_id, "vendorFirstRunGate", Some(question))
+                            .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                    }))
+                    .await;
+                match raise_result {
+                    Ok(mut value) => {
+                        let _ = crate::domain::broadcast_committed(&events_tx, &mut value);
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            run_id = %run_id,
+                            "failed to record vendor-first-run-gate escalation"
                         );
                     }
                 }
@@ -2020,5 +2095,242 @@ mod crash_resume_tests {
         .iter()
         .map(|v| v.as_str().expect("string").to_string())
         .collect()
+    }
+}
+
+#[cfg(test)]
+mod first_run_gate_tests {
+    //! Requirement (a)'s DB/journal half: emitting
+    //! `AdapterEventPayload::FirstRunGateDetected` through the real
+    //! [`DomainAdapterEventSink`] must durably journal
+    //! `RuntimeEvent::FirstRunGateDetected` AND raise the paired
+    //! `EscalationRaised { reason: "vendorFirstRunGate" }` with a
+    //! populated `question`, against a real database -- proving the
+    //! second-mutation wiring this sink adds (mirrored on the existing
+    //! write-violation special case), not just the payload shape. The
+    //! fixture-driven half (that `wait_for_readiness` actually emits this
+    //! payload for a real replayed gate capture, exactly once) is
+    //! `adapter.rs`'s own
+    //! `wait_for_readiness_escalates_and_then_fails_when_the_process_exits_under_a_replayed_gate_capture`.
+
+    use std::sync::Arc;
+
+    use crew_protocol::{
+        FirstRunGateKind, ProjectId, RunState, TaskId, Timestamp, Worker, WorkerId,
+        WorkerProfileRef,
+    };
+    use tempfile::TempDir;
+    use tokio::sync::broadcast;
+
+    use crate::config::NestedViolationAction;
+    use crate::db::DatabaseHandle;
+    use crate::domain::DomainRepository;
+    use crate::policy::ViolationService;
+
+    use super::*;
+
+    async fn open_db() -> (TempDir, Arc<DatabaseHandle>) {
+        let dir = tempfile::Builder::new()
+            .prefix("bat-first-run-gate-sink-")
+            .tempdir_in("/tmp")
+            .expect("create temp dir");
+        let db_path = dir.path().join("state.db");
+        let db = Arc::new(
+            DatabaseHandle::start(db_path)
+                .await
+                .expect("start database"),
+        );
+        (dir, db)
+    }
+
+    /// Mirrors `out_of_band_input_tests::seed_working_run` (duplicated --
+    /// private to its own module).
+    async fn seed_working_run(
+        db: &DatabaseHandle,
+        project_id: ProjectId,
+    ) -> (TaskId, WorkerId, RunId) {
+        let task_id = TaskId::new();
+        let worker_id = WorkerId::new();
+        let run_id = RunId::new();
+        db.run_domain_op(Box::new(move |conn| {
+            let mut repo = DomainRepository::new(conn, project_id);
+            repo.upsert_task(
+                task_id,
+                &crew_protocol::TaskRef {
+                    owner_client_instance_id: "omp-1".to_string(),
+                    revision: 1,
+                },
+            )?;
+            let worker = Worker {
+                worker_id,
+                profile_ref: WorkerProfileRef {
+                    id: worker_id,
+                    fingerprint: "sha256:fake".to_string(),
+                    adapter: "fake".to_string(),
+                    model: "test".to_string(),
+                    permission_envelope: serde_json::json!({}),
+                },
+                parent_worker_id: None,
+                created_at: Timestamp::now(),
+            };
+            repo.create_worker(&worker)?;
+            let run = crew_protocol::Run {
+                run_id,
+                task_id,
+                worker_id,
+                state: RunState::try_from("queued").expect("queued is a valid state"),
+                flags: crew_protocol::RunFlags::default(),
+                vendor_session_id: None,
+                started_at: None,
+                completed_at: None,
+            };
+            repo.submit_run(&run, None, None)?;
+            for state in ["starting", "working"] {
+                repo.transition_run(
+                    run_id,
+                    &RunState::try_from(state).expect("valid state"),
+                    None,
+                )?;
+            }
+            Ok(serde_json::json!({}))
+        }))
+        .await
+        .expect("seed working run");
+        (task_id, worker_id, run_id)
+    }
+
+    fn sink(
+        db: Arc<DatabaseHandle>,
+        project_id: ProjectId,
+        events_tx: broadcast::Sender<EventEnvelope>,
+    ) -> DomainAdapterEventSink {
+        let violation_service = Arc::new(ViolationService::new(
+            Arc::clone(&db),
+            project_id,
+            events_tx.clone(),
+            None,
+            NestedViolationAction::QuarantineAndCancel,
+            Redactor::new(),
+        ));
+        DomainAdapterEventSink::new(
+            db,
+            project_id,
+            events_tx,
+            Vec::new(),
+            false,
+            violation_service,
+            false,
+        )
+        .expect("built-in redaction rules always compile")
+    }
+
+    #[tokio::test]
+    async fn first_run_gate_detected_journals_the_kind_and_raises_a_populated_escalation() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_working_run(&db, project_id).await;
+        let (events_tx, mut events_rx) = broadcast::channel(16);
+        let sink = sink(Arc::clone(&db), project_id, events_tx);
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::FirstRunGateDetected {
+                kind: FirstRunGateKind::ClaudeWorkspaceTrust,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+
+        let first = events_rx
+            .try_recv()
+            .expect("FirstRunGateDetected must broadcast");
+        match &first.event {
+            RuntimeEvent::FirstRunGateDetected {
+                run_id: got_run_id,
+                task_id: got_task_id,
+                worker_id: got_worker_id,
+                kind,
+            } => {
+                assert_eq!(*got_run_id, run_id);
+                assert_eq!(*got_task_id, task_id);
+                assert_eq!(*got_worker_id, worker_id);
+                assert_eq!(*kind, FirstRunGateKind::ClaudeWorkspaceTrust);
+            }
+            other => panic!("expected FirstRunGateDetected, got {other:?}"),
+        }
+
+        let second = events_rx
+            .try_recv()
+            .expect("the paired EscalationRaised must also broadcast");
+        match &second.event {
+            RuntimeEvent::EscalationRaised {
+                run_id: got_run_id,
+                reason,
+                question,
+                ..
+            } => {
+                assert_eq!(*got_run_id, run_id);
+                assert_eq!(reason, "vendorFirstRunGate");
+                let question = question
+                    .as_ref()
+                    .expect("a vendorFirstRunGate escalation must carry a question")
+                    .as_str();
+                assert!(
+                    question.contains("Claude") && question.contains("workspace-trust prompt"),
+                    "the question must name the vendor and the specific gate: {question}"
+                );
+                assert!(
+                    question.contains("Crew will not answer it for you."),
+                    "the question must close on the approved sentence verbatim: {question}"
+                );
+            }
+            other => panic!("expected EscalationRaised, got {other:?}"),
+        }
+
+        assert!(
+            events_rx.try_recv().is_err(),
+            "exactly these two events, nothing more"
+        );
+
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    #[tokio::test]
+    async fn a_codex_sign_in_gate_names_codex_and_sign_in() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_working_run(&db, project_id).await;
+        let (events_tx, mut events_rx) = broadcast::channel(16);
+        let sink = sink(Arc::clone(&db), project_id, events_tx);
+
+        sink.emit(AdapterEvent {
+            run_id,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::FirstRunGateDetected {
+                kind: FirstRunGateKind::CodexSignIn,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+
+        let _ = events_rx.try_recv().expect("FirstRunGateDetected");
+        let escalation = events_rx.try_recv().expect("EscalationRaised");
+        match &escalation.event {
+            RuntimeEvent::EscalationRaised { question, .. } => {
+                let question = question.as_ref().expect("question").as_str();
+                assert!(
+                    question.contains("Codex") && question.contains("sign-in prompt"),
+                    "unexpected question for CodexSignIn: {question}"
+                );
+            }
+            other => panic!("expected EscalationRaised, got {other:?}"),
+        }
+
+        db.shutdown().await.expect("shutdown database");
     }
 }

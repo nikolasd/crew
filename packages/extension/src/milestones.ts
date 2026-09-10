@@ -156,8 +156,8 @@ export function formatDigest(e: EventEnvelope, lookup: RunLookup): string | unde
     case "budgetExceeded":
       return `${capitalize(who)} exceeded its turn budget. Escalate to the user or raise the budget via the plan.`;
     case "escalationRaised": {
-      const reason = event.payload.reason;
-      return `Escalation raised on ${who}: ${reason}.`;
+      const { reason, question } = event.payload;
+      return question ? `Escalation raised on ${who}: ${reason}. ${question}` : `Escalation raised on ${who}: ${reason}.`;
     }
     case "paneDowngraded": {
       const { requestedBackend, requestedPlacement, actualBackend, reason } = event.payload;

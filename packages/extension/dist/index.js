@@ -8991,6 +8991,50 @@ a listener should act on; this is operator-facing detail only.`,
           additionalProperties: false
         },
         {
+          description: `A TUI adapter's readiness poll recognized a vendor first-run gate
+blocking the run (workspace trust, a theme picker, sign-in, ...).
+Journaled once, immediately before the paired
+\`escalationRaised { reason: "vendorFirstRunGate" }\` -- \`kind\` is a
+closed enum, never captured PTY text, so this event carries no
+redaction obligation of its own.`,
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              const: "firstRunGateDetected"
+            },
+            payload: {
+              type: "object",
+              properties: {
+                runId: {
+                  $ref: "#/$defs/RunId"
+                },
+                taskId: {
+                  $ref: "#/$defs/TaskId"
+                },
+                workerId: {
+                  $ref: "#/$defs/WorkerId"
+                },
+                kind: {
+                  $ref: "#/$defs/FirstRunGateKind"
+                }
+              },
+              additionalProperties: false,
+              required: [
+                "runId",
+                "taskId",
+                "workerId",
+                "kind"
+              ]
+            }
+          },
+          required: [
+            "type",
+            "payload"
+          ],
+          additionalProperties: false
+        },
+        {
           description: "A worker escalated a blocking condition to its leader or a human\noperator. `reason` is a plain, machine-assigned code (never raw\nworker content); `question` has already crossed the redaction\nboundary the same way `workerQuestion`'s field has.",
           type: "object",
           properties: {
@@ -10109,6 +10153,20 @@ new window.`,
         "description",
         "adapter",
         "writes"
+      ]
+    },
+    FirstRunGateKind: {
+      description: `Which recognized vendor first-run gate blocked a run at readiness.
+Closed set, never derived from captured PTY text, so a
+\`firstRunGateDetected\` event carries no redaction obligation of its
+own (see that event's doc comment).`,
+      type: "string",
+      enum: [
+        "claudeWorkspaceTrust",
+        "claudeThemePicker",
+        "claudeSignIn",
+        "codexDirectoryTrust",
+        "codexSignIn"
       ]
     },
     AnsweredBy: {
@@ -13639,8 +13697,8 @@ function formatDigest(e, lookup) {
     case "budgetExceeded":
       return `${capitalize(who)} exceeded its turn budget. Escalate to the user or raise the budget via the plan.`;
     case "escalationRaised": {
-      const reason = event.payload.reason;
-      return `Escalation raised on ${who}: ${reason}.`;
+      const { reason, question } = event.payload;
+      return question ? `Escalation raised on ${who}: ${reason}. ${question}` : `Escalation raised on ${who}: ${reason}.`;
     }
     case "paneDowngraded": {
       const { requestedBackend, requestedPlacement, actualBackend, reason } = event.payload;
