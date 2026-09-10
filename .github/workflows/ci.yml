@@ -162,6 +162,15 @@ jobs:
     # one happens to be on PATH. CI must never make a billed call, so every
     # job here that runs `cargo test`/`bun test` sets the opt-out kill
     # switch (see `crates/runtime/src/conformance/mod.rs`).
+    #
+    # Do NOT delete the line below as redundant now that
+    # `.cargo/config.toml`'s `[env]` sets the same variable. That file
+    # reaches processes CARGO launches; `bun test` below is not one of
+    # them, so this job-level `env:` is the only thing gating the JS half.
+    # Removing it would ungate that step silently -- nothing would fail,
+    # because the switch only bites when a vendor CLI is actually on PATH,
+    # which a CI runner does not have. The regression would stay invisible
+    # until someone ran these steps on a machine that does.
     env:
       CREW_DISABLE_VENDOR_CLI: "1"
       # Run each test binary's cases serially. Many integration tests spawn
