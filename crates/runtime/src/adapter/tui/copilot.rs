@@ -210,6 +210,13 @@ impl TuiVendor for CopilotTuiVendor {
     // `session_id_from_transcript_path` is not overridden: the filename
     // stem IS the session id, exactly what the trait default derives
     // (and the tailed `session.start` line remains authoritative).
+
+    fn classify_surface(
+        &self,
+        grid: &super::grid::TerminalGrid,
+    ) -> Option<super::classify::Surface> {
+        Some(super::classify::classify_copilot_surface(grid))
+    }
 }
 
 /// The real Copilot CLI's session JSONL transcript format: one entry per

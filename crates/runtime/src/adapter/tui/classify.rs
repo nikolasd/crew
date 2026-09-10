@@ -12,10 +12,11 @@
 //! -- a first-run gate answered and cleared would still classify as
 //! blocking, forever, on the accumulator's read.
 //!
-//! `ClaudeTuiVendor`/`CodexTuiVendor`'s own `TuiVendor::classify_surface`
-//! overrides are this module's real production callers, wiring
-//! `classify_claude_surface`/`classify_codex_surface` into
-//! `wait_for_readiness`'s poll (`adapter.rs`) and the Enter-time
+//! `ClaudeTuiVendor`/`CodexTuiVendor`/`CopilotTuiVendor`'s own
+//! `TuiVendor::classify_surface` overrides are this module's real
+//! production callers, wiring
+//! `classify_claude_surface`/`classify_codex_surface`/`classify_copilot_surface`
+//! into `wait_for_readiness`'s poll (`adapter.rs`) and the Enter-time
 //! re-check both depend on.
 
 use super::grid::TerminalGrid;
@@ -33,6 +34,7 @@ pub enum GateKind {
     ClaudeSignIn,
     CodexDirectoryTrust,
     CodexSignIn,
+    CopilotFolderTrust,
 }
 
 /// What a vendor's terminal surface currently shows. `pub` for the same
@@ -130,6 +132,51 @@ pub(crate) fn classify_codex_surface(grid: &TerminalGrid) -> Surface {
     Surface::Undecided
 }
 
+// ------------------------------------------------------------- copilot
+
+const COPILOT_FOLDER_TRUST_TITLE: &str = "Confirm folder trust";
+/// The composer's own footer chrome, present whenever the composer is up
+/// regardless of sign-in state -- `copilot-composer.raw` (the fixture
+/// this constant is keyed on) was captured signed OUT (its status line
+/// reads "Please use /login to sign in to use Copilot"), so a phrase
+/// naming that state would fail closed on every normal, signed-in
+/// machine instead. This is deliberately the footer's own help text, not
+/// anything from the status line above it: verified directly (see the
+/// tests below) that it is absent from `copilot-folder-trust.raw`'s own
+/// footer, which reads "Tip: /theme" while the dialog is up.
+///
+/// **That replacement is what makes keying on the footer safe at all, not
+/// an incidental fact.** Copilot's folder-trust dialog REPLACES the
+/// footer rather than drawing over the composer's own -- if a gate
+/// instead overlaid the composer chrome while leaving it on screen, this
+/// phrase would still be visible on a blocking surface and this predicate
+/// would classify it `PromptReady`, pasting into it. Copilot's sign-in
+/// gate has never been observed (isolation covered `HOME` and the XDG
+/// variables but not the macOS Keychain, so an operator's own credentials
+/// may have satisfied it) -- if it turns out to overlay rather than
+/// replace, this predicate needs a check for that gate too, not just a
+/// new fixture. A signed-in composer's exact rendering is also unmeasured
+/// (see `release/live-conformance/2026-09-10-copilot-omp-first-run.md`'s
+/// own Limits section); this predicate never reads the status line, so it
+/// carries no dependency on that particular gap.
+const COPILOT_PROMPT_READY_FOOTER: &str = "open sidebar";
+
+/// Classifies copilot's current terminal surface. See
+/// [`classify_claude_surface`] for the shared structure and the
+/// `unsupported` check both share.
+pub(crate) fn classify_copilot_surface(grid: &TerminalGrid) -> Surface {
+    if grid.unsupported().is_some() {
+        return Surface::Undecided;
+    }
+    if grid.shows(COPILOT_FOLDER_TRUST_TITLE) {
+        return Surface::Gate(GateKind::CopilotFolderTrust);
+    }
+    if grid.shows(COPILOT_PROMPT_READY_FOOTER) {
+        return Surface::PromptReady;
+    }
+    Surface::Undecided
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +268,8 @@ mod tests {
                 CODEX_PROMPT_READY,
                 &["codex-composer-then-trust.raw", "codex-directory-trust.raw"],
             ),
+            (COPILOT_FOLDER_TRUST_TITLE, &["copilot-folder-trust.raw"]),
+            (COPILOT_PROMPT_READY_FOOTER, &["copilot-composer.raw"]),
         ];
 
         for (phrase, owners) in CASES {
@@ -382,6 +431,41 @@ mod tests {
         );
     }
 
+    // ------------------------------------------------------- copilot, positive
+
+    #[test]
+    fn classifies_copilot_folder_trust() {
+        assert_eq!(
+            classify_copilot_surface(&grid_from("copilot-folder-trust.raw")),
+            Surface::Gate(GateKind::CopilotFolderTrust)
+        );
+    }
+
+    /// `copilot-composer.raw` is captured signed OUT of Copilot (see
+    /// `COPILOT_PROMPT_READY_FOOTER`'s own doc comment); this test pins
+    /// exactly which bytes the predicate keys on and confirms the status
+    /// line naming that state plays no part in the classification --
+    /// removing the status line from a hypothetical future fixture must
+    /// not change this result.
+    #[test]
+    fn classifies_copilot_prompt_ready_from_footer_chrome_not_the_status_line() {
+        let bytes = fixture("copilot-composer.raw");
+        assert!(
+            bytes
+                .windows(b"Please use /login to sign in to use Copilot".len())
+                .any(|w| w == b"Please use /login to sign in to use Copilot"),
+            "this fixture must still be the not-signed-in capture the predicate is deliberately \
+             indifferent to -- if this fails, the fixture changed and the indifference this test \
+             proves is no longer being tested"
+        );
+        assert_eq!(
+            classify_copilot_surface(&grid_from("copilot-composer.raw")),
+            Surface::PromptReady,
+            "must classify PromptReady from footer chrome ({COPILOT_PROMPT_READY_FOOTER:?}) alone, \
+             regardless of the not-signed-in status line also present on this screen"
+        );
+    }
+
     // --------------------------------------------------------- exhaustive
 
     /// Every committed capture's classify result under its own vendor's
@@ -423,6 +507,19 @@ mod tests {
                 "{name} under classify_codex_surface"
             );
         }
+        for (name, expected) in [
+            (
+                "copilot-folder-trust.raw",
+                Surface::Gate(GateKind::CopilotFolderTrust),
+            ),
+            ("copilot-composer.raw", Surface::PromptReady),
+        ] {
+            assert_eq!(
+                classify_copilot_surface(&grid_from(name)),
+                expected,
+                "{name} under classify_copilot_surface"
+            );
+        }
     }
 
     /// A surface with no recognizable gate and no prompt-ready banner is
@@ -433,6 +530,7 @@ mod tests {
         let grid = TerminalGrid::new();
         assert_eq!(classify_claude_surface(&grid), Surface::Undecided);
         assert_eq!(classify_codex_surface(&grid), Surface::Undecided);
+        assert_eq!(classify_copilot_surface(&grid), Surface::Undecided);
     }
 
     /// `TerminalGrid::unsupported` is not decorative: once it is set,

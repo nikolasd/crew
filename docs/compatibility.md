@@ -131,10 +131,30 @@ v1 field names.
 
 ### TUI First-Run Gate Detection
 
-Claude and Codex TUI sessions classify what the vendor's terminal is actually showing and refuse
-to write into a recognized first-run gate. Copilot and OMP-RPC TUI sessions do not yet — for those
-two, the prompt is still delivered to whatever is on screen. Predicates for both land in a later
-slice of the same effort that added Claude's and Codex's.
+Claude, Codex, and Copilot TUI sessions classify what the vendor's terminal is actually showing
+and refuse to write into a recognized first-run gate: Copilot's folder-trust dialog defaults its
+selection to "Yes", so an unattended Enter would grant filesystem trust — the same hazard already
+closed for Codex. OMP-RPC has no comparable trust dialog (its own first-run flow is a global,
+skippable setup wizard, not a per-repository gate); its predicate recognizes its normal prompt and
+otherwise fails closed, per `release/live-conformance/2026-09-10-copilot-omp-first-run.md`.
+
+All three trust-shaped gates (Claude's workspace trust, Codex's directory trust, Copilot's folder
+trust) resolve the same way: trust the repository once with that vendor, in its own session
+(outside crew), or add its documented config entry —
+
+| Vendor | File | Entry |
+|---|---|---|
+| Claude | `~/.claude.json` | `projects["<repo root>"].hasTrustDialogAccepted = true` |
+| Codex | `~/.codex/config.toml` | `[projects."<repo root>"] trust_level = "trusted"` |
+| Copilot | `~/.copilot/config.json` | `"trustedFolders": [ "<repo root>" ]` — seed both the path and its realpath |
+
+— and the trust then covers every worker crew launches from a worktree of that repository too:
+Claude and Codex key trust on the git main-checkout root and treat a `git worktree add` workspace
+as the same repository, and this is measured (not merely documented) for Copilot as well, which
+stores the repository root's realpath in `trustedFolders` regardless of which worktree a worker
+launched from — see the same record's "Copilot worktree trust inheritance" section. Crew never
+writes any of these entries itself: detect-and-escalate is the whole mechanism, and the
+escalation's own question names this one-time step.
 
 ### TUI live conformance (0.5.0)
 
@@ -152,7 +172,7 @@ restart; transcript recovery across a real restart is a separate e2e, tracked as
 |---------|---------------|-------|
 | Claude  | 4 / 4 | fully green (TUI) |
 | Codex   | 4 / 4 | fully green (TUI) — credits refilled; re-run 2026-08-27 on current main (after the intervening adapter changes) is byte-identical to the 2026-08-26 evening report. The earlier out-of-credits state ([`codex-tui-post-quota.json`](../release/live-conformance/codex-tui-post-quota.json), no turns observable at all) is retained only as historical exhaustion evidence |
-| Copilot | 2 / 4 | `read_only_start_and_progress` + `follow_up` fail — CONFIRMED vendor monthly quota wall (`session.error`, `errorCode: quota_exceeded`, independently verified against the raw tailed session file, not just the harness's summary); probe + cancel proven. Not a capture defect: an earlier 2026-08-26 diagnosis blamed transcript-capture/discovery, but that was an untrusted-workspace bug fixed by commit `0ca5d5b` (2026-08-27) — discovery itself now succeeds here (`start=Ok(())`, `session=true`). **Erratum:** the fix is a preflight check inside this adapter's own conformance harness only (`ensure_copilot_workspace_trusted`); it is not wired into the production adapter, and no equivalent exists for any other vendor — the same class of failure reached production for claude and codex — see `release/live-conformance/2026-09-09-vendor-first-run-gates.md` |
+| Copilot | 2 / 4 | `read_only_start_and_progress` + `follow_up` fail — CONFIRMED vendor monthly quota wall (`session.error`, `errorCode: quota_exceeded`, independently verified against the raw tailed session file, not just the harness's summary); probe + cancel proven. Not a capture defect: an earlier 2026-08-26 diagnosis blamed transcript-capture/discovery, but that was an untrusted-workspace bug fixed by commit `0ca5d5b` (2026-08-27) — discovery itself now succeeds here (`start=Ok(())`, `session=true`). **Erratum, resolved:** the fix used to be a preflight check inside this adapter's own conformance harness only (`ensure_copilot_workspace_trusted`), not wired into the production adapter. The production adapter now classifies Copilot's folder-trust dialog directly (see "TUI First-Run Gate Detection" above), so the harness exercises the real production path instead; the harness-only preflight was retired in the same change — see `release/live-conformance/2026-09-09-vendor-first-run-gates.md` and `release/live-conformance/2026-09-10-copilot-omp-first-run.md` |
 
 Version provenance: the live reports deliberately record **no** vendor version (`version: null`) —
 the TUI harness does not pin one, so a report is evidence about the adapter injection path, not
