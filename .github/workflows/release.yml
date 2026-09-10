@@ -140,6 +140,18 @@ jobs:
     # it sets the opt-out kill switch (see
     # `crates/runtime/src/conformance/mod.rs`). This gate uses fixture mode
     # only regardless -- the switch is a second, independent safeguard.
+    #
+    # Do NOT delete the line below as redundant now that
+    # `.cargo/config.toml`'s `[env]` sets the same variable. That file
+    # reaches processes CARGO launches; this job's `bun test` and the
+    # `crewd` binary it builds are not among them. The binary is spawned
+    # by the `runAllFixtures` script below, from inside `bun run -e`, long
+    # after the one cargo invocation here (`cargo build ... --bin crewd`)
+    # has exited -- so `[env]` never reaches that spawn, and this
+    # job-level `env:` is what actually covers it. Removing it
+    # would ungate them silently -- nothing would fail, because the switch
+    # only bites when a vendor CLI is on PATH, which a CI runner does not
+    # have.
     env:
       CREW_DISABLE_VENDOR_CLI: "1"
     steps:
