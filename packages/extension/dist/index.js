@@ -13632,7 +13632,6 @@ var TERMINAL_STATES = {
   lost: true
 };
 var QUESTION_TRIAGE = "Answer via crew_send if run context suffices; escalate to the user only for genuinely human decisions.";
-var TWO_FAILURES_RULE = "Two consecutive failures on the same task require escalation to the user.";
 var READ_THE_REPORT = 'Read it via crew_run { op: "result", runId }.';
 var READ_ANY_PARTIAL_OUTPUT = 'Any partial output it produced is readable via crew_run { op: "result", runId }, though there may be none.';
 function capitalize(s) {
@@ -13696,7 +13695,7 @@ function formatDigest(e, lookup) {
       const state = event.payload.state;
       if (state === "failed") {
         const reason = row?.latestActivity ?? "see runtime";
-        return `${capitalize(who)} FAILED: ${reason}. ${TWO_FAILURES_RULE} ${READ_ANY_PARTIAL_OUTPUT}`;
+        return `${capitalize(who)} FAILED: ${reason}. ${READ_ANY_PARTIAL_OUTPUT}`;
       }
       if (state === "succeeded") {
         return `${capitalize(who)} succeeded. ${READ_THE_REPORT}`;
