@@ -51,6 +51,9 @@ requests/hour. The binary is cached under your Crew state root.
 
 Once installed, [`docs/user-guide.md`](docs/user-guide.md) (Crew User Guide) is the user manual: every tool and
 command the extension registers, and the recommended flow for running a task through it.
+[`docs/compatibility.md`](docs/compatibility.md) (Crew Compatibility Guide) covers supported adapter
+versions and, for TUI workers, each vendor's first-run gate behavior — including the one-time trust
+step claude, codex, and copilot each need and the prerequisites omp's ready-screen detection has.
 
 **To uninstall:**
 ```
