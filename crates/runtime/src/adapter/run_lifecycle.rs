@@ -61,7 +61,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crew_protocol::{EventEnvelope, ProjectId, RunId, RunState};
+use crew_protocol::{EventEnvelope, ProjectId, Redacted, RunId, RunState};
 use serde_json::json;
 use tokio::sync::broadcast;
 
@@ -202,13 +202,25 @@ impl RunLifecycle {
     /// longest legal path. Stops on a terminal state (a terminal state always
     /// wins) and gives up with a warning when the state cannot be read or no
     /// hop is legal.
-    async fn walk_to(&self, target: &RunState) {
+    ///
+    /// Returns whether **this call** is the one that committed the run into
+    /// `target` -- `false` whenever nothing was actually applied here: the
+    /// run was already at `target`, already some other terminal state (a
+    /// terminal state never gets a second edge, regardless of what a caller
+    /// asks for), the read failed, no legal hop existed, or the commit
+    /// itself failed. A caller that gates a one-time side effect on reaching
+    /// `target` (an escalation, say) must read this return value rather than
+    /// assume the walk always lands where it aimed -- the target the caller
+    /// computed can already be moot by the time this runs.
+    async fn walk_to(&self, target: &RunState) -> bool {
         for _ in 0..3 {
             let Some(current) = self.current().await else {
-                return;
+                return false;
             };
             if current == *target || current.is_terminal() {
-                return;
+                // Already there, or already terminal as something else --
+                // either way, not an edge this call is applying.
+                return false;
             }
             let Some(next) = next_hop(&current, target) else {
                 tracing::warn!(
@@ -217,7 +229,7 @@ impl RunLifecycle {
                     to = %target,
                     "no legal run-state hop toward the target; giving up"
                 );
-                return;
+                return false;
             };
             if let Err(err) = self.commit(&next).await {
                 tracing::warn!(
@@ -227,7 +239,10 @@ impl RunLifecycle {
                     to = %next,
                     "failed to commit run-state edge"
                 );
-                return;
+                return false;
+            }
+            if next == *target {
+                return true;
             }
         }
         tracing::warn!(
@@ -235,6 +250,7 @@ impl RunLifecycle {
             to = %target,
             "run-state walk exhausted without reaching the target"
         );
+        false
     }
 
     /// `ProcessStarted` evidence: the vendor process is up. Only a run still
@@ -449,13 +465,44 @@ impl RunLifecycle {
     ) {
         let turn_settled = self.turn_settled().await;
         let terminal = terminal_state_for(exit_code, signal, turn_settled);
-        self.walk_to(&terminal).await;
         // A repeated-failure escalation: a run that just failed for the
         // same task whose previous run also failed raises the leader's
         // attention fact. Committed as its own mutation and broadcast here
         // (invariant 7) -- never folded into the transition commit, since
         // escalation projection is not evidence for lifecycle edges.
-        if terminal == state("failed") {
+        //
+        // Gated on `walk_to`'s own return, not on the `terminal` value
+        // this function computed: `terminal_state_for` only guesses what
+        // *this* exit implies in isolation, and that guess can already be
+        // moot by the time it runs -- the leader's own `run/finish` can
+        // have settled the run to something else entirely (clearing
+        // `turnSettled` as it does) between this exit landing on the wire
+        // and this handler reading it. A run that is already terminal
+        // never gets a second edge (`walk_to`'s own rule), so evaluating
+        // the escalation against the computed guess instead of the edge
+        // `walk_to` actually applied would raise `repeated_failure` on a
+        // run this call never actually failed.
+        //
+        // A deliberate narrowing this gate also carries, decided rather
+        // than merely inherited: `run/finish { outcome: "failed" }`
+        // commits `failed` directly through its own path
+        // (`OrchestrationService::run_finish`), never through this walk,
+        // and never raises this escalation itself. Before this gate
+        // existed, a `ProcessExited` racing in afterward could still
+        // trigger it by accident, riding the same computed-guess bug this
+        // change closes -- so a leader-adjudicated failure sometimes got
+        // the notice and sometimes did not, depending on exit timing. Now
+        // it never does, on any timing: a run the leader explicitly
+        // failed already carries the leader's own verdict, which is a
+        // materially different state of knowledge than the silent,
+        // no-verdict-rendered death this escalation exists to catch (see
+        // `terminal_state_for`'s own doc comment). Raising it there too
+        // would mean threading this same task-history check into
+        // `run_finish`, the run/submit start-error backstop, and the boot
+        // recovery sweep -- every other place a run can reach `failed` --
+        // which is a real feature expansion of this escalation's scope,
+        // not a bug fix, and out of scope here.
+        if self.walk_to(&terminal).await && terminal == state("failed") {
             self.raise_repeated_failure_if_second().await;
         }
     }
@@ -472,8 +519,12 @@ impl RunLifecycle {
             .run_domain_op(Box::new(move |conn| {
                 let mut repo = DomainRepository::new(conn, project_id);
                 if repo.previous_run_for_task_also_failed(run_id) {
-                    repo.record_escalation_raised(run_id, "repeated_failure", None)
-                        .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
+                    repo.record_escalation_raised(
+                        run_id,
+                        "repeated_failure",
+                        Some(repeated_failure_question()),
+                    )
+                    .map(|c| embed_envelope(json!({ "sequence": c.sequence }), &c.envelope))
                 } else {
                     Ok(json!(null))
                 }
@@ -492,6 +543,21 @@ impl RunLifecycle {
             }
         }
     }
+}
+
+/// The runtime-authored text for `EscalationRaised { reason:
+/// "repeated_failure" }`'s `question` field -- the second call site that
+/// actually populates this field (the first is `first_run_gate_question`
+/// in `event_sink.rs`; the field used to be left `None` everywhere).
+/// Only called from behind `previous_run_for_task_also_failed`, so by
+/// construction this is never sent for a task's first failure.
+fn repeated_failure_question() -> Redacted {
+    Redacted::assert_runtime_authored(
+        "This task's previous run also failed, and this run has now failed too -- two \
+         consecutive failures on the same task. Read this run's output (and the one before \
+         it) before deciding whether to retry with the same prompt or escalate to the user; \
+         crew will not retry it for you.",
+    )
 }
 
 /// Wraps a run's [`AdapterEventSink`] so the run's journaled evidence also
@@ -778,6 +844,36 @@ mod tests {
         (task_id, worker_id, run_id)
     }
 
+    /// Seeds a second `queued` run under an already-seeded task/worker --
+    /// the shape a real retry produces (one task, several runs over time),
+    /// without re-registering the task or worker `seed_run` already did.
+    async fn seed_second_run(
+        db: &DatabaseHandle,
+        project_id: ProjectId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+    ) -> RunId {
+        let run_id = RunId::new();
+        db.run_domain_op(Box::new(move |conn| {
+            let mut repo = DomainRepository::new(conn, project_id);
+            let run = Run {
+                run_id,
+                task_id,
+                worker_id,
+                state: RunState::try_from("queued").expect("queued is a valid state"),
+                flags: RunFlags::default(),
+                vendor_session_id: None,
+                started_at: None,
+                completed_at: None,
+            };
+            repo.submit_run(&run, None, None)?;
+            Ok(serde_json::json!({}))
+        }))
+        .await
+        .expect("seed second run");
+        run_id
+    }
+
     /// Drives `run_id` through the legal edges from `queued` up to `target`,
     /// directly through `DomainRepository` (bypassing the sink on purpose:
     /// the tests pin what the sink does from a given starting state).
@@ -792,6 +888,8 @@ mod tests {
             "waitingUser" => &["starting", "working", "waitingUser"],
             "paused" => &["starting", "working", "paused"],
             "cancelled" => &["cancelled"],
+            "succeeded" => &["starting", "working", "succeeded"],
+            "failed" => &["starting", "working", "failed"],
             other => panic!("no drive path defined for {other}"),
         };
         for state in path {
@@ -850,6 +948,76 @@ mod tests {
                     serde_json::from_str(&raw).expect("parse a journaled event");
                 match event {
                     RuntimeEvent::RunEvent { state, .. } => Some(state),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    /// Every `EscalationRaised.reason` journaled for `run_id`, in sequence
+    /// order -- so a test can assert an escalation this sink might raise
+    /// (repeated-failure, say) either did or did not actually fire, rather
+    /// than inferring it from the run's state alone.
+    async fn escalation_reasons(db: &DatabaseHandle, run_id: RunId) -> Vec<String> {
+        let raw: Vec<String> = db
+            .run_domain_op(Box::new(move |conn| {
+                let mut stmt = conn
+                    .prepare("SELECT event_json FROM events WHERE run_id = ?1 ORDER BY sequence")?;
+                let rows: Vec<String> = stmt
+                    .query_map([run_id.to_string()], |row| row.get(0))?
+                    .collect::<Result<_, _>>()?;
+                Ok(serde_json::json!(rows))
+            }))
+            .await
+            .expect("read journaled events")
+            .as_array()
+            .expect("rows are an array")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect();
+        raw.into_iter()
+            .filter_map(|raw| {
+                let event: RuntimeEvent =
+                    serde_json::from_str(&raw).expect("parse a journaled event");
+                match event {
+                    RuntimeEvent::EscalationRaised { reason, .. } => Some(reason),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    /// Every `EscalationRaised.question` journaled for `run_id`, in
+    /// sequence order -- so a test can pin that a call site actually
+    /// populates the field, previously left `None` everywhere, rather than
+    /// only that an escalation fired at all.
+    async fn escalation_questions(db: &DatabaseHandle, run_id: RunId) -> Vec<Option<String>> {
+        let raw: Vec<String> = db
+            .run_domain_op(Box::new(move |conn| {
+                let mut stmt = conn
+                    .prepare("SELECT event_json FROM events WHERE run_id = ?1 ORDER BY sequence")?;
+                let rows: Vec<String> = stmt
+                    .query_map([run_id.to_string()], |row| row.get(0))?
+                    .collect::<Result<_, _>>()?;
+                Ok(serde_json::json!(rows))
+            }))
+            .await
+            .expect("read journaled events")
+            .as_array()
+            .expect("rows are an array")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect();
+        raw.into_iter()
+            .filter_map(|raw| {
+                let event: RuntimeEvent =
+                    serde_json::from_str(&raw).expect("parse a journaled event");
+                match event {
+                    RuntimeEvent::EscalationRaised { question, .. } => {
+                        Some(question.map(|q| q.as_str().to_string()))
+                    }
                     _ => None,
                 }
             })
@@ -1703,6 +1871,208 @@ mod tests {
             run_states(&db, run_id).await,
             before,
             "a terminal state always wins: no further RunEvent may be appended"
+        );
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// The regression `walk_to`'s new return value closes. The leader's own `run/finish` can settle
+    /// a run to `succeeded` before the vendor process's own `ProcessExited`
+    /// evidence lands -- a real race, not a hypothetical one, since the two
+    /// arrive on independent paths. When that exit lands here, `walk_to`
+    /// correctly no-ops (the run is already terminal), but the OLD code
+    /// raised `repeated_failure` against `terminal_state_for`'s *computed*
+    /// guess regardless of what `walk_to` actually applied -- so a run that
+    /// never failed at all could still escalate as if it had. This run's
+    /// task has a genuinely failed predecessor (`run1`), the exact condition
+    /// `previous_run_for_task_also_failed` would say yes to -- so if the old
+    /// bug were still here, this is precisely the case that would trip it.
+    #[tokio::test]
+    async fn an_exit_racing_an_already_finished_run_never_raises_the_computed_failure() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run1) = seed_run(&db, project_id).await;
+        drive_to_state(&db, project_id, run1, "failed").await;
+
+        let run2 = seed_second_run(&db, project_id, task_id, worker_id).await;
+        drive_to_state(&db, project_id, run2, "succeeded").await;
+        let before = run_states(&db, run2).await;
+        let (tx, _rx) = broadcast::channel(64);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run2,
+            Arc::new(ActivityClock::new()),
+        );
+
+        // A non-zero exit is unconditionally `failed` per `terminal_state_for`,
+        // independent of `turnSettled` -- the strongest possible computed
+        // guess, so this exercises the gate rather than a value that might
+        // coincidentally agree with `succeeded` on its own.
+        sink.emit(AdapterEvent {
+            run_id: run2,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::ProcessExited {
+                exit_code: Some(1),
+                signal: None,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+
+        assert_eq!(run_state(&db, run2).await, "succeeded");
+        assert_eq!(
+            run_states(&db, run2).await,
+            before,
+            "a terminal state always wins: no further RunEvent may be appended"
+        );
+        assert_eq!(
+            escalation_reasons(&db, run2).await,
+            Vec::<String>::new(),
+            "a run that never actually transitioned to failed must never raise \
+             repeated_failure, even though its predecessor genuinely did fail"
+        );
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// The narrowing this gate deliberately accepts, pinned rather than
+    /// left as an untested side effect: a run the leader already committed
+    /// to `failed` through its own path (`run/finish`'s, which
+    /// `drive_to_state` stands in for here) never raises `repeated_failure`
+    /// off a racing exit either, even on a task whose predecessor
+    /// genuinely also failed. Before the fix above existed this case DID
+    /// escalate, but only by accident -- riding the same computed-guess bug
+    /// that also produced the false positive on `succeeded`. See
+    /// `observe_process_exited`'s own doc comment for why this is treated
+    /// as acceptable rather than closed: a leader-adjudicated failure
+    /// already carries the leader's own verdict.
+    #[tokio::test]
+    async fn an_exit_racing_a_run_the_leader_already_failed_does_not_escalate_either() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run1) = seed_run(&db, project_id).await;
+        drive_to_state(&db, project_id, run1, "failed").await;
+
+        let run2 = seed_second_run(&db, project_id, task_id, worker_id).await;
+        drive_to_state(&db, project_id, run2, "failed").await;
+        let before = run_states(&db, run2).await;
+        let (tx, _rx) = broadcast::channel(64);
+        let sink = RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx,
+            run2,
+            Arc::new(ActivityClock::new()),
+        );
+
+        sink.emit(AdapterEvent {
+            run_id: run2,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::ProcessExited {
+                exit_code: Some(1),
+                signal: None,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit");
+
+        assert_eq!(run_state(&db, run2).await, "failed");
+        assert_eq!(
+            run_states(&db, run2).await,
+            before,
+            "a terminal state always wins: no further RunEvent may be appended"
+        );
+        assert_eq!(
+            escalation_reasons(&db, run2).await,
+            Vec::<String>::new(),
+            "a run already failed through the leader's own run/finish path must not \
+             escalate again off a racing exit, even though its predecessor genuinely failed too"
+        );
+        db.shutdown().await.expect("shutdown database");
+    }
+
+    /// The positive case the regression above needs beside it: gating the
+    /// escalation on an applied transition must not also suppress a
+    /// genuine one. Two runs on the same task, both actually driven to
+    /// `failed` through this sink (never already terminal when their exit
+    /// lands), must still raise `repeated_failure` on the second, carrying
+    /// the populated question `repeated_failure_question` now supplies.
+    #[tokio::test]
+    async fn a_second_consecutive_genuine_failure_still_raises_repeated_failure() {
+        let (_dir, db) = open_db().await;
+        let project_id = ProjectId::new();
+        let (task_id, worker_id, run1) = seed_run(&db, project_id).await;
+        drive_to_state(&db, project_id, run1, "working").await;
+        let (tx1, _rx1) = broadcast::channel(64);
+        RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx1,
+            run1,
+            Arc::new(ActivityClock::new()),
+        )
+        .emit(AdapterEvent {
+            run_id: run1,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::ProcessExited {
+                exit_code: Some(1),
+                signal: None,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit run1 exit");
+        assert_eq!(run_state(&db, run1).await, "failed");
+        // run1 is the task's first failure: no predecessor, no escalation.
+        assert_eq!(escalation_reasons(&db, run1).await, Vec::<String>::new());
+
+        let run2 = seed_second_run(&db, project_id, task_id, worker_id).await;
+        drive_to_state(&db, project_id, run2, "working").await;
+        let (tx2, _rx2) = broadcast::channel(64);
+        RunLifecycleSink::wrap(
+            Arc::new(StubSink),
+            Arc::clone(&db),
+            project_id,
+            tx2,
+            run2,
+            Arc::new(ActivityClock::new()),
+        )
+        .emit(AdapterEvent {
+            run_id: run2,
+            task_id,
+            worker_id,
+            payload: AdapterEventPayload::ProcessExited {
+                exit_code: Some(1),
+                signal: None,
+            },
+            cursor: None,
+        })
+        .await
+        .expect("emit run2 exit");
+
+        assert_eq!(run_state(&db, run2).await, "failed");
+        assert_eq!(
+            escalation_reasons(&db, run2).await,
+            vec!["repeated_failure".to_string()],
+            "run2 genuinely failed right after run1 genuinely failed -- the gate must not \
+             suppress this"
+        );
+        let questions = escalation_questions(&db, run2).await;
+        assert_eq!(questions.len(), 1);
+        let question = questions[0]
+            .as_deref()
+            .expect("repeated_failure must carry a populated question, not None");
+        assert!(
+            question.contains("consecutive") && question.contains("failed"),
+            "question does not read as a repeated-failure notice: {question:?}"
         );
         db.shutdown().await.expect("shutdown database");
     }
