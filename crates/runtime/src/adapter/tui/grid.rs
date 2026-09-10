@@ -845,6 +845,8 @@ pub(super) const ALL_FIXTURES: &[&str] = &[
     "claude-theme-picker.raw",
     "claude-trust-to-composer.raw",
     "claude-workspace-trust.raw",
+    "codex-composer-empty.raw",
+    "codex-composer-holding.raw",
     "codex-composer-then-trust.raw",
     "codex-directory-trust.raw",
     "codex-signin.raw",
