@@ -837,4 +837,174 @@ mod tests {
         );
         harness.db.shutdown().await.ok();
     }
+
+    /// The live P3b regression, reproduced end to end through the real
+    /// `TuiAdapter`: codex's composer paints first (readiness classifies
+    /// `PromptReady`, the prompt is pasted), then a splash screen
+    /// paints, then the real directory-trust gate paints -- strictly
+    /// AFTER the paste, which is exactly the window
+    /// `wait_for_enter_precondition` exists to catch. Before that
+    /// mechanism existed this sequence made `start()` fail outright,
+    /// having already pasted into what turned out to be a gate; the fix
+    /// is to park and escalate instead, identically to a gate seen
+    /// before any paste at all -- never a start failure.
+    ///
+    /// The live regression's splash also carried an escape sequence
+    /// this module does not implement, which is deliberately NOT
+    /// reproduced here: `TerminalGrid::mark_unsupported`'s test-build
+    /// body panics by design (see its own doc comment), and a panic
+    /// inside the background task that feeds this grid from the PTY
+    /// would kill that task outright, silently starving every later
+    /// push -- including the gate text itself -- rather than exercising
+    /// anything. That half of the regression (a gate phrase surviving
+    /// an unsupported sequence elsewhere on screen) is proven at the
+    /// classifier level instead, directly against the latch, by
+    /// `classify.rs`'s own
+    /// `a_gate_phrase_survives_an_unsupported_sequence_and_still_returns_gate`.
+    /// This test's job is the other half: the parking mechanism itself,
+    /// against an ordinary (fully implemented) splash.
+    #[tokio::test]
+    async fn a_gate_appearing_after_the_prompt_was_pasted_parks_and_escalates_rather_than_failing_start()
+     {
+        use crate::adapter::r#trait::CancelScope;
+
+        let harness = harness().await;
+        let session_dir = harness.scripts_dir.join("late-gate-session");
+        std::fs::create_dir_all(&session_dir).expect("create session dir");
+
+        // Deliberately its own minimal double, not `write_double`: this
+        // scenario is purely about timing and screen content, not about
+        // rollout tailing or follow-ups, and is driven entirely by the
+        // double's own clock rather than by anything it reads from its
+        // stdin -- there is no reliable way for a dumb shell double to
+        // notice a bracketed paste landing without a full re-render loop
+        // of its own, so this reproduces the composer/splash/gate
+        // sequence purely on a timer instead:
+        //
+        // - t=0: the ready phrase, held long enough (0.7s, comfortably
+        //   past `INJECT_MIN_DELAY`'s 500ms floor) for `wait_for_
+        //   readiness` to see it and paste.
+        // - t=0..0.7s: a filler byte every 20ms -- keeps
+        //   `wait_for_output_idle` from ever seeing `submit_idle`'s 50ms
+        //   of quiet before the gate actually paints, which would
+        //   otherwise let `wait_for_enter_precondition`'s first tick see
+        //   only the stale ready phrase plus the pasted nonce (the pty's
+        //   own canonical-mode echo puts it on screen well before this
+        //   double ever reacts to anything) and proceed to Enter before
+        //   the gate is even on screen. Each filler write ends in its
+        //   own newline so the shell's stdio actually flushes it to the
+        //   pty promptly (line-buffered on a tty) rather than sitting
+        //   unflushed until the process's final sleep.
+        // - t=0.7s: an ordinary splash (erase-to-end-of-line, fully
+        //   implemented) and the real gate -- see this test's own doc
+        //   comment for why the unimplemented half of the live
+        //   regression is proven separately, at the classifier level.
+        let script = r#"#!/bin/sh
+echo "Ask Codex to do anything"
+i=0
+while [ $i -lt 35 ]; do
+  sleep 0.02
+  printf '.\n'
+  i=$((i + 1))
+done
+printf '\033[K'
+printf 'Do you trust the contents of this directory?\n'
+sleep 30
+"#
+        .to_string();
+        let script_path = harness
+            .scripts_dir
+            .join(format!("fake-codex-late-gate-{}.sh", uuid::Uuid::now_v7()));
+        std::fs::write(&script_path, script).expect("write test double script");
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script_path, perms).unwrap();
+        }
+        let cfg = adapter_config(script_path, session_dir);
+
+        let run_id = RunId::new();
+        let task_id = TaskId::new();
+        let worker_id = WorkerId::new();
+        let vendor = CodexTuiVendor::new(harness.scripts_dir.clone(), Vec::new());
+        let adapter = Arc::new(TuiAdapter::new(
+            vendor,
+            cfg,
+            run_id,
+            task_id,
+            worker_id,
+            Arc::clone(&harness.pane_coordinator),
+            harness.panes_dir.clone(),
+            DisplayPlacement::SplitRight,
+            None,
+            None,
+            CloseOnExit::Always,
+            fast_timings(),
+            ResumeContext::default(),
+        ));
+        let sink = Arc::new(CollectingSink::default());
+
+        let spec = StartSpec {
+            run_id,
+            task_id,
+            worker_id,
+            prompt: "say hi".to_string(),
+            resume: None,
+        };
+        let start_adapter = Arc::clone(&adapter);
+        let start_sink: Arc<dyn AdapterEventSink> = sink.clone();
+        let mut start = tokio::spawn(async move { start_adapter.start(spec, start_sink).await });
+
+        let saw_gate = sink
+            .wait_for(
+                |p| {
+                    matches!(
+                        p,
+                        AdapterEventPayload::FirstRunGateDetected { kind }
+                            if *kind == crew_protocol::FirstRunGateKind::CodexDirectoryTrust
+                    )
+                },
+                SCENARIO_OBSERVATION_DEADLINE,
+            )
+            .await;
+        assert!(
+            saw_gate,
+            "the late gate must be escalated even though the prompt was already pasted (saw: \
+             {:?})",
+            sink.payloads().await
+        );
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut start)
+                .await
+                .is_err(),
+            "start() must still be parked on the gate -- it must not have already failed or \
+             succeeded"
+        );
+
+        // `Worker`, not `Turn`: matches this crate's own cancel-scope
+        // widening at a gate park (see `TuiAdapter::cancel`'s own
+        // comment) -- either scope fires the same token here, `Worker`
+        // is simply the scope real cancellation of a still-starting run
+        // would use.
+        adapter
+            .cancel(CancelScope::Worker)
+            .await
+            .expect("cancelling a parked start must itself succeed");
+
+        let result = tokio::time::timeout(SCENARIO_OBSERVATION_DEADLINE, start)
+            .await
+            .expect("start() must resolve promptly once cancelled, not hang")
+            .expect("the start() task must not panic");
+        let message = result
+            .expect_err("a cancelled gate-park must fail start(), not silently succeed as ready")
+            .to_string();
+        assert!(
+            message.contains("cancelled"),
+            "unexpected failure reason: {message}"
+        );
+
+        harness.db.shutdown().await.ok();
+    }
 }

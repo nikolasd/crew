@@ -1035,7 +1035,10 @@ impl<V: TuiVendor> TuiAdapter<V> {
         // its composer, strictly after readiness already concluded
         // `PromptReady`), so its lifetime spans this whole function, not
         // just the call to `wait_for_readiness`.
-        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new(
+            crate::supervisor::DEFAULT_COLS as usize,
+            crate::supervisor::DEFAULT_ROWS as usize,
+        )));
         {
             let mut grid_rx = pty.subscribe_output();
             let grid = Arc::clone(&grid);
@@ -1202,54 +1205,42 @@ impl<V: TuiVendor> TuiAdapter<V> {
             // window (`wait_for_output_idle` above waits up to
             // `submit_idle`/`ENTER_IDLE_CAP`, ample time for a late gate
             // to appear), never reuse the readiness-time classification --
-            // see `enter_precondition`'s own doc comment for why.
-            let precondition = {
-                let g = grid.lock().expect("terminal-grid mutex never poisoned");
-                enter_precondition(self.vendor.as_ref(), &g)
-            };
-            match precondition {
-                EnterPrecondition::Proceed => {
-                    // A write failure here means the worker already exited;
-                    // the exit watcher owns reporting that -- nothing
-                    // useful to add.
-                    let _ = pty.write_input(enter).await;
-                }
-                EnterPrecondition::Blocked(surface) => {
-                    // Withholding the Enter must fail the run, not just
-                    // skip a step: the prompt is already pasted, so the
-                    // run cannot progress either way, and a run that
-                    // silently withholds and then waits out
-                    // `discovery_timeout` reads as an unrelated hang, not
-                    // as this decision. Same shape as the readiness-path
-                    // failure above, naming the actual variant seen.
-                    let detail = match surface {
-                        Surface::Gate(gate) => format!(
-                            "a first-run gate appeared after the prompt was pasted ({gate:?}) -- \
-                             withholding the submit byte rather than confirming into it; answer \
-                             it by hand once in this workspace outside crew, then retry"
-                        ),
-                        Surface::Undecided => "the surface became unreadable after the prompt \
-                                                was pasted -- withholding the submit byte rather \
-                                                than confirming into an unrecognized screen"
-                            .to_string(),
-                        Surface::PromptReady => {
-                            unreachable!("EnterPrecondition::Proceed handles PromptReady")
-                        }
-                    };
-                    return self
-                        .fail_start(
-                            pty,
-                            attach,
-                            pane_outcome,
-                            sink,
-                            run_id,
-                            task_id,
-                            worker_id,
-                            AdapterError::process(self.kind(), "start", detail),
-                        )
-                        .await;
-                }
+            // see `wait_for_enter_precondition`'s own doc comment for why,
+            // and for why a recognized gate here parks (like readiness
+            // does) rather than failing outright.
+            if let Err(err) = wait_for_enter_precondition(
+                &mut readiness_rx,
+                self.kind(),
+                self.vendor.as_ref(),
+                &grid,
+                self.timings.readiness_quiet,
+                self.timings.readiness_cap,
+                &pty,
+                &discovery_key,
+                run_id,
+                task_id,
+                worker_id,
+                &sink,
+                &cancel_token,
+            )
+            .await
+            {
+                return self
+                    .fail_start(
+                        pty,
+                        attach,
+                        pane_outcome,
+                        sink,
+                        run_id,
+                        task_id,
+                        worker_id,
+                        err,
+                    )
+                    .await;
             }
+            // A write failure here means the worker already exited; the
+            // exit watcher owns reporting that -- nothing useful to add.
+            let _ = pty.write_input(enter).await;
         }
 
         // A resume with an already-known transcript path (e.g. from a
@@ -1714,37 +1705,119 @@ async fn emit_tui_event(
 
 /// The outcome of re-checking, at Enter time, whether the submit byte
 /// should still be delivered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum EnterPrecondition {
     /// Deliver the Enter: `PromptReady`, or a vendor with no real
     /// predicate (`classify_surface` returned `None`) keeping its
-    /// unconditional legacy behavior.
+    /// unconditional legacy behavior. `wait_for_enter_precondition`
+    /// additionally requires the injected nonce to still be visible
+    /// before actually treating a `PromptReady` `Proceed` as safe to
+    /// act on -- see its own doc comment.
     Proceed,
-    /// Withhold it. Carries the classification that caused this, so the
-    /// caller can name the actual reason rather than guessing at it --
-    /// `Gate` and `Undecided` are different facts about the world and
-    /// read differently to whoever debugs the failure.
+    /// Withhold it, for now. Carries the classification that caused
+    /// this, so the caller can tell `Gate` (park and re-check once it
+    /// clears) apart from `Undecided`/`Unreadable` (poll until a
+    /// deadline, then fail) -- see `wait_for_enter_precondition`'s own
+    /// doc comment for what each becomes.
     Blocked(Surface),
 }
 
-/// Classifies `grid`'s CURRENT state through `vendor` to decide whether
-/// the Enter byte should still be delivered -- never the classification
-/// `wait_for_readiness` reached earlier. That re-check is required, not
-/// belt-and-braces: a vendor whose first-run gate paints strictly after
-/// its own composer (observed live on codex) can classify as
-/// `PromptReady` at readiness time and `Gate` by the time the submit
-/// byte is due, since the caller waits for output to go quiet in
-/// between -- exactly the window a late gate has to appear in.
-///
-/// A withheld Enter must fail the run, not merely skip a step: the
-/// prompt has already been pasted, so the run cannot progress either
-/// way, and a typed failure naming what was seen is diagnosable in one
-/// line where a silent skip looks like an unrelated hang until whoever
-/// is debugging it reads the wrong subsystem first.
+/// Classifies `grid`'s CURRENT state through `vendor` -- the single
+/// classification `wait_for_enter_precondition`'s loop acts on, never
+/// the classification `wait_for_readiness` reached earlier (a vendor
+/// whose first-run gate paints strictly after its own composer, observed
+/// live on codex, can classify as `PromptReady` at readiness time and
+/// `Gate` by the time the submit byte is due, since the caller waits for
+/// output to go quiet in between -- exactly the window a late gate has
+/// to appear in).
 fn enter_precondition(vendor: &dyn TuiVendor, grid: &TerminalGrid) -> EnterPrecondition {
     match vendor.classify_surface(grid) {
         None | Some(Surface::PromptReady) => EnterPrecondition::Proceed,
         Some(other) => EnterPrecondition::Blocked(other),
+    }
+}
+
+/// Why `wait_for_enter_precondition`'s poll has not yet resolved on a
+/// given tick -- everything that is not `Proceed` or a parkable `Gate`.
+/// Kept distinct from `Surface` itself because "the composer reads ready
+/// but our own injected nonce never showed up" is not a classification
+/// `classify_surface` can produce (it has no nonce awareness at all --
+/// see `enter_precondition`'s own doc comment) but a fact this function
+/// layers on top of one; folding it into `Surface::Undecided` would lose
+/// the more specific, and more actionable, message this case deserves.
+enum EnterBlockedReason {
+    /// `Undecided`/`Unreadable` (never `Gate`, which parks separately,
+    /// or `PromptReady`, which either proceeds or becomes
+    /// `ReadyWithoutNonce` below) -- and defensively any other
+    /// classification a future `Surface` variant might add, named rather
+    /// than panicked on: see `enter_blocked_detail`'s own comment on its
+    /// matching fallback arm.
+    Surface(Surface),
+    /// `PromptReady`, but the run's own injected nonce is not on screen.
+    /// Polled exactly like `Surface` above, under the very same
+    /// deadline-with-rearm logic -- NOT resolved on the first tick that
+    /// observes it (see `wait_for_enter_precondition`'s own doc comment
+    /// for the recovery race that requires this).
+    ReadyWithoutNonce,
+}
+
+/// The failure detail for `wait_for_enter_precondition`'s terminal
+/// failure shapes, once its deadline has actually elapsed. `Gate` is
+/// deliberately absent from `EnterBlockedReason` entirely -- a gate
+/// parks (see `wait_for_enter_precondition`'s own doc comment) rather
+/// than failing through this function, and its own two failure messages
+/// (the worker exiting or the run being cancelled while parked) are
+/// built inline, matching `wait_for_readiness`'s own style for the
+/// identical two cases.
+///
+/// `nonce_visible` is a diagnostic note only, never a decision input: it
+/// separates "the paste never landed" from "the paste landed and the
+/// screen then became something we do not recognise" for whoever reads
+/// the failure -- a positive nonce match is real evidence the text
+/// arrived somewhere, but (like a ready phrase surviving an overlay gate,
+/// the reasoning `classify_copilot_surface`'s own doc comment already
+/// gives for a stronger signal) it is not proof the screen it landed on
+/// is safe to confirm into. `ReadyWithoutNonce` ignores it: by
+/// definition the nonce is absent on that path, so the note would only
+/// repeat the finding itself.
+fn enter_blocked_detail(reason: &EnterBlockedReason, nonce_visible: bool) -> String {
+    let nonce_note = if nonce_visible {
+        "our own injected nonce was visible on screen"
+    } else {
+        "our own injected nonce was NOT visible on screen"
+    };
+    match reason {
+        EnterBlockedReason::ReadyWithoutNonce => {
+            "the composer read ready after the prompt was pasted, but our own injected nonce \
+             was never visible on screen before the readiness cap elapsed -- the prompt did not \
+             survive whatever appeared in between, so the submit byte was withheld rather than \
+             confirming into it"
+                .to_string()
+        }
+        EnterBlockedReason::Surface(Surface::Unreadable(class)) => format!(
+            "the surface could not be safely read after the prompt was pasted (unsupported: \
+             {class}) -- withholding the submit byte rather than confirming into an unreadable \
+             screen ({nonce_note})"
+        ),
+        EnterBlockedReason::Surface(Surface::Undecided) => format!(
+            "nothing recognizable appeared on screen after the prompt was pasted -- withholding \
+             the submit byte rather than confirming into an unrecognized screen ({nonce_note})"
+        ),
+        // Defensive only: `wait_for_enter_precondition` never wraps a
+        // `Gate` (it parks separately) or a `PromptReady` (it either
+        // proceeds or becomes `ReadyWithoutNonce` above) here today.
+        // Named rather than panicked on -- a `Surface` variant added
+        // later without updating this match fails this run closed
+        // instead of crashing the background task that runs it, which
+        // is the whole point of a module whose job is refusing to act
+        // on surfaces it cannot vouch for.
+        EnterBlockedReason::Surface(surface @ (Surface::Gate(_) | Surface::PromptReady)) => {
+            format!(
+                "an unexpected classification ({surface:?}) was observed after the prompt was \
+                 pasted -- withholding the submit byte rather than confirming into it \
+                 ({nonce_note})"
+            )
+        }
     }
 }
 
@@ -1921,7 +1994,13 @@ async fn wait_for_readiness(
                 }
                 continue;
             }
-            Some(Surface::Undecided) => {
+            // Undecided (nothing matched, grid intact) and Unreadable (an
+            // unsupported sequence is latched) share the same procedural
+            // handling below -- both are "not yet decided, keep polling
+            // until the deadline" -- and differ only in the failure detail
+            // once that deadline is actually exhausted, which is where
+            // `surface` is inspected again.
+            Some(surface @ (Surface::Undecided | Surface::Unreadable(_))) => {
                 // The screen just changed away from a gate we recognized
                 // and parked on -- evidence of real progress (a human
                 // answered it, or the vendor advanced on its own), not
@@ -1931,16 +2010,21 @@ async fn wait_for_readiness(
                 // may have long since elapsed while this poll was
                 // correctly parked with no deadline of its own. Exactly
                 // once per transition, via `just_left_gate` -- re-arming
-                // on every `Undecided` tick instead would mean a screen
-                // that is genuinely, permanently unrecognizable after a
-                // gate never fails closed at all.
+                // on every tick here instead would mean a screen that is
+                // genuinely, permanently unrecognizable after a gate never
+                // fails closed at all.
                 if just_left_gate {
                     deadline = tokio::time::Instant::now() + cap;
                     just_left_gate = false;
                 }
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
                 if remaining.is_zero() {
-                    let detail = if escalated_gate.is_some() {
+                    let detail = if let Surface::Unreadable(class) = &surface {
+                        format!(
+                            "the surface could not be safely read before the readiness cap \
+                             elapsed (unsupported: {class})"
+                        )
+                    } else if escalated_gate.is_some() {
                         "no recognizable prompt appeared within a fresh readiness window after a \
                          first-run gate was left"
                             .to_string()
@@ -2055,6 +2139,231 @@ async fn wait_for_readiness(
         match tokio::time::timeout(wait, rx.recv()).await {
             Ok(_) => continue,
             Err(_) => return Ok(()),
+        }
+    }
+}
+
+/// The outcome `wait_for_enter_precondition`'s loop reaches on one tick --
+/// not itself the return type, since `Gate` and `NotYet` still have more
+/// work to do (park, or poll under a deadline) before either succeeding
+/// or failing.
+enum EnterTick {
+    /// Safe to deliver the submit byte now.
+    Proceed,
+    /// A first-run gate is on screen; park and escalate, then re-tick.
+    Gate(GateKind),
+    /// Nothing decided yet, INCLUDING "ready but the nonce has not
+    /// (yet) reappeared" -- poll under the deadline-with-rearm logic
+    /// below rather than resolving on this one tick. See
+    /// `wait_for_enter_precondition`'s own doc comment for why a ready
+    /// composer without the nonce must not be treated any more
+    /// conclusively than an unrecognized screen is.
+    NotYet(EnterBlockedReason),
+}
+
+/// Re-classifies the surface at Enter time and decides whether the
+/// submit byte is safe to deliver -- never reusing the classification
+/// `wait_for_readiness` reached earlier (see `enter_precondition`'s own
+/// doc comment for the race that makes the re-check necessary: a
+/// vendor's first-run gate can paint strictly after its own composer, so
+/// a screen that read `PromptReady` when the paste landed can read
+/// `Gate` by the time Enter is due).
+///
+/// Deliberately duplicated from `wait_for_readiness` rather than shared
+/// with it: the two callers have genuinely different proceed-conditions
+/// (this one additionally requires the run's injected nonce to still be
+/// visible, `wait_for_readiness` has no nonce to check at all) and
+/// different failure text, and a shared helper today would be shaped by
+/// only one real caller. Keep them separate.
+///
+/// - `Gate(gate)` parks and escalates exactly like `wait_for_readiness`'s
+///   own `Gate` arm: `FirstRunGateDetected` once per distinct gate, an
+///   unbounded park raced against the process exiting or the run being
+///   cancelled, no deadline of its own (a human answering a first-run
+///   gate by hand has no bound this adapter may impose). Once the gate
+///   clears, the FULL precedence check runs again from scratch on the
+///   next tick -- a gate clearing is not itself proof of readiness, only
+///   a fresh `PromptReady`-plus-nonce classification is.
+/// - `Undecided`/`Unreadable` poll under the same deadline-with-rearm
+///   logic as `wait_for_readiness` (a fresh window opens exactly once
+///   after leaving a gate), failing closed once it is exhausted.
+/// - A vendor with no real predicate (`classify_surface` returns `None`)
+///   proceeds unconditionally, matching its own legacy behavior -- there
+///   is no classification to distrust, so there is nothing for a nonce
+///   check to add.
+/// - `PromptReady` proceeds only if the run's own injected nonce
+///   (`discovery_key`) is still visible on screen. This is a narrowing
+///   condition, never a widening one: it can only turn an outcome that
+///   would otherwise proceed into a failure, never the reverse, which is
+///   what makes it safe to add on top of an already-reviewed precedence
+///   check rather than a new hole in it. Ready-without-the-nonce polls
+///   under the SAME deadline-with-rearm logic as `Undecided`/`Unreadable`
+///   above, not a first-observation failure: composer chrome and pasted
+///   text are not guaranteed to arrive in the same PTY read, so a tick
+///   can land after a human answers a gate and the composer repaints,
+///   but strictly before the pasted text itself catches up -- exactly
+///   the recovery window the gate-park's own rearm exists to protect,
+///   and this path shares it rather than bypassing it. Only once the
+///   deadline is actually exhausted does it fail closed, with a
+///   dedicated message: the pasted text did not survive whatever
+///   happened on screen between it landing and Enter falling due (a
+///   hand-answered dialog resetting the composer, for instance), which
+///   is a different fact from "nothing was ever recognizable" and
+///   deserves its own diagnosis once it is a conclusion rather than a
+///   first impression.
+#[allow(clippy::too_many_arguments)]
+async fn wait_for_enter_precondition(
+    rx: &mut broadcast::Receiver<Vec<u8>>,
+    kind: &str,
+    vendor: &dyn TuiVendor,
+    grid: &StdMutex<TerminalGrid>,
+    quiet: Duration,
+    cap: Duration,
+    pty: &Arc<PtyProcess>,
+    discovery_key: &str,
+    run_id: RunId,
+    task_id: TaskId,
+    worker_id: WorkerId,
+    sink: &Arc<dyn AdapterEventSink>,
+    cancel_token: &CancellationToken,
+) -> Result<(), AdapterError> {
+    let mut deadline = tokio::time::Instant::now() + cap;
+    // Same two flags, same meaning, as `wait_for_readiness` -- see that
+    // function's own declarations for the full reasoning; duplicated
+    // here rather than shared per this function's own doc comment.
+    let mut escalated_gate: Option<GateKind> = None;
+    let mut just_left_gate = false;
+
+    loop {
+        let tick = {
+            let g = grid.lock().expect("terminal-grid mutex never poisoned");
+            match enter_precondition(vendor, &g) {
+                EnterPrecondition::Proceed => match vendor.classify_surface(&g) {
+                    None => EnterTick::Proceed,
+                    Some(Surface::PromptReady) if g.shows(discovery_key) => EnterTick::Proceed,
+                    Some(Surface::PromptReady) => {
+                        EnterTick::NotYet(EnterBlockedReason::ReadyWithoutNonce)
+                    }
+                    // Defensive only -- see `EnterBlockedReason::Surface`'s
+                    // own doc comment on its matching fallback arm.
+                    // `enter_precondition` only returns `Proceed` for
+                    // `None`/`PromptReady` today, but polling under a
+                    // deadline rather than assuming that invariant holds
+                    // forever costs nothing and fails closed instead of
+                    // panicking if it is ever wrong.
+                    Some(other) => EnterTick::NotYet(EnterBlockedReason::Surface(other)),
+                },
+                EnterPrecondition::Blocked(Surface::Gate(gate)) => EnterTick::Gate(gate),
+                EnterPrecondition::Blocked(surface) => {
+                    EnterTick::NotYet(EnterBlockedReason::Surface(surface))
+                }
+            }
+        };
+        match tick {
+            EnterTick::Proceed => return Ok(()),
+            EnterTick::Gate(gate) => {
+                just_left_gate = true;
+                if escalated_gate != Some(gate) {
+                    emit(
+                        sink,
+                        run_id,
+                        task_id,
+                        worker_id,
+                        AdapterEventPayload::FirstRunGateDetected {
+                            kind: protocol_gate_kind(gate),
+                        },
+                        None,
+                    )
+                    .await;
+                    escalated_gate = Some(gate);
+                }
+                tokio::select! {
+                    biased;
+                    _ = pty.exit_watcher() => {
+                        let classified = {
+                            let g = grid.lock().expect("terminal-grid mutex never poisoned");
+                            vendor.classify_surface(&g)
+                        };
+                        return Err(match classified {
+                            Some(Surface::Gate(gate)) => AdapterError::process(
+                                kind,
+                                "start",
+                                format!(
+                                    "the worker process exited while a first-run gate was \
+                                     blocking the run after the prompt was pasted ({gate:?})"
+                                ),
+                            ),
+                            _ => AdapterError::process(
+                                kind,
+                                "start",
+                                "the worker process exited before a recognizable surface \
+                                 appeared after the prompt was pasted",
+                            ),
+                        });
+                    }
+                    _ = cancel_token.cancelled() => {
+                        return Err(AdapterError::process(
+                            kind,
+                            "start",
+                            format!(
+                                "the run was cancelled while a first-run gate was blocking it \
+                                 after the prompt was pasted ({gate:?})"
+                            ),
+                        ));
+                    }
+                    _ = tokio::time::timeout(quiet, rx.recv()) => {}
+                }
+                continue;
+            }
+            EnterTick::NotYet(reason) => {
+                if just_left_gate {
+                    deadline = tokio::time::Instant::now() + cap;
+                    just_left_gate = false;
+                }
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    let nonce_visible = {
+                        let g = grid.lock().expect("terminal-grid mutex never poisoned");
+                        g.shows(discovery_key)
+                    };
+                    let detail = enter_blocked_detail(&reason, nonce_visible);
+                    return Err(AdapterError::process(kind, "start", detail));
+                }
+                tokio::select! {
+                    biased;
+                    _ = pty.exit_watcher() => {
+                        let classified = {
+                            let g = grid.lock().expect("terminal-grid mutex never poisoned");
+                            vendor.classify_surface(&g)
+                        };
+                        return Err(match classified {
+                            Some(Surface::Gate(gate)) => AdapterError::process(
+                                kind,
+                                "start",
+                                format!(
+                                    "the worker process exited while a first-run gate was \
+                                     blocking the run after the prompt was pasted ({gate:?})"
+                                ),
+                            ),
+                            _ => AdapterError::process(
+                                kind,
+                                "start",
+                                "the worker process exited before a recognizable surface \
+                                 appeared after the prompt was pasted",
+                            ),
+                        });
+                    }
+                    _ = cancel_token.cancelled() => {
+                        return Err(AdapterError::process(
+                            kind,
+                            "start",
+                            "the run was cancelled while waiting on the submit precondition",
+                        ));
+                    }
+                    _ = tokio::time::timeout(quiet.min(remaining), rx.recv()) => {}
+                }
+                continue;
+            }
         }
     }
 }
@@ -3317,7 +3626,7 @@ mod tests {
     }
 
     fn grid_from(name: &str) -> TerminalGrid {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(&fixture(name));
         grid
     }
@@ -3357,6 +3666,62 @@ mod tests {
              composer, so a readiness-time classification of PromptReady says nothing about \
              what is on screen by the time Enter is due"
         );
+    }
+
+    /// Nothing matched (no known gate, no ready phrase, grid otherwise
+    /// trustworthy) must still withhold the Enter -- the ruling this
+    /// module's design settled on after considering, and rejecting, a
+    /// nonce-based override here (a positive nonce match proves "our text
+    /// landed somewhere visible", never "this is the composer we aimed it
+    /// at"; the same overlay-gate hazard `classify_copilot_surface`'s own
+    /// doc comment already names for a much STRONGER signal, a ready
+    /// phrase, applies at least as much to nonce evidence, which is
+    /// weaker). `enter_precondition` itself carries no nonce awareness at
+    /// all -- that diagnostic (see `run_pipeline`'s own nonce_note) is
+    /// bolted on entirely outside this pure function, which is what keeps
+    /// this withhold unconditional rather than contingent on it.
+    #[test]
+    fn enter_precondition_withholds_when_nothing_is_recognizable() {
+        use crate::adapter::tui::ClaudeTuiVendor;
+
+        let claude = ClaudeTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let empty = TerminalGrid::new(120, 40);
+        assert_eq!(
+            enter_precondition(&claude, &empty),
+            EnterPrecondition::Blocked(Surface::Undecided),
+            "nothing recognizable on an otherwise trustworthy grid must withhold the Enter, \
+             never proceed on the strength of anything short of PromptReady"
+        );
+    }
+
+    /// The nonce note is a diagnostic on every `Surface`-shaped detail, in
+    /// both directions, and the surface's own classification is always
+    /// named regardless of it -- proven here as a pure function so the
+    /// text itself is covered without a `run_pipeline`/PTY-level test,
+    /// which the decision path (already proven above) does not need.
+    /// `ReadyWithoutNonce` gets its own case: it ignores the note
+    /// entirely, since the nonce being absent is the finding itself, not
+    /// a diagnostic on top of some other one.
+    #[test]
+    fn enter_blocked_detail_names_the_surface_and_notes_the_nonce_either_way() {
+        // `Gate` is deliberately absent here -- see `enter_blocked_detail`'s
+        // own doc comment: `wait_for_enter_precondition` never reaches
+        // this function for a gate, it parks instead.
+        let unreadable = enter_blocked_detail(
+            &EnterBlockedReason::Surface(Surface::Unreadable("CSI 'b' (REP)".into())),
+            true,
+        );
+        assert!(unreadable.contains("CSI 'b' (REP)"));
+        assert!(unreadable.contains("nonce was visible"));
+
+        let undecided =
+            enter_blocked_detail(&EnterBlockedReason::Surface(Surface::Undecided), false);
+        assert!(undecided.contains("nothing recognizable"));
+        assert!(undecided.contains("nonce was NOT visible"));
+
+        let ready_without_nonce =
+            enter_blocked_detail(&EnterBlockedReason::ReadyWithoutNonce, false);
+        assert!(ready_without_nonce.contains("did not survive"));
     }
 
     /// The other half: a genuinely ready composer, with no gate on
@@ -3438,7 +3803,7 @@ mod tests {
         );
 
         let mut readiness_rx = pty.subscribe_output();
-        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new_at_fixture_size()));
         {
             let mut grid_rx = pty.subscribe_output();
             let grid = Arc::clone(&grid);
@@ -3556,7 +3921,7 @@ mod tests {
         );
 
         let mut readiness_rx = pty.subscribe_output();
-        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new_at_fixture_size()));
         {
             let mut grid_rx = pty.subscribe_output();
             let grid = Arc::clone(&grid);
@@ -3666,7 +4031,7 @@ mod tests {
         );
 
         let mut readiness_rx = pty.subscribe_output();
-        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new_at_fixture_size()));
         {
             let mut grid_rx = pty.subscribe_output();
             let grid = Arc::clone(&grid);
@@ -3741,7 +4106,7 @@ mod tests {
         );
 
         let mut readiness_rx = pty.subscribe_output();
-        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new_at_fixture_size()));
         {
             let mut grid_rx = pty.subscribe_output();
             let grid = Arc::clone(&grid);
@@ -3829,7 +4194,7 @@ mod tests {
         );
 
         let mut readiness_rx = pty.subscribe_output();
-        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new_at_fixture_size()));
         {
             let mut grid_rx = pty.subscribe_output();
             let grid = Arc::clone(&grid);
@@ -3913,7 +4278,7 @@ mod tests {
         );
 
         let mut readiness_rx = pty.subscribe_output();
-        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new_at_fixture_size()));
         {
             let mut grid_rx = pty.subscribe_output();
             let grid = Arc::clone(&grid);
@@ -4000,7 +4365,7 @@ mod tests {
         );
 
         let mut readiness_rx = pty.subscribe_output();
-        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new_at_fixture_size()));
         {
             let mut grid_rx = pty.subscribe_output();
             let grid = Arc::clone(&grid);
@@ -4082,7 +4447,7 @@ mod tests {
         );
 
         let mut readiness_rx = pty.subscribe_output();
-        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new_at_fixture_size()));
         {
             let mut grid_rx = pty.subscribe_output();
             let grid = Arc::clone(&grid);
@@ -4163,7 +4528,7 @@ mod tests {
         );
 
         let mut readiness_rx = pty.subscribe_output();
-        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new_at_fixture_size()));
         {
             let mut grid_rx = pty.subscribe_output();
             let grid = Arc::clone(&grid);
@@ -4250,7 +4615,7 @@ mod tests {
         );
 
         let mut readiness_rx = pty.subscribe_output();
-        let grid = Arc::new(StdMutex::new(TerminalGrid::new()));
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new_at_fixture_size()));
         {
             let mut grid_rx = pty.subscribe_output();
             let grid = Arc::clone(&grid);
@@ -4322,6 +4687,227 @@ mod tests {
         assert!(
             message.contains("cancelled"),
             "the error must say the run was cancelled: {message}"
+        );
+    }
+
+    /// `wait_for_enter_precondition`'s whole reason to exist, end to end:
+    /// a real fixture-replayed gate that appears strictly after the
+    /// composer must park and escalate exactly once -- never fail the
+    /// run outright -- and once the surface clears must re-run the FULL
+    /// precedence check before proceeding, not merely notice the gate is
+    /// gone.
+    ///
+    /// `codex-composer-then-trust.raw` proves only the first half of
+    /// that: it is a genuine capture of the live race (composer paints,
+    /// gate paints after it), and its own final state IS the gate --
+    /// it does not, and cannot, capture what codex's screen looks like
+    /// once a human answers that dialog by hand, because the capture
+    /// simply ends there. The "clears and proceeds" half of this test
+    /// therefore pushes a SYNTHESIZED recovery frame, not a captured
+    /// one, purely to drive `wait_for_enter_precondition`'s re-check
+    /// loop past the park -- it is not evidence of codex's real
+    /// post-answer behavior and must not be read as such.
+    #[tokio::test]
+    async fn wait_for_enter_precondition_parks_on_a_late_gate_then_proceeds_once_it_clears() {
+        use crate::adapter::tui::CodexTuiVendor;
+
+        let pty = Arc::new(
+            PtyProcess::spawn(
+                &crate::supervisor::SpawnSpec {
+                    program: PathBuf::from("/bin/sh"),
+                    args: vec!["-c".to_string(), "printf hi && sleep 30".to_string()],
+                    ..crate::supervisor::SpawnSpec::minimal()
+                },
+                EscalationTimings::default(),
+            )
+            .expect("spawn the ticking double"),
+        );
+
+        let mut readiness_rx = pty.subscribe_output();
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new_at_fixture_size()));
+        {
+            let mut grid_rx = pty.subscribe_output();
+            let grid = Arc::clone(&grid);
+            tokio::spawn(async move {
+                loop {
+                    match grid_rx.recv().await {
+                        Ok(bytes) => grid
+                            .lock()
+                            .expect("terminal-grid mutex never poisoned")
+                            .push(&bytes),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        // Seed the grid with the real capture -- the exact live race
+        // this function exists for: the composer painted, then the
+        // directory-trust gate painted strictly after it.
+        grid.lock()
+            .expect("terminal-grid mutex never poisoned")
+            .push(&fixture("codex-composer-then-trust.raw"));
+
+        let nonce = "crew-test-nonce-9f3c1a";
+        let vendor = CodexTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let sink = GateRecordingSink::new();
+        let dyn_sink: Arc<dyn AdapterEventSink> = sink.clone();
+        let cancel_token = CancellationToken::new();
+
+        let sink_for_wait = sink.clone();
+        let grid_for_recovery = Arc::clone(&grid);
+        tokio::spawn(async move {
+            assert!(
+                wait_until(
+                    || !sink_for_wait.payloads().is_empty(),
+                    Duration::from_secs(5)
+                )
+                .await,
+                "the late gate must be escalated before this test synthesizes its clearing"
+            );
+            // NOT a captured recovery -- see this test's own doc comment.
+            let mut g = grid_for_recovery
+                .lock()
+                .expect("terminal-grid mutex never poisoned");
+            g.push(b"\x1b[2J\x1b[H"); // full repaint; also clears the unsupported latch
+            g.push(format!("Ask Codex to do anything {nonce}").as_bytes());
+        });
+
+        let result = wait_for_enter_precondition(
+            &mut readiness_rx,
+            "codex",
+            &vendor,
+            &grid,
+            Duration::from_millis(20),
+            Duration::from_secs(5),
+            &pty,
+            nonce,
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            &dyn_sink,
+            &cancel_token,
+        )
+        .await;
+
+        let _ = pty.terminate().await;
+
+        result.expect(
+            "a late gate that clears to a ready composer with the nonce still visible must let \
+             the submit byte through, not fail the run",
+        );
+        match &sink.payloads()[..] {
+            [AdapterEventPayload::FirstRunGateDetected { kind }] => {
+                assert_eq!(*kind, crew_protocol::FirstRunGateKind::CodexDirectoryTrust);
+            }
+            other => panic!("the late gate must be escalated exactly once: {other:?}"),
+        }
+    }
+
+    /// The nonce clause's other half: a composer that reads ready, but
+    /// without our own injected nonce anywhere on screen, must still
+    /// fail -- proceeding here would mean confirming into a screen no
+    /// evidence says received our prompt at all. Failing needs to be a
+    /// CONCLUSION, not a first impression, though: composer chrome and
+    /// pasted text are not guaranteed to arrive in the same PTY read, so
+    /// a tick landing between the two must not be mistaken for the
+    /// nonce never showing up at all. This test proves that by timing
+    /// it -- the elapsed bound is the regression control for a bug this
+    /// module's own history already has one of (see the module's own
+    /// doc comment on `EnterBlockedReason::ReadyWithoutNonce`): a
+    /// version that fails on the very first ready-without-nonce tick
+    /// would resolve near-instantly instead of near `cap`.
+    #[tokio::test]
+    async fn wait_for_enter_precondition_fails_when_ready_but_the_nonce_never_reappears() {
+        use crate::adapter::tui::CodexTuiVendor;
+
+        let pty = Arc::new(
+            PtyProcess::spawn(
+                &crate::supervisor::SpawnSpec {
+                    program: PathBuf::from("/bin/sh"),
+                    args: vec!["-c".to_string(), "printf hi && sleep 30".to_string()],
+                    ..crate::supervisor::SpawnSpec::minimal()
+                },
+                EscalationTimings::default(),
+            )
+            .expect("spawn the ticking double"),
+        );
+
+        let mut readiness_rx = pty.subscribe_output();
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new_at_fixture_size()));
+        {
+            let mut grid_rx = pty.subscribe_output();
+            let grid = Arc::clone(&grid);
+            tokio::spawn(async move {
+                loop {
+                    match grid_rx.recv().await {
+                        Ok(bytes) => grid
+                            .lock()
+                            .expect("terminal-grid mutex never poisoned")
+                            .push(&bytes),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        // Ready from the very first tick, and never carries the nonce --
+        // no gate to park on here, this exercises the plain
+        // `PromptReady`-without-nonce failure directly.
+        grid.lock()
+            .expect("terminal-grid mutex never poisoned")
+            .push(b"Ask Codex to do anything");
+
+        let vendor = CodexTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let sink = GateRecordingSink::new();
+        let dyn_sink: Arc<dyn AdapterEventSink> = sink.clone();
+        let cancel_token = CancellationToken::new();
+        let cap = Duration::from_millis(300);
+        let started = tokio::time::Instant::now();
+
+        let result = wait_for_enter_precondition(
+            &mut readiness_rx,
+            "codex",
+            &vendor,
+            &grid,
+            Duration::from_millis(20),
+            cap,
+            &pty,
+            "a-nonce-that-never-appears",
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            &dyn_sink,
+            &cancel_token,
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        let _ = pty.terminate().await;
+
+        let message = result
+            .expect_err("a ready composer that never shows our nonce must not receive the Enter")
+            .to_string();
+        assert!(
+            message.contains("did not survive"),
+            "unexpected failure reason: {message}"
+        );
+        assert!(
+            sink.payloads().is_empty(),
+            "no gate was ever seen, so nothing should escalate: {:?}",
+            sink.payloads()
+        );
+        assert!(
+            elapsed >= cap,
+            "must poll to the deadline before failing, not resolve on the first tick that sees \
+             the nonce absent: took {elapsed:?}, cap was {cap:?}"
+        );
+        assert!(
+            elapsed < cap * 3,
+            "must fail promptly once the deadline is actually exhausted, not linger: took \
+             {elapsed:?}, cap was {cap:?}"
         );
     }
 

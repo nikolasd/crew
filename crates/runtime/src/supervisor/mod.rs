@@ -17,3 +17,4 @@ pub use process::{
     EscalationTimings, ManagedProcess, SpawnSpec, Supervisor, SupervisorError, TerminationOutcome,
 };
 pub use pty::PtyProcess;
+pub(crate) use pty::{DEFAULT_COLS, DEFAULT_ROWS};
