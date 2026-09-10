@@ -67,10 +67,23 @@ pub async fn sweep_once(
                 // a leader's connection state at all. `LeaderGone` is
                 // journaled from the leader-grace-window teardown
                 // directly (`service::orchestration::settle_leader_gone`),
-                // never through this worker-liveness sweep.
-                TimeoutKind::LeaderGone => unreachable!(
-                    "due_timeouts never produces LeaderGone -- it has no leader-connection state to observe"
-                ),
+                // never through this worker-liveness sweep. This arm
+                // should be unreachable on that invariant, but this loop
+                // runs inside a long-lived background task, not a test --
+                // panicking here would silently take the whole sweep down
+                // rather than fail loudly where someone would notice. Log
+                // and skip this one kind instead, so a future producer
+                // added here in error degrades to a missed fact, not a
+                // dead daemon.
+                TimeoutKind::LeaderGone => {
+                    tracing::error!(
+                        run_id = %run_id,
+                        "due_timeouts produced LeaderGone, which it should never be able to \
+                         observe -- skipping this kind rather than journaling a nonsensical \
+                         since_ms"
+                    );
+                    continue;
+                }
             };
             let outcome = db
                 .run_domain_op(Box::new({

@@ -119,7 +119,7 @@ pub(crate) async fn handle(stream: UnixStream, ctx: ConnContext, shared: Arc<Sha
                     {
                         shared
                             .orchestration
-                            .settle_leader_gone(&instance_id, grace)
+                            .settle_leader_gone(&instance_id, grace, &shared.leader_registry)
                             .await;
                     }
                 });

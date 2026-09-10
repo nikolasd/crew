@@ -1602,23 +1602,33 @@ impl OrchestrationService {
         Ok(result)
     }
 
-    /// Settles every non-terminal run owned by `instance_id`, once its
-    /// grace-window timer (`ipc::leader_registry`) has confirmed it has
-    /// held no live connection for the full window. Called from exactly
-    /// two places, both re-checking `LeaderRegistry::gone_for_at_least`
-    /// themselves right before this runs: a live disconnect's own timer
-    /// (`ipc::connection::handle`'s `on_gone` callback), and the
-    /// daemon-startup seed for runs whose owner was never reconnected
+    /// Settles every non-terminal run owned by `instance_id` that is
+    /// STILL abandoned, once its grace-window timer (`ipc::leader_registry`)
+    /// has confirmed it held no live connection for the full window.
+    /// Called from exactly two places, both making that same initial
+    /// check themselves right before calling this: a live disconnect's
+    /// own timer (`ipc::connection::handle`'s `on_gone` callback), and
+    /// the daemon-startup seed for runs whose owner was never reconnected
     /// after a restart ([`Self::seed_leader_registry_after_restart`]).
     ///
-    /// `grace` is only for the journaled fact's `since_ms` -- the actual
-    /// decision already happened in the caller's `gone_for_at_least`
-    /// check; this never re-verifies it, and takes the caller's word for
-    /// how long the window it waited out actually was (the configured
-    /// value, which a test may have shrunk well below the production
+    /// "Abandoned" means gone NOW, having been gone the full window --
+    /// never merely "was gone for the window at some earlier instant".
+    /// The caller's own check is a cheap early-out (skips the query below
+    /// entirely in the common case: nothing owned, or the leader never
+    /// reconnects) but is not enough on its own -- the query plus two DB
+    /// round trips per owned run is not instantaneous, and a leader with
+    /// several parked runs can reconnect partway through this loop. So
+    /// `leader_registry.gone_for_at_least` is re-checked immediately
+    /// before EACH run's own settle, inside the loop below, not only
+    /// once at entry: a leader that comes back mid-loop leaves every run
+    /// from that point on untouched, exactly as if it had never been
+    /// gone. `grace` is also used for the journaled fact's `since_ms`,
+    /// taking the caller's word for how long the window it waited out
+    /// actually was (the configured value, which a test may have shrunk
+    /// well below the production
     /// [`crate::ipc::leader_registry::LEADER_DISCONNECT_GRACE_WINDOW`]).
     ///
-    /// For each owned run: journals a `WorkerTimeout { kind: LeaderGone }`
+    /// For each owned run still confirmed abandoned: journals a `WorkerTimeout { kind: LeaderGone }`
     /// fact FIRST (the same "report before deciding" shape the inactivity
     /// sweep uses for `Inactivity`/`Total`), then transitions to
     /// `RunState::unrendered_verdict()` -- never a literal `"cancelled"`,
@@ -1628,7 +1638,12 @@ impl OrchestrationService {
     /// silently skipped: `transition_run`'s own guarded write refuses an
     /// illegal edge, and that refusal is exactly correct here, not an
     /// error to surface.
-    pub(crate) async fn settle_leader_gone(&self, instance_id: &str, grace: Duration) {
+    pub(crate) async fn settle_leader_gone(
+        &self,
+        instance_id: &str,
+        grace: Duration,
+        leader_registry: &crate::ipc::leader_registry::LeaderRegistry,
+    ) {
         let project_id = self.project_id;
         let run_ids: Vec<String> = match self
             .db
@@ -1657,6 +1672,27 @@ impl OrchestrationService {
             let Ok(run_id) = RunId::parse(&run_id_str) else {
                 continue;
             };
+
+            // Re-checked immediately before THIS run's settle, not only
+            // once by the caller before the query above: the query plus
+            // two DB round trips per run is not instantaneous, and a
+            // leader with several parked runs can reconnect partway
+            // through this loop. "Abandoned" means gone NOW, having been
+            // gone the full window -- never merely "was gone for the
+            // window at some earlier instant" the caller happened to
+            // observe. The caller's own check stays, as the cheap
+            // early-out that skips this query entirely in the common
+            // case (nothing owned, or the leader never reconnects); this
+            // one is what actually protects a leader that comes back
+            // mid-loop, run by run, rather than only at the start of it.
+            if !leader_registry.gone_for_at_least(instance_id, grace) {
+                tracing::info!(
+                    instance_id,
+                    run_id = %run_id,
+                    "leader reconnected mid-settle; leaving this run untouched"
+                );
+                continue;
+            }
 
             let mut timeout_fact = match self
                 .db
@@ -1762,7 +1798,9 @@ impl OrchestrationService {
             tokio::spawn(async move {
                 tokio::time::sleep(grace).await;
                 if leader_registry.gone_for_at_least(&owner, grace) {
-                    orchestration.settle_leader_gone(&owner, grace).await;
+                    orchestration
+                        .settle_leader_gone(&owner, grace, &leader_registry)
+                        .await;
                 }
             });
         }
@@ -3709,6 +3747,7 @@ mod restart_seeding_tests {
         db_path: &std::path::Path,
         project_id: ProjectId,
         events_tx: broadcast::Sender<EventEnvelope>,
+        run_driver: Option<Arc<dyn RunDriver>>,
     ) -> Arc<OrchestrationService> {
         let db = Arc::new(DatabaseHandle::start(db_path).await.expect("db starts"));
         let violation = Arc::new(crate::policy::ViolationService::new(
@@ -3725,7 +3764,7 @@ mod restart_seeding_tests {
         Arc::new(OrchestrationService::new(
             db,
             project_id,
-            None,
+            run_driver,
             Arc::new(crate::approval::NoopApprovalCallback),
             violation,
             events_tx,
@@ -3808,7 +3847,7 @@ mod restart_seeding_tests {
         let project_id = ProjectId::new();
         let (events_tx, mut events_rx) = broadcast::channel(16);
         let orchestration =
-            build_orchestration(&dir.path().join("db.sqlite"), project_id, events_tx).await;
+            build_orchestration(&dir.path().join("db.sqlite"), project_id, events_tx, None).await;
         let run_id = seed_nonterminal_run(&orchestration, "leader-gone").await;
 
         let leader_registry = LeaderRegistry::new();
@@ -3850,7 +3889,7 @@ mod restart_seeding_tests {
         let project_id = ProjectId::new();
         let (events_tx, mut events_rx) = broadcast::channel(16);
         let orchestration =
-            build_orchestration(&dir.path().join("db.sqlite"), project_id, events_tx).await;
+            build_orchestration(&dir.path().join("db.sqlite"), project_id, events_tx, None).await;
         let run_id = seed_nonterminal_run(&orchestration, "leader-returns").await;
 
         let leader_registry = LeaderRegistry::new();
@@ -3875,6 +3914,144 @@ mod restart_seeding_tests {
         assert!(
             events_rx.try_recv().is_err(),
             "a reconnect within the window must journal nothing"
+        );
+    }
+
+    /// A [`RunDriver`] whose `cancel_run` blocks on its FIRST call until
+    /// the test releases it, notifying the test the instant that call
+    /// starts. Gives a test deterministic control over exactly when
+    /// `settle_leader_gone`'s loop has finished processing one run --
+    /// `cancel_and_settle_run` already commits the run's own
+    /// `transition_run` (and broadcasts it) *before* calling
+    /// `cancel_run`, so "the first `cancel_run` call has started" is
+    /// proof the first run is already settled in the database, without
+    /// guessing at timing.
+    struct BlockingOnFirstCancelDriver {
+        first_call_started: Arc<tokio::sync::Notify>,
+        release_first_call: Arc<tokio::sync::Notify>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl RunDriver for BlockingOnFirstCancelDriver {
+        fn active_run_count(&self) -> usize {
+            0
+        }
+
+        fn start(
+            &self,
+            _ctx: crate::service::RunDriverContext,
+        ) -> crate::service::AdapterFuture<'static, Result<(), String>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn send_follow_up(
+            &self,
+            _run_id: RunId,
+            _task_id: TaskId,
+            _worker_id: WorkerId,
+            _prompt: String,
+            _kind: crew_protocol::MessageKind,
+        ) -> crate::service::AdapterFuture<'static, Result<(), String>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn running_adapter(&self, _run_id: RunId) -> Option<Arc<dyn crate::adapter::Adapter>> {
+            None
+        }
+
+        fn cancel_run(
+            &self,
+            _run_id: RunId,
+            _scope: CancelScope,
+        ) -> crate::service::AdapterFuture<'static, Result<crate::service::CancelOutcome, String>>
+        {
+            let first_call_started = Arc::clone(&self.first_call_started);
+            let release_first_call = Arc::clone(&self.release_first_call);
+            let is_first = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+            Box::pin(async move {
+                if is_first {
+                    first_call_started.notify_one();
+                    release_first_call.notified().await;
+                }
+                Ok(crate::service::CancelOutcome::Cancelled)
+            })
+        }
+    }
+
+    /// The re-check staff's review named directly: `settle_leader_gone`'s
+    /// caller-side check (before the DB query for owned runs) is not
+    /// enough on its own for a leader with more than one parked run,
+    /// because the query plus per-run DB round trips are not
+    /// instantaneous. This proves the loop's OWN re-check (immediately
+    /// before each run's settle) actually stops the run reached AFTER a
+    /// reconnect, using a blocking driver rather than a guessed sleep to
+    /// land the reconnect deterministically between the two runs'
+    /// settles -- never racing on timing.
+    #[tokio::test]
+    async fn a_leader_reconnecting_mid_settle_leaves_the_later_run_untouched() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project_id = ProjectId::new();
+        let (events_tx, _events_rx) = broadcast::channel(16);
+        let driver = Arc::new(BlockingOnFirstCancelDriver {
+            first_call_started: Arc::new(tokio::sync::Notify::new()),
+            release_first_call: Arc::new(tokio::sync::Notify::new()),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let orchestration = build_orchestration(
+            &dir.path().join("db.sqlite"),
+            project_id,
+            events_tx,
+            Some(Arc::clone(&driver) as Arc<dyn RunDriver>),
+        )
+        .await;
+
+        let first_run = seed_nonterminal_run(&orchestration, "leader-mid").await;
+        let second_run = seed_nonterminal_run(&orchestration, "leader-mid").await;
+
+        let leader_registry = LeaderRegistry::new();
+        let grace = Duration::from_millis(20);
+        // Already gone for the full window from the start -- the
+        // caller-side check this loop's own re-check exists alongside.
+        leader_registry.seed_disconnected_since("leader-mid".to_string(), Instant::now() - grace);
+
+        let orch = Arc::clone(&orchestration);
+        let registry_for_task = leader_registry.clone();
+        let settle_task = tokio::spawn(async move {
+            orch.settle_leader_gone("leader-mid", grace, &registry_for_task)
+                .await;
+        });
+
+        // Waits for proof the first run is already settled (its
+        // `cancel_run` call has started, which only happens after its
+        // own `transition_run` commit), not a guessed duration.
+        driver.first_call_started.notified().await;
+
+        // The leader reconnects here -- strictly between the first run's
+        // settle (already committed) and the second's (not yet reached:
+        // the loop is still blocked inside the first run's `cancel_run`).
+        let _reconnected = leader_registry.register("leader-mid".to_string(), |_| {});
+        driver.release_first_call.notify_one();
+
+        settle_task.await.expect("settle_leader_gone task");
+
+        // `owned_nonterminal_run_ids_op` carries no `ORDER BY`, so which
+        // of the two rows the loop reaches first is not a guarantee this
+        // test should depend on -- only that exactly one of them was
+        // already settled when the reconnect landed (the one whose
+        // `cancel_run` blocked the loop) and the other was reached only
+        // after, and so must survive.
+        let first_state = run_state(&orchestration, first_run).await;
+        let second_state = run_state(&orchestration, second_run).await;
+        let states = [first_state.as_str(), second_state.as_str()];
+        assert_eq!(
+            states.iter().filter(|s| **s == "cancelled").count(),
+            1,
+            "exactly the run reached before the reconnect must be settled: {states:?}"
+        );
+        assert_eq!(
+            states.iter().filter(|s| **s == "queued").count(),
+            1,
+            "exactly the run reached after the reconnect must be left untouched: {states:?}"
         );
     }
 }

@@ -173,9 +173,27 @@ impl LeaderRegistry {
                         .zero_since
                         .is_some_and(|since| since.elapsed() >= grace)
             }
-            // No entry at all is the same fact as "gone": nothing has
-            // ever registered a live connection for this id.
-            None => true,
+            // No entry at all means nobody has ever registered OR seeded
+            // this id -- an unestablished question, not evidence of
+            // absence. Both real callers (`register`'s connection path,
+            // `seed_disconnected_since`'s restart path) always create the
+            // entry before ever asking this question, so this branch is a
+            // guard against a future caller's misuse, never a path either
+            // takes today. The destructive answer (`true`, which a caller
+            // reads as license to settle) must never be the default for a
+            // question nobody has established an answer to -- `false`
+            // costs nothing on the paths that exist, and refuses to
+            // fabricate an instant, grace-free settlement for one that
+            // doesn't.
+            None => {
+                tracing::warn!(
+                    instance_id,
+                    "gone_for_at_least asked about an instance id with no registry entry at \
+                     all -- neither a live connection nor a restart seed ever created one; \
+                     answering false rather than settling on an unestablished question"
+                );
+                false
+            }
         }
     }
 }
@@ -320,10 +338,17 @@ mod tests {
         );
     }
 
+    /// Both real callers (a live connection's `register`, restart's
+    /// `seed_disconnected_since`) always create the entry before ever
+    /// asking `gone_for_at_least` -- so an id with no entry at all is
+    /// only reachable by a future caller's misuse, never by either path
+    /// that exists today. `false` is the answer that refuses to settle
+    /// on that unestablished question, rather than fabricating an
+    /// instant, grace-free "gone" for it.
     #[test]
-    fn an_unregistered_instance_id_reads_as_gone() {
+    fn an_unregistered_instance_id_never_reads_as_gone() {
         let registry = LeaderRegistry::new();
-        assert!(registry.gone_for_at_least("never-seen", GRACE));
+        assert!(!registry.gone_for_at_least("never-seen", GRACE));
     }
 
     #[test]
