@@ -4305,6 +4305,44 @@ mod tests {
     /// deadline re-arms once the first byte arrives, so classification
     /// always gets a full `cap` regardless of how long the wait for that
     /// first byte took, and this fails at roughly `delay + cap`.
+    ///
+    /// The first-output wait itself is intentionally still bounded by the
+    /// entry-armed cap, not by anything looser -- a vendor that never
+    /// speaks at all must still fail, on its own bound, and this test
+    /// does not touch that.
+    ///
+    /// **Margin arithmetic, load-tested on a real macOS CI failure (a 200ms
+    /// delay against a 300ms cap left only 100ms of spawn budget, which a
+    /// loaded runner blew): three constraints, none of them free to
+    /// shrink without re-deriving this comment.**
+    ///
+    ///   1. `delay` must stay below `cap`, or even the FIXED code fails at
+    ///      the first-output wait (bounded by the entry cap, per the note
+    ///      above) and this test would stop testing the re-arm at all.
+    ///   2. `cap - delay` is the spawn budget: real time for `/bin/sh` to
+    ///      start and the pty to deliver "hello" after the double's own
+    ///      `sleep` returns, on whatever CI runner this runs on. Too small
+    ///      and the test flakes on infrastructure latency having nothing
+    ///      to do with the fix.
+    ///   3. `delay` is also the discrimination margin: broken code fails
+    ///      at roughly `cap` alone, fixed code at roughly `delay + cap`.
+    ///      Too small a `delay` and a sufficiently loaded runner can make
+    ///      the BROKEN code's failure take long enough to satisfy the
+    ///      `elapsed >= delay + cap` assertion anyway -- a false pass, not
+    ///      a proof.
+    ///
+    /// `delay = 400ms`, `cap = 1.2s`: constraint 1 holds (400 < 1200),
+    /// constraint 2 gives an 800ms spawn budget (8x the 100ms that failed
+    /// in CI), constraint 3 gives a 400ms discrimination margin -- `delay`
+    /// itself -- between the broken code's ~1.2s failure point and the
+    /// fixed code's ~1.6s one. This cannot be made fully
+    /// deterministic under arbitrary load without a fake clock, which is
+    /// incompatible with a real PTY and a real child process -- under
+    /// sufficient contention the broken code could still take long enough
+    /// to false-pass. Accepted, not solved: these margins are a
+    /// probabilistic judgment call, not a proof, and the numbers above are
+    /// the reasoning behind that call, not an arbitrary pair that happened
+    /// to pass once.
     #[tokio::test]
     async fn a_delayed_first_output_no_longer_consumes_the_cap() {
         use crate::adapter::tui::ClaudeTuiVendor;
@@ -4315,7 +4353,7 @@ mod tests {
                     program: PathBuf::from("/bin/sh"),
                     args: vec![
                         "-c".to_string(),
-                        "sleep 0.2 && echo hello && sleep 5".to_string(),
+                        "sleep 0.4 && echo hello && sleep 5".to_string(),
                     ],
                     ..crate::supervisor::SpawnSpec::minimal()
                 },
@@ -4353,7 +4391,7 @@ mod tests {
             &vendor,
             &grid,
             Duration::from_millis(30),
-            Duration::from_millis(300),
+            Duration::from_millis(1200),
             &pty,
             Some(PromptInjection {
                 text: "this must never be written",
@@ -4378,15 +4416,25 @@ mod tests {
             message.contains("no recognizable prompt or first-run gate"),
             "unexpected failure reason: {message}"
         );
+        // The lower bound is the exact nominal value (`delay + cap`), not
+        // padded below it: the classify loop only returns this failure
+        // once `remaining.is_zero()`, so `delay + cap` is a hard floor
+        // `elapsed` approaches from above and cannot come in under --
+        // it can overshoot by up to one `quiet` tick (the loop's own poll
+        // interval), never undershoot. That is a stronger guarantee than
+        // a margin, which is why zero slack here is correct rather than
+        // a regression: "adding slack" by lowering this bound would only
+        // ever move it toward the broken code's ~1.2s failure point,
+        // weakening the exact discrimination this test exists for.
         assert!(
-            elapsed >= Duration::from_millis(450),
-            "the 200ms delay before the vendor's first byte must not shrink the classification \
-             window below a full 300ms cap -- expected roughly delay (200ms) + cap (300ms), took \
+            elapsed >= Duration::from_millis(1600),
+            "the 400ms delay before the vendor's first byte must not shrink the classification \
+             window below a full 1.2s cap -- expected roughly delay (400ms) + cap (1.2s), took \
              {elapsed:?}"
         );
         assert!(
-            elapsed < Duration::from_secs(2),
-            "must fail at roughly delay + cap (~500ms), not hang: took {elapsed:?}"
+            elapsed < Duration::from_secs(5),
+            "must fail at roughly delay + cap (~1.6s), not hang: took {elapsed:?}"
         );
     }
 
