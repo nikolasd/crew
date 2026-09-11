@@ -43,9 +43,14 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use super::process::{EscalationTimings, SpawnSpec, SupervisorError, TerminationOutcome};
 
 /// Initial terminal geometry for TUI workers. Viewers may later request a
-/// different size through [`PtyProcess::resize`].
-const DEFAULT_COLS: u16 = 120;
-const DEFAULT_ROWS: u16 = 32;
+/// different size through [`PtyProcess::resize`]. `pub(crate)`: this is
+/// also the size `TerminalGrid` (`adapter::tui::grid`) models in
+/// production, so the classifier's own idea of the screen's shape stays
+/// the PTY's real one rather than a second, independently-drifting
+/// constant -- see [`super::super::adapter::tui::grid::FIXTURE_GRID_WIDTH`]'s
+/// own doc comment for why that mismatch matters.
+pub(crate) const DEFAULT_COLS: u16 = 120;
+pub(crate) const DEFAULT_ROWS: u16 = 32;
 
 /// Broadcast capacity in output chunks. A lagging viewer skips ahead
 /// (misses frames) rather than exerting backpressure on the worker.

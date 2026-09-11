@@ -22,15 +22,27 @@
 
 use super::screen::TuiScreen;
 
-/// Fixed size, matching the probe harness's actual PTY winsize
-/// (`struct.pack("HHHH", 40, 120, 0, 0)` -- the size crew's own adapter
-/// requests) and comfortably covering the highest row/col any committed
-/// capture's `CSI G`/`CSI H` parameters reference (34 / 119). A vendor that
-/// used a larger terminal would need these constants revisited, not a
-/// dynamic grid -- the fixture set is the sizing authority, not a guess at
-/// generality.
-pub(crate) const GRID_WIDTH: usize = 120;
-pub(crate) const GRID_HEIGHT: usize = 40;
+/// The size every committed fixture under `fixtures/adapters/tui-screens/`
+/// was captured at (see that directory's own README for the per-fixture
+/// size column). Fixture-replay tests build a grid at this size, matching
+/// the capture; production instead builds one at the PTY's own real size
+/// (`crate::supervisor::pty::{DEFAULT_COLS, DEFAULT_ROWS}`, currently
+/// 120x32) -- the two can legitimately differ, which is exactly why size
+/// is a constructor parameter now rather than a fixed constant. This
+/// constant used to claim the fixed 120x40 size matched "the size crew's
+/// own adapter requests"; it did not -- 40 rows came from the probe
+/// harness that took the captures, never from anything production spawns
+/// a PTY at. That mismatch (real PTY rows scrolling content off a grid
+/// modeling more rows than exist) is a live working hypothesis for how a
+/// real first-run gate went unrecognized: a screen that scrolled past row
+/// 32 on the real terminal could still sit within this grid's own
+/// (larger, wrong) row range, rendering at a position the real terminal
+/// never actually held it at. `#[cfg(test)]`: nothing in production
+/// builds a grid at this size.
+#[cfg(test)]
+pub(crate) const FIXTURE_GRID_WIDTH: usize = 120;
+#[cfg(test)]
+pub(crate) const FIXTURE_GRID_HEIGHT: usize = 40;
 
 /// A rectangular grid of cells, with a cursor and a scroll region, folded
 /// from raw PTY bytes.
@@ -44,6 +56,8 @@ pub(crate) const GRID_HEIGHT: usize = 40;
 /// intent to expose the grid beyond this crate.
 #[derive(Debug, Clone)]
 pub struct TerminalGrid {
+    width: usize,
+    height: usize,
     cells: Vec<Vec<char>>,
     cursor_row: usize,
     cursor_col: usize,
@@ -55,53 +69,93 @@ pub struct TerminalGrid {
     /// `pending` buffer -- a PTY read can split either at any byte, and
     /// this must not treat a split sequence's tail as literal text.
     pending: Vec<u8>,
-    /// The first CSI final byte, CSI parameter, or single-byte escape this
-    /// grid could not apply safely, recorded on the way to either return
-    /// (production build) or panic (`#[cfg(test)]` build, so every
-    /// existing test still catches this exactly as before) -- see
-    /// [`Self::mark_unsupported`]. This is the fact a later slice's
-    /// `classify_surface` must consult and map to `Undecided` before this
-    /// module gets a real caller: a promise in a doc comment that "the
-    /// next slice will handle this" does not fail when someone adds that
-    /// caller without meeting it; a field that caller cannot silently
-    /// skip does. See [`Self::unsupported`].
+    /// The current grid's trustworthiness: `Some(class)` when the most
+    /// recent escape sequence this grid could not apply safely has not
+    /// been superseded by a full repaint since -- see
+    /// [`Self::mark_unsupported`] and [`Self::erase_whole_screen`] (which
+    /// clears this) for the two halves of that lifecycle. `class` is a
+    /// closed-set name (e.g. `"CSI 'b' (REP)"`), never the raw sequence:
+    /// this field's value can reach a `RuntimeEvent` string (the
+    /// Enter-precondition failure detail), which crosses the redaction
+    /// boundary -- see [`Self::mark_unsupported`]'s own doc comment.
     unsupported: Option<String>,
-}
-
-impl Default for TerminalGrid {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// How many times this grid has ever recorded an unsupported
+    /// sequence, across the grid's whole lifetime -- never cleared,
+    /// unlike [`Self::unsupported`] itself. A grid that clears and
+    /// re-latches repeatedly is a chronically-misparsing vendor hiding
+    /// behind a well-behaved repaint loop; nothing else here would make
+    /// that visible once the flag itself can recover.
+    unsupported_count: usize,
 }
 
 impl TerminalGrid {
-    pub fn new() -> Self {
+    /// Builds an empty grid of `width` columns by `height` rows.
+    /// Production builds one at the PTY's own real size
+    /// (`crate::supervisor::pty::{DEFAULT_COLS, DEFAULT_ROWS}`); a
+    /// fixture-replay test builds one at [`FIXTURE_GRID_WIDTH`]/
+    /// [`FIXTURE_GRID_HEIGHT`], the size every committed capture was
+    /// actually recorded at. The two are not required to agree, and
+    /// historically have not (see [`FIXTURE_GRID_WIDTH`]'s own doc
+    /// comment) -- that mismatch is precisely why this takes a size
+    /// rather than assuming one.
+    pub fn new(width: usize, height: usize) -> Self {
         Self {
-            cells: vec![vec![' '; GRID_WIDTH]; GRID_HEIGHT],
+            width,
+            height,
+            cells: vec![vec![' '; width]; height],
             cursor_row: 0,
             cursor_col: 0,
             saved_cursor: None,
             scroll_top: 0,
-            scroll_bottom: GRID_HEIGHT - 1,
+            scroll_bottom: height - 1,
             pending: Vec::new(),
             unsupported: None,
+            unsupported_count: 0,
         }
     }
 
-    /// The first unsupported escape sequence this grid encountered, if
-    /// any -- see [`Self::mark_unsupported`] and `apply_csi`'s doc
-    /// comment for what "unsupported" means. `None` in a `#[cfg(test)]`
-    /// build proves nothing either way: every existing test that reaches
-    /// an unsupported sequence panics before this could ever be read, by
-    /// design (see [`Self::mark_unsupported`]).
-    pub(crate) fn unsupported(&self) -> Option<&str> {
+    /// A grid at [`FIXTURE_GRID_WIDTH`]x[`FIXTURE_GRID_HEIGHT`] -- every
+    /// committed fixture's own recorded size. The convenience fixture-test
+    /// callers reach for instead of naming that size at every call site.
+    #[cfg(test)]
+    pub(crate) fn new_at_fixture_size() -> Self {
+        Self::new(FIXTURE_GRID_WIDTH, FIXTURE_GRID_HEIGHT)
+    }
+
+    /// The current grid's trustworthiness: `Some(class)` (a closed-set
+    /// name, never the raw sequence -- see [`Self::unsupported`]'s own
+    /// doc comment) when an unsupported escape sequence has been recorded
+    /// and no full repaint has cleared it since. `pub`, not `pub(crate)`:
+    /// a production-build integration test (`crates/runtime/tests/`,
+    /// which compiles this crate WITHOUT the `test` cfg, so it is the
+    /// only place that ever exercises `mark_unsupported`'s
+    /// `#[cfg(not(test))]` body) needs to read this to prove the flag
+    /// records and clears rather than panicking -- see
+    /// [`Self::mark_unsupported`]'s own doc comment for why no test
+    /// inside this crate can do that.
+    pub fn unsupported(&self) -> Option<&str> {
         self.unsupported.as_deref()
     }
 
-    /// A grid built from one complete slice of output.
+    /// How many times this grid has ever recorded an unsupported
+    /// sequence -- see [`Self::unsupported_count`]'s field doc comment.
+    /// `pub` for the same reason as [`Self::unsupported`].
+    pub fn unsupported_count(&self) -> usize {
+        self.unsupported_count
+    }
+
+    /// A grid built from one complete slice of a NAMED committed
+    /// capture, sized to that capture's own recorded geometry via
+    /// [`fixture_size`] -- never the blanket [`FIXTURE_GRID_WIDTH`]/
+    /// [`FIXTURE_GRID_HEIGHT`] default, which is wrong for the two
+    /// captures recorded at the PTY's real 120x32. See
+    /// `fixtures/adapters/tui-screens/README.md`'s own "Size is part of
+    /// a capture, not a detail" section for why replaying at the wrong
+    /// size is not merely cosmetic.
     #[cfg(test)]
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
-        let mut grid = Self::new();
+    pub(super) fn from_named_fixture_bytes(name: &str, bytes: &[u8]) -> Self {
+        let (width, height) = fixture_size(name);
+        let mut grid = Self::new(width, height);
         grid.push(bytes);
         grid
     }
@@ -200,8 +254,8 @@ impl TerminalGrid {
 
     /// The grid's current visible content as multi-line text, one row per
     /// line, trailing spaces trimmed per row and wholly-blank trailing rows
-    /// dropped (a fixed 40-row grid mostly holding a few lines of dialog
-    /// text has no meaning left in the other 30-odd blank rows below it).
+    /// dropped (a grid this size mostly holding a few lines of dialog text
+    /// has no meaning left in the many blank rows below it).
     /// A blank row followed by real content further down is kept -- only
     /// the *trailing* run is dropped. Real inter-word spacing is present
     /// (this is a rendered screen, not `TuiScreen`'s whitespace-stripped
@@ -232,10 +286,10 @@ impl TerminalGrid {
     // ---------------------------------------------------- write/movement
 
     fn write_char(&mut self, ch: char) {
-        if self.cursor_row < GRID_HEIGHT && self.cursor_col < GRID_WIDTH {
+        if self.cursor_row < self.height && self.cursor_col < self.width {
             self.cells[self.cursor_row][self.cursor_col] = ch;
         }
-        self.cursor_col = (self.cursor_col + 1).min(GRID_WIDTH - 1);
+        self.cursor_col = (self.cursor_col + 1).min(self.width - 1);
         // No auto-wrap at the right margin: not exercised by any capture
         // (max column param observed is 119 of 120), so implementing wrap
         // now would be exactly the "speculative" this design refuses to
@@ -259,7 +313,7 @@ impl TerminalGrid {
                 row.fill(' ');
             }
         } else {
-            self.cursor_row = (self.cursor_row + 1).min(GRID_HEIGHT - 1);
+            self.cursor_row = (self.cursor_row + 1).min(self.height - 1);
         }
     }
 
@@ -269,7 +323,7 @@ impl TerminalGrid {
     /// `codex-directory-trust.raw` (29 occurrences) in the current fixture
     /// set, but load-bearing: without scroll-region-aware handling here,
     /// that capture's later content renders at the wrong rows relative to
-    /// the fixed 40-row grid.
+    /// the grid.
     fn reverse_index(&mut self) {
         if self.cursor_row == self.scroll_top {
             self.cells[self.scroll_top..=self.scroll_bottom].rotate_right(1);
@@ -292,10 +346,23 @@ impl TerminalGrid {
         }
     }
 
+    /// Blanks every cell -- a vendor sending `CSI 2 J` is declaring the
+    /// prior screen void, which is also why this is where
+    /// [`Self::unsupported`] clears: every cell this grid's own content-
+    /// matching predicates (`shows`/`rendered`) can read is, from this
+    /// point, freshly and uniformly overwritten, so whatever an earlier
+    /// unsupported sequence may have distorted no longer survives in cell
+    /// content for those predicates to trust or distrust. A per-write
+    /// clear would be wrong for the reason a per-write clear of anything
+    /// here is wrong: a write following the corrupting read can itself
+    /// land at a cursor position that read left distorted, so only an
+    /// operation that overwrites the WHOLE grid unconditionally, not one
+    /// cell at a time, actually re-establishes trust.
     fn erase_whole_screen(&mut self) {
         for row in &mut self.cells {
             row.fill(' ');
         }
+        self.unsupported = None;
     }
 
     fn erase_from_cursor_to_end_of_screen(&mut self) {
@@ -377,14 +444,14 @@ impl TerminalGrid {
     fn apply_csi(&mut self, params: &[u8], final_byte: u8) {
         match final_byte {
             b'A' => self.cursor_row = self.cursor_row.saturating_sub(parse_count(params)),
-            b'B' => self.cursor_row = (self.cursor_row + parse_count(params)).min(GRID_HEIGHT - 1),
-            b'C' => self.cursor_col = (self.cursor_col + parse_count(params)).min(GRID_WIDTH - 1),
+            b'B' => self.cursor_row = (self.cursor_row + parse_count(params)).min(self.height - 1),
+            b'C' => self.cursor_col = (self.cursor_col + parse_count(params)).min(self.width - 1),
             b'D' => self.cursor_col = self.cursor_col.saturating_sub(parse_count(params)),
-            b'G' => self.cursor_col = parse_count(params).saturating_sub(1).min(GRID_WIDTH - 1),
+            b'G' => self.cursor_col = parse_count(params).saturating_sub(1).min(self.width - 1),
             b'H' => {
                 let (row, col) = parse_row_col(params);
-                self.cursor_row = row.saturating_sub(1).min(GRID_HEIGHT - 1);
-                self.cursor_col = col.saturating_sub(1).min(GRID_WIDTH - 1);
+                self.cursor_row = row.saturating_sub(1).min(self.height - 1);
+                self.cursor_col = col.saturating_sub(1).min(self.width - 1);
             }
             b'J' => match params {
                 b"" | b"0" => self.erase_from_cursor_to_end_of_screen(),
@@ -398,7 +465,9 @@ impl TerminalGrid {
                 // have to clear it. Reached first by the omp composer
                 // capture, which emits it alongside `2 J` on entry.
                 b"3" => {}
-                other => self.mark_unsupported(unhandled_csi_message(b'J', other)),
+                other => self.mark_unsupported("CSI 'J' (unrecognised parameter)", || {
+                    unhandled_csi_message(b'J', other)
+                }),
             },
             b'K' => match params {
                 b"" | b"0" => self.erase_from_cursor_to_end_of_line(),
@@ -410,16 +479,18 @@ impl TerminalGrid {
                 // exists to avoid.
                 b"1" => self.erase_from_start_of_line_to_cursor(),
                 b"2" => self.erase_whole_line(),
-                other => self.mark_unsupported(unhandled_csi_message(b'K', other)),
+                other => self.mark_unsupported("CSI 'K' (unrecognised parameter)", || {
+                    unhandled_csi_message(b'K', other)
+                }),
             },
             b'r' => {
                 if params.is_empty() {
                     self.scroll_top = 0;
-                    self.scroll_bottom = GRID_HEIGHT - 1;
+                    self.scroll_bottom = self.height - 1;
                 } else {
                     let (top, bottom) = parse_row_col(params);
-                    self.scroll_top = top.saturating_sub(1).min(GRID_HEIGHT - 1);
-                    self.scroll_bottom = bottom.saturating_sub(1).min(GRID_HEIGHT - 1);
+                    self.scroll_top = top.saturating_sub(1).min(self.height - 1);
+                    self.scroll_bottom = bottom.saturating_sub(1).min(self.height - 1);
                 }
             }
             // Content-neutral families: see the doc comment above.
@@ -438,18 +509,38 @@ impl TerminalGrid {
             // accounted for and neither reaches a grid cell.
             b'm' | b'q' | b'c' | b'n' | b'u' | b't' | b'p' => {}
             b'h' | b'l' if params.starts_with(b"?") => {}
-            other => self.mark_unsupported(unhandled_csi_message(other, params)),
+            other => self.mark_unsupported(csi_unsupported_class(other), || {
+                unhandled_csi_message(other, params)
+            }),
         }
     }
 
-    /// Records `description` as [`Self::unsupported`] (if nothing has been
+    /// Records `class` as [`Self::unsupported`] (if nothing has been
     /// recorded yet -- the *first* unsupported sequence is what a caller
-    /// needs, not the last), so a novel vendor escape becomes a fact the
-    /// daemon can act on rather than a crash. A doc comment saying "the
-    /// next slice must handle this before adding a caller" has nothing
-    /// that fails when that promise is broken; this field does, because
-    /// [`Self::unsupported`] is `pub(crate)` and the slice that adds a
-    /// real caller cannot add one without reading it.
+    /// needs, not the last) and always increments
+    /// [`Self::unsupported_count`], so a novel vendor escape becomes a
+    /// fact the daemon can act on rather than a crash. A doc comment
+    /// saying "the next slice must handle this before adding a caller"
+    /// has nothing that fails when that promise is broken; this field
+    /// does, because [`Self::unsupported`] is `pub` and the caller that
+    /// surfaces it (the Enter-precondition failure detail) cannot add one
+    /// without reading it.
+    ///
+    /// `class` must be a closed-set, redaction-safe name -- one of the
+    /// small number of fixed strings a caller builds it from (see
+    /// [`csi_unsupported_class`]), never a value built from the escape
+    /// sequence's own parameters. This is what ends up in
+    /// [`Self::unsupported`], which can reach a `RuntimeEvent` string
+    /// (the Enter-precondition failure detail naming the unsupported
+    /// class); a description built from raw vendor bytes would cross the
+    /// redaction boundary carrying whatever text the vendor happened to
+    /// echo back through an unimplemented sequence's parameters.
+    ///
+    /// `diagnostic` is the fuller, raw-bytes-included description used
+    /// ONLY by the `#[cfg(test)]` panic below -- never journaled, so the
+    /// redaction constraint does not apply to it -- and is lazy
+    /// (`impl FnOnce`) so building it costs nothing in the production
+    /// build that never calls it.
     ///
     /// `#[cfg(test)]` builds record exactly the same way, then ALSO
     /// panic, so every existing test that exercises an unsupported
@@ -460,20 +551,29 @@ impl TerminalGrid {
     /// twice is what makes the production behavior (record, do not crash)
     /// something this crate's own test suite can actually exercise, even
     /// though `cfg!(test)` being true throughout `cargo test` means no
-    /// test here ever reaches a build where the panic itself is absent.
+    /// test here ever reaches a build where the panic itself is absent --
+    /// see [`Self::unsupported`]'s own doc comment for how a
+    /// production-build integration test proves the non-panicking body
+    /// anyway.
     #[cfg(test)]
-    fn mark_unsupported(&mut self, description: String) -> ! {
+    fn mark_unsupported(
+        &mut self,
+        class: impl Into<String>,
+        diagnostic: impl FnOnce() -> String,
+    ) -> ! {
         if self.unsupported.is_none() {
-            self.unsupported = Some(description.clone());
+            self.unsupported = Some(class.into());
         }
-        panic!("{description}")
+        self.unsupported_count += 1;
+        panic!("{}", diagnostic())
     }
 
     #[cfg(not(test))]
-    fn mark_unsupported(&mut self, description: String) {
+    fn mark_unsupported(&mut self, class: impl Into<String>, _diagnostic: impl FnOnce() -> String) {
         if self.unsupported.is_none() {
-            self.unsupported = Some(description);
+            self.unsupported = Some(class.into());
         }
+        self.unsupported_count += 1;
     }
 
     // -------------------------------------------------------- ESC (C1)
@@ -488,12 +588,14 @@ impl TerminalGrid {
             b'7' => self.save_cursor(),
             b'8' => self.restore_cursor(),
             b'M' => self.reverse_index(),
-            other => self.mark_unsupported(format!(
-                "unrecognized single-byte escape ESC {:?} reached apply_esc; the current \
-                 fixture set only contains ESC 7/8/M -- a fixture must exist before a fourth \
-                 is implemented",
-                other as char
-            )),
+            other => self.mark_unsupported("unrecognised single-byte escape", || {
+                format!(
+                    "unrecognized single-byte escape ESC {:?} reached apply_esc; the current \
+                     fixture set only contains ESC 7/8/M -- a fixture must exist before a \
+                     fourth is implemented",
+                    other as char
+                )
+            }),
         }
     }
 
@@ -631,11 +733,48 @@ fn classify_escape(bytes: &[u8]) -> Escape<'_> {
     }
 }
 
+/// A closed-set, redaction-safe class name for an unrecognized CSI final
+/// byte -- what [`TerminalGrid::mark_unsupported`] actually stores (see
+/// its own doc comment for why). Every arm is a fixed string literal:
+/// even the fallback for a final byte outside this small, curated table
+/// names no byte at all, deliberately -- a single interpolated byte is
+/// this table's only concession, restricted to the identified,
+/// maintainer-reviewed mnemonics below, never a hole a caller could widen
+/// by adding a match arm that formats the byte in. Candidates come from
+/// staff's own review of `apply_csi`'s implemented set against a plausible
+/// vendor splash screen (box-drawing/ASCII art uses REP; window-resize and
+/// scroll-related redraws plausibly use IL/DL/ICH/DCH/ECH/SU/SD); this
+/// table is not exhaustive of the CSI grammar, only of what a real capture
+/// has been observed or is plausible to need -- widening it on a guess
+/// rather than a fixture is exactly the discipline this module's own
+/// module doc warns against.
+fn csi_unsupported_class(final_byte: u8) -> &'static str {
+    match final_byte {
+        b'b' => "CSI 'b' (REP)",
+        b'L' => "CSI 'L' (IL)",
+        b'M' => "CSI 'M' (DL)",
+        b'P' => "CSI 'P' (DCH)",
+        b'@' => "CSI '@' (ICH)",
+        b'X' => "CSI 'X' (ECH)",
+        b'S' => "CSI 'S' (SU)",
+        b'T' => "CSI 'T' (SD)",
+        b'd' => "CSI 'd' (VPA)",
+        b'E' => "CSI 'E' (CNL)",
+        b'F' => "CSI 'F' (CPL)",
+        b'Z' => "CSI 'Z' (CBT)",
+        b's' => "CSI 's' (SCP)",
+        _ => "unrecognised CSI final byte",
+    }
+}
+
 /// The message [`TerminalGrid::mark_unsupported`] records (or panics with,
 /// under `#[cfg(test)]`) for an unrecognized CSI final byte, or a
 /// recognized final byte with a parameter this grid does not know how to
 /// apply safely -- see [`TerminalGrid::apply_csi`]'s doc comment for why
-/// these are not silently ignored.
+/// these are not silently ignored. Only ever reaches the `#[cfg(test)]`
+/// panic (see [`TerminalGrid::mark_unsupported`]'s own doc comment for
+/// why the raw parameter bytes it embeds must never reach further than
+/// that).
 fn unhandled_csi_message(final_byte: u8, params: &[u8]) -> String {
     format!(
         "unhandled CSI final byte {:?} with params {:?} reached apply_csi; the current fixture \
@@ -714,6 +853,8 @@ pub(super) const ALL_FIXTURES: &[&str] = &[
     "claude-theme-picker.raw",
     "claude-trust-to-composer.raw",
     "claude-workspace-trust.raw",
+    "codex-composer-empty.raw",
+    "codex-composer-holding.raw",
     "codex-composer-then-trust.raw",
     "codex-directory-trust.raw",
     "codex-signin.raw",
@@ -722,6 +863,30 @@ pub(super) const ALL_FIXTURES: &[&str] = &[
     "omp-composer.raw",
     "omp-setup-step1.raw",
 ];
+
+/// The recorded geometry for one committed capture, read off
+/// `fixtures/adapters/tui-screens/README.md`'s own `Size` column -- the
+/// single source `from_named_fixture_bytes` sizes a fixture's replay
+/// grid from. Two captures were taken at the PTY's real spawn size,
+/// `DEFAULT_COLS`x`DEFAULT_ROWS` (120x32); every other committed capture
+/// predates that and was recorded at 120x40 by a probe harness, which is
+/// why that is this function's default rather than something every other
+/// call site has to name. A future capture recorded at yet another size
+/// must be added to `AT_120X32` (or a sibling list, if a third size ever
+/// shows up) AND to the README's own table -- `tests::
+/// fixture_size_agrees_with_the_readme_size_column` is what turns
+/// "must" into a failing test rather than a hope, by parsing the
+/// README's own table and comparing it against this function directly,
+/// so the two cannot drift against each other unnoticed.
+#[cfg(test)]
+pub(super) fn fixture_size(name: &str) -> (usize, usize) {
+    const AT_120X32: &[&str] = &["codex-composer-empty.raw", "codex-composer-holding.raw"];
+    if AT_120X32.contains(&name) {
+        (120, 32)
+    } else {
+        (FIXTURE_GRID_WIDTH, FIXTURE_GRID_HEIGHT)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -777,6 +942,75 @@ mod tests {
         );
     }
 
+    /// `fixture_size`'s own doc comment names its gap plainly: it is a
+    /// hand-maintained copy of the README's `Size` column, with nothing
+    /// checking the two still agree. This test is that check -- it
+    /// parses the README's own table (never a second hand-typed copy of
+    /// the sizes) and asserts `fixture_size` answers the same thing for
+    /// every committed capture, so a table edited without touching the
+    /// const (or the reverse) fails loudly instead of silently replaying
+    /// a future capture at the wrong geometry.
+    #[test]
+    fn fixture_size_agrees_with_the_readme_size_column() {
+        use std::collections::BTreeMap;
+
+        let readme_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/adapters/tui-screens/README.md");
+        let readme = std::fs::read_to_string(&readme_path)
+            .unwrap_or_else(|err| panic!("reading {}: {err}", readme_path.display()));
+
+        // A capture row looks like `| \`name.raw\` | vendor | WxH | gate |`.
+        // Splitting on '|' yields a leading (and trailing) empty cell from
+        // the row's own bounding pipes, so the name is cell 1 and the size
+        // is cell 3. The README's other table (the empty/holding phrase
+        // comparison) never has a `.raw` first cell, so it is skipped by
+        // construction, not by position.
+        let mut from_readme: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        for line in readme.lines() {
+            let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+            if cells.len() < 5 {
+                continue;
+            }
+            let Some(name) = cells[1].strip_prefix('`').and_then(|s| s.strip_suffix('`')) else {
+                continue;
+            };
+            if !name.ends_with(".raw") {
+                continue;
+            }
+            let Some((w, h)) = cells[3].split_once('x') else {
+                panic!("{name}: README Size column {:?} is not `WxH`", cells[3]);
+            };
+            let (w, h) = (
+                w.trim()
+                    .parse::<usize>()
+                    .unwrap_or_else(|err| panic!("{name}: width {w:?}: {err}")),
+                h.trim()
+                    .parse::<usize>()
+                    .unwrap_or_else(|err| panic!("{name}: height {h:?}: {err}")),
+            );
+            assert!(
+                from_readme.insert(name.to_string(), (w, h)).is_none(),
+                "{name}: appears more than once in the README's capture table"
+            );
+        }
+
+        let listed: std::collections::BTreeSet<&str> =
+            from_readme.keys().map(String::as_str).collect();
+        let all_fixtures: std::collections::BTreeSet<&str> = ALL_FIXTURES.iter().copied().collect();
+        assert_eq!(
+            listed, all_fixtures,
+            "the README's capture table must list exactly ALL_FIXTURES's own names"
+        );
+
+        for name in ALL_FIXTURES {
+            assert_eq!(
+                fixture_size(name),
+                from_readme[*name],
+                "{name}: fixture_size disagrees with the README's own Size column"
+            );
+        }
+    }
+
     // -------------------------------------------------- the point of this module
 
     /// The mirror of `screen.rs`'s
@@ -793,7 +1027,7 @@ mod tests {
     #[test]
     fn a_grid_stops_showing_an_answered_gate_once_the_terminal_clears_it() {
         let bytes = fixture("claude-trust-to-composer.raw");
-        let grid = TerminalGrid::from_bytes(&bytes);
+        let grid = TerminalGrid::from_named_fixture_bytes("claude-trust-to-composer.raw", &bytes);
 
         assert!(
             bytes.windows(8).any(|w| w == b"\x1b[?1049h"),
@@ -819,7 +1053,7 @@ mod tests {
 
     #[test]
     fn cursor_position_is_one_indexed_and_clamped_to_the_grid() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"\x1b[5;10Hx");
         assert_eq!(
             grid.rendered().lines().nth(4).unwrap().chars().nth(9),
@@ -827,22 +1061,22 @@ mod tests {
         );
 
         // Past the grid: clamp, do not panic or wrap.
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"\x1b[999;999Hx");
         assert_eq!(
             grid.rendered()
                 .lines()
-                .nth(GRID_HEIGHT - 1)
+                .nth(FIXTURE_GRID_HEIGHT - 1)
                 .unwrap()
                 .chars()
-                .nth(GRID_WIDTH - 1),
+                .nth(FIXTURE_GRID_WIDTH - 1),
             Some('x')
         );
     }
 
     #[test]
     fn cursor_column_absolute_defaults_to_one_and_is_one_indexed() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"ab\x1b[GY"); // CSI G with no param -> column 1
         assert_eq!(
             grid.rendered().lines().next().unwrap().chars().next(),
@@ -852,7 +1086,7 @@ mod tests {
 
     #[test]
     fn relative_cursor_moves_are_clamped_not_wrapped() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"\x1b[5Dx"); // 5 back from column 0
         assert_eq!(
             grid.rendered().lines().next().unwrap().chars().next(),
@@ -864,14 +1098,14 @@ mod tests {
 
     #[test]
     fn erase_whole_screen_blanks_every_cell() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"hello\x1b[2J");
         assert_eq!(grid.rendered(), "");
     }
 
     #[test]
     fn erase_to_end_of_screen_from_the_origin_blanks_everything() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"one\r\ntwo\x1b[H\x1b[0J");
         assert_eq!(
             grid.rendered(),
@@ -882,7 +1116,7 @@ mod tests {
 
     #[test]
     fn erase_to_end_of_screen_leaves_content_before_the_cursor_alone() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"keep\r\nabcdef\x1b[2;3H\x1b[0J");
         assert_eq!(
             grid.rendered(),
@@ -893,7 +1127,7 @@ mod tests {
 
     #[test]
     fn erase_to_end_of_line_leaves_earlier_columns_alone() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"abcdef\x1b[3D\x1b[K");
         assert_eq!(grid.rendered().lines().next().unwrap(), "abc");
     }
@@ -902,7 +1136,7 @@ mod tests {
 
     #[test]
     fn line_feed_at_the_scroll_bottom_scrolls_up() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"\x1b[1;2r"); // a 2-row scroll region (rows 1-2, i.e. index 0-1)
         // CR+LF each line, not an absolute reposition: the scroll only
         // triggers when LF is issued from the scroll region's own bottom
@@ -919,7 +1153,7 @@ mod tests {
 
     #[test]
     fn reverse_index_at_the_scroll_top_scrolls_down() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"\x1b[1;2r\x1b[1;1Hbottom\x1b[2;1Htop");
         grid.push(b"\x1b[1;1H\x1bMnew"); // RI at scroll_top pushes "bottom" down, "top" is lost off the bottom
         let rendered = grid.rendered();
@@ -935,7 +1169,7 @@ mod tests {
 
     #[test]
     fn sgr_and_device_query_sequences_do_not_move_the_cursor_or_write_a_cell() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"\x1b[1;31mx\x1b[0m\x1b[6n\x1b[c\x1b[>0q\x1b[?u");
         assert_eq!(grid.rendered(), "x");
     }
@@ -945,7 +1179,7 @@ mod tests {
         // The exact cluster from claude-trust-to-composer.raw's alt-screen
         // switch: ?1049h ?1000h ?1002h ?1003h ?1006h, none of them a panic,
         // none of them moving the cursor.
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?25hx");
         assert_eq!(grid.rendered(), "x");
     }
@@ -954,17 +1188,17 @@ mod tests {
 
     #[test]
     fn osc_sequences_are_skipped_with_either_terminator_and_no_effect() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"a\x1b]0;a window title\x07b");
         assert_eq!(grid.rendered(), "ab");
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"a\x1b]0;a window title\x1b\\b");
         assert_eq!(grid.rendered(), "ab");
     }
 
     #[test]
     fn an_osc_terminator_split_across_reads_is_held_incomplete() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"a\x1b]0;title");
         grid.push(b"\x07b");
         assert_eq!(grid.rendered(), "ab");
@@ -972,14 +1206,14 @@ mod tests {
 
     #[test]
     fn charset_designation_consumes_all_three_bytes() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"before\x1b(Bafter");
         assert_eq!(grid.rendered(), "beforeafter");
     }
 
     #[test]
     fn a_charset_designation_split_across_reads_is_held_incomplete() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"before\x1b(");
         grid.push(b"Bafter");
         assert_eq!(grid.rendered(), "beforeafter");
@@ -990,7 +1224,7 @@ mod tests {
         // SI (0x0f): present 3 times in the current fixture set, always
         // bare. This grid tracks no charset-selection register, so it is
         // ignored the same way a charset designation is.
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"a\x0fb");
         assert_eq!(grid.rendered(), "ab");
     }
@@ -1001,9 +1235,10 @@ mod tests {
     fn chunked_pushes_agree_with_one_whole_push_at_every_split() {
         for name in ALL_FIXTURES {
             let bytes = fixture(name);
-            let whole = TerminalGrid::from_bytes(&bytes);
+            let (width, height) = fixture_size(name);
+            let whole = TerminalGrid::from_named_fixture_bytes(name, &bytes);
             for chunk in [1usize, 2, 3, 5, 7, 64, 512] {
-                let mut grid = TerminalGrid::new();
+                let mut grid = TerminalGrid::new(width, height);
                 for slice in bytes.chunks(chunk) {
                     grid.push(slice);
                 }
@@ -1024,7 +1259,7 @@ mod tests {
     fn every_committed_capture_folds_in_without_panicking() {
         for name in ALL_FIXTURES {
             let bytes = fixture(name);
-            let grid = TerminalGrid::from_bytes(&bytes);
+            let grid = TerminalGrid::from_named_fixture_bytes(name, &bytes);
             assert!(
                 !grid.rendered().is_empty(),
                 "{name}: rendered grid must not be empty"
@@ -1036,7 +1271,7 @@ mod tests {
 
     #[test]
     fn a_multibyte_scalar_split_across_reads_is_not_corrupted() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         let bytes = "trust\u{2014}folder".as_bytes();
         grid.push(&bytes[..6]); // splits the em dash
         grid.push(&bytes[6..]);
@@ -1045,7 +1280,7 @@ mod tests {
 
     #[test]
     fn invalid_utf8_is_dropped_without_stalling_the_scan() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"be\xfffore\xfe after");
         // Unlike `TuiScreen`, this grid keeps real spacing -- only the two
         // invalid bytes are dropped, the space between "fore" and "after" is
@@ -1058,21 +1293,21 @@ mod tests {
     #[test]
     #[should_panic(expected = "unhandled CSI final byte")]
     fn an_unrecognized_csi_final_byte_panics_rather_than_being_ignored() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"\x1b[5Z"); // CBT, not in the current fixture set
     }
 
     #[test]
     #[should_panic(expected = "unhandled CSI final byte")]
     fn an_unrecognized_erase_parameter_on_j_panics_rather_than_being_ignored() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"\x1b[1J"); // erase-to-cursor: never appears, must not be guessed at
     }
 
     #[test]
     #[should_panic(expected = "unhandled CSI final byte")]
     fn an_unrecognized_erase_parameter_on_k_panics_rather_than_being_ignored() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         // `3` rather than `1`: this test used `1K` until the copilot
         // capture arrived emitting it for real, at which point it stopped
         // being unrecognized and had to be implemented. The test's subject
@@ -1089,7 +1324,7 @@ mod tests {
     /// one.
     #[test]
     fn erase_scrollback_on_j_leaves_the_visible_screen_alone() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"a visible line");
         grid.push(b"\x1b[3J");
         assert!(
@@ -1107,7 +1342,7 @@ mod tests {
     /// cursor, inclusive of the cursor cell.
     #[test]
     fn erase_to_cursor_on_k_clears_the_line_start_including_the_cursor_cell() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"abcdef");
         grid.push(b"\x1b[1;4H"); // cursor onto the 'd'
         grid.push(b"\x1b[1K");
@@ -1130,7 +1365,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "unrecognized single-byte escape")]
     fn an_unrecognized_single_byte_escape_panics_rather_than_being_ignored() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         grid.push(b"\x1bZ"); // not 7/8/M
     }
 
@@ -1145,7 +1380,8 @@ mod tests {
     /// right one.
     #[test]
     fn an_unsupported_sequence_is_recorded_before_the_test_build_panics() {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
+        assert_eq!(grid.unsupported_count(), 0);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             grid.push(b"\x1b[5Z"); // CBT, not in the current fixture set
         }));
@@ -1153,16 +1389,106 @@ mod tests {
             outcome.is_err(),
             "test builds must still panic on a novel CSI final byte"
         );
-        let message = grid
-            .unsupported()
-            .expect("mark_unsupported must record before it panics, not after");
+        // What `unsupported()` stores is the closed-set class, not the
+        // raw diagnostic -- this is what a `RuntimeEvent` failure detail
+        // is allowed to surface (see `mark_unsupported`'s own doc
+        // comment for why raw parameter bytes must never reach here).
+        assert_eq!(
+            grid.unsupported(),
+            Some("CSI 'Z' (CBT)"),
+            "the stored class must be the closed-set mnemonic, not the raw diagnostic"
+        );
+        assert_eq!(
+            grid.unsupported_count(),
+            1,
+            "the count must reflect this one recorded sequence"
+        );
+        // The fuller, raw-bytes-including diagnostic still exists -- it
+        // is just confined to the panic message, never journaled. Reading
+        // it back proves this test's own instrument (the class name
+        // above) is not merely a weaker check on a message that was
+        // secretly identical all along.
+        let panic_message = outcome
+            .unwrap_err()
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
         assert!(
-            message.contains("unhandled CSI final byte"),
-            "unexpected message: {message:?}"
+            panic_message.contains("unhandled CSI final byte"),
+            "unexpected panic message: {panic_message:?}"
         );
         assert!(
-            message.contains("'Z'"),
-            "the final byte itself must be named: {message:?}"
+            panic_message.contains("'Z'"),
+            "the final byte itself must still be named in the panic diagnostic: \
+             {panic_message:?}"
+        );
+    }
+
+    /// The redaction-safety property `mark_unsupported`'s doc comment
+    /// promises: whatever a vendor's own escape-sequence parameters
+    /// happen to carry must never appear in what `unsupported()` stores.
+    /// CSI's own grammar restricts parameter bytes to `0x20..=0x3f`
+    /// (digits and punctuation, never letters -- a "phrase" cannot
+    /// literally occupy this position at all), so this uses parameters
+    /// distinctive enough to notice a leak (an unusual digit run) rather
+    /// than an implausible letter-carrying payload the grammar itself
+    /// could never deliver here.
+    #[test]
+    fn an_unsupported_sequences_params_never_reach_the_stored_class() {
+        let mut grid = TerminalGrid::new_at_fixture_size();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Z is the unrecognized final byte; 90210;12345 are its
+            // (equally unrecognized, and irrelevant to the class) params.
+            grid.push(b"\x1b[90210;12345Z");
+        }));
+        assert!(outcome.is_err());
+        let class = grid
+            .unsupported()
+            .expect("mark_unsupported must record before it panics, not after");
+        assert_eq!(
+            class, "CSI 'Z' (CBT)",
+            "the stored class must be exactly the closed-set mnemonic, independent of params"
+        );
+        assert!(
+            !class.contains("90210") && !class.contains("12345"),
+            "parameter bytes must never appear in the stored class: {class:?}"
+        );
+    }
+
+    /// The clear half of the latch's lifecycle: a full repaint (`CSI 2
+    /// J`) restores trust, and the count -- unlike the flag -- never
+    /// resets, so a grid that clears and re-latches repeatedly is still
+    /// visible as a chronically-misparsing vendor.
+    #[test]
+    fn a_full_erase_clears_unsupported_but_never_the_count() {
+        let mut grid = TerminalGrid::new_at_fixture_size();
+        let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            grid.push(b"\x1b[5Z");
+        }));
+        assert!(first.is_err());
+        assert!(grid.unsupported().is_some());
+        assert_eq!(grid.unsupported_count(), 1);
+
+        grid.push(b"\x1b[2J");
+        assert_eq!(
+            grid.unsupported(),
+            None,
+            "a full repaint must clear the latch"
+        );
+        assert_eq!(
+            grid.unsupported_count(),
+            1,
+            "the count must survive the clear -- it is a lifetime count, not a current-state flag"
+        );
+
+        let second = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            grid.push(b"\x1b[6Z");
+        }));
+        assert!(second.is_err());
+        assert_eq!(
+            grid.unsupported_count(),
+            2,
+            "a second, later unsupported sequence must still be counted after a clear"
         );
     }
 
