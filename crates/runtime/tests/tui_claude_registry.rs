@@ -614,6 +614,178 @@ async fn submitting_a_tui_mode_claude_run_reaches_the_tui_path_and_emits_lifecyc
     db.shutdown().await.expect("shutdown database");
 }
 
+/// Installing crew's REAL daemon-shaped approval wiring -- an
+/// `ApprovalService` backed by `ProtocolApprovalCallback`, exactly as
+/// `lifecycle.rs` wires it for the whole daemon -- ahead of a TUI run
+/// must not change that run's own behavior at all. This is provable
+/// directly, not merely inferable from reading the code: `TuiAdapter`
+/// never touches `ApprovalService`/`ApprovalCallback` at all (no field
+/// carries either, and `build_tui_adapter`'s own call sites never pass
+/// one), but "was asserted, not proven" is exactly the failure class
+/// this spike exists to catch -- so this drives a full TUI run through
+/// a real tool call (`write_fake_claude_script`'s own `tool_use` entry,
+/// the kind of event that WOULD be approval-shaped on a permission-
+/// aware adapter) with the real wiring installed, and asserts three
+/// things: `respond_to_approval` still refuses with
+/// `capability_unsupported`, no row was ever inserted into `approvals`
+/// for this run, and no `EscalationRaised` reached the journal as a
+/// side effect of the tool call either.
+#[tokio::test]
+async fn the_real_approval_callback_wiring_never_touches_a_tui_run() {
+    let _guard = SERIAL_PTY.lock().await;
+    let (db, dir, project_id) = harness().await;
+    let profile = claude_tui_profile();
+    let (run_id, task_id, worker_id) = seed_worker_and_run(&db, project_id, &profile).await;
+
+    let session_dir = dir.path().join("session");
+    std::fs::create_dir_all(&session_dir).expect("create session dir");
+    let script_path = write_fake_claude_script(dir.path(), &session_dir);
+
+    let mut adapters = BTreeMap::new();
+    adapters.insert(
+        "claude".to_string(),
+        AdapterConfig {
+            enabled: true,
+            bin: script_path.to_string_lossy().into_owned(),
+            mode: CrewAdapterMode::Tui,
+            permission_mode: PermissionMode::Default,
+            model: None,
+            profile: "test".to_string(),
+            session_dir: Some(session_dir.to_string_lossy().into_owned()),
+            extra_args: Vec::new(),
+        },
+    );
+
+    let mut display_registry = DisplayRegistry::new();
+    display_registry.register(Box::new(HiddenDisplay::new(
+        crew_protocol::DisplayConfig::default(),
+    )));
+
+    let panes_dir = dir.path().join("panes");
+    std::fs::create_dir_all(&panes_dir).expect("create panes dir");
+
+    let registry = AdapterRegistry::new(
+        Arc::new(FixtureAuthorization { allow: true }),
+        dir.path().to_path_buf(),
+        None,
+        vec![],
+    );
+    registry.set_tui_support(Arc::new(TuiSupport {
+        display_registry: Arc::new(display_registry),
+        panes_dir,
+        crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
+        state_dir: dir.path().to_path_buf(),
+        close_on_exit: CloseOnExit::Always,
+        forced_backend: None,
+        force_hidden_displays: false,
+        adapters,
+        timings: fast_timings(),
+        org_security_patterns: Vec::new(),
+    }));
+
+    // The real daemon wiring: ONE `ApprovalService` backed by
+    // `ProtocolApprovalCallback`, sharing this test's own `db` --
+    // exactly `lifecycle.rs`'s own shape, not a second, disconnected
+    // instance that would prove nothing about the real path.
+    let (approval_events_tx, _approval_events_rx) = tokio::sync::broadcast::channel(100);
+    let callback = Arc::new(
+        crew_runtime::adapter::claude_protocol::approval_bridge::ProtocolApprovalCallback::new(),
+    );
+    let approval_service = Arc::new(crew_runtime::ApprovalService::new(
+        Arc::clone(&db),
+        project_id,
+        Arc::clone(&callback) as Arc<dyn crew_runtime::ApprovalCallback>,
+        approval_events_tx,
+    ));
+    registry.set_protocol_support(Arc::new(crew_runtime::adapter::ProtocolSupport {
+        approval_service,
+        callback,
+    }));
+
+    let result = registry
+        .start(ctx(
+            Arc::clone(&db),
+            project_id,
+            run_id,
+            task_id,
+            worker_id,
+            "say hi",
+        ))
+        .await;
+    assert!(
+        result.is_ok(),
+        "starting a TUI-mode Claude run must succeed: {result:?}"
+    );
+
+    let adapter = registry
+        .running_adapter(run_id)
+        .expect("the started adapter must be tracked as running");
+
+    // Wait for the fake script's own tool_use entry to actually be
+    // tailed and journaled as an `adapterToolStarted` event -- proof the
+    // approval-shaped moment this test cares about really happened, not
+    // just that the run started. The vendor's own `toolu_1` id is
+    // reassigned to a crew-generated one by the TUI tailer's own
+    // normalization, so the journaled event kind is the marker to look
+    // for, not the vendor's own id string.
+    let saw_tool_call = wait_until(
+        || {
+            let db = Arc::clone(&db);
+            async move { journal_count(&db, run_id, "adapterToolStarted").await }
+        },
+        |count: &usize| *count > 0,
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(
+        saw_tool_call,
+        "expected the fake script's tool_use entry to be journaled as adapterToolStarted"
+    );
+
+    // 1. `respond_to_approval` still refuses -- unconditionally, exactly
+    //    as it did before this wiring existed.
+    let respond_result = adapter
+        .respond_to_approval("fake-approval-id", "approve")
+        .await;
+    assert!(
+        matches!(respond_result, Err(ref err) if err.code() == "capability_unsupported"),
+        "TuiAdapter::respond_to_approval must still refuse: {respond_result:?}"
+    );
+
+    // 2. No row was ever inserted into `approvals` for this run.
+    let approval_rows: i64 = {
+        let run_id_string = run_id.to_string();
+        db.run_domain_op(Box::new(move |conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM approvals WHERE run_id = ?1",
+                rusqlite::params![run_id_string],
+                |row| row.get(0),
+            )?;
+            Ok(serde_json::json!(count))
+        }))
+        .await
+        .expect("approvals count query")
+        .as_i64()
+        .expect("count is an integer")
+    };
+    assert_eq!(
+        approval_rows, 0,
+        "a TUI run's tool call must never raise a real approval"
+    );
+
+    // 3. No `EscalationRaised` was journaled as a side effect of the
+    //    tool call either -- the approval wiring being present did not
+    //    fabricate one.
+    assert_eq!(
+        journal_count(&db, run_id, "escalationRaised").await,
+        0,
+        "a TUI run's tool call must never raise an escalation either"
+    );
+
+    let _ = adapter.dispose().await;
+    db.shutdown().await.expect("shutdown database");
+}
+
 /// The model chosen for THIS run -- the resolved `WorkerProfile.model`,
 /// what a per-run model picker in crew's own UI dialog would produce --
 /// must reach the vendor process `crewd` actually execs. Asserted from

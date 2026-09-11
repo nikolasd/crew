@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use crew_runtime::{StateRoot, VERSION};
 /// Selector for `crewd conformance --live`: which control plane to exercise
@@ -1253,17 +1253,29 @@ async fn run_conformance(
         }
     };
 
-    // `--mode headless` is a typed rejection now, for both `--fixture`
-    // and `--live` -- never silently accepted-and-discarded. Before this,
-    // `--fixture` ignored `--mode` entirely (always headless-sourced) and `--live
-    // --mode headless` silently reached each adapter's own headless
-    // `live_report`; both dispatch targets are deleted along with the
-    // headless control plane itself (`docs/adr/0026-headless-retirement.md`).
-    if matches!(mode, ConformanceModeArg::Headless) {
-        return fail(
-            &"mode: \"headless\" is retired in crew v2 -- the headless control \
-              plane has no adapter implementation to dispatch to; use --mode tui (the default)",
-        );
+    // Only `Tui` dispatches anywhere below -- both `--fixture` and
+    // `--live` always run the TUI-sourced report regardless of `mode`,
+    // so anything else must be refused here, named, rather than let a
+    // dispatch built for one mode silently run under a caller's belief
+    // it asked for another. Deliberately an ALLOWLIST (`!= Tui`), not a
+    // `Headless`-specific denylist: a denylist only refuses the variant
+    // someone thought to write down, so `ConformanceModeArg` gaining a
+    // `Protocol` value later would sail straight past a `Headless`-only
+    // check and reach `run_fixture_conformance`'s own `unreachable!()`
+    // arm for it -- a panic from a supported command line, not a typed
+    // rejection. `Headless` itself is retired
+    // (`docs/adr/0026-headless-retirement.md`); today it is the only
+    // other variant, but the guarantee here must hold by construction,
+    // not by nobody having added a second one yet.
+    if !matches!(mode, ConformanceModeArg::Tui) {
+        let mode_name = mode
+            .to_possible_value()
+            .map(|value| value.get_name().to_string())
+            .unwrap_or_else(|| format!("{mode:?}"));
+        return fail(&format!(
+            "mode: \"{mode_name}\" has no conformance dispatch to run -- only \"tui\" does; use \
+             --mode tui (the default)"
+        ));
     }
 
     let mut reports: Vec<serde_json::Value> = Vec::with_capacity(kinds.len());

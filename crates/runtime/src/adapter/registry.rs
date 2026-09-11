@@ -93,13 +93,23 @@ pub trait AdapterAuthorization: Send + Sync {
     /// `effective_capabilities`' undowngraded-`Skipped` guarantee exist to
     /// close.
     ///
+    /// **A coarser version of the same rule, at the whole-mode grain
+    /// rather than the per-scenario one above:** `effective_capabilities`
+    /// is a [`GatedCapabilities`], not a bare [`AdapterCapabilities`],
+    /// specifically so a mode with no conformance suite to run AT ALL
+    /// (`AdapterMode::Protocol`, which has none yet -- see
+    /// [`GatedCapabilities::Unproven`]) cannot reach this function
+    /// looking identical to a suite that actually ran. The binding
+    /// constraint above extends to it: a real capability check must
+    /// deny on `Unproven`, never treat it as `Proven`'s equivalent.
+    ///
     /// # Errors
     /// Returns a human-readable denial reason. The run is never started
     /// when this returns `Err`.
     fn authorize(
         &self,
         profile: &WorkerProfile,
-        effective_capabilities: &AdapterCapabilities,
+        effective_capabilities: &GatedCapabilities,
         policy: Option<&crate::config::RuntimePolicy>,
     ) -> Result<(), String>;
 
@@ -107,6 +117,47 @@ pub trait AdapterAuthorization: Send + Sync {
     /// Called exactly once from every settlement path (success, error,
     /// cancellation). Safe to call even if no slot was booked.
     fn release(&self);
+}
+
+/// The capabilities [`AdapterAuthorization::authorize`] actually sees --
+/// wrapped, not passed alongside a `proven: bool`, so a caller cannot
+/// drop the distinction by accident and every `authorize` implementation
+/// is forced to say which one it has. See that trait method's own doc
+/// comment for the binding constraint this exists to let a future
+/// capability check honor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatedCapabilities {
+    /// A conformance suite (fixture or live) actually ran for this
+    /// profile's `(kind, mode)`; these are its own `effective_capabilities`.
+    Proven(AdapterCapabilities),
+    /// No conformance suite exists for this profile's adapter mode at
+    /// all yet -- today, only `AdapterMode::Protocol`
+    /// (`crate::adapter::claude_protocol`, spike-scoped, tracked by a
+    /// card for the real suite). Carries the adapter's own DECLARED
+    /// capabilities, never independently verified. An
+    /// [`AdapterAuthorization::authorize`] implementation that grows a
+    /// real capability check must deny on this variant, not treat it as
+    /// equivalent to [`Self::Proven`].
+    Unproven(AdapterCapabilities),
+}
+
+impl GatedCapabilities {
+    /// The wrapped capabilities regardless of provenance -- for a caller
+    /// (today, only [`crate::policy::PolicyEvaluator`]) that genuinely
+    /// reads zero capability fields and therefore has no reason to
+    /// branch on which variant it received.
+    #[must_use]
+    pub fn capabilities(&self) -> &AdapterCapabilities {
+        match self {
+            Self::Proven(capabilities) | Self::Unproven(capabilities) => capabilities,
+        }
+    }
+
+    /// Whether these capabilities were actually conformance-verified.
+    #[must_use]
+    pub fn is_proven(&self) -> bool {
+        matches!(self, Self::Proven(_))
+    }
 }
 
 /// A deterministic allow/deny fixture for tests. Production callers must
@@ -120,7 +171,7 @@ impl AdapterAuthorization for FixtureAuthorization {
     fn authorize(
         &self,
         _profile: &WorkerProfile,
-        _effective_capabilities: &AdapterCapabilities,
+        _effective_capabilities: &GatedCapabilities,
         _policy: Option<&crate::config::RuntimePolicy>,
     ) -> Result<(), String> {
         if self.allow {
@@ -158,6 +209,18 @@ pub enum RegistryError {
     /// until its TUI vendor impl lands).
     #[error("adapter {0} has no TUI-mode implementation yet; mode: \"tui\" is unavailable for it")]
     TuiModeUnavailable(String),
+    /// `mode: "protocol"` was requested but
+    /// [`AdapterRegistry::set_protocol_support`] was never called --
+    /// the same defense-in-depth shape as [`Self::TuiModeUnavailable`]:
+    /// `gate_profile` already refuses a non-Claude kind under this mode
+    /// before `build_adapter` is ever reached, so a caller hitting this
+    /// variant means Claude itself was requested in a window before this
+    /// registry's own protocol support was wired up.
+    #[error(
+        "adapter {0} has no protocol-mode implementation yet; mode: \"protocol\" is unavailable \
+         for it"
+    )]
+    ProtocolModeUnavailable(String),
     /// [`AdapterRegistry::resume_run`] was called before the caller ever
     /// supplied [`ResumeSupport`] via
     /// [`AdapterRegistry::set_resume_support`]. Fail closed: a resume
@@ -234,6 +297,30 @@ pub struct ResumeSupport {
     pub events_tx: tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
 }
 
+/// Everything `build_adapter`'s `AdapterMode::Protocol` branch needs
+/// beyond `super::claude_protocol::adapter::ClaudeProtocolAdapter`'s own
+/// vendor-facing fields: the server-owned `ApprovalService` `respond_to_approval`'s
+/// real bridge submits requests to, and the callback map that same
+/// bridge registers its one-shot receivers into. A post-construction
+/// setter bundle -- exactly like [`TuiSupport`]/[`ResumeSupport`], and
+/// for the identical reason: `ApprovalService` is constructed inside
+/// `crate::ipc::Server::bind` (from `ServerConfig::approval_callback`),
+/// which happens after this registry must already be handed to
+/// [`crate::ipc::ServerConfig::run_driver`].
+///
+/// `pub`, not `pub(crate)`, on the same basis as
+/// `super::claude_protocol::approval_bridge::ProtocolApprovalCallback`'s
+/// own doc comment: `crates/runtime/tests/tui_claude_registry.rs`
+/// installs this bundle on a registry driving a TUI run, to prove that
+/// run's behavior is unaffected by the real daemon-shaped approval
+/// wiring being present -- it never touches `mode: "tui"`'s own
+/// dispatch, but the earlier version of this claim was asserted, not
+/// proven.
+pub struct ProtocolSupport {
+    pub approval_service: Arc<crate::approval::ApprovalService>,
+    pub callback: Arc<super::claude_protocol::approval_bridge::ProtocolApprovalCallback>,
+}
+
 /// Implements [`RunDriver`] against the four real worker adapters.
 ///
 /// Always constructed behind an `Arc` in practice (exactly like every
@@ -276,6 +363,13 @@ pub struct AdapterRegistry {
     /// makes every `resume_run` a typed [`RegistryError::ResumeUnsupported`]
     /// refusal, never a silently unwired resume.
     resume_support: Mutex<Option<Arc<ResumeSupport>>>,
+    /// `AdapterMode::Protocol` support (see [`ProtocolSupport`]'s own doc
+    /// comment). `None` until [`Self::set_protocol_support`] is called
+    /// (or permanently, for callers -- chiefly tests -- that never call
+    /// it): `build_adapter`'s `AdapterMode::Protocol` branch gets a typed
+    /// [`RegistryError::ProtocolModeUnavailable`] refusal in that window,
+    /// the same shape [`Self::tui`]'s absence gives `mode: "tui"`.
+    protocol: Mutex<Option<Arc<ProtocolSupport>>>,
     running: Arc<Mutex<HashMap<RunId, Arc<dyn Adapter>>>>,
     /// Org security patterns for redaction.
     org_security_patterns: Vec<String>,
@@ -308,6 +402,7 @@ impl AdapterRegistry {
             broker: Mutex::new(None),
             tui: Mutex::new(None),
             resume_support: Mutex::new(None),
+            protocol: Mutex::new(None),
             activity: Mutex::new(None),
             max_live_sessions: Mutex::new(None),
             running: Arc::new(Mutex::new(HashMap::new())),
@@ -352,6 +447,14 @@ impl AdapterRegistry {
     /// already be handed to [`crate::ipc::ServerConfig::run_driver`].
     pub fn set_resume_support(&self, support: Arc<ResumeSupport>) {
         *self.resume_support.lock() = Some(support);
+    }
+
+    /// Supplies the [`ProtocolSupport`] bundle `build_adapter`'s
+    /// `AdapterMode::Protocol` branch needs. A post-construction setter
+    /// for the same reason `set_resume_support` is -- see
+    /// [`ProtocolSupport`]'s own doc comment.
+    pub fn set_protocol_support(&self, support: Arc<ProtocolSupport>) {
+        *self.protocol.lock() = Some(support);
     }
 
     /// Supplies the shared [`ActivityClock`] every run's lifecycle sink
@@ -521,6 +624,7 @@ impl AdapterRegistry {
             self.mcp.clone(),
             self.broker.lock().clone(),
             self.tui.lock().clone(),
+            self.protocol.lock().clone(),
             Arc::clone(&support.db),
             support.project_id,
             support.events_tx.clone(),
@@ -542,7 +646,7 @@ impl AdapterRegistry {
             support.project_id,
             support.events_tx.clone(),
             self.org_security_patterns.clone(),
-            effective_capabilities.nested != NestedCapability::Managed,
+            effective_capabilities.capabilities().nested != NestedCapability::Managed,
             Arc::clone(&support.violation_service),
             // Resume support carries no workspace context; a resumed run
             // is treated as shared (the conservative side for the
@@ -583,6 +687,7 @@ impl RunDriver for AdapterRegistry {
         let mcp = self.mcp.clone();
         let broker = self.broker.lock().clone();
         let tui = self.tui.lock().clone();
+        let protocol = self.protocol.lock().clone();
         let org_security_patterns = self.org_security_patterns.clone();
         let running = Arc::clone(&self.running);
         // Read under the registry's own lock, before the async block: a
@@ -636,6 +741,7 @@ impl RunDriver for AdapterRegistry {
                 mcp,
                 broker,
                 tui,
+                protocol,
                 org_security_patterns,
             )
             .await
@@ -827,6 +933,7 @@ fn build_placeholder_adapter() -> Arc<dyn Adapter> {
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_one(
     ctx: &RunDriverContext,
     authorization: &Arc<dyn AdapterAuthorization>,
@@ -834,6 +941,7 @@ async fn run_one(
     mcp: Option<AdapterMcpConfig>,
     broker: Option<Arc<CoordinationBroker>>,
     tui: Option<Arc<TuiSupport>>,
+    protocol: Option<Arc<ProtocolSupport>>,
     org_security_patterns: Vec<String>,
 ) -> Result<
     (
@@ -873,6 +981,7 @@ async fn run_one(
         mcp,
         broker,
         tui,
+        protocol,
         Arc::clone(&ctx.db),
         ctx.project_id,
         ctx.events_tx.clone(),
@@ -892,7 +1001,7 @@ async fn run_one(
         ctx.project_id,
         ctx.events_tx.clone(),
         org_security_patterns,
-        effective_capabilities.nested != NestedCapability::Managed,
+        effective_capabilities.capabilities().nested != NestedCapability::Managed,
         Arc::clone(&ctx.violation_service),
         ctx.workspace_path.is_some(),
     ) {
@@ -1005,13 +1114,20 @@ async fn gate_profile(
     profile: &WorkerProfile,
     policy: Option<&crate::config::RuntimePolicy>,
     mode: AdapterMode,
-) -> Result<AdapterCapabilities, String> {
+) -> Result<GatedCapabilities, String> {
     // Handle TerminalDegraded specially (it has no adapter kind)
     let effective_capabilities = if profile.adapter_kind().is_none() {
         // TerminalDegraded uses the terminal adapter with degraded capabilities
         // We need to extract the backend from the startup options
         if let StartupOptions::TerminalDegraded(opts) = &profile.startup_options() {
-            super::terminal::TerminalAdapter::new(opts.backend.clone()).capabilities()
+            // A `TerminalAdapter`'s capabilities are a pure function of
+            // its own static profile, with no vendor CLI (and therefore
+            // no conformance question) involved at all -- `Proven` here
+            // is not a shortcut, it is the literal truth: there is
+            // nothing this could disagree with.
+            GatedCapabilities::Proven(
+                super::terminal::TerminalAdapter::new(opts.backend.clone()).capabilities(),
+            )
         } else {
             return Err("TerminalDegraded profile has no startup options".to_string());
         }
@@ -1033,6 +1149,33 @@ async fn gate_profile(
             return Err(
                 RegistryError::HeadlessControlPlaneRetired(kind.wire_name().to_string()).into(),
             );
+        }
+        // The protocol-first control plane (claude only for now:
+        // `crate::adapter::claude_protocol`) has no conformance
+        // suite to run at all yet -- unlike `Headless` above, this is
+        // not a permanent rejection, just an as-yet-unproven one. Reject
+        // OTHER kinds under this mode (nothing implements them), and for
+        // claude, proceed with the adapter's own DECLARED capabilities,
+        // wrapped `Unproven` so `authorize` below (and any future
+        // capability check inside it) cannot mistake this for a suite
+        // that actually ran. Checked, and short-circuited, before the
+        // conformance dispatch below for the identical reason the
+        // `Headless` check above is.
+        if mode == AdapterMode::Protocol {
+            if kind != AdapterKind::Claude {
+                return Err(format!(
+                    "adapter {} has no protocol-mode implementation yet; mode: \"protocol\" is \
+                     unavailable for it",
+                    kind.wire_name()
+                ));
+            }
+            let effective_capabilities =
+                GatedCapabilities::Unproven(super::claude_protocol::declared_capabilities());
+            authorization
+                .authorize(profile, &effective_capabilities, policy)
+                .map_err(RegistryError::AuthorizationDenied)
+                .map_err(String::from)?;
+            return Ok(effective_capabilities);
         }
         // The full suite is memoized per `(kind, mode)`, stamped
         // with the vendor-CLI version the availability probe observed; a
@@ -1082,7 +1225,7 @@ async fn gate_profile(
                 .and_then(|(stamped_version, cached)| {
                     (*stamped_version == probed_version).then_some(*cached)
                 });
-        match suite_hit {
+        GatedCapabilities::Proven(match suite_hit {
             Some(cached) => cached,
             None => {
                 let effective = conformance::run_fixture_conformance(kind, mode)
@@ -1093,7 +1236,7 @@ async fn gate_profile(
                     .insert(cache_key, (probed_version, effective));
                 effective
             }
-        }
+        })
     };
 
     // Policy decision: exactly once, for cache hits and misses alike --
@@ -1251,6 +1394,7 @@ fn build_adapter(
     mcp: Option<AdapterMcpConfig>,
     broker: Option<Arc<CoordinationBroker>>,
     tui: Option<Arc<TuiSupport>>,
+    protocol: Option<Arc<ProtocolSupport>>,
     db: Arc<DatabaseHandle>,
     project_id: crew_protocol::ProjectId,
     events_tx: tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
@@ -1364,6 +1508,65 @@ fn build_adapter(
         return Err(RegistryError::TuiModeUnavailable(
             kind.wire_name().to_string(),
         ));
+    }
+
+    // `mode: "protocol"`: `gate_profile` already refuses every
+    // kind but Claude before this function is ever reached under this
+    // mode, so the only real branch here is Claude's own. `protocol`
+    // absent is the same defense-in-depth shape `tui` absent is above --
+    // reachable only if Claude protocol mode is requested before
+    // `AdapterRegistry::set_protocol_support` is ever called.
+    if requested_mode(&profile.startup_options) == Some(super::profile::AdapterMode::Protocol) {
+        let kind = profile
+            .startup_options
+            .adapter_kind()
+            .expect("Protocol mode only applies to a startup_options variant with an AdapterKind");
+        let Some(protocol) = protocol else {
+            return Err(RegistryError::ProtocolModeUnavailable(
+                kind.wire_name().to_string(),
+            ));
+        };
+        return match kind {
+            super::AdapterKind::Claude => {
+                // `db`/`project_id`/`events_tx`/`display`/`resume_cursor`
+                // are unused here: unlike a `TuiAdapter`, this adapter
+                // builds no internal pane/sink of its own -- the caller
+                // (`run_one`/`resume_one`) builds the shared
+                // `DomainAdapterEventSink` from those same values and
+                // hands it to `Adapter::start` separately, exactly the
+                // path every adapter this registry constructs goes
+                // through. `resume_cursor` in particular is always
+                // `None` here in practice: `crate::recovery`'s own
+                // `AdapterMode::Protocol` arm already refuses resume
+                // before this function is ever reached for one.
+                //
+                // `profile.model` passed straight through, trimmed --
+                // see `super::claude_protocol::adapter`'s own module doc
+                // comment on why the boot-config-precedence
+                // `build_tui_adapter` needs has nothing to apply to
+                // here: no boot-loaded per-vendor config exists for
+                // protocol mode to override. Trimmed defensively per
+                // `WorkerProfile::validate`'s own non-empty guarantee at
+                // `ProfileStore::insert` -- belt and suspenders, not a
+                // guess at emptiness this adapter has any reason to
+                // expect.
+                let model = Some(profile.model.trim().to_string()).filter(|m| !m.is_empty());
+                Ok(Arc::new(
+                    super::claude_protocol::adapter::ClaudeProtocolAdapter::new(
+                        repo_root.to_path_buf(),
+                        profile.environment_allowlist.clone(),
+                        model,
+                        super::claude_protocol::adapter::ProtocolBundle {
+                            approval_service: Arc::clone(&protocol.approval_service),
+                            callback: Arc::clone(&protocol.callback),
+                        },
+                    ),
+                ))
+            }
+            _ => Err(RegistryError::ProtocolModeUnavailable(
+                kind.wire_name().to_string(),
+            )),
+        };
     }
 
     // Every reserved kind's Headless fallback (three headless vendor
@@ -1660,6 +1863,7 @@ mod build_adapter_tests {
             None,
             None,
             None, // no TuiSupport supplied
+            None,
             db,
             crew_protocol::ProjectId::new(),
             events_tx,
@@ -1697,6 +1901,7 @@ mod build_adapter_tests {
             None,
             None,
             Some(test_tui_support()),
+            None,
             db,
             crew_protocol::ProjectId::new(),
             events_tx,
@@ -1731,6 +1936,7 @@ mod build_adapter_tests {
             None,
             None,
             Some(test_tui_support()),
+            None,
             db,
             crew_protocol::ProjectId::new(),
             events_tx,
@@ -1771,6 +1977,7 @@ mod build_adapter_tests {
             None,
             None,
             Some(test_tui_support()),
+            None,
             db,
             crew_protocol::ProjectId::new(),
             events_tx,
@@ -1806,6 +2013,7 @@ mod build_adapter_tests {
             None,
             None,
             Some(test_tui_support()),
+            None,
             db,
             crew_protocol::ProjectId::new(),
             events_tx,
@@ -1857,6 +2065,7 @@ mod build_adapter_tests {
                 RunId::new(),
                 TaskId::new(),
                 WorkerId::new(),
+                None,
                 None,
                 None,
                 None,
@@ -2044,7 +2253,7 @@ mod settlement_tests {
         fn authorize(
             &self,
             _profile: &WorkerProfile,
-            _effective_capabilities: &AdapterCapabilities,
+            _effective_capabilities: &GatedCapabilities,
             _policy: Option<&crate::config::RuntimePolicy>,
         ) -> Result<(), String> {
             Ok(())
@@ -2180,7 +2389,7 @@ mod settlement_tests {
         // all (see `AdapterAuthorization::authorize`'s doc comment), so
         // any value proves the concurrency-ceiling point -- deliberately
         // not read from a specific adapter's `declared_capabilities()`.
-        let capabilities = AdapterCapabilities {
+        let capabilities = GatedCapabilities::Proven(AdapterCapabilities {
             protocol: crate::adapter::capability::ProtocolKind::Terminal,
             resume: crate::adapter::capability::ResumeCapability::Session,
             steering: crate::adapter::capability::SteeringCapability::ActiveTurn,
@@ -2191,7 +2400,7 @@ mod settlement_tests {
             native_view: crate::adapter::capability::NativeViewCapability::IndependentTui,
             workspace_control: crate::adapter::capability::WorkspaceControlCapability::Write,
             durability: crate::adapter::capability::DurabilityCapability::VendorResumable,
-        };
+        });
 
         // Book the one slot, then prove the ceiling is exhausted.
         authorization
@@ -2391,8 +2600,12 @@ mod conformance_cache_tests {
         .await
         .expect("tui gate must pass");
 
+        assert!(
+            effective.is_proven(),
+            "a TUI-mode submit's gate must be Proven, not merely declared: {effective:?}"
+        );
         assert_eq!(
-            effective.protocol,
+            effective.capabilities().protocol,
             crate::adapter::capability::ProtocolKind::Terminal,
             "a TUI-mode submit must be gated on the TUI suite's effective capabilities: \
              {effective:?}"
@@ -2444,6 +2657,157 @@ mod conformance_cache_tests {
             CONFORMANCE_CACHE.lock().is_empty(),
             "a refused Headless submit must never write a cache entry"
         );
+    }
+
+    fn claude_profile_with_mode(mode: AdapterMode) -> WorkerProfile {
+        WorkerProfile {
+            id: crate::adapter::profile::ProfileId::new(),
+            adapter: "claude".to_string(),
+            model: String::new(),
+            permission_envelope: serde_json::Value::Object(serde_json::Map::new()),
+            startup_options: StartupOptions::Claude(ClaudeStartupOptions {
+                mode,
+                ..Default::default()
+            }),
+            environment_allowlist: Vec::new(),
+            source: "test".to_string(),
+        }
+    }
+
+    /// `AdapterMode::Protocol` has no conformance suite to run at all
+    /// yet -- unlike `Headless`, this is
+    /// a temporary, not permanent, gap, so `gate_profile` proceeds rather
+    /// than refusing outright, but must not let the result look like a
+    /// suite that actually ran. Pins the whole shape of that: no suite
+    /// runs, no cache entry is written (both exactly like the Headless
+    /// rejection above), the capabilities returned are the module's own
+    /// `declared_capabilities()`, and -- the part that matters --
+    /// `is_proven()` is `false`.
+    #[tokio::test]
+    async fn a_protocol_mode_claude_submit_is_gated_on_declared_capabilities_marked_unproven() {
+        let _serial = SERIAL.lock().await;
+        CONFORMANCE_CACHE.lock().clear();
+        FIXTURE_SUITE_RUNS.store(0, Ordering::Relaxed);
+        let authorization: Arc<dyn AdapterAuthorization> =
+            Arc::new(FixtureAuthorization { allow: true });
+
+        let gated = gate_profile(
+            &authorization,
+            &claude_profile_with_mode(AdapterMode::Protocol),
+            None,
+            AdapterMode::Protocol,
+        )
+        .await
+        .expect("a protocol-mode claude submit must be gated, not refused");
+
+        assert!(
+            !gated.is_proven(),
+            "protocol-mode capabilities must never look Proven -- no suite has run for this \
+             mode yet: {gated:?}"
+        );
+        assert_eq!(
+            *gated.capabilities(),
+            crate::adapter::claude_protocol::declared_capabilities(),
+            "must carry the module's own declared capabilities, not some other value"
+        );
+        assert_eq!(
+            FIXTURE_SUITE_RUNS.load(Ordering::Relaxed),
+            0,
+            "protocol mode must never dispatch to the fixture conformance suite"
+        );
+        assert!(
+            CONFORMANCE_CACHE.lock().is_empty(),
+            "an unproven protocol-mode submit must never write a cache entry meant for proven \
+             results"
+        );
+    }
+
+    /// Only claude implements `AdapterMode::Protocol` in this spike --
+    /// every other kind gets a typed rejection, the same shape as
+    /// `TuiModeUnavailable` for a `TuiVendor`-less kind under `Tui` mode,
+    /// rather than silently proceeding with a declared-capabilities set
+    /// for an adapter that does not exist.
+    #[tokio::test]
+    async fn a_protocol_mode_submit_for_an_unimplemented_kind_is_rejected() {
+        let _serial = SERIAL.lock().await;
+        let authorization: Arc<dyn AdapterAuthorization> =
+            Arc::new(FixtureAuthorization { allow: true });
+
+        let err = gate_profile(
+            &authorization,
+            &omp_rpc_profile_with_mode(AdapterMode::Protocol),
+            None,
+            AdapterMode::Protocol,
+        )
+        .await
+        .expect_err("ompRpc has no protocol-mode implementation");
+
+        assert!(
+            err.contains("ompRpc") && err.contains("protocol"),
+            "the rejection must name the kind and the mode: {err}"
+        );
+    }
+
+    /// The distinguishability the `Unproven` marker exists for, proven
+    /// rather than merely documented: an `AdapterAuthorization` that
+    /// actually reads the marker denies a protocol-mode (unproven)
+    /// profile and allows a TUI-mode (proven) one, using the SAME
+    /// authorizer for both -- so the difference in outcome can only come
+    /// from `GatedCapabilities` itself. This is the test that fails the
+    /// day a real capability check forgets the deny-on-unproven
+    /// constraint from `AdapterAuthorization::authorize`'s own doc
+    /// comment.
+    struct DenyOnUnprovenAuthorization;
+
+    impl AdapterAuthorization for DenyOnUnprovenAuthorization {
+        fn authorize(
+            &self,
+            _profile: &WorkerProfile,
+            effective_capabilities: &GatedCapabilities,
+            _policy: Option<&crate::config::RuntimePolicy>,
+        ) -> Result<(), String> {
+            if effective_capabilities.is_proven() {
+                Ok(())
+            } else {
+                Err("denied: capabilities are unproven for this mode".to_string())
+            }
+        }
+
+        fn release(&self) {}
+    }
+
+    #[tokio::test]
+    async fn a_real_capability_check_denies_unproven_protocol_capabilities_and_allows_proven_ones()
+    {
+        let _serial = SERIAL.lock().await;
+        CONFORMANCE_CACHE.lock().clear();
+        let authorization: Arc<dyn AdapterAuthorization> = Arc::new(DenyOnUnprovenAuthorization);
+
+        let denied = gate_profile(
+            &authorization,
+            &claude_profile_with_mode(AdapterMode::Protocol),
+            None,
+            AdapterMode::Protocol,
+        )
+        .await
+        .expect_err("a checker that reads the marker must deny an unproven protocol submit");
+        assert!(
+            denied.contains("unproven"),
+            "must be this authorizer's own denial, not some other failure: {denied}"
+        );
+
+        gate_profile(
+            &authorization,
+            &omp_rpc_profile_with_mode(AdapterMode::Tui),
+            None,
+            AdapterMode::Tui,
+        )
+        .await
+        .expect(
+            "the SAME checker must allow a Proven (TUI, conformance-suite-backed) submit -- the \
+             denial above is about the marker, not about this authorizer refusing everything",
+        );
+        CONFORMANCE_CACHE.lock().clear();
     }
 
     /// Seeds a task/worker/run with a resolved Claude profile snapshot in
