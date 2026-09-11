@@ -101,6 +101,16 @@ fn claude_tui_profile() -> WorkerProfile {
     }
 }
 
+/// Like [`claude_tui_profile`], but with a caller-chosen `model` -- the
+/// per-run model a UI model picker would have resolved, distinct from
+/// whatever `crew.json`'s own boot-loaded adapter config carries.
+fn claude_tui_profile_with_model(model: &str) -> WorkerProfile {
+    WorkerProfile {
+        model: model.to_string(),
+        ..claude_tui_profile()
+    }
+}
+
 /// Mirrors `tests/adapter_registry.rs`'s own `seed_worker_and_run`
 /// exactly (raw SQL, same shape) -- going through the full domain-
 /// repository event pipeline is unnecessary for a registry test
@@ -264,6 +274,42 @@ done
     );
     let path = scripts_dir.join("fake-claude.sh");
     std::fs::write(&path, script).expect("write fake claude script");
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&path, perms).unwrap();
+    path
+}
+
+/// Same shape as [`write_fake_claude_script`], with one addition: the
+/// very first thing it does is dump its own argv, one entry per line, to
+/// `argv_path`. Lets a test read back exactly what `crewd` executed --
+/// not a stored `WorkerProfile` row, not a rendered pane note, either of
+/// which could look right while the real spawn used something else.
+fn write_argv_recording_claude_script(
+    scripts_dir: &std::path::Path,
+    session_dir: &std::path::Path,
+    argv_path: &std::path::Path,
+) -> PathBuf {
+    let script = format!(
+        r#"#!/bin/sh
+printf '%s\n' "$@" > "{argv_path}"
+echo "Welcome to Claude Code!"
+SESSION_ID="11111111-1111-4111-8111-000000000099"
+TRANSCRIPT="{session_dir}/$SESSION_ID.jsonl"
+while IFS= read -r line; do
+  case "$line" in
+    *"[crew:"*)
+      printf '%s\n' '{{"type":"user","sessionId":"'"$SESSION_ID"'","timestamp":"2026-01-01T00:00:00Z","message":{{"role":"user","content":"'"$line"'"}}}}' >> "$TRANSCRIPT"
+      printf '%s\n' '{{"type":"assistant","sessionId":"'"$SESSION_ID"'","timestamp":"2026-01-01T00:00:01Z","message":{{"content":[{{"type":"text","text":"hi from the fixture e2e"}}]}}}}' >> "$TRANSCRIPT"
+      ;;
+  esac
+done
+"#,
+        argv_path = argv_path.display(),
+        session_dir = session_dir.display(),
+    );
+    let path = scripts_dir.join("fake-claude-argv.sh");
+    std::fs::write(&path, script).expect("write fake claude argv-recording script");
     let mut perms = std::fs::metadata(&path).unwrap().permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(&path, perms).unwrap();
@@ -565,6 +611,331 @@ async fn submitting_a_tui_mode_claude_run_reaches_the_tui_path_and_emits_lifecyc
     );
 
     let _ = adapter.dispose().await;
+    db.shutdown().await.expect("shutdown database");
+}
+
+/// The model chosen for THIS run -- the resolved `WorkerProfile.model`,
+/// what a per-run model picker in crew's own UI dialog would produce --
+/// must reach the vendor process `crewd` actually execs. Asserted from
+/// the LAUNCHED ARGV, read back from what the real (fake) vendor process
+/// itself received on its command line: not the stored `WorkerProfile`
+/// row and not any pane-rendered note, either of which could look right
+/// while the real spawn used something else.
+///
+/// `TuiSupport.adapters["claude"].model` (`crew.json`'s own boot-loaded
+/// config, read once at daemon startup) is deliberately set to a
+/// *different* model than the profile's, so a passing assertion can only
+/// mean the run's own model actually made it into the argv, never a
+/// coincidental match with whatever the boot config happened to carry.
+#[tokio::test]
+async fn the_runs_own_resolved_model_reaches_the_launched_argv() {
+    let _guard = SERIAL_PTY.lock().await;
+    let (db, dir, project_id) = harness().await;
+    let profile = claude_tui_profile_with_model("run-specific-opus");
+    let (run_id, task_id, worker_id) = seed_worker_and_run(&db, project_id, &profile).await;
+
+    let session_dir = dir.path().join("session");
+    std::fs::create_dir_all(&session_dir).expect("create session dir");
+    let argv_path = dir.path().join("argv.txt");
+    let script_path = write_argv_recording_claude_script(dir.path(), &session_dir, &argv_path);
+
+    let mut adapters = BTreeMap::new();
+    adapters.insert(
+        "claude".to_string(),
+        AdapterConfig {
+            enabled: true,
+            bin: script_path.to_string_lossy().into_owned(),
+            mode: CrewAdapterMode::Tui,
+            permission_mode: PermissionMode::Default,
+            model: Some("boot-loaded-sonnet".to_string()),
+            profile: "test".to_string(),
+            session_dir: Some(session_dir.to_string_lossy().into_owned()),
+            extra_args: Vec::new(),
+        },
+    );
+
+    let mut display_registry = DisplayRegistry::new();
+    display_registry.register(Box::new(HiddenDisplay::new(
+        crew_protocol::DisplayConfig::default(),
+    )));
+    let panes_dir = dir.path().join("panes");
+    std::fs::create_dir_all(&panes_dir).expect("create panes dir");
+
+    let registry = AdapterRegistry::new(
+        Arc::new(FixtureAuthorization { allow: true }),
+        dir.path().to_path_buf(),
+        None,
+        vec![],
+    );
+    registry.set_tui_support(Arc::new(TuiSupport {
+        display_registry: Arc::new(display_registry),
+        panes_dir,
+        crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
+        state_dir: dir.path().to_path_buf(),
+        close_on_exit: CloseOnExit::Always,
+        forced_backend: None,
+        force_hidden_displays: false,
+        adapters,
+        timings: fast_timings(),
+        org_security_patterns: Vec::new(),
+    }));
+
+    let result = registry
+        .start(ctx(
+            Arc::clone(&db),
+            project_id,
+            run_id,
+            task_id,
+            worker_id,
+            "say hi",
+        ))
+        .await;
+    assert!(result.is_ok(), "starting the run must succeed: {result:?}");
+
+    let argv_written = wait_until(
+        || {
+            let argv_path = argv_path.clone();
+            async move { argv_path.exists() }
+        },
+        |exists: &bool| *exists,
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(
+        argv_written,
+        "the fake vendor process was never launched -- the argv file was never written"
+    );
+
+    let recorded = std::fs::read_to_string(&argv_path).expect("read recorded argv");
+    let argv: Vec<&str> = recorded.lines().collect();
+    let launched_model = argv
+        .iter()
+        .position(|arg| *arg == "--model")
+        .and_then(|i| argv.get(i + 1))
+        .copied();
+
+    assert_eq!(
+        launched_model,
+        Some("run-specific-opus"),
+        "the run's own resolved model must reach the launched argv, not crew.json's boot-loaded \
+         adapter config -- got argv: {argv:?}"
+    );
+
+    if let Some(adapter) = registry.running_adapter(run_id) {
+        let _ = adapter.dispose().await;
+    }
+    db.shutdown().await.expect("shutdown database");
+}
+
+/// Row 2 of the same precedence: no run-specific model (the profile's own
+/// `model` is empty -- nothing for a per-run picker to have overridden
+/// with), `crew.json`'s boot-loaded config carries one. That boot-loaded
+/// model must still reach the launched argv -- today's behavior for
+/// anyone who configures `crew.json` and never opens a per-run model
+/// dialog. The careless version of "thread the run's model through" --
+/// treating it as always authoritative rather than only when non-empty
+/// -- breaks exactly this row, silently dropping `--model` for every
+/// currently-working setup that relies on it.
+#[tokio::test]
+async fn a_boot_loaded_model_reaches_the_launched_argv_when_the_run_has_none_of_its_own() {
+    let _guard = SERIAL_PTY.lock().await;
+    let (db, dir, project_id) = harness().await;
+    let profile = claude_tui_profile_with_model("");
+    let (run_id, task_id, worker_id) = seed_worker_and_run(&db, project_id, &profile).await;
+
+    let session_dir = dir.path().join("session");
+    std::fs::create_dir_all(&session_dir).expect("create session dir");
+    let argv_path = dir.path().join("argv.txt");
+    let script_path = write_argv_recording_claude_script(dir.path(), &session_dir, &argv_path);
+
+    let mut adapters = BTreeMap::new();
+    adapters.insert(
+        "claude".to_string(),
+        AdapterConfig {
+            enabled: true,
+            bin: script_path.to_string_lossy().into_owned(),
+            mode: CrewAdapterMode::Tui,
+            permission_mode: PermissionMode::Default,
+            model: Some("boot-loaded-sonnet".to_string()),
+            profile: "test".to_string(),
+            session_dir: Some(session_dir.to_string_lossy().into_owned()),
+            extra_args: Vec::new(),
+        },
+    );
+
+    let mut display_registry = DisplayRegistry::new();
+    display_registry.register(Box::new(HiddenDisplay::new(
+        crew_protocol::DisplayConfig::default(),
+    )));
+    let panes_dir = dir.path().join("panes");
+    std::fs::create_dir_all(&panes_dir).expect("create panes dir");
+
+    let registry = AdapterRegistry::new(
+        Arc::new(FixtureAuthorization { allow: true }),
+        dir.path().to_path_buf(),
+        None,
+        vec![],
+    );
+    registry.set_tui_support(Arc::new(TuiSupport {
+        display_registry: Arc::new(display_registry),
+        panes_dir,
+        crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
+        state_dir: dir.path().to_path_buf(),
+        close_on_exit: CloseOnExit::Always,
+        forced_backend: None,
+        force_hidden_displays: false,
+        adapters,
+        timings: fast_timings(),
+        org_security_patterns: Vec::new(),
+    }));
+
+    let result = registry
+        .start(ctx(
+            Arc::clone(&db),
+            project_id,
+            run_id,
+            task_id,
+            worker_id,
+            "say hi",
+        ))
+        .await;
+    assert!(result.is_ok(), "starting the run must succeed: {result:?}");
+
+    let argv_written = wait_until(
+        || {
+            let argv_path = argv_path.clone();
+            async move { argv_path.exists() }
+        },
+        |exists: &bool| *exists,
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(
+        argv_written,
+        "the fake vendor process was never launched -- the argv file was never written"
+    );
+
+    let recorded = std::fs::read_to_string(&argv_path).expect("read recorded argv");
+    let argv: Vec<&str> = recorded.lines().collect();
+    let launched_model = argv
+        .iter()
+        .position(|arg| *arg == "--model")
+        .and_then(|i| argv.get(i + 1))
+        .copied();
+
+    assert_eq!(
+        launched_model,
+        Some("boot-loaded-sonnet"),
+        "with no run-specific model, crew.json's boot-loaded adapter config must still reach the \
+         launched argv -- got argv: {argv:?}"
+    );
+
+    if let Some(adapter) = registry.running_adapter(run_id) {
+        let _ = adapter.dispose().await;
+    }
+    db.shutdown().await.expect("shutdown database");
+}
+
+/// Row 3: neither a run-specific model nor a `crew.json` boot-loaded one
+/// -- the vendor's own hardcoded default (`default_claude_tui_config`'s
+/// `model: None`) must be left alone, meaning no `--model` flag reaches
+/// the launched argv at all.
+#[tokio::test]
+async fn no_model_flag_reaches_the_launched_argv_when_neither_source_has_one() {
+    let _guard = SERIAL_PTY.lock().await;
+    let (db, dir, project_id) = harness().await;
+    let profile = claude_tui_profile_with_model("");
+    let (run_id, task_id, worker_id) = seed_worker_and_run(&db, project_id, &profile).await;
+
+    let session_dir = dir.path().join("session");
+    std::fs::create_dir_all(&session_dir).expect("create session dir");
+    let argv_path = dir.path().join("argv.txt");
+    let script_path = write_argv_recording_claude_script(dir.path(), &session_dir, &argv_path);
+
+    // No "claude" entry at all: `build_tui_adapter` falls back to
+    // `default_claude_tui_config()`, whose `bin` is the literal string
+    // "claude" -- wrong for this test, so the default is built once here
+    // and overridden with the fake script's path, everything else as the
+    // hardcoded default has it (in particular `model: None`).
+    let mut adapters = BTreeMap::new();
+    adapters.insert(
+        "claude".to_string(),
+        AdapterConfig {
+            enabled: true,
+            bin: script_path.to_string_lossy().into_owned(),
+            mode: CrewAdapterMode::Tui,
+            permission_mode: PermissionMode::Max,
+            model: None,
+            profile: "complex analysis, investigation, deep debugging".to_string(),
+            session_dir: Some(session_dir.to_string_lossy().into_owned()),
+            extra_args: Vec::new(),
+        },
+    );
+
+    let mut display_registry = DisplayRegistry::new();
+    display_registry.register(Box::new(HiddenDisplay::new(
+        crew_protocol::DisplayConfig::default(),
+    )));
+    let panes_dir = dir.path().join("panes");
+    std::fs::create_dir_all(&panes_dir).expect("create panes dir");
+
+    let registry = AdapterRegistry::new(
+        Arc::new(FixtureAuthorization { allow: true }),
+        dir.path().to_path_buf(),
+        None,
+        vec![],
+    );
+    registry.set_tui_support(Arc::new(TuiSupport {
+        display_registry: Arc::new(display_registry),
+        panes_dir,
+        crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
+        state_dir: dir.path().to_path_buf(),
+        close_on_exit: CloseOnExit::Always,
+        forced_backend: None,
+        force_hidden_displays: false,
+        adapters,
+        timings: fast_timings(),
+        org_security_patterns: Vec::new(),
+    }));
+
+    let result = registry
+        .start(ctx(
+            Arc::clone(&db),
+            project_id,
+            run_id,
+            task_id,
+            worker_id,
+            "say hi",
+        ))
+        .await;
+    assert!(result.is_ok(), "starting the run must succeed: {result:?}");
+
+    let argv_written = wait_until(
+        || {
+            let argv_path = argv_path.clone();
+            async move { argv_path.exists() }
+        },
+        |exists: &bool| *exists,
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(
+        argv_written,
+        "the fake vendor process was never launched -- the argv file was never written"
+    );
+
+    let recorded = std::fs::read_to_string(&argv_path).expect("read recorded argv");
+    let argv: Vec<&str> = recorded.lines().collect();
+
+    assert!(
+        !argv.contains(&"--model"),
+        "with neither a run-specific model nor a crew.json one, no --model flag should reach the \
+         launched argv at all -- got argv: {argv:?}"
+    );
+
+    if let Some(adapter) = registry.running_adapter(run_id) {
+        let _ = adapter.dispose().await;
+    }
     db.shutdown().await.expect("shutdown database");
 }
 
