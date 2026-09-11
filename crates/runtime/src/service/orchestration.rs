@@ -288,6 +288,21 @@ impl OrchestrationService {
         }
     }
 
+    /// The `ApprovalService` this service dispatches `approval/*` RPCs
+    /// through -- exposed (like `crate::ipc::Server::violation_service`,
+    /// for the identical construction-order reason) so a caller
+    /// constructed after this service's own `new` can share the SAME
+    /// instance rather than build a second one with independent state.
+    /// `crate::adapter::registry::AdapterRegistry::set_protocol_support`
+    /// is the one caller today: a protocol-mode Claude adapter's
+    /// `respond_to_approval` bridge must submit approvals to the exact
+    /// service `approval/decide` itself dispatches through, or a real
+    /// decision would never reach it.
+    #[must_use]
+    pub fn approval_service(&self) -> Arc<crate::approval::ApprovalService> {
+        Arc::clone(&self.approval)
+    }
+
     /// Enables the configured, on-demand retention maintenance RPC.
     #[must_use]
     pub fn with_retention(mut self, retention: crate::audit::Retention) -> Self {

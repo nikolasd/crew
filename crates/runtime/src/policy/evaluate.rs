@@ -299,11 +299,22 @@ impl AdapterAuthorization for PolicyEvaluator {
     fn authorize(
         &self,
         profile: &WorkerProfile,
-        effective_capabilities: &AdapterCapabilities,
+        effective_capabilities: &crate::adapter::registry::GatedCapabilities,
         policy: Option<&RuntimePolicy>,
     ) -> Result<(), String> {
-        self.evaluate(profile, effective_capabilities, false, policy)
-            .map_err(|e| e.to_string())
+        // Reads zero capability fields today (this trait method's own
+        // doc comment), so unwrapping the proven/unproven distinction
+        // here rather than branching on it is not a shortcut yet -- it
+        // is the literal truth of what this evaluation looks at. The
+        // binding constraint is on whoever adds the first real
+        // capability check, not on this call.
+        self.evaluate(
+            profile,
+            effective_capabilities.capabilities(),
+            false,
+            policy,
+        )
+        .map_err(|e| e.to_string())
     }
 
     fn release(&self) {
@@ -540,10 +551,16 @@ mod tests {
         let stripped_evaluator = PolicyEvaluator::new(test_policy());
         let profile = test_profile("any-model-at-all");
 
-        let declared_result =
-            declared_evaluator.authorize(&profile, &fully_declared_capabilities(), None);
-        let stripped_result =
-            stripped_evaluator.authorize(&profile, &fully_stripped_capabilities(), None);
+        let declared_result = declared_evaluator.authorize(
+            &profile,
+            &crate::adapter::registry::GatedCapabilities::Proven(fully_declared_capabilities()),
+            None,
+        );
+        let stripped_result = stripped_evaluator.authorize(
+            &profile,
+            &crate::adapter::registry::GatedCapabilities::Proven(fully_stripped_capabilities()),
+            None,
+        );
 
         assert!(declared_result.is_ok(), "{declared_result:?}");
         assert_eq!(

@@ -3075,6 +3075,24 @@ impl<'c> DomainRepository<'c> {
             RuntimeEvent::WorkerQuestion { question, .. } => question.clone(),
             _ => None,
         };
+        // A journaled `EscalationRaised` reaching this generic path --
+        // today, only `claude_protocol::adapter::ClaudeProtocolAdapter`'s
+        // `AdapterEventPayload::WorkspaceTrustPending` constructs one
+        // here, rather than through the dedicated
+        // `record_escalation_raised` the other two production sites use
+        // -- gets the identical escalations-row projection that method
+        // inserts, on the same "commit together" basis (I1) this
+        // function's own `WorkerQuestion` case above already follows.
+        // No open-row dedup here (unlike `WorkerQuestion`'s "one open
+        // question per run"): every current caller of this path emits
+        // at most once per run before failing it outright, so there is
+        // nothing yet to deduplicate against.
+        let escalation = match event {
+            RuntimeEvent::EscalationRaised {
+                reason, question, ..
+            } => Some((reason.clone(), question.clone())),
+            _ => None,
+        };
         self.append_and_apply(
             event,
             Some(task_id),
@@ -3113,6 +3131,19 @@ impl<'c> DomainRepository<'c> {
                             ],
                         )?;
                     }
+                }
+                if let Some((reason, question)) = escalation {
+                    tx.execute(
+                        "INSERT INTO escalations (escalation_id, run_id, kind, question, created_at) \
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![
+                            crew_protocol::EscalationId::new().to_string(),
+                            run_id.to_string(),
+                            reason,
+                            question.as_ref().map(crew_protocol::Redacted::as_str),
+                            Timestamp::now().as_str(),
+                        ],
+                    )?;
                 }
                 Ok(())
             },

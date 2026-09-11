@@ -905,6 +905,27 @@ pub enum RuntimeEvent {
         output_tokens: u64,
         cost_usd: Option<f64>,
     },
+    /// A protocol-first adapter reconciled its journal against the
+    /// vendor's own durable transcript for this run. Carries no free
+    /// text, only counts. `examined == 0` is itself a finding, not a
+    /// clean pass: a reconciliation that never looked at anything is
+    /// indistinguishable from one that never ran at all, and this is the
+    /// field that lets a reader (or a future check) tell those two
+    /// apart. No repair mechanism exists yet, so `gapsRepaired` is
+    /// always `0` today; `gapsFound` and `gapsRepaired` being unequal is
+    /// the current, expected state, not a defect, until an actual repair
+    /// step is built.
+    AdapterReconciliationEvent {
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        #[ts(type = "number")]
+        examined: u64,
+        #[ts(type = "number")]
+        gaps_found: u64,
+        #[ts(type = "number")]
+        gaps_repaired: u64,
+    },
     /// An artifact produced by a worker adapter.
     AdapterArtifactEvent {
         run_id: RunId,
@@ -1651,11 +1672,14 @@ mod redaction_enumeration {
         (
             "RuntimeEvent::EscalationRaised.reason",
             "A machine-assigned code from a closed set, chosen by the runtime and never \
-             caller- or vendor-derived: the three production construction sites pass \
+             caller- or vendor-derived: the four production construction sites pass \
              the literals `repeated_failure` \
              (crates/runtime/src/adapter/run_lifecycle.rs), `write_violation` \
-             (crates/runtime/src/domain/repository.rs), and `vendorFirstRunGate` \
-             (crates/runtime/src/adapter/event_sink.rs). This reason previously \
+             (crates/runtime/src/domain/repository.rs), `vendorFirstRunGate` \
+             (crates/runtime/src/adapter/event_sink.rs), and `claudeWorkspaceTrustPending` \
+             (crates/runtime/src/adapter/event_sink.rs, a protocol-mode Claude adapter's own \
+             pre-spawn trust check -- distinct from `vendorFirstRunGate` because that run has \
+             no live pane a human could answer the gate from). This reason previously \
              offered two supports and neither existed -- it cited \"the field's own doc\", \
              which had no doc, and said the worker's text travels in the sibling \
              `question`, which no production site populates before `vendorFirstRunGate`. \
