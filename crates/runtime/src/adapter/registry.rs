@@ -1415,14 +1415,23 @@ fn build_adapter(
 /// fresh on every call, unlike `tui.adapters` which is loaded once at
 /// daemon boot and never reloaded. Precedence, in order:
 ///
-///   1. `run_model` non-empty -> it wins, overriding `cfg.model`
-///      unconditionally. This is the whole point: a value resolved for
-///      THIS run (possibly persisted to `crew.json` only after this
-///      daemon already booted) must not be shadowed by a stale
-///      boot-time snapshot.
-///   2. `run_model` empty, `cfg.model` set -> `cfg.model` wins. Today's
-///      behavior, preserved for a `crew.json` adapter config set once
-///      and never revisited by a per-run picker.
+///   1. `run_model`, trimmed, non-empty -> it wins, overriding
+///      `cfg.model` unconditionally with the trimmed value. This is the
+///      whole point: a value resolved for THIS run (possibly persisted
+///      to `crew.json` only after this daemon already booted) must not
+///      be shadowed by a stale boot-time snapshot. Trimming matters on
+///      its own: nothing upstream of this call guarantees `run_model`
+///      isn't whitespace-only (`WorkerProfile.model` is a plain
+///      `String`, and `WorkerProfile::validate`'s own `EmptyModel` check
+///      is not necessarily on every path that can reach here -- see the
+///      `TerminalDegraded` defense-in-depth case just above this
+///      function for the same shape of gap), and an untrimmed value
+///      would launch a real `--model "   "` rather than falling through
+///      to a perfectly good boot-loaded one.
+///   2. `run_model` empty or whitespace-only, `cfg.model` set ->
+///      `cfg.model` wins. Today's behavior, preserved for a `crew.json`
+///      adapter config set once and never revisited by a per-run
+///      picker.
 ///   3. Both empty -> the vendor's own hardcoded default in
 ///      `default_*_tui_config` (via `cfg.model` being `None` there
 ///      already), unchanged.
@@ -1458,13 +1467,15 @@ fn build_tui_adapter<V: TuiVendor>(
             "omp" => default_omp_tui_config(),
             _ => default_claude_tui_config(),
         });
-    // Rule 1: a non-empty run-specific model always overrides whatever
-    // `crew.json`'s boot-loaded config carries -- see this function's
-    // own doc comment for the full three-row precedence. An empty
-    // `run_model` (rule 2/3) leaves `cfg.model` exactly as selected
-    // above, boot config or hardcoded default alike.
-    if !run_model.is_empty() {
-        cfg.model = Some(run_model.to_string());
+    // Rule 1: a non-empty (after trimming) run-specific model always
+    // overrides whatever `crew.json`'s boot-loaded config carries -- see
+    // this function's own doc comment for the full three-row precedence,
+    // including why the trim itself is load-bearing. A whitespace-only
+    // or empty `run_model` (rule 2/3) leaves `cfg.model` exactly as
+    // selected above, boot config or hardcoded default alike.
+    let trimmed_run_model = run_model.trim();
+    if !trimmed_run_model.is_empty() {
+        cfg.model = Some(trimmed_run_model.to_string());
     }
     // Same patterns already validated once at startup
     // (`lifecycle.rs`'s fail-closed `Redactor::with_org_rules` call) --

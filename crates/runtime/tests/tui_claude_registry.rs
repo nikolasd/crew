@@ -836,6 +836,112 @@ async fn a_boot_loaded_model_reaches_the_launched_argv_when_the_run_has_none_of_
     db.shutdown().await.expect("shutdown database");
 }
 
+/// Row 2 defended against the input that defeats a bare emptiness check:
+/// nothing upstream of the registry guarantees `WorkerProfile.model`
+/// isn't whitespace-only, so a run-specific model of `"   "` must fall
+/// through to the boot-loaded config exactly like an empty one does, not
+/// launch a real `--model "   "` that overrides a perfectly good
+/// boot-loaded value with nonsense.
+#[tokio::test]
+async fn a_whitespace_only_run_model_falls_through_to_the_boot_loaded_one() {
+    let _guard = SERIAL_PTY.lock().await;
+    let (db, dir, project_id) = harness().await;
+    let profile = claude_tui_profile_with_model("   ");
+    let (run_id, task_id, worker_id) = seed_worker_and_run(&db, project_id, &profile).await;
+
+    let session_dir = dir.path().join("session");
+    std::fs::create_dir_all(&session_dir).expect("create session dir");
+    let argv_path = dir.path().join("argv.txt");
+    let script_path = write_argv_recording_claude_script(dir.path(), &session_dir, &argv_path);
+
+    let mut adapters = BTreeMap::new();
+    adapters.insert(
+        "claude".to_string(),
+        AdapterConfig {
+            enabled: true,
+            bin: script_path.to_string_lossy().into_owned(),
+            mode: CrewAdapterMode::Tui,
+            permission_mode: PermissionMode::Default,
+            model: Some("boot-loaded-sonnet".to_string()),
+            profile: "test".to_string(),
+            session_dir: Some(session_dir.to_string_lossy().into_owned()),
+            extra_args: Vec::new(),
+        },
+    );
+
+    let mut display_registry = DisplayRegistry::new();
+    display_registry.register(Box::new(HiddenDisplay::new(
+        crew_protocol::DisplayConfig::default(),
+    )));
+    let panes_dir = dir.path().join("panes");
+    std::fs::create_dir_all(&panes_dir).expect("create panes dir");
+
+    let registry = AdapterRegistry::new(
+        Arc::new(FixtureAuthorization { allow: true }),
+        dir.path().to_path_buf(),
+        None,
+        vec![],
+    );
+    registry.set_tui_support(Arc::new(TuiSupport {
+        display_registry: Arc::new(display_registry),
+        panes_dir,
+        crewd_path: PathBuf::from("/opt/crew/bin/crewd"),
+        state_dir: dir.path().to_path_buf(),
+        close_on_exit: CloseOnExit::Always,
+        forced_backend: None,
+        force_hidden_displays: false,
+        adapters,
+        timings: fast_timings(),
+        org_security_patterns: Vec::new(),
+    }));
+
+    let result = registry
+        .start(ctx(
+            Arc::clone(&db),
+            project_id,
+            run_id,
+            task_id,
+            worker_id,
+            "say hi",
+        ))
+        .await;
+    assert!(result.is_ok(), "starting the run must succeed: {result:?}");
+
+    let argv_written = wait_until(
+        || {
+            let argv_path = argv_path.clone();
+            async move { argv_path.exists() }
+        },
+        |exists: &bool| *exists,
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(
+        argv_written,
+        "the fake vendor process was never launched -- the argv file was never written"
+    );
+
+    let recorded = std::fs::read_to_string(&argv_path).expect("read recorded argv");
+    let argv: Vec<&str> = recorded.lines().collect();
+    let launched_model = argv
+        .iter()
+        .position(|arg| *arg == "--model")
+        .and_then(|i| argv.get(i + 1))
+        .copied();
+
+    assert_eq!(
+        launched_model,
+        Some("boot-loaded-sonnet"),
+        "a whitespace-only run model must fall through to crew.json's boot-loaded adapter config, \
+         not launch as a literal whitespace model overriding a good one -- got argv: {argv:?}"
+    );
+
+    if let Some(adapter) = registry.running_adapter(run_id) {
+        let _ = adapter.dispose().await;
+    }
+    db.shutdown().await.expect("shutdown database");
+}
+
 /// Row 3: neither a run-specific model nor a `crew.json` boot-loaded one
 /// -- the vendor's own hardcoded default (`default_claude_tui_config`'s
 /// `model: None`) must be left alone, meaning no `--model` flag reaches
