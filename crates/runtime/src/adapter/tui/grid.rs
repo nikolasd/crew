@@ -873,9 +873,11 @@ pub(super) const ALL_FIXTURES: &[&str] = &[
 /// why that is this function's default rather than something every other
 /// call site has to name. A future capture recorded at yet another size
 /// must be added to `AT_120X32` (or a sibling list, if a third size ever
-/// shows up) AND to the README's own table -- this function has no way
-/// to check the README for you, only to be wrong the same way it would
-/// be if you forgot the table too.
+/// shows up) AND to the README's own table -- `tests::
+/// fixture_size_agrees_with_the_readme_size_column` is what turns
+/// "must" into a failing test rather than a hope, by parsing the
+/// README's own table and comparing it against this function directly,
+/// so the two cannot drift against each other unnoticed.
 #[cfg(test)]
 pub(super) fn fixture_size(name: &str) -> (usize, usize) {
     const AT_120X32: &[&str] = &["codex-composer-empty.raw", "codex-composer-holding.raw"];
@@ -938,6 +940,75 @@ mod tests {
              listed but not on disk (renamed or removed?): {missing_from_disk:?}",
             dir.display()
         );
+    }
+
+    /// `fixture_size`'s own doc comment names its gap plainly: it is a
+    /// hand-maintained copy of the README's `Size` column, with nothing
+    /// checking the two still agree. This test is that check -- it
+    /// parses the README's own table (never a second hand-typed copy of
+    /// the sizes) and asserts `fixture_size` answers the same thing for
+    /// every committed capture, so a table edited without touching the
+    /// const (or the reverse) fails loudly instead of silently replaying
+    /// a future capture at the wrong geometry.
+    #[test]
+    fn fixture_size_agrees_with_the_readme_size_column() {
+        use std::collections::BTreeMap;
+
+        let readme_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/adapters/tui-screens/README.md");
+        let readme = std::fs::read_to_string(&readme_path)
+            .unwrap_or_else(|err| panic!("reading {}: {err}", readme_path.display()));
+
+        // A capture row looks like `| \`name.raw\` | vendor | WxH | gate |`.
+        // Splitting on '|' yields a leading (and trailing) empty cell from
+        // the row's own bounding pipes, so the name is cell 1 and the size
+        // is cell 3. The README's other table (the empty/holding phrase
+        // comparison) never has a `.raw` first cell, so it is skipped by
+        // construction, not by position.
+        let mut from_readme: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        for line in readme.lines() {
+            let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+            if cells.len() < 5 {
+                continue;
+            }
+            let Some(name) = cells[1].strip_prefix('`').and_then(|s| s.strip_suffix('`')) else {
+                continue;
+            };
+            if !name.ends_with(".raw") {
+                continue;
+            }
+            let Some((w, h)) = cells[3].split_once('x') else {
+                panic!("{name}: README Size column {:?} is not `WxH`", cells[3]);
+            };
+            let (w, h) = (
+                w.trim()
+                    .parse::<usize>()
+                    .unwrap_or_else(|err| panic!("{name}: width {w:?}: {err}")),
+                h.trim()
+                    .parse::<usize>()
+                    .unwrap_or_else(|err| panic!("{name}: height {h:?}: {err}")),
+            );
+            assert!(
+                from_readme.insert(name.to_string(), (w, h)).is_none(),
+                "{name}: appears more than once in the README's capture table"
+            );
+        }
+
+        let listed: std::collections::BTreeSet<&str> =
+            from_readme.keys().map(String::as_str).collect();
+        let all_fixtures: std::collections::BTreeSet<&str> = ALL_FIXTURES.iter().copied().collect();
+        assert_eq!(
+            listed, all_fixtures,
+            "the README's capture table must list exactly ALL_FIXTURES's own names"
+        );
+
+        for name in ALL_FIXTURES {
+            assert_eq!(
+                fixture_size(name),
+                from_readme[*name],
+                "{name}: fixture_size disagrees with the README's own Size column"
+            );
+        }
     }
 
     // -------------------------------------------------- the point of this module
