@@ -1531,17 +1531,16 @@ fn build_adapter(
                 // `AdapterMode::Protocol` arm already refuses resume
                 // before this function is ever reached for one.
                 //
-                // `model` is threaded through unresolved -- see
-                // `super::claude_protocol::adapter`'s own module doc
-                // comment on why the run-specific-over-boot-config
-                // precedence a correct value needs is not this
-                // function's to invent ahead of the fix for
-                // `build_tui_adapter`'s own model-resolution gap
-                // landing on this shared construction path.
-                // Trimmed defensively per `WorkerProfile::validate`'s
-                // own non-empty guarantee at `ProfileStore::insert` --
-                // belt and suspenders, not a guess at emptiness this
-                // adapter has any reason to expect.
+                // `profile.model` passed straight through, trimmed --
+                // see `super::claude_protocol::adapter`'s own module doc
+                // comment on why the boot-config-precedence
+                // `build_tui_adapter` needs has nothing to apply to
+                // here: no boot-loaded per-vendor config exists for
+                // protocol mode to override. Trimmed defensively per
+                // `WorkerProfile::validate`'s own non-empty guarantee at
+                // `ProfileStore::insert` -- belt and suspenders, not a
+                // guess at emptiness this adapter has any reason to
+                // expect.
                 let model = Some(profile.model.trim().to_string()).filter(|m| !m.is_empty());
                 Ok(Arc::new(
                     super::claude_protocol::adapter::ClaudeProtocolAdapter::new(

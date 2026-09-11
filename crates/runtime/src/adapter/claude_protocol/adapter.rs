@@ -15,14 +15,20 @@
 //! **Not in scope here** (see this spike's own PR body for the full
 //! non-goals list): a renderer beyond bare legibility, `resume`/
 //! `--continue`, the other three vendors, and performance work.
-//! `--model` is threaded through as a plain parameter this adapter does
-//! not resolve itself -- the run-specific-over-boot-config precedence a
-//! correct answer needs belongs to the fix for `build_adapter`'s other
-//! callers' own model-resolution gap, landing separately on the shared
-//! construction path first; this adapter inherits whatever it is
-//! handed, the same way
-//! `crate::adapter::tui::claude::ClaudeTuiVendor::base_args` reads
-//! `cfg.model` today, not a fix invented here ahead of it landing.
+//!
+//! `--model` is threaded through as a plain, already-resolved parameter
+//! this adapter does not itself resolve -- it is handed exactly
+//! `profile.model`, the run's own resolved model, the same field the
+//! fix for `build_tui_adapter`'s own model-resolution gap (that
+//! adapter's boot-config snapshot silently outliving a later per-run
+//! choice) threads through as `run_model`. There is no boot-loaded
+//! per-vendor config for protocol mode to override in the first place
+//! (no `crew.json` adapters map is ever read here), so that fix's
+//! three-row precedence has nothing to collide with: this adapter's own
+//! rule is simply "use it, trimmed, when non-empty; omit `--model`
+//! otherwise and let claude's own default apply" -- [`Self::start`]'s
+//! own test proves this against a REAL launched process's real argv,
+//! not a configured value, mirroring that fix's own reproduction shape.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -75,11 +81,19 @@ pub(crate) struct ClaudeProtocolAdapter {
     model: Option<String>,
     bundle: ProtocolBundle,
     /// Where to read claude's own trust record from --
-    /// `Some(trust::default_claude_json_path())` in production; `None`
-    /// only when `HOME` could not be resolved, in which case
-    /// [`Self::start`] treats the workspace as untrusted (fail closed,
-    /// never guessed).
+    /// `trust::default_claude_json_path()` in production; a temp path in
+    /// a test. `None` only when `HOME` could not be resolved, in which
+    /// case [`Self::start`] treats the workspace as untrusted (fail
+    /// closed, never guessed).
     claude_json_path: Option<PathBuf>,
+    /// The binary [`Self::start`] spawns -- `"claude"` (resolved via
+    /// `PATH`) in production, a fake script's path in a test. A plain
+    /// field, injected at construction, rather than a `PATH`-shadowing
+    /// trick or a `#[cfg(test)]` branch: the same shape
+    /// `AdapterConfig.bin` already gives `ClaudeTuiVendor`, so a test can
+    /// prove what actually reached `Command::new` without touching
+    /// global process state.
+    bin: String,
     /// The live child process, held for the duration of one turn so
     /// [`Adapter::cancel`] can reach it. `None` before the first
     /// [`Adapter::start`] call and after the turn ends.
@@ -100,8 +114,20 @@ impl ClaudeProtocolAdapter {
             model,
             bundle,
             claude_json_path: trust::default_claude_json_path(),
+            bin: "claude".to_string(),
             child: AsyncMutex::new(None),
         }
+    }
+
+    /// Overrides where [`Self::start`] reads the trust record from and
+    /// which binary it spawns -- a test-only seam, never reachable from
+    /// production construction (`Self::new` above is the only
+    /// `pub(crate)` constructor `super::super::registry` can see).
+    #[cfg(test)]
+    fn with_test_overrides(mut self, claude_json_path: PathBuf, bin: String) -> Self {
+        self.claude_json_path = Some(claude_json_path);
+        self.bin = bin;
+        self
     }
 
     fn env(&self) -> std::collections::HashMap<String, String> {
@@ -205,7 +231,7 @@ impl Adapter for ClaudeProtocolAdapter {
     /// a long-lived stream this adapter needs to hold open.
     fn probe(&self) -> AdapterFuture<'_, ProbeResult> {
         Box::pin(async move {
-            let output = std::process::Command::new("claude")
+            let output = std::process::Command::new(&self.bin)
                 .arg("--version")
                 .output()
                 .map_err(|e| AdapterError::unavailable(self.kind(), "probe", e.to_string()))?;
@@ -266,7 +292,7 @@ impl Adapter for ClaudeProtocolAdapter {
             let argv = super::launch::build_argv(model);
             let env = self.env();
 
-            let mut command = tokio::process::Command::new("claude");
+            let mut command = tokio::process::Command::new(&self.bin);
             command
                 .args(&argv)
                 .current_dir(&canonical_repo_root)
@@ -430,5 +456,160 @@ impl Adapter for ClaudeProtocolAdapter {
             *guard = None;
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc as StdArc;
+
+    use tokio::sync::broadcast;
+
+    use crew_protocol::{RunId, TaskId, WorkerId};
+
+    use crate::approval::NoopApprovalCallback;
+    use crate::db::DatabaseHandle;
+
+    /// A minimal in-memory sink that just records every payload it was
+    /// handed -- the same small fixture `reader.rs`'s own test module
+    /// defines, duplicated here rather than exported across a private
+    /// module boundary for one shared use.
+    struct RecordingSink {
+        events: StdArc<parking_lot::Mutex<Vec<AdapterEventPayload>>>,
+    }
+
+    impl AdapterEventSink for RecordingSink {
+        fn emit(&self, event: AdapterEvent) -> AdapterFuture<'_, u64> {
+            self.events.lock().push(event.payload);
+            Box::pin(async { Ok(0) })
+        }
+
+        fn note_real_user_turn(&self, _run_id: RunId) -> AdapterFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    /// A fake `claude` that dumps its own received argv (one entry per
+    /// line) to `argv_path` before doing anything else, then emits just
+    /// enough `stream-json` to let [`Adapter::start`] complete: a
+    /// `system/init` line (so reconciliation has a session id to look
+    /// for, even though no transcript file will exist for it) and a
+    /// `result` line. Mirrors
+    /// `crates/runtime/tests/tui_claude_registry.rs`'s own
+    /// `write_argv_recording_claude_script` -- the same proof shape
+    /// (read back what was actually executed, not a stored value that
+    /// could look right while the real spawn used something else), a
+    /// stream-json body instead of a PTY transcript.
+    fn write_argv_recording_fake_claude(
+        dir: &std::path::Path,
+        argv_path: &std::path::Path,
+    ) -> PathBuf {
+        let script = format!(
+            r#"#!/bin/sh
+printf '%s\n' "$@" > "{argv_path}"
+read -r _first_line
+echo '{{"type":"system","subtype":"init","session_id":"sess-argv-test"}}'
+echo '{{"type":"result","subtype":"success"}}'
+"#,
+            argv_path = argv_path.display(),
+        );
+        let path = dir.join("fake-claude.sh");
+        std::fs::write(&path, script).expect("write fake claude script");
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    /// Keyed on the CANONICALIZED repo root -- `Self::start` canonicalizes
+    /// before checking (matching `ClaudeTuiVendor::transcript_root`'s own
+    /// precedent that a real recording proved necessary: a tempdir under
+    /// `/tmp`/`/var` is frequently a symlink to `/private/tmp`/
+    /// `/private/var` on macOS, so the raw and canonical paths can
+    /// genuinely differ even for a path this test itself just created).
+    fn trusted_claude_json(dir: &std::path::Path, repo_root: &std::path::Path) -> PathBuf {
+        let canonical =
+            std::fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+        let path = dir.join(".claude.json");
+        let contents = serde_json::json!({
+            "projects": {
+                canonical.to_string_lossy().to_string(): { "hasTrustDialogAccepted": true },
+            }
+        });
+        std::fs::write(&path, contents.to_string()).unwrap();
+        path
+    }
+
+    /// The same reproduction shape the `build_tui_adapter` model-resolution
+    /// fix used: assert against the ARGV THE REAL SPAWN RECEIVED, read
+    /// back from a file the fake binary itself wrote, never a
+    /// configured/stored value that could look right while the actual
+    /// launch used something else. Proves `--model` reaches the real
+    /// launch for this adapter the same way that fix proved it for
+    /// `TuiAdapter`.
+    #[tokio::test]
+    async fn the_resolved_model_reaches_the_real_launched_argv() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo_root = dir.path().join("repo");
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let argv_path = dir.path().join("argv.txt");
+        let bin = write_argv_recording_fake_claude(dir.path(), &argv_path);
+        let claude_json_path = trusted_claude_json(dir.path(), &repo_root);
+
+        let state_dir = tempfile::TempDir::new().unwrap();
+        let db = StdArc::new(
+            DatabaseHandle::start(state_dir.path().join("runtime.db"))
+                .await
+                .unwrap(),
+        );
+        let project_id = crew_protocol::ProjectId::new();
+        let approval_service = StdArc::new(ApprovalService::new(
+            StdArc::clone(&db),
+            project_id,
+            StdArc::new(NoopApprovalCallback) as StdArc<dyn crate::approval::ApprovalCallback>,
+            broadcast::channel(64).0,
+        ));
+        let callback = StdArc::new(ProtocolApprovalCallback::new());
+
+        let adapter = ClaudeProtocolAdapter::new(
+            repo_root.clone(),
+            Vec::new(),
+            Some("claude-sonnet-5".to_string()),
+            ProtocolBundle {
+                approval_service,
+                callback,
+            },
+        )
+        .with_test_overrides(claude_json_path, bin.to_string_lossy().to_string());
+
+        let events = StdArc::new(parking_lot::Mutex::new(Vec::new()));
+        let sink: Arc<dyn AdapterEventSink> = Arc::new(RecordingSink {
+            events: StdArc::clone(&events),
+        });
+
+        adapter
+            .start(
+                StartSpec {
+                    run_id: RunId::new(),
+                    task_id: TaskId::new(),
+                    worker_id: WorkerId::new(),
+                    prompt: "hello".to_string(),
+                    resume: None,
+                },
+                sink,
+            )
+            .await
+            .expect("start must succeed against the fake binary");
+
+        let recorded_argv = std::fs::read_to_string(&argv_path).expect("fake binary must have run");
+        let argv: Vec<&str> = recorded_argv.lines().collect();
+        assert!(
+            argv.windows(2).any(|w| w == ["--model", "claude-sonnet-5"]),
+            "expected --model claude-sonnet-5 in the real launched argv, got: {argv:?}"
+        );
+
+        db.shutdown().await.ok();
     }
 }
