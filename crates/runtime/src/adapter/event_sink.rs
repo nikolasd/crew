@@ -155,6 +155,24 @@ pub enum AdapterEventPayload {
     FirstRunGateDetected {
         kind: crew_protocol::FirstRunGateKind,
     },
+    /// A protocol-first adapter (ADR-0037) reconciled its journal against
+    /// the vendor's own durable transcript for this run -- the audit path
+    /// a live event stream alone cannot guarantee, since no vendor's
+    /// wire carries a sequence number a dropped message would be missed
+    /// against. Carries no free text, only counts: `examined` is how
+    /// many transcript entries this pass actually looked at, and
+    /// `examined == 0` is itself a finding, not a clean pass -- a
+    /// reconciliation that never looked at anything is indistinguishable
+    /// from one that never ran, and a boolean "did it run" flag cannot
+    /// tell those apart the way a real count can. `gaps_found` and
+    /// `gaps_repaired` are expected to be equal; a caller finding them
+    /// unequal has found a defect in the repair step itself, not in the
+    /// vendor's transcript.
+    ReconciliationCompleted {
+        examined: u64,
+        gaps_found: u64,
+        gaps_repaired: u64,
+    },
 }
 
 /// Adapters push ordered normalized events into the runtime journal
@@ -440,6 +458,18 @@ impl DomainAdapterEventSink {
                     kind,
                 }
             }
+            AdapterEventPayload::ReconciliationCompleted {
+                examined,
+                gaps_found,
+                gaps_repaired,
+            } => RuntimeEvent::AdapterReconciliationEvent {
+                run_id,
+                task_id,
+                worker_id,
+                examined,
+                gaps_found,
+                gaps_repaired,
+            },
         }
     }
 }

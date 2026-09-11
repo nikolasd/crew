@@ -905,6 +905,26 @@ pub enum RuntimeEvent {
         output_tokens: u64,
         cost_usd: Option<f64>,
     },
+    /// A protocol-first adapter (ADR-0037) reconciled its journal against
+    /// the vendor's own durable transcript for this run. Carries no free
+    /// text, only counts. `examined == 0` is itself a finding, not a
+    /// clean pass: a reconciliation that never looked at anything is
+    /// indistinguishable from one that never ran at all, and this is the
+    /// field that lets a reader (or a future check) tell those two
+    /// apart. `gapsFound` and `gapsRepaired` are expected equal; a
+    /// caller finding them unequal has found a defect in the repair step
+    /// itself, not in the vendor's own transcript.
+    AdapterReconciliationEvent {
+        run_id: RunId,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        #[ts(type = "number")]
+        examined: u64,
+        #[ts(type = "number")]
+        gaps_found: u64,
+        #[ts(type = "number")]
+        gaps_repaired: u64,
+    },
     /// An artifact produced by a worker adapter.
     AdapterArtifactEvent {
         run_id: RunId,

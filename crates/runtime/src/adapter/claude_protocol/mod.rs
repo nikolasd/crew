@@ -16,6 +16,18 @@
 //! (with a test-only seam to prove that reconciliation actually catches
 //! a dropped event), and the pane renderer.
 
+// `pub`, not `pub(crate)`: `crates/runtime/tests/claude_protocol_reconcile.rs`
+// links this crate as an ordinary external dependency specifically to
+// reach `find_gaps` under a compilation where `cfg(test)` is NOT applied
+// to this crate's own code -- the one place able to prove the
+// production (never-injected) parse path actually runs, on the same
+// rule `adapter::tui::grid`'s own module doc comment states for
+// `TerminalGrid`. The test-only injection seam itself
+// (`reconcile::arm_drop_for_test`) stays private to this module: an
+// external, production-shaped caller must never be able to reach it,
+// only to prove it is not there.
+pub mod reconcile;
+
 use super::capability::{
     AdapterCapabilities, ApprovalsCapability, DurabilityCapability, NativeViewCapability,
     NestedCapability, ProtocolKind, ResumeCapability, SteeringCapability, UsageCapability,

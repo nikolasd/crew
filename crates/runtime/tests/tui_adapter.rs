@@ -112,6 +112,7 @@ fn kind_of(payload: &AdapterEventPayload) -> &'static str {
         AdapterEventPayload::OutOfBandInput { .. } => "OutOfBandInput",
         AdapterEventPayload::TurnEnded { .. } => "TurnEnded",
         AdapterEventPayload::FirstRunGateDetected { .. } => "FirstRunGateDetected",
+        AdapterEventPayload::ReconciliationCompleted { .. } => "ReconciliationCompleted",
     }
 }
 
