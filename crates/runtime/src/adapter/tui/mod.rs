@@ -80,13 +80,12 @@ use crate::conformance::ConformanceReport;
 /// registry/config -- and `AdapterRegistry` builds a fresh
 /// `PaneCoordinator` per run from this plus that run's own context.
 ///
-/// No longer TUI-specific despite the name: `AdapterMode::Protocol`
-/// (ADR-0037) reuses this same bundle for its own pane wiring, since
-/// every field here is a display/pane-coordination concern, not a
-/// PTY-specific one. The name stays `TuiSupport` for now -- renaming it
-/// is filed as a card gated on the ADR's acceptance, not done mid-spike,
-/// to avoid churning a shared struct for code that may be discarded if
-/// the ADR is rejected.
+/// Not inherently TUI-specific despite the name: every field here is a
+/// display/pane-coordination concern, not a PTY-specific one, so
+/// `AdapterMode::Protocol`'s own pane renderer (not yet built) is
+/// expected to reuse this bundle rather than invent a second one. The
+/// name stays `TuiSupport` for now, to avoid churning a shared struct
+/// ahead of that renderer actually existing.
 #[derive(Clone)]
 pub struct TuiSupport {
     pub display_registry: Arc<DisplayRegistry>,

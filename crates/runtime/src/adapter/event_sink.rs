@@ -155,7 +155,7 @@ pub enum AdapterEventPayload {
     FirstRunGateDetected {
         kind: crew_protocol::FirstRunGateKind,
     },
-    /// A protocol-first adapter (ADR-0037) reconciled its journal against
+    /// A protocol-first adapter reconciled its journal against
     /// the vendor's own durable transcript for this run -- the audit path
     /// a live event stream alone cannot guarantee, since no vendor's
     /// wire carries a sequence number a dropped message would be missed

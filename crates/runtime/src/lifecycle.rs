@@ -410,7 +410,7 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         events_tx: server.events_sender(),
     }));
 
-    // Protocol-mode (ADR-0037) support: the server-owned `ApprovalService`
+    // Protocol-mode support: the server-owned `ApprovalService`
     // only exists once `Server::bind` has constructed its own
     // `OrchestrationService` -- a post-construction setter for the same
     // reason `set_resume_support` above is. `protocol_callback` is the

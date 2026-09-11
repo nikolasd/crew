@@ -195,14 +195,14 @@ impl Default for DisplayConfig {
 /// `Headless`, naming the retirement and directing the operator to
 /// `"tui"`. See `docs/adr/0026-headless-retirement.md`.
 ///
-/// `Protocol` (ADR-0037) drives a vendor over its own structured
-/// protocol -- newline-delimited JSON over a subprocess's stdio, not a
-/// PTY -- with the terminal reduced to a self-rendered view rather than
-/// the control surface. Once ADR-0037 is accepted, `Tui` stops meaning
-/// "the way crew controls this vendor" and starts meaning "the legacy,
-/// screen-driven path" for whichever vendors have not moved to
-/// `Protocol` yet -- worth saying here so a future reader does not
-/// assume the TUI path itself has no protocol underneath it.
+/// `Protocol` drives a vendor over its own structured protocol --
+/// newline-delimited JSON over a subprocess's stdio, not a PTY -- with
+/// the terminal reduced to a self-rendered view rather than the control
+/// surface. A second, independent control path alongside `Tui`, not a
+/// replacement for it: worth saying here so a future reader does not
+/// assume the TUI path itself has no protocol underneath it (it does --
+/// the vendor's own screen-rendering protocol -- `Protocol` mode is
+/// about which one crew treats as authoritative).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum AdapterMode {

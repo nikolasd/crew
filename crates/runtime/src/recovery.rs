@@ -759,9 +759,9 @@ impl RecoveryCoordinator {
                 ));
             }
             Some(AdapterMode::Protocol) => {
-                // ADR-0037's protocol-first adapters do not implement
-                // resume yet -- explicitly a non-goal of the spike that
-                // introduces the first one (`crate::adapter::claude_protocol`).
+                // Protocol-first adapters (`crate::adapter::claude_protocol`)
+                // do not implement resume yet -- explicitly out of scope
+                // for the first one.
                 // Reject here, at the same point the `Headless` rejection
                 // above fires, rather than let a resume attempt reach a
                 // downstream failure shaped like something else.

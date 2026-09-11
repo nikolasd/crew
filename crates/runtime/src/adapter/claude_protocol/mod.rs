@@ -1,4 +1,4 @@
-//! The claude protocol adapter (ADR-0037 spike): drives `claude -p
+//! The claude protocol adapter: drives `claude -p
 //! --input-format stream-json --output-format stream-json` and its
 //! control channel directly, rather than a PTY -- the terminal becomes a
 //! self-rendered view, never the control surface. Selected by

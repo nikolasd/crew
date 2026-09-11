@@ -97,7 +97,7 @@ pub trait AdapterAuthorization: Send + Sync {
     /// rather than the per-scenario one above:** `effective_capabilities`
     /// is a [`GatedCapabilities`], not a bare [`AdapterCapabilities`],
     /// specifically so a mode with no conformance suite to run AT ALL
-    /// (`AdapterMode::Protocol`, ADR-0037, spike-scoped -- see
+    /// (`AdapterMode::Protocol`, which has none yet -- see
     /// [`GatedCapabilities::Unproven`]) cannot reach this function
     /// looking identical to a suite that actually ran. The binding
     /// constraint above extends to it: a real capability check must
@@ -209,7 +209,7 @@ pub enum RegistryError {
     /// until its TUI vendor impl lands).
     #[error("adapter {0} has no TUI-mode implementation yet; mode: \"tui\" is unavailable for it")]
     TuiModeUnavailable(String),
-    /// `mode: "protocol"` (ADR-0037) was requested but
+    /// `mode: "protocol"` was requested but
     /// [`AdapterRegistry::set_protocol_support`] was never called --
     /// the same defense-in-depth shape as [`Self::TuiModeUnavailable`]:
     /// `gate_profile` already refuses a non-Claude kind under this mode
@@ -1150,8 +1150,8 @@ async fn gate_profile(
                 RegistryError::HeadlessControlPlaneRetired(kind.wire_name().to_string()).into(),
             );
         }
-        // ADR-0037's protocol-first control plane (spike-scoped, claude
-        // only: `crate::adapter::claude_protocol`) has no conformance
+        // The protocol-first control plane (claude only for now:
+        // `crate::adapter::claude_protocol`) has no conformance
         // suite to run at all yet -- unlike `Headless` above, this is
         // not a permanent rejection, just an as-yet-unproven one. Reject
         // OTHER kinds under this mode (nothing implements them), and for
@@ -1510,7 +1510,7 @@ fn build_adapter(
         ));
     }
 
-    // `mode: "protocol"` (ADR-0037): `gate_profile` already refuses every
+    // `mode: "protocol"`: `gate_profile` already refuses every
     // kind but Claude before this function is ever reached under this
     // mode, so the only real branch here is Claude's own. `protocol`
     // absent is the same defense-in-depth shape `tui` absent is above --
@@ -2674,8 +2674,8 @@ mod conformance_cache_tests {
         }
     }
 
-    /// `AdapterMode::Protocol` (ADR-0037, spike-scoped) has no
-    /// conformance suite to run at all yet -- unlike `Headless`, this is
+    /// `AdapterMode::Protocol` has no conformance suite to run at all
+    /// yet -- unlike `Headless`, this is
     /// a temporary, not permanent, gap, so `gate_profile` proceeds rather
     /// than refusing outright, but must not let the result look like a
     /// suite that actually ran. Pins the whole shape of that: no suite
