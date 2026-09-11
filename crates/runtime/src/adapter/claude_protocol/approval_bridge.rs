@@ -90,12 +90,21 @@ pub(crate) fn build_permission_response(request_id: &str, decision: &str) -> Vec
 /// call and no idea what the decision refers to. The channel makes that
 /// coupling explicit and lets it die with the request, which is what the
 /// domain actually looks like.
-pub(crate) struct ProtocolApprovalCallback {
+pub struct ProtocolApprovalCallback {
     pending: StdMutex<HashMap<ApprovalId, oneshot::Sender<String>>>,
 }
 
 impl ProtocolApprovalCallback {
-    pub(crate) fn new() -> Self {
+    /// `pub`, not `pub(crate)`: `crates/runtime/tests/tui_claude_registry.rs`
+    /// constructs one directly, as an ordinary external dependency, to
+    /// install the REAL daemon-shaped `ApprovalService` wiring
+    /// (`ProtocolApprovalCallback` as its callback, exactly as
+    /// `lifecycle.rs` wires it) ahead of a TUI run, and prove that run's
+    /// own behavior is unaffected by it -- the same "widen specifically
+    /// so an external test can prove a production property" precedent
+    /// `claude_protocol::reconcile`'s own module already set.
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             pending: StdMutex::new(HashMap::new()),
         }

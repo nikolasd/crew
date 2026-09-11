@@ -20,7 +20,11 @@
 //! other three vendors.
 
 pub(crate) mod adapter;
-pub(crate) mod approval_bridge;
+// `pub`, not `pub(crate)`: `ProtocolApprovalCallback`'s own doc comment
+// explains why an external test needs to reach it (the same "widen to
+// let a test prove a production property" precedent `reconcile` below
+// already set, for a different property).
+pub mod approval_bridge;
 pub(crate) mod launch;
 pub(crate) mod reader;
 pub(crate) mod trust;

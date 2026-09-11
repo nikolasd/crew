@@ -37,8 +37,8 @@ pub use profile::{
 };
 pub use profile_store::{ProfileStore, ProfileStoreError};
 pub use registry::{
-    AdapterAuthorization, AdapterRegistry, FixtureAuthorization, GatedCapabilities, RegistryError,
-    ResumeSupport,
+    AdapterAuthorization, AdapterRegistry, FixtureAuthorization, GatedCapabilities,
+    ProtocolSupport, RegistryError, ResumeSupport,
 };
 pub use run_lifecycle::RunLifecycleSink;
 pub use r#trait::{

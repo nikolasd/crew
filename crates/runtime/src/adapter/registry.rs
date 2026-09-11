@@ -307,9 +307,18 @@ pub struct ResumeSupport {
 /// `crate::ipc::Server::bind` (from `ServerConfig::approval_callback`),
 /// which happens after this registry must already be handed to
 /// [`crate::ipc::ServerConfig::run_driver`].
-pub(crate) struct ProtocolSupport {
-    pub(crate) approval_service: Arc<crate::approval::ApprovalService>,
-    pub(crate) callback: Arc<super::claude_protocol::approval_bridge::ProtocolApprovalCallback>,
+///
+/// `pub`, not `pub(crate)`, on the same basis as
+/// `super::claude_protocol::approval_bridge::ProtocolApprovalCallback`'s
+/// own doc comment: `crates/runtime/tests/tui_claude_registry.rs`
+/// installs this bundle on a registry driving a TUI run, to prove that
+/// run's behavior is unaffected by the real daemon-shaped approval
+/// wiring being present -- it never touches `mode: "tui"`'s own
+/// dispatch, but the earlier version of this claim was asserted, not
+/// proven.
+pub struct ProtocolSupport {
+    pub approval_service: Arc<crate::approval::ApprovalService>,
+    pub callback: Arc<super::claude_protocol::approval_bridge::ProtocolApprovalCallback>,
 }
 
 /// Implements [`RunDriver`] against the four real worker adapters.
@@ -444,7 +453,7 @@ impl AdapterRegistry {
     /// `AdapterMode::Protocol` branch needs. A post-construction setter
     /// for the same reason `set_resume_support` is -- see
     /// [`ProtocolSupport`]'s own doc comment.
-    pub(crate) fn set_protocol_support(&self, support: Arc<ProtocolSupport>) {
+    pub fn set_protocol_support(&self, support: Arc<ProtocolSupport>) {
         *self.protocol.lock() = Some(support);
     }
 
