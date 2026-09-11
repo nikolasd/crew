@@ -39,20 +39,31 @@ pub enum GateKind {
 
 /// What a vendor's terminal surface currently shows. `pub` for the same
 /// reason as [`GateKind`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Surface {
     /// A recognized first-run gate is blocking the run; see [`GateKind`].
+    /// Matched BEFORE the grid-trust check below, deliberately -- see
+    /// [`classify_surface`]'s own doc comment for why a positive gate
+    /// match is trusted even against an [`Surface::Unreadable`] grid.
     Gate(GateKind),
     /// The vendor's main composer is up and no known gate is blocking it.
     PromptReady,
     /// Neither a known gate nor prompt-readiness is recognizable on the
-    /// current surface. This is not "probably fine" -- it is the state a
-    /// caller must park on and escalate from, never treat as ready: a
-    /// truly novel gate this module does not yet know about renders
-    /// exactly like this, and so does a grid that hit
-    /// [`TerminalGrid::unsupported`] (an escape sequence it could not
-    /// apply safely, so its rendered content can no longer be trusted).
+    /// current surface, and the grid itself is trustworthy (no
+    /// unsupported escape sequence is currently latched). This is not
+    /// "probably fine" -- it is the state a caller must park on and
+    /// escalate from, never treat as ready: a truly novel gate this
+    /// module does not yet know about renders exactly like this.
     Undecided,
+    /// An escape sequence this grid could not apply safely is currently
+    /// latched (see [`TerminalGrid::unsupported`]), so nothing below a
+    /// matched gate phrase can be trusted -- a positive gate match still
+    /// wins over this (see [`classify_surface`]), but the absence of one
+    /// proves nothing here. Carries the same closed-set class name
+    /// [`TerminalGrid::unsupported`] returns, for a caller's failure
+    /// detail to name -- never the raw sequence; see that method's own
+    /// doc comment for why.
+    Unreadable(String),
 }
 
 // --------------------------------------------------------------- claude
@@ -74,29 +85,21 @@ const CLAUDE_SIGNIN_TITLE: &str = "Select login method:";
 /// checks, that ordering is what silently breaks, not this constant.
 const CLAUDE_PROMPT_READY_BANNER: &str = "Claude Code";
 
-/// Classifies claude's current terminal surface. Gate checks run first,
-/// in the order above, and return on the first match; see
+/// Classifies claude's current terminal surface using the shared
+/// precedence (see [`classify_surface`]); gate checks run in the order
+/// above and return on the first match -- see
 /// [`CLAUDE_PROMPT_READY_BANNER`]'s doc comment for why that order is
 /// load-bearing, not incidental.
 pub(crate) fn classify_claude_surface(grid: &TerminalGrid) -> Surface {
-    // An escape sequence the grid could not apply safely means its
-    // rendered content is no longer trustworthy -- see `Surface::Undecided`.
-    if grid.unsupported().is_some() {
-        return Surface::Undecided;
-    }
-    if grid.shows(CLAUDE_WORKSPACE_TRUST_TITLE) {
-        return Surface::Gate(GateKind::ClaudeWorkspaceTrust);
-    }
-    if grid.shows(CLAUDE_THEME_PICKER_TITLE) {
-        return Surface::Gate(GateKind::ClaudeThemePicker);
-    }
-    if grid.shows(CLAUDE_SIGNIN_TITLE) {
-        return Surface::Gate(GateKind::ClaudeSignIn);
-    }
-    if grid.shows(CLAUDE_PROMPT_READY_BANNER) {
-        return Surface::PromptReady;
-    }
-    Surface::Undecided
+    classify_surface(
+        grid,
+        &[
+            (CLAUDE_WORKSPACE_TRUST_TITLE, GateKind::ClaudeWorkspaceTrust),
+            (CLAUDE_THEME_PICKER_TITLE, GateKind::ClaudeThemePicker),
+            (CLAUDE_SIGNIN_TITLE, GateKind::ClaudeSignIn),
+        ],
+        CLAUDE_PROMPT_READY_BANNER,
+    )
 }
 
 // ---------------------------------------------------------------- codex
@@ -114,22 +117,16 @@ const CODEX_SIGNIN_TITLE: &str = "Sign in with ChatGPT";
 const CODEX_PROMPT_READY: &str = "Ask Codex to do anything";
 
 /// Classifies codex's current terminal surface. See
-/// [`classify_claude_surface`] for the shared structure and the
-/// `unsupported` check both share.
+/// [`classify_claude_surface`] for the shared structure both use.
 pub(crate) fn classify_codex_surface(grid: &TerminalGrid) -> Surface {
-    if grid.unsupported().is_some() {
-        return Surface::Undecided;
-    }
-    if grid.shows(CODEX_DIRECTORY_TRUST_TITLE) {
-        return Surface::Gate(GateKind::CodexDirectoryTrust);
-    }
-    if grid.shows(CODEX_SIGNIN_TITLE) {
-        return Surface::Gate(GateKind::CodexSignIn);
-    }
-    if grid.shows(CODEX_PROMPT_READY) {
-        return Surface::PromptReady;
-    }
-    Surface::Undecided
+    classify_surface(
+        grid,
+        &[
+            (CODEX_DIRECTORY_TRUST_TITLE, GateKind::CodexDirectoryTrust),
+            (CODEX_SIGNIN_TITLE, GateKind::CodexSignIn),
+        ],
+        CODEX_PROMPT_READY,
+    )
 }
 
 // ------------------------------------------------------------- copilot
@@ -162,19 +159,13 @@ const COPILOT_FOLDER_TRUST_TITLE: &str = "Confirm folder trust";
 const COPILOT_PROMPT_READY_FOOTER: &str = "open sidebar";
 
 /// Classifies copilot's current terminal surface. See
-/// [`classify_claude_surface`] for the shared structure and the
-/// `unsupported` check both share.
+/// [`classify_claude_surface`] for the shared structure both use.
 pub(crate) fn classify_copilot_surface(grid: &TerminalGrid) -> Surface {
-    if grid.unsupported().is_some() {
-        return Surface::Undecided;
-    }
-    if grid.shows(COPILOT_FOLDER_TRUST_TITLE) {
-        return Surface::Gate(GateKind::CopilotFolderTrust);
-    }
-    if grid.shows(COPILOT_PROMPT_READY_FOOTER) {
-        return Surface::PromptReady;
-    }
-    Surface::Undecided
+    classify_surface(
+        grid,
+        &[(COPILOT_FOLDER_TRUST_TITLE, GateKind::CopilotFolderTrust)],
+        COPILOT_PROMPT_READY_FOOTER,
+    )
 }
 
 // -------------------------------------------------------------- omp
@@ -240,13 +231,46 @@ pub(crate) fn classify_copilot_surface(grid: &TerminalGrid) -> Surface {
 const OMP_PROMPT_READY_TIP: &str = "for prompt actions";
 
 /// Classifies omp's current terminal surface. Unlike every other
-/// classifier in this module, there is no gate branch at all -- see
+/// classifier in this module, there is no gate list at all -- see
 /// [`OMP_PROMPT_READY_TIP`]'s own doc comment for why.
 pub(crate) fn classify_omp_surface(grid: &TerminalGrid) -> Surface {
-    if grid.unsupported().is_some() {
-        return Surface::Undecided;
+    classify_surface(grid, &[], OMP_PROMPT_READY_TIP)
+}
+
+/// The precedence every vendor's classifier above shares, parameterized
+/// on its own gate list and ready phrase:
+///
+/// 1. a gate phrase match, checked first, regardless of the grid's
+///    trustworthiness;
+/// 2. the grid being untrustworthy (an unsupported escape sequence is
+///    currently latched);
+/// 3. the ready phrase;
+/// 4. otherwise, nothing matched.
+///
+/// Gate detection runs before the trust check -- the reverse of this
+/// module's original order -- because the two kinds of evidence are not
+/// symmetric. An unimplemented escape sequence can only distort layout:
+/// it moves things, erases things, leaves stale content standing: it
+/// never invents text that was not already somewhere in the vendor's own
+/// output. So a positive phrase match (`grid.shows(phrase)` returning
+/// true) is real evidence even when the grid is otherwise untrustworthy,
+/// while the ABSENCE of one proves nothing about a grid that might be
+/// hiding a phrase behind exactly the distortion that made it
+/// untrustworthy. Checking gates only after ruling the grid untrustworthy
+/// (this module's original order) let one unimplemented sequence
+/// permanently blind every later check to a gate that was genuinely,
+/// visibly on screen -- the live regression a real first-run sign-in gate
+/// went unrecognized for.
+fn classify_surface(grid: &TerminalGrid, gates: &[(&str, GateKind)], ready: &str) -> Surface {
+    for (phrase, kind) in gates {
+        if grid.shows(phrase) {
+            return Surface::Gate(*kind);
+        }
     }
-    if grid.shows(OMP_PROMPT_READY_TIP) {
+    if let Some(class) = grid.unsupported() {
+        return Surface::Unreadable(class.to_string());
+    }
+    if grid.shows(ready) {
         return Surface::PromptReady;
     }
     Surface::Undecided
@@ -271,7 +295,7 @@ mod tests {
     }
 
     fn grid_from(name: &str) -> TerminalGrid {
-        TerminalGrid::from_bytes(&fixture(name))
+        TerminalGrid::from_named_fixture_bytes(name, &fixture(name))
     }
 
     /// Pushes a fixture in real-PTY-read-sized chunks, reporting whether
@@ -287,7 +311,7 @@ mod tests {
     /// what its name claims, and it is also the strictly stronger check
     /// for the fixtures whose final state IS the gate.
     fn ever_shows(bytes: &[u8], phrase: &str) -> bool {
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         let mut ever = false;
         for chunk in bytes.chunks(64) {
             grid.push(chunk);
@@ -418,7 +442,7 @@ mod tests {
     #[test]
     fn claude_signin_is_shown_before_it_moves_on_to_a_later_screen() {
         let bytes = fixture("claude-signin-method.raw");
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         let mut saw_signin = false;
         for chunk in bytes.chunks(64) {
             grid.push(chunk);
@@ -459,7 +483,7 @@ mod tests {
     #[test]
     fn codex_directory_trust_is_shown_before_it_moves_on_to_startup() {
         let bytes = fixture("codex-directory-trust.raw");
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         let mut saw_gate = false;
         for chunk in bytes.chunks(64) {
             grid.push(chunk);
@@ -499,7 +523,7 @@ mod tests {
     #[test]
     fn classifies_codex_prompt_ready_before_its_gate_is_drawn() {
         let bytes = fixture("codex-composer-then-trust.raw");
-        let mut grid = TerminalGrid::new();
+        let mut grid = TerminalGrid::new_at_fixture_size();
         let mut saw_prompt_ready = false;
         for chunk in bytes.chunks(64) {
             grid.push(chunk);
@@ -664,20 +688,27 @@ mod tests {
     /// it is the simplest such surface.
     #[test]
     fn an_empty_surface_is_undecided_for_both_vendors() {
-        let grid = TerminalGrid::new();
+        let grid = TerminalGrid::new_at_fixture_size();
         assert_eq!(classify_claude_surface(&grid), Surface::Undecided);
         assert_eq!(classify_codex_surface(&grid), Surface::Undecided);
         assert_eq!(classify_copilot_surface(&grid), Surface::Undecided);
         assert_eq!(classify_omp_surface(&grid), Surface::Undecided);
     }
 
-    /// `TerminalGrid::unsupported` is not decorative: once it is set,
-    /// `classify_*_surface` must return `Undecided` even if a known phrase
-    /// also happens to be showing, because the grid's content past the
-    /// unsupported sequence is not trustworthy.
+    /// The single most important test in this module: a real, on-screen
+    /// gate must never be masked by an unrelated unsupported escape
+    /// sequence appearing anywhere else in the same output. This is the
+    /// live regression (a genuine codex sign-in gate went unrecognized
+    /// because an unimplemented escape sequence had already latched
+    /// `TerminalGrid::unsupported`, and the classifier used to check that
+    /// flag BEFORE any gate phrase) -- see [`classify_surface`]'s own doc
+    /// comment for why gate phrases are checked first now. Deliberately
+    /// asserted through `catch_unwind` around the actual `push` that
+    /// trips `mark_unsupported`, not by calling a lower-level setter,
+    /// so this exercises the exact same recording path production hits.
     #[test]
-    fn an_unsupported_sequence_forces_undecided_even_with_a_known_phrase_showing() {
-        let mut grid = TerminalGrid::new();
+    fn a_gate_phrase_survives_an_unsupported_sequence_and_still_returns_gate() {
+        let mut grid = TerminalGrid::new_at_fixture_size();
         // Inspecting `grid` after the panic is only meaningful because
         // `mark_unsupported` records before it panics, not after (see its
         // own doc comment in grid.rs) -- that ordering is exactly what
@@ -690,13 +721,67 @@ mod tests {
             "test builds still panic on a novel CSI final byte, unchanged by this module"
         );
         assert!(
+            grid.unsupported().is_some(),
+            "the unsupported sequence must actually have latched for this test to mean anything"
+        );
+        assert!(
             grid.shows(CLAUDE_WORKSPACE_TRUST_TITLE),
-            "the phrase must genuinely be on screen for this test to mean anything"
+            "the gate phrase must genuinely be on screen for this test to mean anything"
         );
         assert_eq!(
             classify_claude_surface(&grid),
-            Surface::Undecided,
-            "a grid that hit an unsupported sequence must classify as Undecided regardless of what phrase it also shows"
+            Surface::Gate(GateKind::ClaudeWorkspaceTrust),
+            "a gate phrase actually on screen must be recognized regardless of an unrelated \
+             unsupported sequence elsewhere in the same output -- an unimplemented escape can \
+             only distort layout, never fabricate the phrase this checks for"
+        );
+    }
+
+    /// The other side of the same asymmetry: a READY phrase, unlike a
+    /// gate phrase, does not get this exemption -- `classify_surface`
+    /// checks gates first, then grid trust, then readiness, so an
+    /// unsupported sequence still masks `PromptReady` even with the
+    /// phrase genuinely on screen. Readiness is intentionally held to the
+    /// stricter standard: proceeding into an untrustworthy grid (typing
+    /// into it) is the dangerous direction, while recognizing a gate and
+    /// parking is always safe.
+    #[test]
+    fn an_unsupported_sequence_still_masks_a_ready_phrase() {
+        let mut grid = TerminalGrid::new_at_fixture_size();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            grid.push(format!("{CLAUDE_PROMPT_READY_BANNER}\x1b[5Z").as_bytes());
+        }));
+        assert!(outcome.is_err());
+        assert!(grid.shows(CLAUDE_PROMPT_READY_BANNER));
+        assert!(matches!(
+            classify_claude_surface(&grid),
+            Surface::Unreadable(_)
+        ));
+    }
+
+    /// A run recovers classification after the latch clears -- proven at
+    /// this module's own level (not just the grid's), since it is
+    /// `classify_claude_surface`'s reading of `unsupported()` that a
+    /// caller (`wait_for_readiness`) actually depends on to decide
+    /// whether polling should continue making progress.
+    #[test]
+    fn classification_recovers_once_a_full_repaint_clears_the_latch() {
+        let mut grid = TerminalGrid::new_at_fixture_size();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            grid.push(b"\x1b[5Z");
+        }));
+        assert!(outcome.is_err());
+        assert!(matches!(
+            classify_claude_surface(&grid),
+            Surface::Unreadable(_)
+        ));
+
+        grid.push(format!("\x1b[2J{CLAUDE_PROMPT_READY_BANNER}").as_bytes());
+        assert_eq!(
+            classify_claude_surface(&grid),
+            Surface::PromptReady,
+            "a full repaint clearing the latch, followed by the composer's own banner, must let \
+             classification recover -- not stay stuck on the last thing that ever went wrong"
         );
     }
 }

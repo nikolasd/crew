@@ -29,7 +29,17 @@ pub use copilot::CopilotTuiVendor;
 pub use omp::OmpTuiVendor;
 mod classify;
 mod discovery;
-mod grid;
+/// `pub`, not `pub(crate)`: an integration test under `crates/runtime/tests/`
+/// needs to reach `TerminalGrid` from outside this crate's own unit-test
+/// binary, because that is the only build of this crate that compiles
+/// `TerminalGrid::mark_unsupported`'s `#[cfg(not(test))]` (non-panicking)
+/// body at all -- see that method's own doc comment for why no test
+/// inside this crate can exercise it. The `tui`/`adapter` modules' own
+/// privacy still bounds practical use to what this crate exposes
+/// elsewhere (`TuiVendor::classify_surface`); this widening exists for
+/// that one test, not as an invitation to build on `TerminalGrid`
+/// directly from outside the crate.
+pub mod grid;
 mod input;
 pub(crate) mod oob_coalescer;
 mod screen;
