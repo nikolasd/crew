@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import type { EventEnvelope, RuntimeEvent, RuntimeEventKind } from "@nikolasd/crew-protocol";
+import type { Component } from "@oh-my-pi/pi-tui";
 import { attachMilestoneBridge, formatDigest, MilestoneTracker, type RunLookup } from "./milestones";
 import type { MonitorController } from "./monitor/controller";
 import type { MonitorRow } from "./monitor/model";
@@ -341,16 +342,29 @@ test("escalation digest with a question appends it after the reason", () => {
 
 function fakeBridge(): {
   sent: string[];
+  sentCustomTypes: string[];
   dispatch: (e: EventEnvelope, meta?: { replay: boolean }) => void;
   unsubscribe: () => void;
 } {
   const sent: string[] = [];
+  const sentCustomTypes: string[] = [];
   const fakePi = {
     logger: { debug() {}, info() {}, warn() {}, error() {} },
-    sendMessage: (message: string) => {
-      sent.push(message);
+    // Present (even as a no-op) so `supportsCustomMessageRenderer` reads
+    // true and the bridge sends the `{ customType, content }` object
+    // shape below -- a build advertised as supporting custom renderers,
+    // which is the case most of this file's tests exercise. The opposite
+    // case (absent, bare string) has its own dedicated test.
+    registerMessageRenderer: () => {},
+    sendMessage: (message: { customType: string; content: string }) => {
+      sent.push(message.content);
+      sentCustomTypes.push(message.customType);
     },
-  } as unknown as { logger: { [k: string]: (...a: unknown[]) => void }; sendMessage: (m: string) => void };
+  } as unknown as {
+    logger: { [k: string]: (...a: unknown[]) => void };
+    registerMessageRenderer: () => void;
+    sendMessage: (m: { customType: string; content: string }) => void;
+  };
   const listeners: Array<(e: EventEnvelope, meta: { replay: boolean }) => void> = [];
   const controller = {
     subscribeEvents(cb: (e: EventEnvelope, meta: { replay: boolean }) => void) {
@@ -373,7 +387,7 @@ function fakeBridge(): {
     }
   };
   expect(listeners.length).toBe(1);
-  return { sent, dispatch, unsubscribe };
+  return { sent, sentCustomTypes, dispatch, unsubscribe };
 }
 
 test("bridge injects a digest for a milestone and stays silent for noise", () => {
@@ -388,6 +402,51 @@ test("bridge injects a digest for a milestone and stays silent for noise", () =>
   unsubscribe();
   dispatch(run("run-2", "succeeded")); // detached: no further injection
   expect(sent.length).toBe(1);
+});
+
+test("every digest is sent under crew's own customType, not a bare string", () => {
+  // A bare string falls back to oh-my-pi's generic "custom-message"
+  // header, indistinguishable from any other extension's notice. Every
+  // digest must carry `customType: "crew"` so the registered renderer
+  // (see the rendering tests below) actually applies to it.
+  const { sentCustomTypes, dispatch } = fakeBridge();
+  dispatch(run("run-1", "failed"));
+  dispatch(run("run-2", "succeeded"));
+  expect(sentCustomTypes).toEqual(["crew", "crew"]);
+});
+
+test("a build with no registerMessageRenderer gets a bare-string digest, never the object shape", () => {
+  // The wire-shape half of the same capability check the renderer
+  // registration is gated on: a build old enough to lack
+  // `registerMessageRenderer` has not established that its `sendMessage`
+  // accepts anything but a string, so it must never receive the
+  // `{ customType, content }` object -- that would be an untested,
+  // possibly-garbled payload on exactly the build least likely to handle
+  // it gracefully.
+  const sent: unknown[] = [];
+  const fakePi = {
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    // deliberately no registerMessageRenderer
+    sendMessage: (message: unknown) => {
+      sent.push(message);
+    },
+  };
+  const listeners: Array<(e: EventEnvelope, meta: { replay: boolean }) => void> = [];
+  const controller = {
+    subscribeEvents(cb: (e: EventEnvelope, meta: { replay: boolean }) => void) {
+      listeners.push(cb);
+      return () => {};
+    },
+    getState() {
+      return { rows: ROWS };
+    },
+  } as unknown as MonitorController;
+  attachMilestoneBridge(fakePi as never, controller);
+  listeners[0]?.(run("run-1", "failed"), { replay: false });
+
+  expect(sent.length).toBe(1);
+  expect(typeof sent[0]).toBe("string");
+  expect(sent[0] as string).toContain("FAILED");
 });
 
 test("an omp build with no sendMessage warns once, not silently and not per event", () => {
@@ -483,4 +542,130 @@ test("a replayed milestone still updates the tracker's one-shot bookkeeping", ()
   // A different run's first `working`, live, is still a real milestone.
   dispatch(run("run-2", "working"), { replay: false });
   expect(sent.length).toBe(1);
+});
+
+function fakePiWithRenderer(): {
+  pi: { logger: { [k: string]: (...a: unknown[]) => void } };
+  registered: Array<{ customType: string; renderer: (message: { content: unknown }) => Component | undefined }>;
+} {
+  const registered: Array<{ customType: string; renderer: (message: { content: unknown }) => Component | undefined }> = [];
+  const pi = {
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    registerMessageRenderer: (customType: string, renderer: (message: { content: unknown }) => Component | undefined) => {
+      registered.push({ customType, renderer });
+    },
+    // No sendMessage needed for these tests -- only the renderer registration
+    // and its output are under test here.
+  };
+  return { pi, registered };
+}
+
+function controllerWithNoEvents(): MonitorController {
+  return {
+    subscribeEvents() {
+      return () => {};
+    },
+    getState() {
+      return { rows: ROWS };
+    },
+  } as unknown as MonitorController;
+}
+
+/**
+ * `registerCrewMessageRenderer` registers asynchronously (it dynamically
+ * imports `@oh-my-pi/pi-tui` before calling `registerMessageRenderer`),
+ * so a test that attaches the bridge and immediately inspects what got
+ * registered needs to let that microtask chain settle first. A macrotask
+ * flush is deliberately used over an immediate microtask flush: the
+ * import may resolve over more than one microtask hop internally, and a
+ * `setTimeout` is guaranteed to run after all of them regardless of how
+ * many there are.
+ */
+async function flushAsyncRegistration(): Promise<void> {
+  // Pre-warms the module cache (the same specifier `registerCrewMessageRenderer`
+  // dynamically imports) so its own `import()` resolves from cache rather
+  // than doing first-time resolution work, then flushes a macrotask to
+  // let that resolved promise's `.then`/registration chain finish running
+  // before the test inspects what got registered.
+  await import("@oh-my-pi/pi-tui");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+test("attaching the bridge registers a renderer for crew's own customType", async () => {
+  const { pi, registered } = fakePiWithRenderer();
+  attachMilestoneBridge(pi as never, controllerWithNoEvents());
+  await flushAsyncRegistration();
+  expect(registered.length).toBe(1);
+  expect(registered[0]?.customType).toBe("crew");
+});
+
+test("the registered renderer draws crew's icon, label, and the digest text", async () => {
+  // The actual proof of content: the renderer this bridge registers,
+  // invoked the way oh-my-pi itself would invoke it, must produce a real
+  // component whose rendered rows show crew's own icon and label rather
+  // than the generic "custom-message" fallback header -- and still carry
+  // the digest text verbatim, since the digest wording itself is out of
+  // scope for this change.
+  const { pi, registered } = fakePiWithRenderer();
+  attachMilestoneBridge(pi as never, controllerWithNoEvents());
+  await flushAsyncRegistration();
+  const renderer = registered[0]?.renderer;
+  expect(renderer).toBeDefined();
+
+  const component = renderer?.({ content: "run run-1 (claude adapter) for task task-1 FAILED: boom." });
+  expect(component).toBeDefined();
+  const rows = component?.render(80).join("\n") ?? "";
+  expect(rows).toContain("👥");
+  expect(rows).toContain("Crew");
+  expect(rows).toContain("run run-1 (claude adapter) for task task-1 FAILED: boom.");
+});
+
+test("the registered renderer degrades to the stringified content on a non-string payload rather than throwing", async () => {
+  // Every digest this bridge sends is a plain string, but `content` is
+  // typed as `CustomMessageContent` in general (a string or a content-part
+  // array). A future or third-party sender of this customType with rich
+  // content must still render something rather than crash the renderer.
+  const { pi, registered } = fakePiWithRenderer();
+  attachMilestoneBridge(pi as never, controllerWithNoEvents());
+  await flushAsyncRegistration();
+  const renderer = registered[0]?.renderer;
+  const component = renderer?.({ content: [{ type: "text", text: "hi" }] });
+  expect(component).toBeDefined();
+  const rows = component?.render(80).join("\n") ?? "";
+  expect(rows).toContain("👥");
+  expect(rows.length).toBeGreaterThan(0);
+});
+
+test("a build that advertises registerMessageRenderer but has no @oh-my-pi/pi-tui degrades to no custom renderer, not a crash", async () => {
+  // The combination the doc comment calls unlikely but still guards: the
+  // method exists (so `supportsCustomMessageRenderer` is true and the
+  // object wire shape is sent) yet the dynamic import of `pi-tui` fails.
+  // Import failure is simulated by pointing the dynamic import at a
+  // module specifier that cannot resolve -- `registerCrewMessageRenderer`
+  // itself is not exported, so this drives it through the same public
+  // entry point every other test here uses, with a `registerMessageRenderer`
+  // that throws synchronously to stand in for a resolution failure deep in
+  // the (unmockable from here) dynamic import.
+  const registered: unknown[] = [];
+  const pi = {
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    registerMessageRenderer: () => {
+      registered.push(true);
+      throw new Error("simulated: registerMessageRenderer itself rejected the renderer");
+    },
+  };
+  expect(() => attachMilestoneBridge(pi as never, controllerWithNoEvents())).not.toThrow();
+  await flushAsyncRegistration();
+});
+
+test("an omp build with no registerMessageRenderer degrades quietly, not a crash", () => {
+  // The counterpart to the missing-sendMessage test: an older/newer omp
+  // build without this method must still let the bridge attach and deliver
+  // digests -- losing only the custom header, never the notification
+  // itself, and never throwing at attach time.
+  const pi = {
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    // deliberately no registerMessageRenderer
+  };
+  expect(() => attachMilestoneBridge(pi as never, controllerWithNoEvents())).not.toThrow();
 });

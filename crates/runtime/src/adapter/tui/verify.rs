@@ -10,10 +10,9 @@
 //!
 //! Nonce presence does not answer it. The discovery nonce is *appended*
 //! to the prompt as a self-describing, ASCII-only tag
-//! (`"<prompt>\n\n[crew:<nonce> run-correlation id; ...]"`, built by
-//! `adapter::compose_injected_prompt`; the wording was later made
-//! self-describing, but the shape and position are unchanged from the
-//! original), so a transcript containing it proves only that the tail
+//! (`"<prompt> [crew:<nonce> run-correlation id; ...]"` -- a single
+//! space, no newlines -- built by `adapter::compose_injected_prompt`),
+//! so a transcript containing it proves only that the tail
 //! arrived — which is precisely the half that survived the original
 //! line-by-line corruption. The head is what goes missing, so the
 //! check has to compare the recorded text itself.

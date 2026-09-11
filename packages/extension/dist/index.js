@@ -30,6 +30,7 @@ var __toESM = (mod, isNodeMode, target) => {
   return to;
 };
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
+var __require = import.meta.require;
 
 // ../../node_modules/.bun/ajv@8.17.1/node_modules/ajv/dist/compile/codegen/code.js
 var require_code = __commonJS((exports) => {
@@ -11473,11 +11474,12 @@ var package_default = {
   exports: { ".": "./dist/index.js" },
   omp: { extensions: ["./dist/index.js"] },
   scripts: {
-    build: "bun build src/index.ts --outdir dist --target bun --external @oh-my-pi/pi-coding-agent"
+    build: "bun build src/index.ts --outdir dist --target bun --external @oh-my-pi/pi-coding-agent --external @oh-my-pi/pi-tui"
   },
-  peerDependencies: { "@oh-my-pi/pi-coding-agent": ">=17.0.7 <19" },
+  peerDependencies: { "@oh-my-pi/pi-coding-agent": ">=17.0.7 <19", "@oh-my-pi/pi-tui": ">=17.0.7 <19" },
   devDependencies: {
     "@oh-my-pi/pi-coding-agent": ">=17.0.7 <19",
+    "@oh-my-pi/pi-tui": ">=17.0.7 <19",
     "@nikolasd/crew-protocol": "workspace:*",
     "@types/bun": "1.3.14",
     ajv: "8.17.1",
@@ -13605,6 +13607,29 @@ import { mkdir, writeFile } from "fs/promises";
 import { join as join8 } from "path";
 
 // src/milestones.ts
+var CREW_MESSAGE_TYPE = "crew";
+var CREW_ICON = "\uD83D\uDC65";
+var CREW_LABEL = "Crew";
+function supportsCustomMessageRenderer(pi) {
+  return typeof pi.registerMessageRenderer === "function";
+}
+async function registerCrewMessageRenderer(pi) {
+  const register = pi.registerMessageRenderer;
+  try {
+    const { Box, Text } = await import("@oh-my-pi/pi-tui");
+    register.call(pi, CREW_MESSAGE_TYPE, (message) => {
+      const text = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+      const box = new Box(1, 0);
+      box.addChild(new Text(`${CREW_ICON} ${CREW_LABEL}`));
+      box.addChild(new Text(text));
+      return box;
+    });
+  } catch (err) {
+    pi.logger.debug("crew milestone bridge: could not register the crew message renderer", {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
 var TERMINAL_STATES = {
   succeeded: true,
   failed: true,
@@ -13695,7 +13720,7 @@ function formatDigest(e, lookup) {
       if (!event.payload.flags.turnSettled) {
         return;
       }
-      return `${capitalize(who)} settled a turn and is waiting on the leader (not terminal -- ` + `the vendor is still parked, not exited). Read the answer via crew_run { op: "result", runId }, ` + `then either crew_send to follow up or crew_run { op: "finish", runId, outcome } to close it.`;
+      return `${capitalize(who)} settled a turn and is waiting on the leader (not terminal -- the vendor is still parked, not exited). Read the answer via crew_run { op: "result", runId }, then either crew_send to follow up or crew_run { op: "finish", runId, outcome } to close it.`;
     }
     case "workerQuestion": {
       const question = event.payload.question ?? "(no question text captured)";
@@ -13703,7 +13728,7 @@ function formatDigest(e, lookup) {
     }
     case "workerTimeout": {
       const kind = event.payload.kind ?? "inactivity";
-      return `${capitalize(who)} hit a worker ${kind} timeout. The runtime reports; the leader decides: ` + `give it more time via crew_run { op: "timeoutAck", runId, decision: "extend" }, ` + `redirect it via crew_send (the nudge), or stop it via crew_run { op: "timeoutAck", decision: "abort" }.`;
+      return `${capitalize(who)} hit a worker ${kind} timeout. The runtime reports; the leader decides: give it more time via crew_run { op: "timeoutAck", runId, decision: "extend" }, redirect it via crew_send (the nudge), or stop it via crew_run { op: "timeoutAck", decision: "abort" }.`;
     }
     case "budgetExceeded":
       return `${capitalize(who)} exceeded its turn budget. Escalate to the user or raise the budget via the plan.`;
@@ -13721,6 +13746,10 @@ function formatDigest(e, lookup) {
 }
 function attachMilestoneBridge(pi, monitor) {
   const tracker = new MilestoneTracker;
+  const customRendererSupported = supportsCustomMessageRenderer(pi);
+  if (customRendererSupported) {
+    registerCrewMessageRenderer(pi);
+  }
   const send = pi.sendMessage;
   let warnedMissingSendMessage = false;
   return monitor.subscribeEvents((e, meta) => {
@@ -13735,7 +13764,8 @@ function attachMilestoneBridge(pi, monitor) {
         return;
       }
       if (typeof send === "function") {
-        send.call(pi, digest, { deliverAs: "followUp", triggerTurn: true });
+        const message = customRendererSupported ? { customType: CREW_MESSAGE_TYPE, content: digest } : digest;
+        send.call(pi, message, { deliverAs: "followUp", triggerTurn: true });
       } else if (!warnedMissingSendMessage) {
         warnedMissingSendMessage = true;
         pi.logger.warn("crew milestone bridge: this omp build exposes no sendMessage on ExtensionAPI, so run milestones will not be delivered to the leader for the rest of this session");
