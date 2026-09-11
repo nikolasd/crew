@@ -8440,15 +8440,7 @@ only *that* the turn ended, and how.`,
           additionalProperties: false
         },
         {
-          description: `A protocol-first adapter (ADR-0037) reconciled its journal against
-the vendor's own durable transcript for this run. Carries no free
-text, only counts. \`examined == 0\` is itself a finding, not a
-clean pass: a reconciliation that never looked at anything is
-indistinguishable from one that never ran at all, and this is the
-field that lets a reader (or a future check) tell those two
-apart. \`gapsFound\` and \`gapsRepaired\` are expected equal; a
-caller finding them unequal has found a defect in the repair step
-itself, not in the vendor's own transcript.`,
+          description: "A protocol-first adapter reconciled its journal against the\nvendor's own durable transcript for this run. Carries no free\ntext, only counts. `examined == 0` is itself a finding, not a\nclean pass: a reconciliation that never looked at anything is\nindistinguishable from one that never ran at all, and this is the\nfield that lets a reader (or a future check) tell those two\napart. No repair mechanism exists yet, so `gapsRepaired` is\nalways `0` today; `gapsFound` and `gapsRepaired` being unequal is\nthe current, expected state, not a defect, until an actual repair\nstep is built.",
           type: "object",
           properties: {
             type: {
