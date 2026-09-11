@@ -16,6 +16,8 @@
 //! (with a test-only seam to prove that reconciliation actually catches
 //! a dropped event), and the pane renderer.
 
+pub(crate) mod approval_bridge;
+
 // `pub`, not `pub(crate)`: `crates/runtime/tests/claude_protocol_reconcile.rs`
 // links this crate as an ordinary external dependency specifically to
 // reach `find_gaps` under a compilation where `cfg(test)` is NOT applied
