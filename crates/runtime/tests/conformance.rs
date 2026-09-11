@@ -220,15 +220,53 @@ fn conformance_fixture_with_the_kill_switch_never_spawns_a_vendor_cli() {
             .env("PATH", "/usr/bin:/bin")
             .output()
             .expect("must be runnable");
+        // The per-scenario report is on STDOUT and this assertion used to
+        // fire before anything parsed it, so a CI failure here carried only
+        // the CLI's one-line summary from `cli.rs`'s baseline check -- which
+        // names the scenarios but never says what each of them observed.
+        // The data was already in hand and thrown away by the assertion that
+        // failed first. Parse before asserting, and parse *defensively*: a
+        // diagnostic that panics on the failure path it exists to explain is
+        // worse than no diagnostic at all, so unparseable stdout degrades to
+        // a note rather than replacing the real failure with its own.
+        // Kept as a `Result`, not flattened to an `Option`: the parse error
+        // is itself diagnostic, and dropping it would be a smaller version
+        // of the defect this block exists to fix. The two unparseable cases
+        // are distinguished too -- "did not parse" and "parsed but carried
+        // no scenarios" send a reader to different places.
+        let parsed = serde_json::from_slice::<serde_json::Value>(&output.stdout);
+        let scenario_detail = match parsed.as_ref().ok().and_then(|reports| {
+            reports
+                .get(0)
+                .and_then(|first| first["scenarios"].as_array())
+        }) {
+            Some(scenarios) => scenarios
+                .iter()
+                .map(|s| {
+                    format!(
+                        "  {}: {} -- {}",
+                        s["name"].as_str().unwrap_or("(unnamed)"),
+                        s["outcome"].as_str().unwrap_or("(no outcome)"),
+                        s["detail"].as_str().unwrap_or("(no detail)")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            None => match parsed.as_ref() {
+                Err(err) => format!("  (stdout did not parse as JSON: {err})"),
+                Ok(_) => "  (report JSON carried no scenarios array)".to_string(),
+            },
+        };
+
         assert!(
             output.status.success(),
             "{adapter}: fixture mode with the kill switch set must still satisfy the committed \
-             baseline: {}",
+             baseline\nstderr: {}\nscenarios:\n{scenario_detail}",
             String::from_utf8_lossy(&output.stderr)
         );
 
-        let reports: serde_json::Value = serde_json::from_slice(&output.stdout)
-            .unwrap_or_else(|err| panic!("{adapter}: stdout must be valid JSON: {err}"));
+        let reports =
+            parsed.unwrap_or_else(|err| panic!("{adapter}: stdout must be valid JSON: {err}"));
         let scenarios = reports[0]["scenarios"]
             .as_array()
             .unwrap_or_else(|| panic!("{adapter}: scenarios must be a JSON array"))
