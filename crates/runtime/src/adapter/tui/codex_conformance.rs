@@ -905,15 +905,19 @@ mod tests {
         //    terminal echo the moment it takes over (it renders its own
         //    UI); this double, left in the default echoing mode, means
         //    the pty's line discipline reflects the pasted bytes back as
-        //    OUTPUT -- and because ECHOCTL renders each control byte as
-        //    a two-character caret sequence (`^[` for one `ESC`), the
-        //    echoed bracketed-paste framing is roughly twice as long as
-        //    the real bytes crewd wrote. That was enough to overflow this
-        //    grid's 120-column width mid-paste, silently dropping
-        //    whatever landed past the edge -- including this double's own
-        //    gate text, printed immediately afterward. Disabling echo
-        //    removes the paste from the screen entirely, exactly like a
-        //    real vendor: nothing here needs it visible, only the gate
+        //    OUTPUT -- re-emitting the entire ~100-character paste onto
+        //    the composer's own line. On a 120-column grid that alone
+        //    leaves too little room for what the double prints next
+        //    (ECHOCTL rendering each control byte as a two-character
+        //    caret sequence, `^[` for one `ESC`, adds a couple more
+        //    bytes on top, not a multiple of the paste's length -- the
+        //    re-emission is the cause, the caret rendering only a minor
+        //    aggravation of it). That was enough to overflow the grid
+        //    mid-paste, silently dropping whatever landed past the edge
+        //    -- including this double's own gate text, printed
+        //    immediately afterward. Disabling echo removes the paste
+        //    from the screen entirely, exactly like a real vendor:
+        //    nothing here needs it visible, only the gate
         //    text this double paints on its own.
         let script = r#"#!/bin/sh
 echo "Ask Codex to do anything"
