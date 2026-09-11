@@ -11,14 +11,22 @@
 //! one additional named server (`"crew"`) alongside whatever the
 //! vendor CLI already loads from the user/project's own config.
 //!
-//! OMP-RPC has no separate MCP subprocess of its own to inject this
-//! into at all: `omp --mode rpc`'s "host tools" are invoked over the
-//! *same* RPC channel the adapter already owns (a `host_tool_call`
+//! The paragraph below describes the **retired headless OMP-RPC
+//! adapter**, deleted with the rest of the headless control plane
+//! (`docs/adr/0026-headless-retirement.md`). It is kept because the
+//! ancestry argument it makes is the reason this module's socket
+//! authenticates the way it does. `omp` today runs as a TUI vendor on a
+//! PTY; whether that path reaches this module is NOT described here and
+//! should not be inferred from what follows.
+//!
+//! That adapter had no separate MCP subprocess of its own to inject this
+//! into at all: `omp --mode rpc`'s "host tools" were invoked over the
+//! *same* RPC channel the adapter itself owned (a `host_tool_call`
 //! frame on its stdout, answered with a `host_tool_result` on its
-//! stdin -- see `crate::adapter::omp_rpc`'s own host-tool bridge), so
-//! it never goes through this module or the scope-token-authenticated
-//! socket at all: the runtime process making that in-process call is
-//! the vendor's own parent, never a descendant of it, so it could not
+//! stdin), so it never went through this module or the
+//! scope-token-authenticated socket at all: the runtime process making
+//! that in-process call was the vendor's own parent, never a descendant
+//! of it, so it could not
 //! authenticate over that socket even if it tried (ancestry is checked
 //! in the wrong direction). `CoordinationBroker::execute_tool_call`
 //! (`crate::coordination::broker`) is the shared, in-process
