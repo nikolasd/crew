@@ -604,10 +604,32 @@ where
                 // permission decisions is not one this adapter can
                 // vouch for having driven correctly.
                 for denial in &permission_denials {
-                    let explained = denial.tool_use_id.as_deref().is_some_and(|id| {
-                        outcome.bridged_tool_use_ids.contains(id)
-                            || outcome.observed_permission_denials.contains(id)
-                    });
+                    // Split deliberately: a missing `tool_use_id` is a
+                    // *shape* problem (this entry cannot be correlated
+                    // against either set at all), never a claim about
+                    // the sentinel -- conflating the two would name a
+                    // cause with no evidence for it, and would make a
+                    // future CLI release that drops this field fail
+                    // every denial in every repo with an ordinary deny
+                    // rule while pointing whoever debugs it at the wrong
+                    // flag. Both branches still fail closed; only the
+                    // message differs.
+                    let Some(id) = denial.tool_use_id.as_deref() else {
+                        return Err(AdapterError::protocol(
+                            "claude",
+                            "start",
+                            format!(
+                                "claude's own result reported a permission denial for {} with \
+                                 no tool_use_id at all, so it cannot be correlated against this \
+                                 turn's own approval ledger or its observed \
+                                 system/permission_denied notices -- the denial's shape, not the \
+                                 host's participation, is what is unaccounted for here",
+                                denial.tool_name.as_deref().unwrap_or("<unknown tool>")
+                            ),
+                        ));
+                    };
+                    let explained = outcome.bridged_tool_use_ids.contains(id)
+                        || outcome.observed_permission_denials.contains(id);
                     if !explained {
                         return Err(AdapterError::protocol(
                             "claude",
@@ -716,6 +738,32 @@ mod tests {
                 permission_denials: vec![PermissionDenial {
                     tool_name: Some("Bash".to_string()),
                     tool_use_id: Some("toolu_1".to_string()),
+                }],
+            }
+        );
+    }
+
+    /// A `permission_denials` entry missing `tool_use_id` entirely
+    /// parses to `None` rather than failing the whole line -- this is
+    /// the shape [`drive_turn`]'s own ledger-reconciliation check must
+    /// treat as an uncorrelatable entry, not as evidence the host was
+    /// never consulted (see the dedicated end-to-end test for that
+    /// distinction).
+    #[test]
+    fn a_permission_denial_missing_tool_use_id_parses_to_none() {
+        let value = serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "permission_denials": [
+                {"tool_name": "Bash", "tool_input": {}},
+            ],
+        });
+        assert_eq!(
+            classify_line(&value),
+            StreamLine::TurnComplete {
+                permission_denials: vec![PermissionDenial {
+                    tool_name: Some("Bash".to_string()),
+                    tool_use_id: None,
                 }],
             }
         );
@@ -1410,6 +1458,65 @@ mod tests {
         let err = result.expect_err("an unexplained denial must fail the turn");
         assert_eq!(err.error_code(), crate::adapter::AdapterErrorCode::Protocol);
         assert!(err.detail().contains("Bash"));
+
+        db.shutdown().await.ok();
+    }
+
+    /// A `permission_denials` entry with NO `tool_use_id` at all still
+    /// fails the turn closed, but the message must say this is a shape
+    /// problem (nothing to correlate against), never claim the host was
+    /// never consulted -- that claim has no evidence behind it here, and
+    /// a message that made it would misdirect debugging toward the
+    /// sentinel flag for what could just as well be a future CLI release
+    /// dropping this field.
+    #[tokio::test]
+    async fn a_permission_denial_with_no_tool_use_id_fails_the_turn_with_a_shape_message() {
+        let (mut test_side, adapter_stdout) = tokio::io::duplex(4096);
+        let (adapter_stdin, _stdin_capture) = tokio::io::duplex(4096);
+
+        let script = concat!(
+            r#"{"type":"result","subtype":"success","permission_denials":"#,
+            r#"[{"tool_name":"Bash"}]}"#,
+            "\n",
+        );
+        test_side.write_all(script.as_bytes()).await.unwrap();
+        drop(test_side);
+
+        let sink: Arc<dyn AdapterEventSink> = Arc::new(RecordingSink {
+            events: StdArc::new(parking_lot::Mutex::new(Vec::new())),
+        });
+        let state_dir = tempfile::TempDir::new().unwrap();
+        let db = StdArc::new(
+            DatabaseHandle::start(state_dir.path().join("runtime.db"))
+                .await
+                .unwrap(),
+        );
+        let project_id = ProjectId::new();
+        let callback = ProtocolApprovalCallback::new();
+        let approval_service = noop_approval_service(&db, project_id);
+
+        let result = drive_turn(
+            adapter_stdout,
+            adapter_stdin,
+            &sink,
+            &approval_service,
+            &callback,
+            ids(),
+            None,
+            "hello",
+        )
+        .await;
+
+        let err = result.expect_err("a denial with no tool_use_id must still fail the turn");
+        assert_eq!(err.error_code(), crate::adapter::AdapterErrorCode::Protocol);
+        assert!(err.detail().contains("Bash"));
+        assert!(err.detail().contains("no tool_use_id at all"));
+        assert!(
+            !err.detail().contains("the host was never consulted"),
+            "must not claim the host was never consulted when the actual problem is a missing \
+             correlation field: {}",
+            err.detail()
+        );
 
         db.shutdown().await.ok();
     }
