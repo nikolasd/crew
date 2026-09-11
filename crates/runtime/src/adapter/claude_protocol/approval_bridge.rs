@@ -31,6 +31,18 @@ pub(crate) struct PermissionRequest {
     pub(crate) request_id: String,
     pub(crate) tool_name: String,
     pub(crate) input: serde_json::Value,
+    /// Claude's own id for the specific tool call this request is
+    /// blocked on (`toolu_...`) -- distinct from `request_id`, which is
+    /// this control-channel round trip's own correlation id, generated
+    /// fresh per request. A live capture's final `result` message
+    /// reports a denied tool call by THIS id, in `permission_denials`,
+    /// never by `request_id` -- so reconciling a denial against
+    /// whichever requests this reader actually bridged needs this
+    /// field, not `request_id`. `None` when absent -- observed present
+    /// on every real `can_use_tool` request this spike captured, but
+    /// parsed as optional rather than required, matching this module's
+    /// own tolerant-parse stance for every other field here.
+    pub(crate) tool_use_id: Option<String>,
 }
 
 /// Parses one `can_use_tool` control-channel message. Tolerant the same
@@ -52,6 +64,10 @@ pub(crate) fn parse_permission_request(value: &serde_json::Value) -> Option<Perm
             .get("input")
             .cloned()
             .unwrap_or(serde_json::Value::Null),
+        tool_use_id: request
+            .get("tool_use_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
     })
 }
 
@@ -388,6 +404,7 @@ mod tests {
                 "subtype": "can_use_tool",
                 "tool_name": "Write",
                 "input": { "path": "/tmp/x", "content": "hi" },
+                "tool_use_id": "toolu_01abc",
             },
         });
         let parsed = parse_permission_request(&value).expect("must parse");
@@ -397,6 +414,25 @@ mod tests {
             parsed.input,
             serde_json::json!({ "path": "/tmp/x", "content": "hi" })
         );
+        assert_eq!(parsed.tool_use_id.as_deref(), Some("toolu_01abc"));
+    }
+
+    /// `tool_use_id` is optional, not required -- an absent one parses
+    /// to `None` rather than failing the whole request, matching this
+    /// module's own tolerant-parse stance for every other field.
+    #[test]
+    fn a_missing_tool_use_id_parses_to_none() {
+        let value = serde_json::json!({
+            "type": "control_request",
+            "request_id": "req-1",
+            "request": {
+                "subtype": "can_use_tool",
+                "tool_name": "Write",
+                "input": {},
+            },
+        });
+        let parsed = parse_permission_request(&value).expect("must parse");
+        assert_eq!(parsed.tool_use_id, None);
     }
 
     /// A different control-channel message shape (not a permission

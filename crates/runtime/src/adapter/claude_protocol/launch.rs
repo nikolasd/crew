@@ -52,6 +52,29 @@ pub(crate) const PINNED_PERMISSION_MODE: &str = "auto";
 /// this adapter should depend on staying true by accident.
 pub(crate) const PINNED_PERMISSION_PROMPTS: &str = "host";
 
+/// `--permission-prompt-tool stdio` -- the actual enabler of the
+/// `can_use_tool` control-channel requests `claude_protocol::approval_bridge`
+/// bridges into crew's own approval ledger. Not documented under this
+/// flag's own `--help` entry (that text describes it as naming an MCP
+/// tool); found instead by reading the SDK's own source that constructs
+/// it -- the Python SDK's `subprocess_cli.py` passes exactly the literal
+/// `"stdio"` sentinel whenever a caller supplies a `can_use_tool`
+/// callback (`types.py` documents the same shape). The TS SDK is
+/// inferred to do the same from the Python side's own comments, not
+/// read directly -- this repo ships no TypeScript SDK source to read.
+/// Confirmed empirically, not just from source: a live call without
+/// this flag produced zero `can_use_tool` control-channel frames across
+/// seven calls and two forcing conditions; the identical settings and
+/// prompt, with only this flag added, produced a real `can_use_tool`
+/// request, and a real reply built from
+/// `super::approval_bridge::build_permission_response`'s own unmodified
+/// output then let the tool actually execute.
+///
+/// A named constant for the same reason [`PINNED_PERMISSION_MODE`] is
+/// one: nothing else in this adapter needs a second, independently
+/// typed copy of this spelling.
+pub(crate) const PINNED_PERMISSION_PROMPT_TOOL: &str = "stdio";
+
 /// Builds the argv `claude` is launched with, everything after the
 /// binary name itself. `model`, when given, is placed exactly where
 /// [`crate::adapter::tui::claude::ClaudeTuiVendor::base_args`] places its
@@ -79,6 +102,8 @@ pub(crate) fn build_argv(model: Option<&str>) -> Vec<String> {
         PINNED_PERMISSION_MODE.to_string(),
         "--permission-prompts".to_string(),
         PINNED_PERMISSION_PROMPTS.to_string(),
+        "--permission-prompt-tool".to_string(),
+        PINNED_PERMISSION_PROMPT_TOOL.to_string(),
     ];
     if let Some(model) = model {
         argv.push("--model".to_string());
@@ -144,6 +169,20 @@ mod tests {
     fn never_passes_the_skip_permissions_flag() {
         let argv = build_argv(None);
         assert!(!argv.iter().any(|arg| arg.contains("skip-permissions")));
+    }
+
+    /// The sentinel that actually enables `can_use_tool` control
+    /// requests -- see [`PINNED_PERMISSION_PROMPT_TOOL`]'s own doc
+    /// comment for how that was confirmed. Proven pinned the same way
+    /// as the other two flags: always present, never left to whatever
+    /// `claude`'s own default for this flag might be.
+    #[test]
+    fn permission_prompt_tool_is_always_pinned_to_stdio() {
+        let argv = build_argv(None);
+        assert!(
+            argv.windows(2)
+                .any(|w| w == ["--permission-prompt-tool", PINNED_PERMISSION_PROMPT_TOOL])
+        );
     }
 
     #[test]

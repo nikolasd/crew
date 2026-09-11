@@ -1,10 +1,11 @@
 //! The real [`Adapter`] implementation for `AdapterMode::Protocol`:
 //! spawns `claude` with [`super::launch::build_argv`]'s fixed launch
-//! argv after [`super::trust::workspace_trust_accepted`] passes, delivers the
-//! initial prompt as the first `stream-json` input message, hands its
-//! stdout/stdin to [`super::reader::drive_turn`] for the whole turn, and
-//! reconciles what that turn saw against claude's own durable transcript
-//! via [`super::reconcile::find_gaps`] once it ends.
+//! argv after [`super::trust::workspace_trust_accepted`] passes, hands its
+//! stdout/stdin to [`super::reader::drive_turn`] for the whole turn --
+//! including the initial prompt, which `drive_turn` itself delivers
+//! only once its own `initialize` control-channel handshake completes,
+//! not before -- and reconciles what that turn saw against claude's own
+//! durable transcript via [`super::reconcile::find_gaps`] once it ends.
 //!
 //! This is the first real caller for three modules this spike built
 //! ahead of it: `reconcile::find_gaps` (previously dead code, reachable
@@ -38,8 +39,10 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 
-use tokio::io::AsyncWriteExt;
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crew_protocol::{Classified, ContentClass};
@@ -52,7 +55,7 @@ use crate::adapter::r#trait::{
     Adapter, AdapterMessage, AdapterSnapshot, CancelScope, ProbeResult, StartSpec, VendorSessionRef,
 };
 use crate::approval::ApprovalService;
-use crate::supervisor::EnvironmentPolicy;
+use crate::supervisor::{EnvironmentPolicy, EscalationTimings, TerminationOutcome};
 
 use super::approval_bridge::ProtocolApprovalCallback;
 use super::reader::{self, RunIdentity};
@@ -108,6 +111,17 @@ pub(crate) struct ClaudeProtocolAdapter {
     /// means this adapter runs with no pane at all, never a refusal to
     /// start.
     pane_support: Option<pane::PaneSupport>,
+    /// How long [`settle_after_turn`] waits at each step of its
+    /// SIGINT -> SIGTERM -> SIGKILL escalation -- production's own
+    /// [`EscalationTimings::default`] (5s/5s, same as every other
+    /// supervised process in this daemon); a test overrides it to keep
+    /// an escalation test's own runtime bounded.
+    escalation: EscalationTimings,
+    /// How long [`settle_after_turn`] waits, unsignaled, for the
+    /// ordinary case (claude exiting on its own) before it starts
+    /// escalating at all -- production's own [`SELF_EXIT_GRACE`]; a test
+    /// overrides it for the same reason `escalation` is overridable.
+    self_exit_grace: Duration,
 }
 
 impl ClaudeProtocolAdapter {
@@ -128,6 +142,8 @@ impl ClaudeProtocolAdapter {
             bin: "claude".to_string(),
             child: AsyncMutex::new(None),
             pane_support,
+            escalation: EscalationTimings::default(),
+            self_exit_grace: SELF_EXIT_GRACE,
         }
     }
 
@@ -139,6 +155,20 @@ impl ClaudeProtocolAdapter {
     fn with_test_overrides(mut self, claude_json_path: PathBuf, bin: String) -> Self {
         self.claude_json_path = Some(claude_json_path);
         self.bin = bin;
+        self
+    }
+
+    /// Overrides the escalation timings and self-exit grace window
+    /// [`settle_after_turn`] waits out -- a test-only seam, so an
+    /// escalation test does not have to pay production's real windows.
+    #[cfg(test)]
+    fn with_escalation_timings(
+        mut self,
+        self_exit_grace: Duration,
+        escalation: EscalationTimings,
+    ) -> Self {
+        self.self_exit_grace = self_exit_grace;
+        self.escalation = escalation;
         self
     }
 
@@ -294,6 +324,105 @@ fn transcript_path(canonical_repo_root: &Path, session_id: &str) -> PathBuf {
         .join(format!("{session_id}.jsonl"))
 }
 
+/// How long a completed turn's own claude process gets to exit on its
+/// own before [`settle_after_turn`] starts signaling it. `drive_turn`
+/// dropping its own `stdin`/`stdout` handles when it returns closes
+/// this adapter's write half of the pipe, which SHOULD make claude see
+/// EOF and exit -- a live capture's own call 9 reasoned this, but never
+/// independently tested it (that call's own harness never closed its
+/// side of stdin, unlike this adapter's `drive_turn`, so it could not
+/// observe this specifically). This window exists so that reasoning is
+/// never load-bearing: whether or not it holds, a process still running
+/// after it gets escalated exactly like a wedged process anywhere else
+/// in this daemon would.
+const SELF_EXIT_GRACE: Duration = Duration::from_secs(5);
+
+/// Waits for `child` to exit on its own, escalating
+/// SIGINT -> SIGTERM -> SIGKILL on `escalation`'s own timings if it does
+/// not -- the same discipline
+/// `crate::supervisor::process::ManagedProcess::terminate` applies to
+/// every other supervised process in this daemon, reused here as free
+/// functions over a bare `tokio::process::Child` rather than by
+/// adopting `ManagedProcess`/`Supervisor` themselves: `drive_turn`'s own
+/// generic `AsyncRead`/`AsyncWrite` interface (and the fast, in-memory
+/// `tokio::io::duplex`-based tests built on it) is the reason this
+/// adapter still spawns via a bare `tokio::process::Command` rather than
+/// `Supervisor::spawn` -- a real gap against this module's own stated
+/// invariant ("every adapter launches its supervised vendor process
+/// through this module"), carried forward rather than fixed here: fixing
+/// it would mean rebuilding `drive_turn` over `ManagedProcess`'s framed
+/// stdout/queued-stdin API instead, which is a larger change than "give
+/// `child.wait()` a deadline" asks for.
+///
+/// Signals are sent to `child`'s own pid directly, never a process
+/// group: unlike `Supervisor::spawn`'s children, this spawn was never
+/// given a process group of its own (see the gap above), and claude's
+/// own `-p` invocation is a single non-interactive process, not an
+/// interactive shell expected to leave orphaned, signal-ignoring
+/// grandchildren behind the way a PTY-hosted shell can.
+async fn settle_after_turn(
+    child: &mut tokio::process::Child,
+    self_exit_grace: Duration,
+    escalation: EscalationTimings,
+) -> TerminationOutcome {
+    if let Ok(Some(status)) = child.try_wait() {
+        return TerminationOutcome::Exited {
+            code: status.code(),
+        };
+    }
+
+    if let Some(outcome) = wait_step(child, self_exit_grace).await {
+        return outcome;
+    }
+
+    let Some(pid) = child.id().map(|id| id as i32) else {
+        // Already reaped by something else between the checks above and
+        // here -- nothing left to signal; `wait()`'s own error, if any,
+        // is reported as an exit of unknown code rather than escalated
+        // further, matching `ManagedProcess::terminate`'s own precedent
+        // for this situation.
+        return match child.wait().await {
+            Ok(status) => TerminationOutcome::Exited {
+                code: status.code(),
+            },
+            Err(_) => TerminationOutcome::Exited { code: None },
+        };
+    };
+
+    let _ = kill(Pid::from_raw(pid), Signal::SIGINT);
+    if let Some(outcome) = wait_step(child, escalation.sigint_to_sigterm).await {
+        return outcome;
+    }
+
+    let _ = kill(Pid::from_raw(pid), Signal::SIGTERM);
+    if let Some(outcome) = wait_step(child, escalation.sigterm_to_sigkill).await {
+        return outcome;
+    }
+
+    let _ = kill(Pid::from_raw(pid), Signal::SIGKILL);
+    let _ = child.wait().await;
+    TerminationOutcome::Killed
+}
+
+/// Waits out `duration` for `child` to exit, without signaling it.
+/// `Some` only on a confirmed exit within the window; `None` for either
+/// a timeout (still running) or a `wait()` error (state unknown) --
+/// neither is a confirmed exit, so both mean the caller should keep
+/// escalating, matching
+/// `crate::supervisor::process::ManagedProcess::wait_out_step`'s own
+/// stance on the identical question.
+async fn wait_step(
+    child: &mut tokio::process::Child,
+    duration: Duration,
+) -> Option<TerminationOutcome> {
+    match tokio::time::timeout(duration, child.wait()).await {
+        Ok(Ok(status)) => Some(TerminationOutcome::Exited {
+            code: status.code(),
+        }),
+        Ok(Err(_)) | Err(_) => None,
+    }
+}
+
 impl Adapter for ClaudeProtocolAdapter {
     fn kind(&self) -> &str {
         "claude"
@@ -394,7 +523,7 @@ impl Adapter for ClaudeProtocolAdapter {
                     .spawn()
                     .map_err(|e| AdapterError::process(self.kind(), "start", e.to_string()))?;
                 let pid = child.id().unwrap_or(0);
-                let mut stdin = child
+                let stdin = child
                     .stdin
                     .take()
                     .expect("stdin was requested as piped at spawn");
@@ -402,21 +531,6 @@ impl Adapter for ClaudeProtocolAdapter {
                     .stdout
                     .take()
                     .expect("stdout was requested as piped at spawn");
-
-                let first_message = serde_json::json!({
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [{"type": "text", "text": spec.prompt}],
-                    },
-                });
-                let mut first_line = serde_json::to_string(&first_message)
-                    .expect("a constructed value always serializes");
-                first_line.push('\n');
-                stdin
-                    .write_all(first_line.as_bytes())
-                    .await
-                    .map_err(|e| AdapterError::process(self.kind(), "start", e.to_string()))?;
 
                 *self.child.lock().await = Some(child);
 
@@ -437,10 +551,11 @@ impl Adapter for ClaudeProtocolAdapter {
                     &self.bundle.callback,
                     ids,
                     pane_output,
+                    &spec.prompt,
                 )
                 .await?;
 
-                let status = {
+                let termination = {
                     let mut guard = self.child.lock().await;
                     let child = guard.as_mut().ok_or_else(|| {
                         AdapterError::invalid_vendor_state(
@@ -449,21 +564,16 @@ impl Adapter for ClaudeProtocolAdapter {
                             "the spawned child process handle was missing at reap time",
                         )
                     })?;
-                    child
-                        .wait()
-                        .await
-                        .map_err(|e| AdapterError::process(self.kind(), "start", e.to_string()))?
+                    settle_after_turn(child, self.self_exit_grace, self.escalation).await
                 };
                 *self.child.lock().await = None;
+                let (exit_code, signal) = termination.exit_signals();
 
                 sink.emit(AdapterEvent {
                     run_id: ids.run_id,
                     task_id: ids.task_id,
                     worker_id: ids.worker_id,
-                    payload: AdapterEventPayload::ProcessExited {
-                        exit_code: status.code(),
-                        signal: None,
-                    },
+                    payload: AdapterEventPayload::ProcessExited { exit_code, signal },
                     cursor: None,
                 })
                 .await?;
@@ -924,6 +1034,117 @@ echo '{{"type":"result","subtype":"success"}}'
             dump.iter().any(|e| e.contains("displayPaneDetached")),
             "expected a DisplayPaneDetached event once the turn settled, got: {dump:#?}"
         );
+
+        db.shutdown().await.ok();
+    }
+
+    /// A `claude` that ignores SIGINT and SIGTERM outright and never
+    /// exits on its own -- [`settle_after_turn`]'s own escalation ladder
+    /// is the only thing that ever reaps it, and only reaches SIGKILL
+    /// after climbing through both prior steps: this is what makes the
+    /// call 9 stdin-drop reasoning a non-assumption, per the maintainer's
+    /// own ruling on this ("do not rely on it; bound the wait and
+    /// escalate instead").
+    fn write_wedged_fake_claude(dir: &std::path::Path) -> PathBuf {
+        let script = r#"#!/bin/sh
+trap '' INT TERM
+read -r _first_line
+echo '{"type":"system","subtype":"init","session_id":"sess-wedged","claude_code_version":"2.1.268","permissionMode":"auto"}'
+echo '{"type":"result","subtype":"success"}'
+while true; do sleep 1; done
+"#;
+        let path = dir.join("wedged-claude.sh");
+        std::fs::write(&path, script).expect("write wedged fake claude script");
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    /// End to end proof that a claude process which never exits on its
+    /// own, and ignores both SIGINT and SIGTERM, still gets reaped: the
+    /// turn completes normally (the protocol's own `result` line
+    /// arrived), and `Adapter::start` still returns rather than hanging
+    /// forever on `child.wait()`, with the final `ProcessExited` event
+    /// reporting the SIGKILL escalation actually needed.
+    #[tokio::test]
+    async fn a_wedged_process_is_escalated_to_sigkill_rather_than_hung_on() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo_root = dir.path().join("repo");
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let bin = write_wedged_fake_claude(dir.path());
+        let claude_json_path = trusted_claude_json(dir.path(), &repo_root);
+
+        let state_dir = tempfile::TempDir::new().unwrap();
+        let db = StdArc::new(
+            DatabaseHandle::start(state_dir.path().join("runtime.db"))
+                .await
+                .unwrap(),
+        );
+        let project_id = crew_protocol::ProjectId::new();
+        let approval_service = StdArc::new(ApprovalService::new(
+            StdArc::clone(&db),
+            project_id,
+            StdArc::new(NoopApprovalCallback) as StdArc<dyn crate::approval::ApprovalCallback>,
+            broadcast::channel(64).0,
+        ));
+        let callback = StdArc::new(ProtocolApprovalCallback::new());
+
+        let adapter = ClaudeProtocolAdapter::new(
+            repo_root.clone(),
+            Vec::new(),
+            None,
+            ProtocolBundle {
+                approval_service,
+                callback,
+            },
+            None,
+        )
+        .with_test_overrides(claude_json_path, bin.to_string_lossy().to_string())
+        .with_escalation_timings(
+            Duration::from_millis(50),
+            EscalationTimings {
+                sigint_to_sigterm: Duration::from_millis(50),
+                sigterm_to_sigkill: Duration::from_millis(50),
+            },
+        );
+
+        let events = StdArc::new(parking_lot::Mutex::new(Vec::new()));
+        let sink: Arc<dyn AdapterEventSink> = Arc::new(RecordingSink {
+            events: StdArc::clone(&events),
+        });
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            adapter.start(
+                StartSpec {
+                    run_id: RunId::new(),
+                    task_id: TaskId::new(),
+                    worker_id: WorkerId::new(),
+                    prompt: "hello".to_string(),
+                    resume: None,
+                },
+                sink,
+            ),
+        )
+        .await
+        .expect("start must not hang past the escalation ladder's own bounded windows")
+        .expect("start must still succeed: the turn itself completed normally");
+
+        {
+            let recorded = events.lock();
+            let exited = recorded.iter().find_map(|payload| match payload {
+                AdapterEventPayload::ProcessExited { exit_code, signal } => {
+                    Some((*exit_code, signal.clone()))
+                }
+                _ => None,
+            });
+            assert_eq!(
+                exited,
+                Some((None, Some("SIGKILL".to_string()))),
+                "expected a SIGKILL-escalated exit, got: {recorded:#?}"
+            );
+        }
 
         db.shutdown().await.ok();
     }
