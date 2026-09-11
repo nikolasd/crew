@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::sync::broadcast;
 
 use crew_protocol::{Classified, ContentClass, RunId, TaskId, WorkerId};
 
@@ -169,6 +170,14 @@ fn classify_line(value: &serde_json::Value) -> StreamLine {
 /// EOF as an error: a process that exits after its own `result` line is
 /// the ordinary case, not a fault.
 ///
+/// `pane_output`, when given, gets one formatted line per normalized
+/// event pushed into it as the turn progresses -- see
+/// `claude_protocol::pane`'s own module doc comment for the format and
+/// why it is a crew-authored report, never the vendor's own output. A
+/// send failing (no receiver currently attached, the ordinary case when
+/// nobody is watching) is silently ignored: the pane is a convenience
+/// view, never load-bearing for the turn itself.
+///
 /// # Errors
 /// Propagates a stdout read failure, a stdin write failure, or
 /// [`approval_bridge::handle_permission_request`]'s own error (a run no
@@ -181,12 +190,19 @@ pub(crate) async fn drive_turn<R, W>(
     approval_service: &ApprovalService,
     callback: &ProtocolApprovalCallback,
     ids: RunIdentity,
+    pane_output: Option<&broadcast::Sender<Vec<u8>>>,
 ) -> Result<TurnOutcome, crate::adapter::error::AdapterError>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
     use crate::adapter::error::AdapterError;
+
+    let render = |text: &str| {
+        if let Some(tx) = pane_output {
+            let _ = tx.send(super::pane::render_line(text));
+        }
+    };
 
     let mut outcome = TurnOutcome::default();
     let mut lines = BufReader::new(stdout).lines();
@@ -238,6 +254,7 @@ where
                 outcome.session_id = session_id;
             }
             StreamLine::AssistantText(text) => {
+                render(&format!("assistant: {text}"));
                 sink.emit(AdapterEvent {
                     run_id: ids.run_id,
                     task_id: ids.task_id,
@@ -254,6 +271,7 @@ where
                 .await?;
             }
             StreamLine::ToolStarted { tool_call_id, name } => {
+                render(&format!("tool: {name}"));
                 sink.emit(AdapterEvent {
                     run_id: ids.run_id,
                     task_id: ids.task_id,
@@ -274,6 +292,7 @@ where
                     // unrecognized transcript entry is in `reconcile`.
                     continue;
                 };
+                render(&format!("permission requested: {}", parsed.tool_name));
                 let reply = approval_bridge::handle_permission_request(
                     approval_service,
                     callback,
@@ -287,8 +306,12 @@ where
                     .write_all(&reply)
                     .await
                     .map_err(|e| AdapterError::process("claude", "write_stdin", e.to_string()))?;
+                render("permission decided");
             }
-            StreamLine::TurnComplete => return Ok(outcome),
+            StreamLine::TurnComplete => {
+                render("turn complete");
+                return Ok(outcome);
+            }
             StreamLine::Other => {}
         }
     }
@@ -299,7 +322,6 @@ mod tests {
     use super::*;
     use std::sync::Arc as StdArc;
     use tokio::io::AsyncReadExt;
-    use tokio::sync::broadcast;
 
     use crew_protocol::{
         DecidedBy, ProjectId, Redacted, Run, RunFlags, RunState, TaskRef, Timestamp, Worker,
@@ -463,6 +485,7 @@ mod tests {
             &approval_service,
             &callback,
             ids(),
+            None,
         )
         .await
         .expect("must not error");
@@ -490,6 +513,69 @@ mod tests {
         let mut written = Vec::new();
         stdin_capture.read_to_end(&mut written).await.unwrap();
         assert!(written.is_empty());
+
+        db.shutdown().await.ok();
+    }
+
+    /// `pane_output`, when given, actually receives one formatted line
+    /// per normalized event -- proven by subscribing to it before the
+    /// turn runs and reading real lines back, not by inspecting
+    /// `drive_turn`'s own source for a call site that looks right.
+    #[tokio::test]
+    async fn pane_output_receives_one_formatted_line_per_event() {
+        let (mut test_side, adapter_stdout) = tokio::io::duplex(4096);
+        let (adapter_stdin, _stdin_capture) = tokio::io::duplex(4096);
+
+        let script = concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}"#,
+            "\n",
+            r#"{"type":"result","subtype":"success"}"#,
+            "\n",
+        );
+        test_side.write_all(script.as_bytes()).await.unwrap();
+        drop(test_side);
+
+        let sink: Arc<dyn AdapterEventSink> = Arc::new(RecordingSink {
+            events: StdArc::new(parking_lot::Mutex::new(Vec::new())),
+        });
+
+        let state_dir = tempfile::TempDir::new().unwrap();
+        let db = StdArc::new(
+            DatabaseHandle::start(state_dir.path().join("runtime.db"))
+                .await
+                .unwrap(),
+        );
+        let project_id = ProjectId::new();
+        let callback = ProtocolApprovalCallback::new();
+        let approval_service = ApprovalService::new(
+            StdArc::clone(&db),
+            project_id,
+            StdArc::new(crate::approval::NoopApprovalCallback) as StdArc<dyn ApprovalCallback>,
+            broadcast::channel(64).0,
+        );
+
+        let (pane_tx, mut pane_rx) = broadcast::channel(16);
+
+        drive_turn(
+            adapter_stdout,
+            adapter_stdin,
+            &sink,
+            &approval_service,
+            &callback,
+            ids(),
+            Some(&pane_tx),
+        )
+        .await
+        .expect("must not error");
+
+        let first = pane_rx.try_recv().expect("a line for the assistant text");
+        assert_eq!(first, super::super::pane::render_line("assistant: hello"));
+        let second = pane_rx.try_recv().expect("a line for turn completion");
+        assert_eq!(second, super::super::pane::render_line("turn complete"));
+        assert!(
+            pane_rx.try_recv().is_err(),
+            "no third line should have been sent"
+        );
 
         db.shutdown().await.ok();
     }
@@ -591,6 +677,7 @@ mod tests {
                         task_id,
                         worker_id,
                     },
+                    None,
                 )
                 .await
             }

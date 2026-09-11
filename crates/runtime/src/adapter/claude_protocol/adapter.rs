@@ -10,11 +10,16 @@
 //! ahead of it: `reconcile::find_gaps` (previously dead code, reachable
 //! only from its own tests and the external drop-seam test),
 //! `approval_bridge`'s whole module (previously `#![allow(dead_code)]`),
-//! and `reader::drive_turn` itself.
+//! and `reader::drive_turn` itself. It is also the first real caller of
+//! [`pane::PaneSupport`]: when a `TuiSupport` bundle was ever supplied
+//! to the registry, [`Self::attach_pane`] opens a crew-rendered pane for
+//! the turn, best-effort -- see `pane`'s own module doc comment for the
+//! format and the provenance/redaction notes worth reading before
+//! citing this pane's own text as evidence of anything.
 //!
 //! **Not in scope here** (see this spike's own PR body for the full
-//! non-goals list): a renderer beyond bare legibility, `resume`/
-//! `--continue`, the other three vendors, and performance work.
+//! non-goals list): `resume`/`--continue`, the other three vendors, and
+//! performance work.
 //!
 //! `--model` is threaded through as a plain, already-resolved parameter
 //! this adapter does not itself resolve -- it is handed exactly
@@ -51,7 +56,7 @@ use crate::supervisor::EnvironmentPolicy;
 
 use super::approval_bridge::ProtocolApprovalCallback;
 use super::reader::{self, RunIdentity};
-use super::{reconcile, trust};
+use super::{pane, reconcile, trust};
 
 /// Everything [`ClaudeProtocolAdapter`] needs that only exists after the
 /// daemon's own `ApprovalService` is constructed -- the server-owned
@@ -98,6 +103,11 @@ pub(crate) struct ClaudeProtocolAdapter {
     /// [`Adapter::cancel`] can reach it. `None` before the first
     /// [`Adapter::start`] call and after the turn ends.
     child: AsyncMutex<Option<tokio::process::Child>>,
+    /// Present only when a `TuiSupport` bundle was ever supplied to the
+    /// registry -- see [`pane::PaneSupport`]'s own doc comment. `None`
+    /// means this adapter runs with no pane at all, never a refusal to
+    /// start.
+    pane_support: Option<pane::PaneSupport>,
 }
 
 impl ClaudeProtocolAdapter {
@@ -107,6 +117,7 @@ impl ClaudeProtocolAdapter {
         environment_allowlist: Vec<String>,
         model: Option<String>,
         bundle: ProtocolBundle,
+        pane_support: Option<pane::PaneSupport>,
     ) -> Self {
         Self {
             repo_root,
@@ -116,6 +127,7 @@ impl ClaudeProtocolAdapter {
             claude_json_path: trust::default_claude_json_path(),
             bin: "claude".to_string(),
             child: AsyncMutex::new(None),
+            pane_support,
         }
     }
 
@@ -196,6 +208,73 @@ impl ClaudeProtocolAdapter {
             tracing::warn!(error = %err, run_id = %ids.run_id, "failed to journal claude-protocol reconciliation");
         }
     }
+
+    /// Attaches this run's pane, if [`Self::pane_support`] was ever
+    /// supplied -- best-effort: a failure here is logged and this
+    /// adapter proceeds with no pane, never fails the turn (see
+    /// [`pane::PaneSupport`]'s own doc comment on why this adapter's
+    /// pane is a convenience, not a control surface).
+    async fn attach_pane(&self, ids: RunIdentity) -> Option<AttachedPane> {
+        let support = self.pane_support.as_ref()?;
+        let (target, output_tx) = pane::PaneAttachTarget::new();
+        let target = Arc::new(target);
+        let socket_path = support.panes_dir.join(format!("{}.sock", ids.run_id));
+        let attach_server = match crate::display::AttachServer::start(
+            socket_path,
+            Arc::clone(&target) as Arc<dyn crate::display::AttachTarget>,
+            target.on_user_input(),
+        ) {
+            Ok(server) => server,
+            Err(err) => {
+                tracing::warn!(error = %err, run_id = %ids.run_id, "failed to start this run's attach server; continuing without a pane");
+                return None;
+            }
+        };
+        let outcome = support
+            .pane_coordinator
+            .attach(crate::display::PaneAttachRequest {
+                run_id: ids.run_id,
+                worker_id: ids.worker_id,
+                adapter: self.kind().to_string(),
+                placement: support.placement,
+                forced_backend: support.forced_backend,
+                launch_program: support.launch_program,
+            })
+            .await;
+        // The banner is the operational form of this module's own
+        // provenance note -- a viewer must never be able to read even
+        // one line before knowing what this pane is (see
+        // `pane::attach_banner`'s own doc comment).
+        let _ = output_tx.send(pane::attach_banner());
+        Some(AttachedPane {
+            attach_server,
+            outcome,
+            output_tx,
+        })
+    }
+
+    /// Releases the pane [`Self::attach_pane`] set up, if any. Called on
+    /// every exit path from [`Self::start`], success or error.
+    async fn detach_pane(&self, pane: AttachedPane, succeeded: bool) {
+        if let Some(support) = &self.pane_support {
+            support
+                .pane_coordinator
+                .detach(&pane.outcome, succeeded, support.close_on_exit)
+                .await;
+        }
+        pane.attach_server.stop();
+    }
+}
+
+/// What [`ClaudeProtocolAdapter::attach_pane`] set up, kept alive for the
+/// duration of one turn so [`ClaudeProtocolAdapter::detach_pane`] can
+/// release it afterward. `output_tx` is also read from directly, by
+/// [`ClaudeProtocolAdapter::start`], to hand `reader::drive_turn` a
+/// place to push formatted lines into.
+struct AttachedPane {
+    attach_server: crate::display::AttachServer,
+    outcome: crate::display::PaneAttachOutcome,
+    output_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
 }
 
 /// `~/.claude/projects/<slug_cwd(canonical_repo_root)>/<session_id>.jsonl`
@@ -284,105 +363,127 @@ impl Adapter for ClaudeProtocolAdapter {
                 ));
             }
 
-            let model = self
-                .model
-                .as_deref()
-                .map(str::trim)
-                .filter(|model| !model.is_empty());
-            let argv = super::launch::build_argv(model);
-            let env = self.env();
+            // Attached before the process spawns, so a viewer sees every
+            // line from the very first one -- best-effort: unlike a
+            // `TuiAdapter`, this adapter's pane is a convenience view, not
+            // its control surface, so a failure to attach never fails the
+            // turn, only logs and proceeds without one.
+            let pane = self.attach_pane(ids).await;
+            let pane_output = pane.as_ref().map(|p| &p.output_tx);
 
-            let mut command = tokio::process::Command::new(&self.bin);
-            command
-                .args(&argv)
-                .current_dir(&canonical_repo_root)
-                .env_clear()
-                .envs(&env)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .kill_on_drop(true);
-            let mut child = command
-                .spawn()
-                .map_err(|e| AdapterError::process(self.kind(), "start", e.to_string()))?;
-            let pid = child.id().unwrap_or(0);
-            let mut stdin = child
-                .stdin
-                .take()
-                .expect("stdin was requested as piped at spawn");
-            let stdout = child
-                .stdout
-                .take()
-                .expect("stdout was requested as piped at spawn");
+            let turn: Result<(), AdapterError> = async {
+                let model = self
+                    .model
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|model| !model.is_empty());
+                let argv = super::launch::build_argv(model);
+                let env = self.env();
 
-            let first_message = serde_json::json!({
-                "type": "user",
-                "message": {
-                    "role": "user",
-                    "content": [{"type": "text", "text": spec.prompt}],
-                },
-            });
-            let mut first_line = serde_json::to_string(&first_message)
-                .expect("a constructed value always serializes");
-            first_line.push('\n');
-            stdin
-                .write_all(first_line.as_bytes())
-                .await
-                .map_err(|e| AdapterError::process(self.kind(), "start", e.to_string()))?;
+                let mut command = tokio::process::Command::new(&self.bin);
+                command
+                    .args(&argv)
+                    .current_dir(&canonical_repo_root)
+                    .env_clear()
+                    .envs(&env)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .kill_on_drop(true);
+                let mut child = command
+                    .spawn()
+                    .map_err(|e| AdapterError::process(self.kind(), "start", e.to_string()))?;
+                let pid = child.id().unwrap_or(0);
+                let mut stdin = child
+                    .stdin
+                    .take()
+                    .expect("stdin was requested as piped at spawn");
+                let stdout = child
+                    .stdout
+                    .take()
+                    .expect("stdout was requested as piped at spawn");
 
-            *self.child.lock().await = Some(child);
-
-            sink.emit(AdapterEvent {
-                run_id: ids.run_id,
-                task_id: ids.task_id,
-                worker_id: ids.worker_id,
-                payload: AdapterEventPayload::ProcessStarted { pid },
-                cursor: None,
-            })
-            .await?;
-
-            let outcome = reader::drive_turn(
-                stdout,
-                stdin,
-                &sink,
-                &self.bundle.approval_service,
-                &self.bundle.callback,
-                ids,
-            )
-            .await?;
-
-            let status = {
-                let mut guard = self.child.lock().await;
-                let child = guard.as_mut().ok_or_else(|| {
-                    AdapterError::invalid_vendor_state(
-                        self.kind(),
-                        "start",
-                        "the spawned child process handle was missing at reap time",
-                    )
-                })?;
-                child
-                    .wait()
+                let first_message = serde_json::json!({
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": spec.prompt}],
+                    },
+                });
+                let mut first_line = serde_json::to_string(&first_message)
+                    .expect("a constructed value always serializes");
+                first_line.push('\n');
+                stdin
+                    .write_all(first_line.as_bytes())
                     .await
-                    .map_err(|e| AdapterError::process(self.kind(), "start", e.to_string()))?
-            };
-            *self.child.lock().await = None;
+                    .map_err(|e| AdapterError::process(self.kind(), "start", e.to_string()))?;
 
-            sink.emit(AdapterEvent {
-                run_id: ids.run_id,
-                task_id: ids.task_id,
-                worker_id: ids.worker_id,
-                payload: AdapterEventPayload::ProcessExited {
-                    exit_code: status.code(),
-                    signal: None,
-                },
-                cursor: None,
-            })
-            .await?;
+                *self.child.lock().await = Some(child);
 
-            self.reconcile_turn(&canonical_repo_root, &outcome, &sink, ids)
-                .await;
+                sink.emit(AdapterEvent {
+                    run_id: ids.run_id,
+                    task_id: ids.task_id,
+                    worker_id: ids.worker_id,
+                    payload: AdapterEventPayload::ProcessStarted { pid },
+                    cursor: None,
+                })
+                .await?;
 
-            Ok(())
+                let outcome = reader::drive_turn(
+                    stdout,
+                    stdin,
+                    &sink,
+                    &self.bundle.approval_service,
+                    &self.bundle.callback,
+                    ids,
+                    pane_output,
+                )
+                .await?;
+
+                let status = {
+                    let mut guard = self.child.lock().await;
+                    let child = guard.as_mut().ok_or_else(|| {
+                        AdapterError::invalid_vendor_state(
+                            self.kind(),
+                            "start",
+                            "the spawned child process handle was missing at reap time",
+                        )
+                    })?;
+                    child
+                        .wait()
+                        .await
+                        .map_err(|e| AdapterError::process(self.kind(), "start", e.to_string()))?
+                };
+                *self.child.lock().await = None;
+
+                sink.emit(AdapterEvent {
+                    run_id: ids.run_id,
+                    task_id: ids.task_id,
+                    worker_id: ids.worker_id,
+                    payload: AdapterEventPayload::ProcessExited {
+                        exit_code: status.code(),
+                        signal: None,
+                    },
+                    cursor: None,
+                })
+                .await?;
+
+                self.reconcile_turn(&canonical_repo_root, &outcome, &sink, ids)
+                    .await;
+
+                Ok(())
+            }
+            .await;
+
+            // Detached on every exit path from here, success or error --
+            // `PaneCoordinator::detach` is what releases the live-pane
+            // slot and journals `DisplayPaneDetached`; leaving it
+            // unreached on an error path would leak both.
+            if let Some(pane) = pane {
+                self.detach_pane(pane, turn.is_ok()).await;
+            }
+
+            turn
         })
     }
 
@@ -581,6 +682,7 @@ echo '{{"type":"result","subtype":"success"}}'
                 approval_service,
                 callback,
             },
+            None,
         )
         .with_test_overrides(claude_json_path, bin.to_string_lossy().to_string());
 
@@ -608,6 +710,219 @@ echo '{{"type":"result","subtype":"success"}}'
         assert!(
             argv.windows(2).any(|w| w == ["--model", "claude-sonnet-5"]),
             "expected --model claude-sonnet-5 in the real launched argv, got: {argv:?}"
+        );
+
+        db.shutdown().await.ok();
+    }
+
+    /// A pane backend that always succeeds with a non-empty pane ref --
+    /// mirrors `tests/tui_claude_registry.rs`'s own `FakeBackend`
+    /// fixture exactly, for the identical reason: `HiddenDisplay`'s own
+    /// `pane_ref` is empty, which would make "a real pane attached"
+    /// indistinguishable from "no real pane at all" in this test's own
+    /// assertions.
+    struct FakePaneBackend;
+
+    impl crate::display::DisplayBackendTrait for FakePaneBackend {
+        fn backend_name(&self) -> &str {
+            "tmux"
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn activate(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn status(&self) -> crew_protocol::DisplayStatus {
+            crew_protocol::DisplayStatus::new(crew_protocol::DisplayBackend::Tmux, true, false)
+        }
+
+        fn create_pane(
+            &self,
+            req: crate::display::PaneRequest,
+        ) -> crate::display::DisplayFuture<'_, crate::display::PaneHandle> {
+            let handle = crate::display::PaneHandle {
+                backend: crew_protocol::DisplayBackend::Tmux,
+                pane_ref: "fake-pane-1".to_string(),
+                placement: req.placement,
+            };
+            Box::pin(async move { Ok(handle) })
+        }
+
+        fn close_pane(
+            &self,
+            _handle: &crate::display::PaneHandle,
+        ) -> crate::display::DisplayFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    /// End-to-end proof that `Self::attach_pane`/`Self::detach_pane`
+    /// actually reach a real `PaneCoordinator`: drives a real turn (the
+    /// same fake-script harness as the model-argv test above) with a
+    /// real pane wired in, then asserts a real `DisplayPaneAttached` and
+    /// `DisplayPaneDetached` were journaled with the fake backend's own
+    /// non-empty pane ref -- not that the two pieces were built to
+    /// agree, but that wiring them together actually reaches the
+    /// journal.
+    #[tokio::test]
+    async fn a_real_turn_attaches_and_detaches_a_real_pane() {
+        // `tempdir_in("/tmp")`, not the bare `TempDir::new()` default
+        // (`std::env::temp_dir()`, a deeply-nested path on macOS): the
+        // attach socket this test binds lives under this directory, and
+        // a `run_id`-length UUID appended to that deep a path overflows
+        // the platform `sun_path` limit -- the same reason
+        // `tests/tui_claude_registry.rs`'s own harness uses this exact
+        // override.
+        let dir = tempfile::Builder::new()
+            .prefix("bat-pane-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let repo_root = dir.path().join("repo");
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let argv_path = dir.path().join("argv.txt");
+        let bin = write_argv_recording_fake_claude(dir.path(), &argv_path);
+        let claude_json_path = trusted_claude_json(dir.path(), &repo_root);
+
+        let state_dir = tempfile::TempDir::new().unwrap();
+        let db = StdArc::new(
+            DatabaseHandle::start(state_dir.path().join("runtime.db"))
+                .await
+                .unwrap(),
+        );
+        let project_id = crew_protocol::ProjectId::new();
+        let approval_service = StdArc::new(ApprovalService::new(
+            StdArc::clone(&db),
+            project_id,
+            StdArc::new(NoopApprovalCallback) as StdArc<dyn crate::approval::ApprovalCallback>,
+            broadcast::channel(64).0,
+        ));
+        let callback = StdArc::new(ProtocolApprovalCallback::new());
+
+        let mut display_registry = crate::display::DisplayRegistry::new();
+        display_registry.register(Box::new(FakePaneBackend));
+        let (events_tx, _events_rx) = broadcast::channel(64);
+        let pane_coordinator = Arc::new(crate::display::PaneCoordinator::new(
+            Arc::new(display_registry),
+            StdArc::clone(&db),
+            project_id,
+            events_tx,
+            std::path::PathBuf::from("/opt/crew/bin/crewd"),
+            dir.path().to_path_buf(),
+            repo_root.clone(),
+            crate::security::redaction::Redactor::new(),
+        ));
+        let panes_dir = dir.path().join("panes");
+        std::fs::create_dir_all(&panes_dir).unwrap();
+
+        let adapter = ClaudeProtocolAdapter::new(
+            repo_root.clone(),
+            Vec::new(),
+            None,
+            ProtocolBundle {
+                approval_service,
+                callback,
+            },
+            Some(pane::PaneSupport {
+                pane_coordinator,
+                panes_dir,
+                placement: crew_protocol::DisplayPlacement::SplitRight,
+                forced_backend: None,
+                launch_program: None,
+                close_on_exit: crate::config::crew::CloseOnExit::Always,
+            }),
+        )
+        .with_test_overrides(claude_json_path, bin.to_string_lossy().to_string());
+
+        let events = StdArc::new(parking_lot::Mutex::new(Vec::new()));
+        let sink: Arc<dyn AdapterEventSink> = Arc::new(RecordingSink { events });
+
+        // `PaneCoordinator::attach`/`detach` journal against a real
+        // `runs` row (a foreign-key reference, invariant 3) -- unlike
+        // `RecordingSink`, they write through the real `db` this test
+        // constructed, so the row has to actually exist first, the same
+        // seeding `tests/tui_claude_registry.rs`'s own
+        // `seed_worker_and_run` does.
+        let task_id = TaskId::new();
+        let worker_id = WorkerId::new();
+        let run_id = RunId::new();
+        db.run_domain_op(Box::new({
+            let task_id = task_id.to_string();
+            let worker_id = worker_id.to_string();
+            let run_id = run_id.to_string();
+            let project_id = project_id.to_string();
+            move |conn| {
+                conn.execute(
+                    "INSERT INTO tasks (task_id, project_id, owner_client_instance_id, revision, created_at, updated_at) \
+                     VALUES (?1, ?2, 'test-owner', 1, ?3, ?3)",
+                    rusqlite::params![task_id, project_id, "2026-01-01T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO worker_profiles (id, fingerprint, adapter, model, permission_envelope) \
+                     VALUES (?1, 'sha256:test', 'claude', 'test-model', '{}')",
+                    rusqlite::params![worker_id.clone()],
+                )?;
+                conn.execute(
+                    "INSERT INTO workers (worker_id, project_id, profile_id, resolved_profile_json, created_at) \
+                     VALUES (?1, ?2, ?1, '{}', ?3)",
+                    rusqlite::params![worker_id, project_id, "2026-01-01T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO runs (run_id, task_id, worker_id, state, created_at) \
+                     VALUES (?1, ?2, ?3, 'queued', ?4)",
+                    rusqlite::params![run_id, task_id, worker_id, "2026-01-01T00:00:00Z"],
+                )?;
+                Ok(serde_json::Value::Null)
+            }
+        }))
+        .await
+        .expect("seed task/worker/run");
+
+        adapter
+            .start(
+                StartSpec {
+                    run_id,
+                    task_id,
+                    worker_id,
+                    prompt: "hello".to_string(),
+                    resume: None,
+                },
+                sink,
+            )
+            .await
+            .expect("start must succeed against the fake binary and fake pane backend");
+
+        let run_id_string = run_id.to_string();
+        let dump: Vec<String> = db
+            .run_domain_op(Box::new(move |conn| {
+                let mut stmt = conn
+                    .prepare("SELECT event_json FROM events WHERE run_id = ?1 ORDER BY sequence")?;
+                let rows = stmt
+                    .query_map(rusqlite::params![run_id_string], |row| {
+                        row.get::<_, String>(0)
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(serde_json::json!(rows))
+            }))
+            .await
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+
+        assert!(
+            dump.iter()
+                .any(|e| e.contains("displayPaneAttached") && e.contains("fake-pane-1")),
+            "expected a DisplayPaneAttached event naming the fake backend's own pane ref, got: {dump:#?}"
+        );
+        assert!(
+            dump.iter().any(|e| e.contains("displayPaneDetached")),
+            "expected a DisplayPaneDetached event once the turn settled, got: {dump:#?}"
         );
 
         db.shutdown().await.ok();

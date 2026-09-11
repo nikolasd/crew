@@ -26,6 +26,7 @@ pub(crate) mod adapter;
 // already set, for a different property).
 pub mod approval_bridge;
 pub(crate) mod launch;
+pub(crate) mod pane;
 pub(crate) mod reader;
 pub(crate) mod trust;
 
