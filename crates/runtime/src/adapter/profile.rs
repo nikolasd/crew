@@ -195,16 +195,21 @@ impl StartupOptions {
     }
 }
 
-/// Whether a supervised adapter process runs attached to a terminal UI or
-/// fully headless. Defaults to `Headless` so a profile serialized before
-/// this field existed still deserializes -- the same wire-compat pattern
-/// `ApprovalEvent.reason` uses in `crew_protocol::event`.
+/// Whether a supervised adapter process runs attached to a terminal UI,
+/// fully headless, or (ADR-0037) driven over its own structured protocol
+/// with the terminal reduced to a self-rendered view. Defaults to
+/// `Headless` so a profile serialized before this field existed still
+/// deserializes -- the same wire-compat pattern `ApprovalEvent.reason`
+/// uses in `crew_protocol::event`. See `config::crew::AdapterMode`'s own
+/// doc comment (the config-layer twin of this enum) for why `Tui`'s own
+/// meaning shifts once `Protocol` has a real implementer.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AdapterMode {
     Tui,
     #[default]
     Headless,
+    Protocol,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

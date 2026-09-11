@@ -6,6 +6,7 @@
 //! [`crate::domain::DomainRepository`] directly.
 mod activity;
 mod capability;
+pub mod claude_protocol;
 mod error;
 mod event_sink;
 pub mod mcp_config;
@@ -36,7 +37,8 @@ pub use profile::{
 };
 pub use profile_store::{ProfileStore, ProfileStoreError};
 pub use registry::{
-    AdapterAuthorization, AdapterRegistry, FixtureAuthorization, RegistryError, ResumeSupport,
+    AdapterAuthorization, AdapterRegistry, FixtureAuthorization, GatedCapabilities, RegistryError,
+    ResumeSupport,
 };
 pub use run_lifecycle::RunLifecycleSink;
 pub use r#trait::{

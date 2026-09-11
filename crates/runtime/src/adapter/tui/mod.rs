@@ -79,6 +79,14 @@ use crate::conformance::ConformanceReport;
 /// the resolved `crewd` binary path, the state root, and the display
 /// registry/config -- and `AdapterRegistry` builds a fresh
 /// `PaneCoordinator` per run from this plus that run's own context.
+///
+/// No longer TUI-specific despite the name: `AdapterMode::Protocol`
+/// (ADR-0037) reuses this same bundle for its own pane wiring, since
+/// every field here is a display/pane-coordination concern, not a
+/// PTY-specific one. The name stays `TuiSupport` for now -- renaming it
+/// is filed as a card gated on the ADR's acceptance, not done mid-spike,
+/// to avoid churning a shared struct for code that may be discarded if
+/// the ADR is rejected.
 #[derive(Clone)]
 pub struct TuiSupport {
     pub display_registry: Arc<DisplayRegistry>,

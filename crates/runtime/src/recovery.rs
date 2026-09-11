@@ -758,6 +758,18 @@ impl RecoveryCoordinator {
                      implementation to dispatch to; use mode: \"tui\""
                 ));
             }
+            Some(AdapterMode::Protocol) => {
+                // ADR-0037's protocol-first adapters do not implement
+                // resume yet -- explicitly a non-goal of the spike that
+                // introduces the first one (`crate::adapter::claude_protocol`).
+                // Reject here, at the same point the `Headless` rejection
+                // above fires, rather than let a resume attempt reach a
+                // downstream failure shaped like something else.
+                return Err(format!(
+                    "adapter {kind} was requested with mode: \"protocol\", which does not \
+                     implement resume yet"
+                ));
+            }
             None => {
                 return Err(
                     "terminal-degraded runs declare no resumable vendor session".to_string()

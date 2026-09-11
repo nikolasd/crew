@@ -204,6 +204,16 @@ pub async fn run_fixture_conformance(kind: AdapterKind, mode: AdapterMode) -> Co
             "run_fixture_conformance called with the retired Headless mode for {kind} -- the \
              caller must reject Headless before calling this function"
         ),
+        // ADR-0037's protocol-first control plane (currently just the
+        // claude spike, `crate::adapter::claude_protocol`) has no fixture
+        // conformance suite of its own yet -- unlike `Headless`, this
+        // is not a permanent rejection, just an as-yet-unbuilt one, but
+        // the honest behavior is the same: fail loudly here rather than
+        // fabricate a report for a suite that does not exist.
+        AdapterMode::Protocol => unreachable!(
+            "run_fixture_conformance called with Protocol mode for {kind} -- no fixture \
+             conformance suite exists for the protocol-first control plane yet"
+        ),
         AdapterMode::Tui => {
             use crate::adapter::tui::{
                 claude_conformance, codex_conformance, copilot_conformance, omp_conformance,

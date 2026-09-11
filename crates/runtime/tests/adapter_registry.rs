@@ -14,9 +14,10 @@ use std::sync::Arc;
 use crew_protocol::{ProjectId, RunId, TaskId, WorkerId};
 use crew_runtime::adapter::{
     AdapterAuthorization, AdapterCapabilities, AdapterMode, AdapterRegistry, ApprovalsCapability,
-    DurabilityCapability, FixtureAuthorization, NativeViewCapability, NestedCapability,
-    OmpRpcStartupOptions, ProtocolKind, ResumeCapability, StartupOptions, SteeringCapability,
-    TerminalDegradedStartupOptions, UsageCapability, WorkerProfile, WorkspaceControlCapability,
+    DurabilityCapability, FixtureAuthorization, GatedCapabilities, NativeViewCapability,
+    NestedCapability, OmpRpcStartupOptions, ProtocolKind, ResumeCapability, StartupOptions,
+    SteeringCapability, TerminalDegradedStartupOptions, UsageCapability, WorkerProfile,
+    WorkspaceControlCapability,
 };
 use crew_runtime::config::{NestedViolationAction, RuntimePolicy, crew::DisplayBackend};
 use crew_runtime::db::DatabaseHandle;
@@ -190,7 +191,7 @@ impl AdapterAuthorization for BlockingAuthorization {
     fn authorize(
         &self,
         _profile: &WorkerProfile,
-        _effective_capabilities: &AdapterCapabilities,
+        _effective_capabilities: &GatedCapabilities,
         _policy: Option<&crew_runtime::config::RuntimePolicy>,
     ) -> Result<(), String> {
         let _ = self.entered_tx.send(());
@@ -408,7 +409,11 @@ async fn releasing_a_policy_evaluator_slot_frees_the_registry_ceiling() {
     // Book the one slot directly, as a real prior `run_one` authorize
     // call would have.
     authorization
-        .authorize(&gpt4_profile, &test_capabilities(), None)
+        .authorize(
+            &gpt4_profile,
+            &GatedCapabilities::Proven(test_capabilities()),
+            None,
+        )
         .expect("the first slot is within the ceiling of 1");
 
     let (db, _dir, project_id) = harness().await;
