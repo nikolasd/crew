@@ -873,40 +873,52 @@ mod tests {
         std::fs::create_dir_all(&session_dir).expect("create session dir");
 
         // Deliberately its own minimal double, not `write_double`: this
-        // scenario is purely about timing and screen content, not about
-        // rollout tailing or follow-ups, and is driven entirely by the
-        // double's own clock rather than by anything it reads from its
-        // stdin -- there is no reliable way for a dumb shell double to
-        // notice a bracketed paste landing without a full re-render loop
-        // of its own, so this reproduces the composer/splash/gate
-        // sequence purely on a timer instead:
+        // scenario is purely about ordering and screen content, not about
+        // rollout tailing or follow-ups. An earlier version of this
+        // double painted the splash and gate on a fixed timer (0.7s
+        // after spawn) -- that passed on a clean-tree run and failed on
+        // a loaded macOS CI runner, because a timer is not an ordering
+        // guarantee: any single scheduling gap wide enough for
+        // `wait_for_output_idle` to see `submit_idle`'s worth of quiet
+        // lets `wait_for_enter_precondition` tick against the stale
+        // ready phrase before the gate has actually painted, and Enter
+        // goes out early.
         //
-        // - t=0: the ready phrase, held long enough (0.7s, comfortably
-        //   past `INJECT_MIN_DELAY`'s 500ms floor) for `wait_for_
-        //   readiness` to see it and paste.
-        // - t=0..0.7s: a filler byte every 20ms -- keeps
-        //   `wait_for_output_idle` from ever seeing `submit_idle`'s 50ms
-        //   of quiet before the gate actually paints, which would
-        //   otherwise let `wait_for_enter_precondition`'s first tick see
-        //   only the stale ready phrase plus the pasted nonce (the pty's
-        //   own canonical-mode echo puts it on screen well before this
-        //   double ever reacts to anything) and proceed to Enter before
-        //   the gate is even on screen. Each filler write ends in its
-        //   own newline so the shell's stdio actually flushes it to the
-        //   pty promptly (line-buffered on a tty) rather than sitting
-        //   unflushed until the process's final sleep.
-        // - t=0.7s: an ordinary splash (erase-to-end-of-line, fully
-        //   implemented) and the real gate -- see this test's own doc
-        //   comment for why the unimplemented half of the live
-        //   regression is proven separately, at the classifier level.
+        // The fix makes the paint a CONSEQUENCE of the paste rather than
+        // of the clock, in two parts:
+        //
+        // 1. Ordering: `read -r` (a whole line) cannot be the trigger --
+        //    the submit byte (`\r`) is deliberately withheld until this
+        //    precondition passes, so nothing the double ever reads
+        //    terminates a line, and blocking on one would hang forever.
+        //    Blocking on a single BYTE does work: the pty starts in
+        //    canonical mode, so `stty -icanon` first drops the double's
+        //    own stdin out of line buffering (a real vendor CLI does its
+        //    own raw-mode setup; this double must do it too, by hand);
+        //    with that done, the very first byte to arrive is the
+        //    bracketed-paste opener's `ESC`, which is causally after the
+        //    paste has begun. If `stty` is unavailable, the canonical-mode
+        //    read never unblocks and this test fails on its own deadline
+        //    -- a clear failure, not a hang mistaken for something else.
+        // 2. Echo: `-echo` in that same `stty` call is not a hardening
+        //    afterthought, it is load-bearing. A real vendor CLI disables
+        //    terminal echo the moment it takes over (it renders its own
+        //    UI); this double, left in the default echoing mode, means
+        //    the pty's line discipline reflects the pasted bytes back as
+        //    OUTPUT -- and because ECHOCTL renders each control byte as
+        //    a two-character caret sequence (`^[` for one `ESC`), the
+        //    echoed bracketed-paste framing is roughly twice as long as
+        //    the real bytes crewd wrote. That was enough to overflow this
+        //    grid's 120-column width mid-paste, silently dropping
+        //    whatever landed past the edge -- including this double's own
+        //    gate text, printed immediately afterward. Disabling echo
+        //    removes the paste from the screen entirely, exactly like a
+        //    real vendor: nothing here needs it visible, only the gate
+        //    text this double paints on its own.
         let script = r#"#!/bin/sh
 echo "Ask Codex to do anything"
-i=0
-while [ $i -lt 35 ]; do
-  sleep 0.02
-  printf '.\n'
-  i=$((i + 1))
-done
+stty -icanon -echo min 1 time 0 2>/dev/null
+dd bs=1 count=1 >/dev/null 2>&1
 printf '\033[K'
 printf 'Do you trust the contents of this directory?\n'
 sleep 30
