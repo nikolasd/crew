@@ -342,6 +342,12 @@ export function attachMilestoneBridge(pi: ExtensionAPI, monitor: MonitorControll
   // one check governs both.
   const customRendererSupported = supportsCustomMessageRenderer(pi);
   if (customRendererSupported) {
+    // Fire-and-forget is safe here: `customRendererSupported` (the wire
+    // shape's own gate below) was already decided synchronously above,
+    // so a digest arriving before this async registration resolves still
+    // gets the correct `{ customType, content }` shape -- only its
+    // header renders generic until the dynamic import settles, which is
+    // attach-time work finishing well before any run reaches a milestone.
     void registerCrewMessageRenderer(pi);
   }
 
