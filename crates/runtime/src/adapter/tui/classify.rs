@@ -295,7 +295,7 @@ mod tests {
     }
 
     fn grid_from(name: &str) -> TerminalGrid {
-        TerminalGrid::from_bytes(&fixture(name))
+        TerminalGrid::from_named_fixture_bytes(name, &fixture(name))
     }
 
     /// Pushes a fixture in real-PTY-read-sized chunks, reporting whether

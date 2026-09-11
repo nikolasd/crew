@@ -144,10 +144,18 @@ impl TerminalGrid {
         self.unsupported_count
     }
 
-    /// A grid built from one complete slice of output.
+    /// A grid built from one complete slice of a NAMED committed
+    /// capture, sized to that capture's own recorded geometry via
+    /// [`fixture_size`] -- never the blanket [`FIXTURE_GRID_WIDTH`]/
+    /// [`FIXTURE_GRID_HEIGHT`] default, which is wrong for the two
+    /// captures recorded at the PTY's real 120x32. See
+    /// `fixtures/adapters/tui-screens/README.md`'s own "Size is part of
+    /// a capture, not a detail" section for why replaying at the wrong
+    /// size is not merely cosmetic.
     #[cfg(test)]
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
-        let mut grid = Self::new_at_fixture_size();
+    pub(super) fn from_named_fixture_bytes(name: &str, bytes: &[u8]) -> Self {
+        let (width, height) = fixture_size(name);
+        let mut grid = Self::new(width, height);
         grid.push(bytes);
         grid
     }
@@ -856,6 +864,28 @@ pub(super) const ALL_FIXTURES: &[&str] = &[
     "omp-setup-step1.raw",
 ];
 
+/// The recorded geometry for one committed capture, read off
+/// `fixtures/adapters/tui-screens/README.md`'s own `Size` column -- the
+/// single source `from_named_fixture_bytes` sizes a fixture's replay
+/// grid from. Two captures were taken at the PTY's real spawn size,
+/// `DEFAULT_COLS`x`DEFAULT_ROWS` (120x32); every other committed capture
+/// predates that and was recorded at 120x40 by a probe harness, which is
+/// why that is this function's default rather than something every other
+/// call site has to name. A future capture recorded at yet another size
+/// must be added to `AT_120X32` (or a sibling list, if a third size ever
+/// shows up) AND to the README's own table -- this function has no way
+/// to check the README for you, only to be wrong the same way it would
+/// be if you forgot the table too.
+#[cfg(test)]
+pub(super) fn fixture_size(name: &str) -> (usize, usize) {
+    const AT_120X32: &[&str] = &["codex-composer-empty.raw", "codex-composer-holding.raw"];
+    if AT_120X32.contains(&name) {
+        (120, 32)
+    } else {
+        (FIXTURE_GRID_WIDTH, FIXTURE_GRID_HEIGHT)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -926,7 +956,7 @@ mod tests {
     #[test]
     fn a_grid_stops_showing_an_answered_gate_once_the_terminal_clears_it() {
         let bytes = fixture("claude-trust-to-composer.raw");
-        let grid = TerminalGrid::from_bytes(&bytes);
+        let grid = TerminalGrid::from_named_fixture_bytes("claude-trust-to-composer.raw", &bytes);
 
         assert!(
             bytes.windows(8).any(|w| w == b"\x1b[?1049h"),
@@ -1134,9 +1164,10 @@ mod tests {
     fn chunked_pushes_agree_with_one_whole_push_at_every_split() {
         for name in ALL_FIXTURES {
             let bytes = fixture(name);
-            let whole = TerminalGrid::from_bytes(&bytes);
+            let (width, height) = fixture_size(name);
+            let whole = TerminalGrid::from_named_fixture_bytes(name, &bytes);
             for chunk in [1usize, 2, 3, 5, 7, 64, 512] {
-                let mut grid = TerminalGrid::new_at_fixture_size();
+                let mut grid = TerminalGrid::new(width, height);
                 for slice in bytes.chunks(chunk) {
                     grid.push(slice);
                 }
@@ -1157,7 +1188,7 @@ mod tests {
     fn every_committed_capture_folds_in_without_panicking() {
         for name in ALL_FIXTURES {
             let bytes = fixture(name);
-            let grid = TerminalGrid::from_bytes(&bytes);
+            let grid = TerminalGrid::from_named_fixture_bytes(name, &bytes);
             assert!(
                 !grid.rendered().is_empty(),
                 "{name}: rendered grid must not be empty"

@@ -3626,9 +3626,7 @@ mod tests {
     }
 
     fn grid_from(name: &str) -> TerminalGrid {
-        let mut grid = TerminalGrid::new_at_fixture_size();
-        grid.push(&fixture(name));
-        grid
+        TerminalGrid::from_named_fixture_bytes(name, &fixture(name))
     }
 
     /// The whole point of re-checking at Enter time rather than reusing
