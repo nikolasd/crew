@@ -1671,11 +1671,14 @@ mod redaction_enumeration {
         (
             "RuntimeEvent::EscalationRaised.reason",
             "A machine-assigned code from a closed set, chosen by the runtime and never \
-             caller- or vendor-derived: the three production construction sites pass \
+             caller- or vendor-derived: the four production construction sites pass \
              the literals `repeated_failure` \
              (crates/runtime/src/adapter/run_lifecycle.rs), `write_violation` \
-             (crates/runtime/src/domain/repository.rs), and `vendorFirstRunGate` \
-             (crates/runtime/src/adapter/event_sink.rs). This reason previously \
+             (crates/runtime/src/domain/repository.rs), `vendorFirstRunGate` \
+             (crates/runtime/src/adapter/event_sink.rs), and `claudeWorkspaceTrustPending` \
+             (crates/runtime/src/adapter/event_sink.rs, a protocol-mode Claude adapter's own \
+             pre-spawn trust check -- distinct from `vendorFirstRunGate` because that run has \
+             no live pane a human could answer the gate from). This reason previously \
              offered two supports and neither existed -- it cited \"the field's own doc\", \
              which had no doc, and said the worker's text travels in the sibling \
              `question`, which no production site populates before `vendorFirstRunGate`. \

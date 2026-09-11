@@ -113,6 +113,7 @@ fn kind_of(payload: &AdapterEventPayload) -> &'static str {
         AdapterEventPayload::TurnEnded { .. } => "TurnEnded",
         AdapterEventPayload::FirstRunGateDetected { .. } => "FirstRunGateDetected",
         AdapterEventPayload::ReconciliationCompleted { .. } => "ReconciliationCompleted",
+        AdapterEventPayload::WorkspaceTrustPending => "WorkspaceTrustPending",
     }
 }
 

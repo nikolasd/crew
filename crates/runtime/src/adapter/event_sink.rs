@@ -164,15 +164,39 @@ pub enum AdapterEventPayload {
     /// `examined == 0` is itself a finding, not a clean pass -- a
     /// reconciliation that never looked at anything is indistinguishable
     /// from one that never ran, and a boolean "did it run" flag cannot
-    /// tell those apart the way a real count can. `gaps_found` and
-    /// `gaps_repaired` are expected to be equal; a caller finding them
-    /// unequal has found a defect in the repair step itself, not in the
-    /// vendor's transcript.
+    /// tell those apart the way a real count can.
+    ///
+    /// **Correction**: this field's own doc previously said `gaps_found`
+    /// and `gaps_repaired` are expected to be equal. No repair mechanism
+    /// exists yet -- `claude_protocol::reconcile::TranscriptEntry`
+    /// carries only an id and a coarse kind, deliberately never the
+    /// entry's own content, so there is nothing a repair step could
+    /// re-journal from it today without reading the raw transcript line
+    /// a second time. The one real caller
+    /// (`claude_protocol::adapter::ClaudeProtocolAdapter`) always emits
+    /// `gaps_repaired: 0`; the two counts being unequal is the current,
+    /// expected state, not a defect, until an actual repair step is
+    /// built.
     ReconciliationCompleted {
         examined: u64,
         gaps_found: u64,
         gaps_repaired: u64,
     },
+    /// A protocol-first Claude adapter checked claude's own trust record
+    /// (`~/.claude.json`) before ever spawning it and found this
+    /// repository not yet accepted -- the protocol-mode equivalent of
+    /// `FirstRunGateDetected { kind: ClaudeWorkspaceTrust }`, but
+    /// detected by reading a file up front rather than by pattern-
+    /// matching text a live PTY painted, since protocol mode has no
+    /// terminal to observe. Carries no fields: the fact is a single,
+    /// closed one. Maps directly to `RuntimeEvent::EscalationRaised {
+    /// reason: "claudeWorkspaceTrustPending" }` -- a new reason distinct
+    /// from `"vendorFirstRunGate"`, precisely because the run this
+    /// escalates has no live pane a human could type into to resolve
+    /// it: the run fails outright (see
+    /// `claude_protocol::adapter::ClaudeProtocolAdapter::start`), and
+    /// this reason's own remediation text says so.
+    WorkspaceTrustPending,
 }
 
 /// Adapters push ordered normalized events into the runtime journal
@@ -470,8 +494,39 @@ impl DomainAdapterEventSink {
                 gaps_found,
                 gaps_repaired,
             },
+            // The primary event this emit call journals IS the
+            // escalation itself -- unlike `FirstRunGateDetected` above,
+            // there is no separate "detected" fact distinct from
+            // "escalated" here (the same shape `write_violation`'s own
+            // construction site in `DomainRepository` already uses: one
+            // event, not a detection event plus a paired escalation).
+            AdapterEventPayload::WorkspaceTrustPending => RuntimeEvent::EscalationRaised {
+                run_id,
+                task_id,
+                worker_id,
+                reason: "claudeWorkspaceTrustPending".to_string(),
+                question: Some(workspace_trust_pending_question()),
+            },
         }
     }
+}
+
+/// The runtime-authored escalation question for
+/// [`AdapterEventPayload::WorkspaceTrustPending`] -- a fixed template,
+/// nothing captured, on the same
+/// [`crew_protocol::Redacted::assert_runtime_authored`] basis
+/// `first_run_gate_question` uses. Distinct wording from that
+/// function's own `ClaudeWorkspaceTrust` case: this run has no live
+/// pane to point a human at (protocol mode has no terminal at all), so
+/// the remediation is "run claude yourself once, then resubmit," never
+/// "answer it in the worker's pane."
+fn workspace_trust_pending_question() -> crew_protocol::Redacted {
+    crew_protocol::Redacted::assert_runtime_authored(
+        "Claude has not yet had its one-time workspace-trust prompt accepted for this \
+         repository, and this run has no terminal to answer it from. Trust the repository \
+         once by running claude interactively here yourself, then resubmit this run. Crew \
+         will not accept the prompt for you.",
+    )
 }
 
 /// The runtime-authored escalation question for a recognized first-run

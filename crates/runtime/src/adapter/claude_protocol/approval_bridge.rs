@@ -13,13 +13,6 @@
 //! that of the control channel specifically, and confirming it is part
 //! of the spike's own job, not something to guess past.
 
-// Same situation as `reconcile.rs`: the control-channel reader that
-// would call `parse_permission_request`/`handle_permission_request`
-// while reading claude's live output does not exist yet. Deliberate,
-// temporary scaffolding -- flagged plainly rather than hidden, and owed
-// a real caller alongside `reconcile::find_gaps`'s own.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
 

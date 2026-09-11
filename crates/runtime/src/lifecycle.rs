@@ -323,12 +323,27 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
     // it). Created before `ServerConfig` so both holders get the same Arc.
     let activity_clock = Arc::new(crate::adapter::ActivityClock::new());
 
+    // The one `ApprovalCallback` this daemon ever constructs -- see
+    // `crate::adapter::registry::ProtocolSupport`'s own doc comment for
+    // why one shared instance (keyed by approval id, never by adapter
+    // instance) is correct here rather than merely convenient.
+    // Behaviorally identical to `NoopApprovalCallback` for any approval
+    // no protocol-mode adapter ever registered (proven directly by
+    // `claude_protocol::approval_bridge`'s own
+    // `acknowledging_an_unregistered_or_dropped_approval_never_errors`),
+    // so replacing the default here is safe for every mode, not just
+    // Claude's protocol one.
+    let protocol_callback =
+        Arc::new(crate::adapter::claude_protocol::approval_bridge::ProtocolApprovalCallback::new());
+
     let config = ServerConfig {
         binary_source: opts.binary_source,
         run_driver: Some(Arc::clone(&registry) as Arc<dyn crate::service::RunDriver>),
         artifact_store: Some(artifact_store),
         repository: repo_root.clone(),
         worker_verifier: Arc::new(ScopeTokenVerifier::new(Arc::clone(&scope_tokens))),
+        approval_callback: Arc::clone(&protocol_callback)
+            as Arc<dyn crate::approval::ApprovalCallback>,
         nested_violation_action,
         policy: Some((config_paths.clone(), Arc::clone(&policy))),
         turn_budget_default: crew_config.limits.turn_budget_per_subtask,
@@ -393,6 +408,18 @@ pub async fn serve(opts: &ServeOptions) -> Result<(), ServeError> {
         project_id: paths.project_id,
         violation_service: server.violation_service(),
         events_tx: server.events_sender(),
+    }));
+
+    // Protocol-mode (ADR-0037) support: the server-owned `ApprovalService`
+    // only exists once `Server::bind` has constructed its own
+    // `OrchestrationService` -- a post-construction setter for the same
+    // reason `set_resume_support` above is. `protocol_callback` is the
+    // SAME instance already wired as `ServerConfig::approval_callback`,
+    // so a protocol adapter's own bridge registers into the identical
+    // map `ApprovalService::decide` calls back into.
+    registry.set_protocol_support(Arc::new(crate::adapter::registry::ProtocolSupport {
+        approval_service: server.orchestration_service().approval_service(),
+        callback: Arc::clone(&protocol_callback),
     }));
 
     // Crash recovery: the sweep is now RESUME FIRST. It runs here --

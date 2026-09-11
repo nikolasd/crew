@@ -6,17 +6,24 @@
 //! reserved kind under that mode stays typed-rejected the same way
 //! `AdapterMode::Headless` is today.
 //!
-//! Not yet a real [`super::Adapter`] implementation -- this module
-//! currently exists only to give [`super::registry::gate_profile`]'s
-//! new `AdapterMode::Protocol` branch something honest to declare, ahead
-//! of the adapter itself. The fuller shape still to come: control
-//! channel framing, a bridge from a vendor permission request to
-//! `crate::approval::ApprovalService`'s existing ledger, reconciling the
-//! vendor's own durable transcript against what this run journaled
-//! (with a test-only seam to prove that reconciliation actually catches
-//! a dropped event), and the pane renderer.
+//! [`adapter::ClaudeProtocolAdapter`] is the real [`super::Adapter`]
+//! implementation [`super::registry::gate_profile`]'s
+//! `AdapterMode::Protocol` branch was built ahead of: subprocess spawn
+//! with the settled fixed argv ([`launch::build_argv`]) -- plain `-p`,
+//! both stream-json formats, explicit `--setting-sources`, no `--bare`
+//! or hook-suppressing flag -- the workspace-trust pre-check
+//! ([`trust::workspace_trust_accepted`]), the control-channel
+//! reader ([`reader::drive_turn`]), the approval bridge
+//! ([`approval_bridge`]), and reconciliation against claude's own
+//! transcript ([`reconcile::find_gaps`]). Still not built: the pane
+//! renderer beyond bare legibility, `resume`/`--continue`, and the
+//! other three vendors.
 
+pub(crate) mod adapter;
 pub(crate) mod approval_bridge;
+pub(crate) mod launch;
+pub(crate) mod reader;
+pub(crate) mod trust;
 
 // `pub`, not `pub(crate)`: `crates/runtime/tests/claude_protocol_reconcile.rs`
 // links this crate as an ordinary external dependency specifically to

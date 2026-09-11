@@ -209,6 +209,18 @@ pub enum RegistryError {
     /// until its TUI vendor impl lands).
     #[error("adapter {0} has no TUI-mode implementation yet; mode: \"tui\" is unavailable for it")]
     TuiModeUnavailable(String),
+    /// `mode: "protocol"` (ADR-0037) was requested but
+    /// [`AdapterRegistry::set_protocol_support`] was never called --
+    /// the same defense-in-depth shape as [`Self::TuiModeUnavailable`]:
+    /// `gate_profile` already refuses a non-Claude kind under this mode
+    /// before `build_adapter` is ever reached, so a caller hitting this
+    /// variant means Claude itself was requested in a window before this
+    /// registry's own protocol support was wired up.
+    #[error(
+        "adapter {0} has no protocol-mode implementation yet; mode: \"protocol\" is unavailable \
+         for it"
+    )]
+    ProtocolModeUnavailable(String),
     /// [`AdapterRegistry::resume_run`] was called before the caller ever
     /// supplied [`ResumeSupport`] via
     /// [`AdapterRegistry::set_resume_support`]. Fail closed: a resume
@@ -285,6 +297,21 @@ pub struct ResumeSupport {
     pub events_tx: tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
 }
 
+/// Everything `build_adapter`'s `AdapterMode::Protocol` branch needs
+/// beyond `super::claude_protocol::adapter::ClaudeProtocolAdapter`'s own
+/// vendor-facing fields: the server-owned `ApprovalService` `respond_to_approval`'s
+/// real bridge submits requests to, and the callback map that same
+/// bridge registers its one-shot receivers into. A post-construction
+/// setter bundle -- exactly like [`TuiSupport`]/[`ResumeSupport`], and
+/// for the identical reason: `ApprovalService` is constructed inside
+/// `crate::ipc::Server::bind` (from `ServerConfig::approval_callback`),
+/// which happens after this registry must already be handed to
+/// [`crate::ipc::ServerConfig::run_driver`].
+pub(crate) struct ProtocolSupport {
+    pub(crate) approval_service: Arc<crate::approval::ApprovalService>,
+    pub(crate) callback: Arc<super::claude_protocol::approval_bridge::ProtocolApprovalCallback>,
+}
+
 /// Implements [`RunDriver`] against the four real worker adapters.
 ///
 /// Always constructed behind an `Arc` in practice (exactly like every
@@ -327,6 +354,13 @@ pub struct AdapterRegistry {
     /// makes every `resume_run` a typed [`RegistryError::ResumeUnsupported`]
     /// refusal, never a silently unwired resume.
     resume_support: Mutex<Option<Arc<ResumeSupport>>>,
+    /// `AdapterMode::Protocol` support (see [`ProtocolSupport`]'s own doc
+    /// comment). `None` until [`Self::set_protocol_support`] is called
+    /// (or permanently, for callers -- chiefly tests -- that never call
+    /// it): `build_adapter`'s `AdapterMode::Protocol` branch gets a typed
+    /// [`RegistryError::ProtocolModeUnavailable`] refusal in that window,
+    /// the same shape [`Self::tui`]'s absence gives `mode: "tui"`.
+    protocol: Mutex<Option<Arc<ProtocolSupport>>>,
     running: Arc<Mutex<HashMap<RunId, Arc<dyn Adapter>>>>,
     /// Org security patterns for redaction.
     org_security_patterns: Vec<String>,
@@ -359,6 +393,7 @@ impl AdapterRegistry {
             broker: Mutex::new(None),
             tui: Mutex::new(None),
             resume_support: Mutex::new(None),
+            protocol: Mutex::new(None),
             activity: Mutex::new(None),
             max_live_sessions: Mutex::new(None),
             running: Arc::new(Mutex::new(HashMap::new())),
@@ -403,6 +438,14 @@ impl AdapterRegistry {
     /// already be handed to [`crate::ipc::ServerConfig::run_driver`].
     pub fn set_resume_support(&self, support: Arc<ResumeSupport>) {
         *self.resume_support.lock() = Some(support);
+    }
+
+    /// Supplies the [`ProtocolSupport`] bundle `build_adapter`'s
+    /// `AdapterMode::Protocol` branch needs. A post-construction setter
+    /// for the same reason `set_resume_support` is -- see
+    /// [`ProtocolSupport`]'s own doc comment.
+    pub(crate) fn set_protocol_support(&self, support: Arc<ProtocolSupport>) {
+        *self.protocol.lock() = Some(support);
     }
 
     /// Supplies the shared [`ActivityClock`] every run's lifecycle sink
@@ -572,6 +615,7 @@ impl AdapterRegistry {
             self.mcp.clone(),
             self.broker.lock().clone(),
             self.tui.lock().clone(),
+            self.protocol.lock().clone(),
             Arc::clone(&support.db),
             support.project_id,
             support.events_tx.clone(),
@@ -634,6 +678,7 @@ impl RunDriver for AdapterRegistry {
         let mcp = self.mcp.clone();
         let broker = self.broker.lock().clone();
         let tui = self.tui.lock().clone();
+        let protocol = self.protocol.lock().clone();
         let org_security_patterns = self.org_security_patterns.clone();
         let running = Arc::clone(&self.running);
         // Read under the registry's own lock, before the async block: a
@@ -687,6 +732,7 @@ impl RunDriver for AdapterRegistry {
                 mcp,
                 broker,
                 tui,
+                protocol,
                 org_security_patterns,
             )
             .await
@@ -878,6 +924,7 @@ fn build_placeholder_adapter() -> Arc<dyn Adapter> {
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_one(
     ctx: &RunDriverContext,
     authorization: &Arc<dyn AdapterAuthorization>,
@@ -885,6 +932,7 @@ async fn run_one(
     mcp: Option<AdapterMcpConfig>,
     broker: Option<Arc<CoordinationBroker>>,
     tui: Option<Arc<TuiSupport>>,
+    protocol: Option<Arc<ProtocolSupport>>,
     org_security_patterns: Vec<String>,
 ) -> Result<
     (
@@ -924,6 +972,7 @@ async fn run_one(
         mcp,
         broker,
         tui,
+        protocol,
         Arc::clone(&ctx.db),
         ctx.project_id,
         ctx.events_tx.clone(),
@@ -1336,6 +1385,7 @@ fn build_adapter(
     mcp: Option<AdapterMcpConfig>,
     broker: Option<Arc<CoordinationBroker>>,
     tui: Option<Arc<TuiSupport>>,
+    protocol: Option<Arc<ProtocolSupport>>,
     db: Arc<DatabaseHandle>,
     project_id: crew_protocol::ProjectId,
     events_tx: tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
@@ -1445,6 +1495,66 @@ fn build_adapter(
         return Err(RegistryError::TuiModeUnavailable(
             kind.wire_name().to_string(),
         ));
+    }
+
+    // `mode: "protocol"` (ADR-0037): `gate_profile` already refuses every
+    // kind but Claude before this function is ever reached under this
+    // mode, so the only real branch here is Claude's own. `protocol`
+    // absent is the same defense-in-depth shape `tui` absent is above --
+    // reachable only if Claude protocol mode is requested before
+    // `AdapterRegistry::set_protocol_support` is ever called.
+    if requested_mode(&profile.startup_options) == Some(super::profile::AdapterMode::Protocol) {
+        let kind = profile
+            .startup_options
+            .adapter_kind()
+            .expect("Protocol mode only applies to a startup_options variant with an AdapterKind");
+        let Some(protocol) = protocol else {
+            return Err(RegistryError::ProtocolModeUnavailable(
+                kind.wire_name().to_string(),
+            ));
+        };
+        return match kind {
+            super::AdapterKind::Claude => {
+                // `db`/`project_id`/`events_tx`/`display`/`resume_cursor`
+                // are unused here: unlike a `TuiAdapter`, this adapter
+                // builds no internal pane/sink of its own -- the caller
+                // (`run_one`/`resume_one`) builds the shared
+                // `DomainAdapterEventSink` from those same values and
+                // hands it to `Adapter::start` separately, exactly the
+                // path every adapter this registry constructs goes
+                // through. `resume_cursor` in particular is always
+                // `None` here in practice: `crate::recovery`'s own
+                // `AdapterMode::Protocol` arm already refuses resume
+                // before this function is ever reached for one.
+                //
+                // `model` is threaded through unresolved -- see
+                // `super::claude_protocol::adapter`'s own module doc
+                // comment on why the run-specific-over-boot-config
+                // precedence a correct value needs is not this
+                // function's to invent ahead of the fix for
+                // `build_tui_adapter`'s own model-resolution gap
+                // landing on this shared construction path.
+                // Trimmed defensively per `WorkerProfile::validate`'s
+                // own non-empty guarantee at `ProfileStore::insert` --
+                // belt and suspenders, not a guess at emptiness this
+                // adapter has any reason to expect.
+                let model = Some(profile.model.trim().to_string()).filter(|m| !m.is_empty());
+                Ok(Arc::new(
+                    super::claude_protocol::adapter::ClaudeProtocolAdapter::new(
+                        repo_root.to_path_buf(),
+                        profile.environment_allowlist.clone(),
+                        model,
+                        super::claude_protocol::adapter::ProtocolBundle {
+                            approval_service: Arc::clone(&protocol.approval_service),
+                            callback: Arc::clone(&protocol.callback),
+                        },
+                    ),
+                ))
+            }
+            _ => Err(RegistryError::ProtocolModeUnavailable(
+                kind.wire_name().to_string(),
+            )),
+        };
     }
 
     // Every reserved kind's Headless fallback (three headless vendor
@@ -1703,6 +1813,7 @@ mod build_adapter_tests {
             None,
             None,
             None, // no TuiSupport supplied
+            None,
             db,
             crew_protocol::ProjectId::new(),
             events_tx,
@@ -1740,6 +1851,7 @@ mod build_adapter_tests {
             None,
             None,
             Some(test_tui_support()),
+            None,
             db,
             crew_protocol::ProjectId::new(),
             events_tx,
@@ -1774,6 +1886,7 @@ mod build_adapter_tests {
             None,
             None,
             Some(test_tui_support()),
+            None,
             db,
             crew_protocol::ProjectId::new(),
             events_tx,
@@ -1814,6 +1927,7 @@ mod build_adapter_tests {
             None,
             None,
             Some(test_tui_support()),
+            None,
             db,
             crew_protocol::ProjectId::new(),
             events_tx,
@@ -1849,6 +1963,7 @@ mod build_adapter_tests {
             None,
             None,
             Some(test_tui_support()),
+            None,
             db,
             crew_protocol::ProjectId::new(),
             events_tx,
@@ -1900,6 +2015,7 @@ mod build_adapter_tests {
                 RunId::new(),
                 TaskId::new(),
                 WorkerId::new(),
+                None,
                 None,
                 None,
                 None,
