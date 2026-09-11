@@ -1860,12 +1860,13 @@ async fn wait_for_readiness(
     sink: &Arc<dyn AdapterEventSink>,
     cancel_token: &CancellationToken,
 ) -> Result<(), AdapterError> {
-    // Provisional: re-armed once below, the moment the vendor's first
-    // byte arrives, and again every time a first-run gate is left (see
-    // `just_left_gate`). Set here only so there is a deadline at all for
-    // the "wait for the first byte" check immediately below to measure
-    // against -- a vendor that never produces any output has to fail
-    // closed too, and nothing has re-armed it yet at that point.
+    // Provisional: re-armed once below, after the vendor's first byte
+    // has arrived and the spawn-anchored hold has passed, and again
+    // every time a first-run gate is left (see `just_left_gate`). Set
+    // here only so there is a deadline at all for the "wait for the
+    // first byte" check immediately below to measure against -- a
+    // vendor that never produces any output has to fail closed too, and
+    // nothing has re-armed it yet at that point.
     let mut deadline = tokio::time::Instant::now() + cap;
     // Set once this poll journals `FirstRunGateDetected` +
     // `EscalationRaised` for the gate currently blocking the run --
@@ -1876,9 +1877,10 @@ async fn wait_for_readiness(
     let mut escalated_gate: Option<GateKind> = None;
     // Set on every tick the Gate arm runs, consumed the next time the
     // surface is classified `Undecided`: it marks that `deadline` (last
-    // armed when the vendor's first byte arrived, or at this function's
-    // entry if a gate somehow parks before any output ever does) is now
-    // stale, because a gate can park for arbitrarily long -- a human
+    // armed once the vendor's first byte arrived and the spawn-anchored
+    // hold below had passed, or at this function's entry if a gate
+    // somehow parks before either of those does) is now stale, because a
+    // gate can park for arbitrarily long -- a human
     // answering it is the whole point of escalating -- and `deadline`
     // was never advanced during that park. Without this, the very next
     // `Undecided` tick after a gate resolves to something this module
@@ -1921,19 +1923,6 @@ async fn wait_for_readiness(
             ));
         }
     }
-    // Re-arm here, exactly once: `deadline` was set at this function's
-    // entry, before anything was known about when the vendor would
-    // actually produce its first byte. On a loaded machine, scheduling
-    // delay before that first byte is routine and has nothing to do with
-    // whether the vendor can show a recognizable prompt -- but left
-    // unarmed, that delay was silently subtracted from the window
-    // `classify_surface` gets below, the same "deadline fixed at entry,
-    // never advanced across a wait with its own reason to take time"
-    // shape the `just_left_gate` re-arm below already exists to fix for
-    // gate parks. From here on, `cap` measures time since the vendor
-    // started talking, not time since this function started waiting for
-    // it to.
-    deadline = tokio::time::Instant::now() + cap;
     // Hold until the spawn-anchored floor before reading the surface or
     // typing anything: a vendor mid-launch has not painted its real
     // screen yet, and INJECT_MIN_DELAY exists precisely so text is not
@@ -1941,6 +1930,22 @@ async fn wait_for_readiness(
     if tokio::time::Instant::now() < not_before {
         tokio::time::sleep_until(not_before).await;
     }
+    // Re-arm here, exactly once, AFTER the hold above rather than before
+    // it: `deadline` was set at this function's entry, before anything
+    // was known about when the vendor would actually produce its first
+    // byte or how much of the spawn-anchored floor above would still be
+    // ahead of it once that byte arrived. On a loaded machine, scheduling
+    // delay before that first byte -- and the deliberate hold above,
+    // which has its own reason to take up to `INJECT_MIN_DELAY` -- are
+    // both routine and have nothing to do with whether the vendor can
+    // show a recognizable prompt, but left unarmed either wait is
+    // silently subtracted from the window `classify_surface` gets below,
+    // the same "deadline fixed at entry, never advanced across a wait
+    // with its own reason to take time" shape the `just_left_gate`
+    // re-arm below already exists to fix for gate parks. From here on,
+    // `cap` measures time since the vendor started talking AND crew
+    // stopped deliberately holding, not time since either began.
+    deadline = tokio::time::Instant::now() + cap;
 
     loop {
         let classified = {
