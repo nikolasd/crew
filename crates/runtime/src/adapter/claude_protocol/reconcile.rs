@@ -12,15 +12,18 @@
 //! stop repeating (screen recognition's own "the accumulator still says
 //! the gate is on screen" shape, one layer up).
 //!
-//! **The entry schema below is provisional**, not yet checked against a
-//! live capture: this spike's own stop conditions ask that of the
-//! control channel, and the same caution applies here. What every entry
-//! needs to carry for this module's OWN purpose is narrow regardless of
-//! the vendor's exact JSON shape: an identifier stable enough to
-//! correlate against what this run already journaled, and a kind
-//! coarse enough to describe a gap without ever carrying vendor
-//! content into a closed-set field (`TranscriptEntryKind`'s own doc
-//! comment).
+//! **Checked against a live capture** (three real turns against
+//! `claude_code_version` `2.1.268`): the entry shape below -- `uuid` as
+//! the correlation id, `type` as the kind discriminant -- is exactly
+//! what a real transcript carries for `user`/`assistant` entries, which
+//! is all this module's own purpose needs regardless of the vendor's
+//! full JSON shape. One thing the same capture found that this module
+//! did not originally account for: a real transcript also carries
+//! non-conversational bookkeeping entries (a `SessionStart` hook's own
+//! error, observed as `type: "attachment"`) that DO carry a `uuid` but
+//! never appear on the live control-channel stream at all -- see
+//! [`TranscriptEntryKind::Attachment`]'s own doc comment for why that
+//! matters to [`find_gaps`] specifically.
 
 use std::collections::HashSet;
 
@@ -38,12 +41,36 @@ pub enum TranscriptEntryKind {
     User,
     /// An assistant-authored turn: text, tool use, or both.
     Assistant,
+    /// A vendor-authored bookkeeping/diagnostic record -- observed as
+    /// `type: "attachment"` (a `SessionStart` hook's own error output,
+    /// in the live capture that found this) -- written to the durable
+    /// transcript but confirmed, across every capture taken so far,
+    /// never to appear on the live control-channel stream at all.
+    /// [`find_gaps`] excludes this kind from its own gap set for
+    /// exactly that reason: an entry that never travels the stream by
+    /// design is not a gap when it is absent from what the stream
+    /// delivered. Still counted in `examined`, same as every other
+    /// entry this module can parse -- only the gap set narrows, not the
+    /// count of what was looked at.
+    Attachment,
     /// Anything this module does not yet classify -- session metadata,
     /// a summary entry, or a future entry type the vendor adds. Grouped
     /// under one variant rather than one per unknown shape so a vendor
     /// addition never requires touching this enum's own callers; the
     /// PARSED `kind` this module reads directly (a small string) is
     /// enough to distinguish them without one Rust variant each.
+    ///
+    /// Deliberately NOT excluded from [`find_gaps`]'s own gap set, on
+    /// the same basis [`Attachment`](Self::Attachment) IS excluded: this
+    /// module only ever denylists a kind it has positively confirmed
+    /// never streams. A kind it has not yet seen is `Other`, not
+    /// `Attachment`, and stays gappable -- noisy (a false-positive gap
+    /// the first time a genuinely new non-streaming kind appears) is
+    /// the correct failure direction for a mechanism whose whole
+    /// purpose is catching silence; silently excluding every unknown
+    /// kind (an allowlist instead of a denylist) would make a real
+    /// future drop of an unrecognized kind invisible by construction,
+    /// which is the failure this module exists to prevent.
     Other,
 }
 
@@ -96,6 +123,7 @@ fn parse_transcript_line_uninjected(line: &[u8]) -> Option<TranscriptEntry> {
     let kind = match value.get("type").and_then(serde_json::Value::as_str) {
         Some("user") => TranscriptEntryKind::User,
         Some("assistant") => TranscriptEntryKind::Assistant,
+        Some("attachment") => TranscriptEntryKind::Attachment,
         _ => TranscriptEntryKind::Other,
     };
     Some(TranscriptEntry { entry_id, kind })
@@ -184,6 +212,14 @@ pub fn find_gaps(
     let examined = entries.len() as u64;
     let gaps: Vec<TranscriptEntry> = entries
         .into_iter()
+        // `examined` above already counted every entry this module
+        // could parse, `Attachment` included -- only the gap set
+        // narrows here. A denylist (name the kinds confirmed never to
+        // stream), not an allowlist (name the kinds allowed to be
+        // gaps): see `TranscriptEntryKind::Other`'s own doc comment for
+        // why an unrecognized future kind must stay gappable rather
+        // than silently excluded.
+        .filter(|entry| entry.kind != TranscriptEntryKind::Attachment)
         .filter(|entry| !journaled_entry_ids.contains(&entry.entry_id))
         .collect();
     (examined, gaps)
@@ -208,6 +244,39 @@ mod tests {
         let (examined, gaps) = find_gaps(transcript.as_bytes(), &HashSet::new());
         assert_eq!(examined, 2);
         assert_eq!(gaps.len(), 2);
+    }
+
+    /// The denylist, proven directly: an `attachment`-kind entry never
+    /// journaled live is counted in `examined` (it was successfully
+    /// parsed) but never reported as a gap (it is a confirmed
+    /// never-streams kind) -- the exact case a live capture found real
+    /// transcripts carry (a `SessionStart` hook's own error record).
+    #[test]
+    fn an_attachment_entry_is_examined_but_never_reported_as_a_gap() {
+        let transcript = [entry("u1", "user"), entry("hook1", "attachment")].join("\n");
+        let (examined, gaps) = find_gaps(transcript.as_bytes(), &HashSet::new());
+        assert_eq!(examined, 2, "attachment entries are parsed, so they count");
+        assert_eq!(
+            gaps,
+            vec![TranscriptEntry {
+                entry_id: "u1".to_string(),
+                kind: TranscriptEntryKind::User,
+            }],
+            "only the user entry may be a gap; the attachment entry must not be"
+        );
+    }
+
+    /// The denylist's other half: a kind this module does not recognize
+    /// at all (never `Other`'s own doc comment) still stays gappable --
+    /// proving the choice is a denylist of confirmed non-streaming
+    /// kinds, not an allowlist of `User`/`Assistant` alone.
+    #[test]
+    fn an_unrecognized_kind_still_counts_as_a_gap() {
+        let transcript = entry("mystery1", "some-future-kind-this-module-has-never-seen");
+        let (examined, gaps) = find_gaps(transcript.as_bytes(), &HashSet::new());
+        assert_eq!(examined, 1);
+        assert_eq!(gaps.len(), 1, "an unrecognized kind must remain gappable");
+        assert_eq!(gaps[0].kind, TranscriptEntryKind::Other);
     }
 
     /// The ordinary case: everything the transcript recorded was also

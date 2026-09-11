@@ -1528,18 +1528,12 @@ fn build_adapter(
         };
         return match kind {
             super::AdapterKind::Claude => {
-                // `db`/`project_id`/`events_tx`/`display`/`resume_cursor`
-                // are unused here: unlike a `TuiAdapter`, this adapter
-                // builds no internal pane/sink of its own -- the caller
-                // (`run_one`/`resume_one`) builds the shared
-                // `DomainAdapterEventSink` from those same values and
-                // hands it to `Adapter::start` separately, exactly the
-                // path every adapter this registry constructs goes
-                // through. `resume_cursor` in particular is always
-                // `None` here in practice: `crate::recovery`'s own
-                // `AdapterMode::Protocol` arm already refuses resume
-                // before this function is ever reached for one.
-                //
+                // `resume_cursor` is always `None` here in practice:
+                // `crate::recovery`'s own `AdapterMode::Protocol` arm
+                // already refuses resume before this function is ever
+                // reached for one -- there is no seam here to hand it
+                // to, so it is intentionally never consumed.
+                let _ = resume_cursor;
                 // `profile.model` passed straight through, trimmed --
                 // see `super::claude_protocol::adapter`'s own module doc
                 // comment on why the boot-config-precedence
@@ -1551,6 +1545,33 @@ fn build_adapter(
                 // guess at emptiness this adapter has any reason to
                 // expect.
                 let model = Some(profile.model.trim().to_string()).filter(|m| !m.is_empty());
+                // Pane support, on the same terms `build_tui_adapter`
+                // gets it: only when a `TuiSupport` bundle was ever
+                // supplied. `None` here means this adapter runs with no
+                // pane at all -- never a refusal to start, unlike TUI
+                // mode's own `TuiModeUnavailable` -- because the pane is
+                // this adapter's convenience view, not its control
+                // surface (see `claude_protocol::pane`'s own module doc
+                // comment).
+                let pane_support = tui.map(|tui| {
+                    let pane_coordinator =
+                        build_pane_coordinator(&tui, db, project_id, events_tx, repo_root);
+                    let placement = display
+                        .as_ref()
+                        .map(|selection| selection.placement)
+                        .unwrap_or(DisplayPlacement::SplitRight);
+                    let launch_program = display
+                        .as_ref()
+                        .and_then(|selection| selection.launch_program);
+                    super::claude_protocol::pane::PaneSupport {
+                        pane_coordinator,
+                        panes_dir: tui.panes_dir.clone(),
+                        placement,
+                        forced_backend: tui.forced_backend,
+                        launch_program,
+                        close_on_exit: tui.close_on_exit,
+                    }
+                });
                 Ok(Arc::new(
                     super::claude_protocol::adapter::ClaudeProtocolAdapter::new(
                         repo_root.to_path_buf(),
@@ -1560,6 +1581,7 @@ fn build_adapter(
                             approval_service: Arc::clone(&protocol.approval_service),
                             callback: Arc::clone(&protocol.callback),
                         },
+                        pane_support,
                     ),
                 ))
             }
@@ -1644,6 +1666,41 @@ fn build_adapter(
 /// [`Adapter::resume`] re-tails from exactly where the journal says the
 /// previous incarnation stopped; the transcript path itself is derived
 /// deterministically inside the adapter from the vendor's own layout.
+/// Builds the one [`PaneCoordinator`] a run's pane wiring needs from a
+/// [`TuiSupport`] bundle -- shared by [`build_tui_adapter`] and
+/// `build_adapter`'s `AdapterMode::Protocol` branch, so the two never
+/// carry independently-maintained copies of the same construction
+/// sequence (the same drift hazard two separately-maintained
+/// `AdapterMode` enums already are, one level down, and worth avoiding
+/// here rather than repeating it).
+fn build_pane_coordinator(
+    tui: &Arc<TuiSupport>,
+    db: Arc<DatabaseHandle>,
+    project_id: crew_protocol::ProjectId,
+    events_tx: tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
+    repo_root: &std::path::Path,
+) -> Arc<PaneCoordinator> {
+    // Same patterns already validated once at startup
+    // (`lifecycle.rs`'s fail-closed `Redactor::with_org_rules` call) --
+    // a compile error building this second instance from the same
+    // config can only be a bug.
+    let redactor = crate::security::redaction::Redactor::with_org_rules(&tui.org_security_patterns)
+        .expect("org_security_patterns already validated at startup");
+    Arc::new(
+        PaneCoordinator::new(
+            Arc::clone(&tui.display_registry),
+            db,
+            project_id,
+            events_tx,
+            tui.crewd_path.clone(),
+            tui.state_dir.clone(),
+            repo_root.to_path_buf(),
+            redactor,
+        )
+        .with_force_hidden_displays(tui.force_hidden_displays),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_tui_adapter<V: TuiVendor>(
     vendor: V,
@@ -1684,21 +1741,7 @@ fn build_tui_adapter<V: TuiVendor>(
     // (`lifecycle.rs`'s fail-closed `Redactor::with_org_rules` call) --
     // a compile error building this second instance from the same
     // config can only be a bug.
-    let redactor = crate::security::redaction::Redactor::with_org_rules(&tui.org_security_patterns)
-        .expect("org_security_patterns already validated at startup");
-    let pane_coordinator = Arc::new(
-        PaneCoordinator::new(
-            Arc::clone(&tui.display_registry),
-            db,
-            project_id,
-            events_tx,
-            tui.crewd_path.clone(),
-            tui.state_dir.clone(),
-            repo_root.to_path_buf(),
-            redactor,
-        )
-        .with_force_hidden_displays(tui.force_hidden_displays),
-    );
+    let pane_coordinator = build_pane_coordinator(tui, db, project_id, events_tx, repo_root);
     let placement = display
         .as_ref()
         .map(|selection| selection.placement)
