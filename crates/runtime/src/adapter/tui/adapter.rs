@@ -1860,6 +1860,13 @@ async fn wait_for_readiness(
     sink: &Arc<dyn AdapterEventSink>,
     cancel_token: &CancellationToken,
 ) -> Result<(), AdapterError> {
+    // Provisional: re-armed once below, after the vendor's first byte
+    // has arrived and the spawn-anchored hold has passed, and again
+    // every time a first-run gate is left (see `just_left_gate`). Set
+    // here only so there is a deadline at all for the "wait for the
+    // first byte" check immediately below to measure against -- a
+    // vendor that never produces any output has to fail closed too, and
+    // nothing has re-armed it yet at that point.
     let mut deadline = tokio::time::Instant::now() + cap;
     // Set once this poll journals `FirstRunGateDetected` +
     // `EscalationRaised` for the gate currently blocking the run --
@@ -1869,16 +1876,22 @@ async fn wait_for_readiness(
     // nowhere yet, but not ruled out) re-escalates for the new one.
     let mut escalated_gate: Option<GateKind> = None;
     // Set on every tick the Gate arm runs, consumed the next time the
-    // surface is classified `Undecided`: it marks that `deadline` (fixed
-    // at this function's entry) is now stale, because a gate can park
-    // for arbitrarily long -- a human answering it is the whole point of
-    // escalating -- and `deadline` was never advanced during that park.
-    // Without this, the very next `Undecided` tick after a gate resolves
-    // to something this module doesn't yet recognize fails instantly,
-    // punishing the human for the progress they just made rather than
-    // giving the new screen a fair readiness window. See the `Undecided`
-    // arm for why this re-arms the deadline exactly once per transition,
-    // never on every `Undecided` tick.
+    // surface is classified `Undecided`: it marks that `deadline` (last
+    // armed once the vendor's first byte arrived and the spawn-anchored
+    // hold below had passed, or at this function's entry if a gate
+    // somehow parks before either of those does) is now stale, because a
+    // gate can park for arbitrarily long -- a human
+    // answering it is the whole point of escalating -- and `deadline`
+    // was never advanced during that park. Without this, the very next
+    // `Undecided` tick after a gate resolves to something this module
+    // doesn't yet recognize fails instantly, punishing the human for the
+    // progress they just made rather than giving the new screen a fair
+    // readiness window. See the `Undecided` arm for why this re-arms the
+    // deadline exactly once per transition, never on every `Undecided`
+    // tick -- the same one-shot discipline the first-byte re-arm below
+    // uses, for the same reason: a deadline meant to measure one wait
+    // must not be reset by every tick of a *different* wait it shares a
+    // variable with.
     let mut just_left_gate = false;
 
     // Wait for the first output (a single check, not a loop: every
@@ -1917,6 +1930,22 @@ async fn wait_for_readiness(
     if tokio::time::Instant::now() < not_before {
         tokio::time::sleep_until(not_before).await;
     }
+    // Re-arm here, exactly once, AFTER the hold above rather than before
+    // it: `deadline` was set at this function's entry, before anything
+    // was known about when the vendor would actually produce its first
+    // byte or how much of the spawn-anchored floor above would still be
+    // ahead of it once that byte arrived. On a loaded machine, scheduling
+    // delay before that first byte -- and the deliberate hold above,
+    // which has its own reason to take up to `INJECT_MIN_DELAY` -- are
+    // both routine and have nothing to do with whether the vendor can
+    // show a recognizable prompt, but left unarmed either wait is
+    // silently subtracted from the window `classify_surface` gets below,
+    // the same "deadline fixed at entry, never advanced across a wait
+    // with its own reason to take time" shape the `just_left_gate`
+    // re-arm below already exists to fix for gate parks. From here on,
+    // `cap` measures time since the vendor started talking AND crew
+    // stopped deliberately holding, not time since either began.
+    deadline = tokio::time::Instant::now() + cap;
 
     loop {
         let classified = {
@@ -4175,6 +4204,17 @@ mod tests {
     /// was misread as "never becoming ready" -- failing a gate this
     /// module could positively identify, for the wrong reason. `cap` is
     /// kept short here specifically so this test still runs fast.
+    ///
+    /// **Why this test's meaning survived the first-byte re-arm added
+    /// alongside it (see `deadline`'s own doc comment above):** the
+    /// double is `echo hello && sleep 5`, which DOES produce output --
+    /// "hello" arrives almost immediately, the re-arm fires on it, and
+    /// `cap` then measures the `sleep 5` of silence from a vendor that
+    /// has already started talking but never becomes recognizable. That
+    /// is exactly the property this test exists to assert (fail closed
+    /// once a *talking* vendor stays unreadable for a full cap), not
+    /// "fail closed measured from process spawn" -- so re-arming here
+    /// changes nothing this test checks.
     #[tokio::test]
     async fn wait_for_readiness_fails_closed_after_cap_on_an_unrecognized_surface() {
         use crate::adapter::tui::ClaudeTuiVendor;
@@ -4248,6 +4288,105 @@ mod tests {
         assert!(
             elapsed < Duration::from_secs(2),
             "must fail at the readiness cap (300ms), not hang: took {elapsed:?}"
+        );
+    }
+
+    /// The readiness cap must measure time since the vendor started
+    /// talking, not time since this function started waiting for it. A
+    /// scheduling delay before the vendor's first byte -- routine on a
+    /// loaded CI runner, not a vendor failing to show a prompt -- must
+    /// not eat into the window classification gets afterward. The double
+    /// here sleeps before printing anything, then prints something this
+    /// module never recognizes as a surface: on the buggy behavior, the
+    /// pre-output sleep and the post-output classification window share
+    /// one deadline armed at entry, so a large enough pre-output delay
+    /// leaves almost nothing for classification and this fails at
+    /// roughly `cap` measured from entry; on the correct behavior, the
+    /// deadline re-arms once the first byte arrives, so classification
+    /// always gets a full `cap` regardless of how long the wait for that
+    /// first byte took, and this fails at roughly `delay + cap`.
+    #[tokio::test]
+    async fn a_delayed_first_output_no_longer_consumes_the_cap() {
+        use crate::adapter::tui::ClaudeTuiVendor;
+
+        let pty = Arc::new(
+            PtyProcess::spawn(
+                &crate::supervisor::SpawnSpec {
+                    program: PathBuf::from("/bin/sh"),
+                    args: vec![
+                        "-c".to_string(),
+                        "sleep 0.2 && echo hello && sleep 5".to_string(),
+                    ],
+                    ..crate::supervisor::SpawnSpec::minimal()
+                },
+                EscalationTimings::default(),
+            )
+            .expect("spawn the delayed-first-output double"),
+        );
+
+        let mut readiness_rx = pty.subscribe_output();
+        let grid = Arc::new(StdMutex::new(TerminalGrid::new_at_fixture_size()));
+        {
+            let mut grid_rx = pty.subscribe_output();
+            let grid = Arc::clone(&grid);
+            tokio::spawn(async move {
+                loop {
+                    match grid_rx.recv().await {
+                        Ok(bytes) => grid
+                            .lock()
+                            .expect("terminal-grid mutex never poisoned")
+                            .push(&bytes),
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        let vendor = ClaudeTuiVendor::new(PathBuf::from("/w"), vec![]);
+        let sink: Arc<dyn AdapterEventSink> = GateRecordingSink::new();
+        let cancel_token = CancellationToken::new();
+        let started = tokio::time::Instant::now();
+        let result = wait_for_readiness(
+            &mut readiness_rx,
+            "claude",
+            &vendor,
+            &grid,
+            Duration::from_millis(30),
+            Duration::from_millis(300),
+            &pty,
+            Some(PromptInjection {
+                text: "this must never be written",
+                write_timeout: Duration::from_secs(1),
+            }),
+            tokio::time::Instant::now(),
+            RunId::new(),
+            TaskId::new(),
+            WorkerId::new(),
+            &sink,
+            &cancel_token,
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        let _ = pty.terminate().await;
+
+        let message = result
+            .expect_err("an unrecognized surface must never be treated as ready")
+            .to_string();
+        assert!(
+            message.contains("no recognizable prompt or first-run gate"),
+            "unexpected failure reason: {message}"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(450),
+            "the 200ms delay before the vendor's first byte must not shrink the classification \
+             window below a full 300ms cap -- expected roughly delay (200ms) + cap (300ms), took \
+             {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "must fail at roughly delay + cap (~500ms), not hang: took {elapsed:?}"
         );
     }
 
