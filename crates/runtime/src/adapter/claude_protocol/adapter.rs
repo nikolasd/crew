@@ -611,7 +611,7 @@ mod tests {
             r#"#!/bin/sh
 printf '%s\n' "$@" > "{argv_path}"
 read -r _first_line
-echo '{{"type":"system","subtype":"init","session_id":"sess-argv-test"}}'
+echo '{{"type":"system","subtype":"init","session_id":"sess-argv-test","claude_code_version":"2.1.268","permissionMode":"auto"}}'
 echo '{{"type":"result","subtype":"success"}}'
 "#,
             argv_path = argv_path.display(),

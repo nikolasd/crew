@@ -72,9 +72,15 @@ enum StreamLine {
     /// reads a `session_id` off of, for
     /// [`TurnOutcome::session_id`] -- claude's own transcript file is
     /// named `<session_id>.jsonl`, and reconciliation cannot find the
-    /// right file without it.
+    /// right file without it. Also the one message
+    /// [`super::posture::version_gate`]/[`super::posture::permission_mode_gate`]
+    /// check `claude_code_version`/`permissionMode` against -- see that
+    /// module's own doc comment for what a live capture confirmed
+    /// `system/init` does and does not report.
     SystemInit {
         session_id: Option<String>,
+        claude_code_version: Option<String>,
+        permission_mode: Option<String>,
     },
     Other,
 }
@@ -114,6 +120,14 @@ fn classify_line(value: &serde_json::Value) -> StreamLine {
             StreamLine::SystemInit {
                 session_id: value
                     .get("session_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                claude_code_version: value
+                    .get("claude_code_version")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                permission_mode: value
+                    .get("permissionMode")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
             }
@@ -250,8 +264,28 @@ where
             outcome.entry_ids.insert(uuid.to_string());
         }
         match classify_line(&value) {
-            StreamLine::SystemInit { session_id } => {
+            StreamLine::SystemInit {
+                session_id,
+                claude_code_version,
+                permission_mode,
+            } => {
                 outcome.session_id = session_id;
+                // Both checked as soon as `system/init` arrives, before
+                // this adapter trusts anything the rest of the turn
+                // reports -- they catch different classes (an
+                // incompatible binary vs. a pinned setting that failed
+                // to apply) and either one failing must abort the turn,
+                // not merely be noted afterward.
+                let reported_version = claude_code_version.as_deref().unwrap_or("<missing>");
+                if let Err(detail) = super::posture::version_gate(reported_version) {
+                    return Err(AdapterError::incompatible_version(
+                        "claude", "start", detail,
+                    ));
+                }
+                let reported_mode = permission_mode.as_deref().unwrap_or("<missing>");
+                if let Err(detail) = super::posture::permission_mode_gate(reported_mode) {
+                    return Err(AdapterError::protocol("claude", "start", detail));
+                }
             }
             StreamLine::AssistantText(text) => {
                 render(&format!("assistant: {text}"));
@@ -396,13 +430,20 @@ mod tests {
     }
 
     #[test]
-    fn classifies_system_init_and_carries_its_session_id() {
-        let value =
-            serde_json::json!({"type": "system", "subtype": "init", "session_id": "sess-1"});
+    fn classifies_system_init_and_carries_its_session_id_version_and_permission_mode() {
+        let value = serde_json::json!({
+            "type": "system",
+            "subtype": "init",
+            "session_id": "sess-1",
+            "claude_code_version": "2.1.268",
+            "permissionMode": "auto",
+        });
         assert_eq!(
             classify_line(&value),
             StreamLine::SystemInit {
-                session_id: Some("sess-1".to_string())
+                session_id: Some("sess-1".to_string()),
+                claude_code_version: Some("2.1.268".to_string()),
+                permission_mode: Some("auto".to_string()),
             }
         );
     }
@@ -446,7 +487,7 @@ mod tests {
         let (adapter_stdin, mut stdin_capture) = tokio::io::duplex(4096);
 
         let script = concat!(
-            r#"{"type":"system","subtype":"init","session_id":"sess-1"}"#,
+            r#"{"type":"system","subtype":"init","session_id":"sess-1","claude_code_version":"2.1.268","permissionMode":"auto"}"#,
             "\n",
             r#"{"type":"assistant","uuid":"u1","message":{"content":[{"type":"text","text":"hello"}]}}"#,
             "\n",
@@ -513,6 +554,123 @@ mod tests {
         let mut written = Vec::new();
         stdin_capture.read_to_end(&mut written).await.unwrap();
         assert!(written.is_empty());
+
+        db.shutdown().await.ok();
+    }
+
+    /// An incompatible (or missing) `claude_code_version` aborts the
+    /// turn as soon as `system/init` arrives -- before any assistant
+    /// text or tool call is ever processed, not merely reported
+    /// afterward. Proven by a script whose `system/init` claims a
+    /// version far outside the tested range, then keeps sending
+    /// content `drive_turn` must never reach.
+    #[tokio::test]
+    async fn an_incompatible_reported_version_aborts_the_turn_immediately() {
+        let (mut test_side, adapter_stdout) = tokio::io::duplex(4096);
+        let (adapter_stdin, _stdin_capture) = tokio::io::duplex(4096);
+
+        let script = concat!(
+            r#"{"type":"system","subtype":"init","session_id":"sess-1","claude_code_version":"0.1.0"}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"should never be read"}]}}"#,
+            "\n",
+            r#"{"type":"result","subtype":"success"}"#,
+            "\n",
+        );
+        test_side.write_all(script.as_bytes()).await.unwrap();
+        drop(test_side);
+
+        let sink: Arc<dyn AdapterEventSink> = Arc::new(RecordingSink {
+            events: StdArc::new(parking_lot::Mutex::new(Vec::new())),
+        });
+
+        let state_dir = tempfile::TempDir::new().unwrap();
+        let db = StdArc::new(
+            DatabaseHandle::start(state_dir.path().join("runtime.db"))
+                .await
+                .unwrap(),
+        );
+        let project_id = ProjectId::new();
+        let callback = ProtocolApprovalCallback::new();
+        let approval_service = ApprovalService::new(
+            StdArc::clone(&db),
+            project_id,
+            StdArc::new(crate::approval::NoopApprovalCallback) as StdArc<dyn ApprovalCallback>,
+            broadcast::channel(64).0,
+        );
+
+        let result = drive_turn(
+            adapter_stdout,
+            adapter_stdin,
+            &sink,
+            &approval_service,
+            &callback,
+            ids(),
+            None,
+        )
+        .await;
+
+        let err = result.expect_err("an out-of-range version must abort the turn");
+        assert_eq!(
+            err.error_code(),
+            crate::adapter::AdapterErrorCode::IncompatibleVersion
+        );
+
+        db.shutdown().await.ok();
+    }
+
+    /// The direct permission-mode assertion, proven the same way: a
+    /// `system/init` reporting a mode other than the pinned one aborts
+    /// the turn immediately, before any content is processed.
+    #[tokio::test]
+    async fn a_mismatched_reported_permission_mode_aborts_the_turn_immediately() {
+        let (mut test_side, adapter_stdout) = tokio::io::duplex(4096);
+        let (adapter_stdin, _stdin_capture) = tokio::io::duplex(4096);
+
+        let script = concat!(
+            r#"{"type":"system","subtype":"init","session_id":"sess-1","claude_code_version":"2.1.268","permissionMode":"plan"}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"should never be read"}]}}"#,
+            "\n",
+            r#"{"type":"result","subtype":"success"}"#,
+            "\n",
+        );
+        test_side.write_all(script.as_bytes()).await.unwrap();
+        drop(test_side);
+
+        let sink: Arc<dyn AdapterEventSink> = Arc::new(RecordingSink {
+            events: StdArc::new(parking_lot::Mutex::new(Vec::new())),
+        });
+
+        let state_dir = tempfile::TempDir::new().unwrap();
+        let db = StdArc::new(
+            DatabaseHandle::start(state_dir.path().join("runtime.db"))
+                .await
+                .unwrap(),
+        );
+        let project_id = ProjectId::new();
+        let callback = ProtocolApprovalCallback::new();
+        let approval_service = ApprovalService::new(
+            StdArc::clone(&db),
+            project_id,
+            StdArc::new(crate::approval::NoopApprovalCallback) as StdArc<dyn ApprovalCallback>,
+            broadcast::channel(64).0,
+        );
+
+        let result = drive_turn(
+            adapter_stdout,
+            adapter_stdin,
+            &sink,
+            &approval_service,
+            &callback,
+            ids(),
+            None,
+        )
+        .await;
+
+        let err = result.expect_err("a mismatched permission mode must abort the turn");
+        assert_eq!(err.error_code(), crate::adapter::AdapterErrorCode::Protocol);
+        assert!(err.detail().contains("plan"));
 
         db.shutdown().await.ok();
     }

@@ -14,10 +14,11 @@
 //! or hook-suppressing flag -- the workspace-trust pre-check
 //! ([`trust::workspace_trust_accepted`]), the control-channel
 //! reader ([`reader::drive_turn`]), the approval bridge
-//! ([`approval_bridge`]), and reconciliation against claude's own
-//! transcript ([`reconcile::find_gaps`]). Still not built: the pane
-//! renderer beyond bare legibility, `resume`/`--continue`, and the
-//! other three vendors.
+//! ([`approval_bridge`]), reconciliation against claude's own
+//! transcript ([`reconcile::find_gaps`]), a crew-rendered pane
+//! ([`pane::PaneSupport`]), and an init-time posture assertion
+//! ([`posture::version_gate`]). Still not built: `resume`/`--continue`
+//! and the other three vendors.
 
 pub(crate) mod adapter;
 // `pub`, not `pub(crate)`: `ProtocolApprovalCallback`'s own doc comment
@@ -27,6 +28,7 @@ pub(crate) mod adapter;
 pub mod approval_bridge;
 pub(crate) mod launch;
 pub(crate) mod pane;
+pub(crate) mod posture;
 pub(crate) mod reader;
 pub(crate) mod trust;
 
