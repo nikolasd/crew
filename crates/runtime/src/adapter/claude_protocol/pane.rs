@@ -52,6 +52,12 @@ use crate::display::{AttachError, AttachTarget, PaneCoordinator};
 /// rather than refusing to start. Unlike a `TuiAdapter`, this adapter's
 /// pane is a convenience view, not its control surface -- the turn
 /// completes identically whether or not anyone is watching.
+///
+/// `Clone`: every field is an `Arc`, a `PathBuf`, or `Copy` -- cheap to
+/// clone -- which [`super::adapter::ClaudeProtocolAdapter::start`]'s own
+/// run-phase task relies on: it owns a clone so it can detach the pane
+/// after `start` itself has already returned.
+#[derive(Clone)]
 pub(crate) struct PaneSupport {
     pub(crate) pane_coordinator: Arc<PaneCoordinator>,
     pub(crate) panes_dir: std::path::PathBuf,

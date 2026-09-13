@@ -106,7 +106,40 @@ pub trait Adapter: Send + Sync {
 
     /// Starts (or, if `spec.resume` is set, resumes) a supervised vendor
     /// process/session for `spec`, pushing every subsequent normalized
-    /// event through `sink`.
+    /// event through `sink`. Two contract clauses, both binding on every
+    /// implementation:
+    ///
+    /// 1. **Returns once the worker is up** -- the process is running
+    ///    and ready to be driven -- never once the run itself ends. For
+    ///    a vendor whose own bring-up and turn are inseparable (nothing
+    ///    observable marks "up" short of the turn finishing), the
+    ///    implementation still owns making this true: see clause 2.
+    /// 2. **The turn's lifetime, terminal event, failure handling, and
+    ///    lease/workspace release are owned by a named component after
+    ///    `start` returns, not by `start` itself or its caller.** For
+    ///    [`crate::adapter::tui::TuiAdapter`], that component is its own
+    ///    spawned tailer/exit-watcher pair (`run_pipeline`). For
+    ///    [`crate::adapter::claude_protocol::ClaudeProtocolAdapter`],
+    ///    it is that adapter's own spawned run-phase task (and its
+    ///    panic-supervisor), reporting exclusively through `sink` from
+    ///    then on -- see that type's own `start` for the up/run split
+    ///    this clause exists to state generally.
+    ///
+    /// **Revisit condition, named rather than left implicit:** a vendor
+    /// whose bring-up and turn genuinely cannot be separated (no
+    /// observable signal exists between "process launched" and "turn
+    /// over") cannot satisfy clause 1 as written; that adapter's `start`
+    /// would need its own documented exception here, not a silent
+    /// divergence from this contract.
+    ///
+    /// **What is actually enforced today, stated plainly rather than
+    /// implied by the clauses above:** this clause is CHECKED, by a red
+    /// (unpatched) then green test, for
+    /// [`crate::adapter::claude_protocol::ClaudeProtocolAdapter`] only.
+    /// The TUI instance -- `run_pipeline`'s own tailer/exit-watcher spawn
+    /// -- is asserted here by inspection of that code, not by a test
+    /// that would fail if it regressed; a cross-adapter conformance check
+    /// proving clause 1 for every adapter is owed, not yet built.
     fn start(&self, spec: StartSpec, sink: Arc<dyn AdapterEventSink>) -> AdapterFuture<'_, ()>;
 
     /// Restores a previously-established vendor session without a fresh

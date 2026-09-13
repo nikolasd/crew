@@ -39,11 +39,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::oneshot;
 
 use crew_protocol::{Classified, ContentClass, TurnOutcome};
 
@@ -104,8 +106,12 @@ pub(crate) struct ClaudeProtocolAdapter {
     bin: String,
     /// The live child process, held for the duration of one turn so
     /// [`Adapter::cancel`] can reach it. `None` before the first
-    /// [`Adapter::start`] call and after the turn ends.
-    child: AsyncMutex<Option<tokio::process::Child>>,
+    /// [`Adapter::start`] call and after the turn ends. `Arc`-wrapped so
+    /// [`Adapter::start`]'s own run-phase task (spawned, `'static`, and
+    /// so unable to borrow `&self`) can hold the same handle `cancel`/
+    /// `dispose`/`snapshot` reach through `self.child` -- one physical
+    /// mutex, two owners.
+    child: Arc<AsyncMutex<Option<tokio::process::Child>>>,
     /// Present only when a `TuiSupport` bundle was ever supplied to the
     /// registry -- see [`pane::PaneSupport`]'s own doc comment. `None`
     /// means this adapter runs with no pane at all, never a refusal to
@@ -122,6 +128,14 @@ pub(crate) struct ClaudeProtocolAdapter {
     /// escalating at all -- production's own [`SELF_EXIT_GRACE`]; a test
     /// overrides it for the same reason `escalation` is overridable.
     self_exit_grace: Duration,
+    /// Test-only seam: when `true`, [`Self::start`]'s run-phase task
+    /// panics deliberately right after the handshake succeeds, so a test
+    /// can prove the run-phase panic supervisor (not just an ordinary
+    /// `Err`) still settles the run terminal -- see
+    /// `a_run_phase_panic_after_the_handshake_still_settles_the_run`.
+    /// Never reachable from production construction.
+    #[cfg(test)]
+    panic_in_run_phase: bool,
 }
 
 impl ClaudeProtocolAdapter {
@@ -140,10 +154,12 @@ impl ClaudeProtocolAdapter {
             bundle,
             claude_json_path: trust::default_claude_json_path(),
             bin: "claude".to_string(),
-            child: AsyncMutex::new(None),
+            child: Arc::new(AsyncMutex::new(None)),
             pane_support,
             escalation: EscalationTimings::default(),
             self_exit_grace: SELF_EXIT_GRACE,
+            #[cfg(test)]
+            panic_in_run_phase: false,
         }
     }
 
@@ -172,71 +188,18 @@ impl ClaudeProtocolAdapter {
         self
     }
 
+    /// Test-only seam: makes [`Self::start`]'s run-phase task panic
+    /// deliberately right after the handshake succeeds -- see
+    /// [`Self::panic_in_run_phase`]'s own doc comment.
+    #[cfg(test)]
+    fn with_run_phase_panic(mut self) -> Self {
+        self.panic_in_run_phase = true;
+        self
+    }
+
     fn env(&self) -> std::collections::HashMap<String, String> {
         let current: std::collections::HashMap<String, String> = std::env::vars().collect();
         EnvironmentPolicy::baseline().build(&current, &self.environment_allowlist)
-    }
-
-    /// Reconciles what [`reader::drive_turn`] actually saw against
-    /// claude's own transcript, journaling the result through `sink`.
-    /// Best-effort: a failure here is logged, never propagated -- the
-    /// turn itself already completed (or failed) by the time this runs,
-    /// and a reconciliation-journaling failure must not turn an
-    /// otherwise-successful turn into a failed run.
-    async fn reconcile_turn(
-        &self,
-        canonical_repo_root: &Path,
-        outcome: &reader::TurnOutcome,
-        sink: &Arc<dyn AdapterEventSink>,
-        ids: RunIdentity,
-    ) {
-        let transcript = outcome.session_id.as_deref().and_then(|session_id| {
-            std::fs::read(transcript_path(canonical_repo_root, session_id)).ok()
-        });
-        let (examined, gaps) = match &transcript {
-            Some(bytes) => reconcile::find_gaps(bytes, &outcome.entry_ids),
-            None => (0, Vec::new()),
-        };
-        // `examined == 0` is itself a finding (`reconcile::find_gaps`'s
-        // own doc comment): a turn this adapter cannot reconcile at all
-        // (no session id ever arrived, the transcript file does not
-        // exist yet, or every line in it failed to parse) must never be
-        // journaled as an ordinary, successful reconciliation -- it is
-        // reported as a distinguishable protocol-health failure instead,
-        // never silently folded into `gaps_found: 0`, which would read
-        // identically to "checked, and found nothing wrong."
-        let payload = if examined == 0 {
-            AdapterEventPayload::ProtocolHealthChanged {
-                healthy: false,
-                detail: Classified {
-                    class: ContentClass::Visible,
-                    value: "could not reconcile this turn against claude's own transcript \
-                            (no entries were readable)"
-                        .to_string(),
-                },
-            }
-        } else {
-            AdapterEventPayload::ReconciliationCompleted {
-                examined,
-                gaps_found: gaps.len() as u64,
-                // No repair mechanism exists yet -- this adapter only
-                // detects and reports a gap, it does not yet re-journal
-                // a missed entry. Left at `0` rather than guessed.
-                gaps_repaired: 0,
-            }
-        };
-        if let Err(err) = sink
-            .emit(AdapterEvent {
-                run_id: ids.run_id,
-                task_id: ids.task_id,
-                worker_id: ids.worker_id,
-                payload,
-                cursor: None,
-            })
-            .await
-        {
-            tracing::warn!(error = %err, run_id = %ids.run_id, "failed to journal claude-protocol reconciliation");
-        }
     }
 
     /// Attaches this run's pane, if [`Self::pane_support`] was ever
@@ -282,23 +245,92 @@ impl ClaudeProtocolAdapter {
             output_tx,
         })
     }
+}
 
-    /// Releases the pane [`Self::attach_pane`] set up, if any. Called on
-    /// every exit path from [`Self::start`], success or error.
-    async fn detach_pane(&self, pane: AttachedPane, succeeded: bool) {
-        if let Some(support) = &self.pane_support {
-            support
-                .pane_coordinator
-                .detach(&pane.outcome, succeeded, support.close_on_exit)
-                .await;
+/// Releases the pane [`ClaudeProtocolAdapter::attach_pane`] set up, if
+/// any. Called on every exit path out of [`Adapter::start`]'s run-phase
+/// task, success or error -- a free function, not a `&self` method,
+/// because that task is `'static` (spawned) and only holds a clone of
+/// [`pane::PaneSupport`], never `&ClaudeProtocolAdapter` itself.
+async fn detach_pane(
+    pane_support: Option<&pane::PaneSupport>,
+    pane: AttachedPane,
+    succeeded: bool,
+) {
+    if let Some(support) = pane_support {
+        support
+            .pane_coordinator
+            .detach(&pane.outcome, succeeded, support.close_on_exit)
+            .await;
+    }
+    pane.attach_server.stop();
+}
+
+/// Reconciles what [`reader::drive_turn`] actually saw against claude's
+/// own transcript, journaling the result through `sink`. Best-effort: a
+/// failure here is logged, never propagated -- the turn itself already
+/// completed (or failed) by the time this runs, and a
+/// reconciliation-journaling failure must not turn an otherwise-successful
+/// turn into a failed run. A free function, not a `&self` method, for the
+/// same reason as [`detach_pane`] above: it runs from the run-phase task.
+async fn reconcile_turn(
+    canonical_repo_root: &Path,
+    outcome: &reader::TurnOutcome,
+    sink: &Arc<dyn AdapterEventSink>,
+    ids: RunIdentity,
+) {
+    let transcript = outcome.session_id.as_deref().and_then(|session_id| {
+        std::fs::read(transcript_path(canonical_repo_root, session_id)).ok()
+    });
+    let (examined, gaps) = match &transcript {
+        Some(bytes) => reconcile::find_gaps(bytes, &outcome.entry_ids),
+        None => (0, Vec::new()),
+    };
+    // `examined == 0` is itself a finding (`reconcile::find_gaps`'s own
+    // doc comment): a turn this adapter cannot reconcile at all (no
+    // session id ever arrived, the transcript file does not exist yet,
+    // or every line in it failed to parse) must never be journaled as an
+    // ordinary, successful reconciliation -- it is reported as a
+    // distinguishable protocol-health failure instead, never silently
+    // folded into `gaps_found: 0`, which would read identically to
+    // "checked, and found nothing wrong."
+    let payload = if examined == 0 {
+        AdapterEventPayload::ProtocolHealthChanged {
+            healthy: false,
+            detail: Classified {
+                class: ContentClass::Visible,
+                value: "could not reconcile this turn against claude's own transcript \
+                        (no entries were readable)"
+                    .to_string(),
+            },
         }
-        pane.attach_server.stop();
+    } else {
+        AdapterEventPayload::ReconciliationCompleted {
+            examined,
+            gaps_found: gaps.len() as u64,
+            // No repair mechanism exists yet -- this adapter only
+            // detects and reports a gap, it does not yet re-journal a
+            // missed entry. Left at `0` rather than guessed.
+            gaps_repaired: 0,
+        }
+    };
+    if let Err(err) = sink
+        .emit(AdapterEvent {
+            run_id: ids.run_id,
+            task_id: ids.task_id,
+            worker_id: ids.worker_id,
+            payload,
+            cursor: None,
+        })
+        .await
+    {
+        tracing::warn!(error = %err, run_id = %ids.run_id, "failed to journal claude-protocol reconciliation");
     }
 }
 
 /// What [`ClaudeProtocolAdapter::attach_pane`] set up, kept alive for the
-/// duration of one turn so [`ClaudeProtocolAdapter::detach_pane`] can
-/// release it afterward. `output_tx` is also read from directly, by
+/// duration of one turn so [`detach_pane`] can release it afterward.
+/// `output_tx` is also read from directly, by
 /// [`ClaudeProtocolAdapter::start`], to hand `reader::drive_turn` a
 /// place to push formatted lines into.
 struct AttachedPane {
@@ -336,6 +368,46 @@ fn transcript_path(canonical_repo_root: &Path, session_id: &str) -> PathBuf {
 /// after it gets escalated exactly like a wedged process anywhere else
 /// in this daemon would.
 const SELF_EXIT_GRACE: Duration = Duration::from_secs(5);
+
+/// Reaps `child` (if still present -- a no-op otherwise) via the normal
+/// escalation ladder and emits `ProcessExited`, best-effort. The shared
+/// tail of every "this run must still end up terminal even though the
+/// ordinary success path never reached its own `ProcessExited` emit"
+/// case [`Adapter::start`]'s run-phase task and its panic supervisor
+/// both hit: a post-handshake [`reader::drive_turn`] `Err` (nothing
+/// upstream of it settles the child in that case, matching this
+/// function's own pre-split behavior for a pre-handshake `Err` exactly
+/// -- see `start`'s own doc comment) and a post-handshake panic (this
+/// run's own supervisor learns of it via a [`tokio::task::JoinHandle`],
+/// not by observing this function itself).
+async fn settle_and_emit_exit_best_effort(
+    child: &Arc<AsyncMutex<Option<tokio::process::Child>>>,
+    sink: &Arc<dyn AdapterEventSink>,
+    ids: RunIdentity,
+    self_exit_grace: Duration,
+    escalation: EscalationTimings,
+) {
+    let termination = {
+        let mut guard = child.lock().await;
+        match guard.as_mut() {
+            Some(child) => Some(settle_after_turn(child, self_exit_grace, escalation).await),
+            None => None,
+        }
+    };
+    *child.lock().await = None;
+    if let Some(termination) = termination {
+        let (exit_code, signal) = termination.exit_signals();
+        let _ = sink
+            .emit(AdapterEvent {
+                run_id: ids.run_id,
+                task_id: ids.task_id,
+                worker_id: ids.worker_id,
+                payload: AdapterEventPayload::ProcessExited { exit_code, signal },
+                cursor: None,
+            })
+            .await;
+    }
+}
 
 /// Waits for `child` to exit on its own, escalating
 /// SIGINT -> SIGTERM -> SIGKILL on `escalation`'s own timings if it does
@@ -460,6 +532,45 @@ impl Adapter for ClaudeProtocolAdapter {
         })
     }
 
+    /// Two phases, matching [`Adapter::start`]'s own contract exactly:
+    /// **up** -- everything below through the initialize handshake --
+    /// runs inline and is what this future's own `.await` resolves on;
+    /// **run** -- the prompt delivery, the rest of the turn, teardown,
+    /// and reconciliation -- runs in a spawned, `'static` task this
+    /// method never waits on, reported through `sink` alone from then
+    /// on (the "named component" the trait doc comment requires: this
+    /// adapter's own run-phase task).
+    ///
+    /// Before this split, this function awaited the whole turn inline,
+    /// which is what made `run/submit`'s own JSON-RPC response (which
+    /// waits on exactly this future, through `RunDriver::start`) block
+    /// for a protocol-mode run's entire duration -- which in turn holds
+    /// the daemon's single per-connection dispatch loop
+    /// (`ipc/connection.rs`'s own read-dispatch-respond loop) for that
+    /// same duration, stalling every other request on that connection,
+    /// including the extension's own event-enrichment calls.
+    ///
+    /// A failure during spawn, the trust precheck, or the handshake
+    /// itself is still returned synchronously from THIS future, exactly
+    /// as before the split -- `orchestration.rs`'s own
+    /// `abandon_and_announce`/`ensure_failed_after_start_error` backstop
+    /// still reaches it. A failure or panic in the run-phase task AFTER
+    /// the handshake is this run's own to settle (this method has
+    /// already returned `Ok` by then): the task's own tail does that for
+    /// an ordinary `Err`, and a dedicated supervisor task (spawned
+    /// alongside it, watching its `JoinHandle`) does it for a panic --
+    /// see [`settle_and_emit_exit_best_effort`]. One deliberate behavior
+    /// change from before the split, named here rather than left
+    /// implicit: a run-phase failure now leaves this run's workspace
+    /// lease held (released only by an explicit `workspace/release` or a
+    /// later `run/retry`'s abandonment), exactly like a `TuiAdapter`
+    /// run-phase failure already does -- before, ANY failure inside this
+    /// function, including mid-turn, abandoned the lease via
+    /// `orchestration.rs`'s own start-error path. See
+    /// `a_post_handshake_failure_leaves_the_lease_held_like_tui_does` for
+    /// the parity this is pinned to (a record of today's behavior, not a
+    /// ruling that it is correct -- that is the pending leases ADR's own
+    /// question).
     fn start(&self, spec: StartSpec, sink: Arc<dyn AdapterEventSink>) -> AdapterFuture<'_, ()> {
         Box::pin(async move {
             let ids = RunIdentity {
@@ -496,135 +607,272 @@ impl Adapter for ClaudeProtocolAdapter {
             // line from the very first one -- best-effort: unlike a
             // `TuiAdapter`, this adapter's pane is a convenience view, not
             // its control surface, so a failure to attach never fails the
-            // turn, only logs and proceeds without one.
+            // turn, only logs and proceeds without one. Handed into the
+            // run-phase task below (owned, not borrowed): this "up"
+            // phase never detaches it itself, on any path -- see that
+            // task's own tail.
             let pane = self.attach_pane(ids).await;
-            let pane_output = pane.as_ref().map(|p| &p.output_tx);
 
-            let turn: Result<(), AdapterError> = async {
-                let model = self
-                    .model
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|model| !model.is_empty());
-                let argv = super::launch::build_argv(model);
-                let env = self.env();
+            let model = self
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|model| !model.is_empty());
+            let argv = super::launch::build_argv(model);
+            let env = self.env();
 
-                let mut command = tokio::process::Command::new(&self.bin);
-                command
-                    .args(&argv)
-                    .current_dir(&canonical_repo_root)
-                    .env_clear()
-                    .envs(&env)
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::null())
-                    .kill_on_drop(true);
-                let mut child = command
-                    .spawn()
-                    .map_err(|e| AdapterError::process(self.kind(), "start", e.to_string()))?;
-                let pid = child.id().unwrap_or(0);
-                let stdin = child
-                    .stdin
-                    .take()
-                    .expect("stdin was requested as piped at spawn");
-                let stdout = child
-                    .stdout
-                    .take()
-                    .expect("stdout was requested as piped at spawn");
+            let mut command = tokio::process::Command::new(&self.bin);
+            command
+                .args(&argv)
+                .current_dir(&canonical_repo_root)
+                .env_clear()
+                .envs(&env)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true);
+            let mut child = match command.spawn() {
+                Ok(child) => child,
+                Err(e) => {
+                    if let Some(pane) = pane {
+                        detach_pane(self.pane_support.as_ref(), pane, false).await;
+                    }
+                    return Err(AdapterError::process(self.kind(), "start", e.to_string()));
+                }
+            };
+            let pid = child.id().unwrap_or(0);
+            let stdin = child
+                .stdin
+                .take()
+                .expect("stdin was requested as piped at spawn");
+            let stdout = child
+                .stdout
+                .take()
+                .expect("stdout was requested as piped at spawn");
 
-                *self.child.lock().await = Some(child);
+            *self.child.lock().await = Some(child);
 
-                sink.emit(AdapterEvent {
+            if let Err(err) = sink
+                .emit(AdapterEvent {
                     run_id: ids.run_id,
                     task_id: ids.task_id,
                     worker_id: ids.worker_id,
                     payload: AdapterEventPayload::ProcessStarted { pid },
                     cursor: None,
                 })
-                .await?;
+                .await
+            {
+                // Still pre-handshake: returned synchronously, exactly
+                // like every other failure above. The spawned child is
+                // left in `self.child` for `dispose`/a future `cancel`
+                // to reach, same as this function's pre-split behavior
+                // for this exact failure (nothing here ever reaped it).
+                if let Some(pane) = pane {
+                    detach_pane(self.pane_support.as_ref(), pane, false).await;
+                }
+                return Err(err);
+            }
 
-                let outcome = reader::drive_turn(
-                    stdout,
-                    stdin,
-                    &sink,
-                    &self.bundle.approval_service,
-                    &self.bundle.callback,
-                    ids,
-                    pane_output,
-                    &spec.prompt,
-                )
-                .await?;
+            // --- "run" phase from here: spawned so the "up" phase above
+            // can return once the handshake completes, without waiting
+            // for the rest of the turn (see this method's own doc
+            // comment).
+            let (ready_tx, ready_rx) = oneshot::channel::<Result<(), AdapterError>>();
+            let handshake_done = Arc::new(AtomicBool::new(false));
 
-                // The turn boundary, parity with
-                // `tui/adapter.rs`'s own `TurnEnded` emission
-                // (`TuiEvent::TurnEnded { outcome }` at that module's line
-                // ~1687). `drive_turn` returning `Ok` here IS this
-                // adapter's turn-boundary evidence -- claude's `-p`
-                // invocation only returns once its own turn is over,
-                // there is no separate "holding at its prompt" signal to
-                // wait for the way a TUI transcript tail has to watch
-                // for one. Emitted before `settle_after_turn`/
-                // `ProcessExited` below, matching the TUI path's own
-                // ordering (the turn boundary is independent of, and
-                // precedes, the process actually going away): without
-                // this, `run_lifecycle::RunLifecycleSink` never learns
-                // this run's turn settled, and a clean exit is
-                // classified `failed` (`terminal_state_for`'s "no turn
-                // ever settled" arm) regardless of what the turn actually
-                // did -- the defect this emission closes. Always
-                // `TurnOutcome::Normal`: this adapter does not yet
-                // distinguish an API-error-ended turn from an ordinary
-                // one (a narrower follow-up, not this fix's scope).
-                sink.emit(AdapterEvent {
-                    run_id: ids.run_id,
-                    task_id: ids.task_id,
-                    worker_id: ids.worker_id,
-                    payload: AdapterEventPayload::TurnEnded {
-                        outcome: TurnOutcome::Normal,
-                    },
-                    cursor: None,
-                })
-                .await?;
+            let task_child = Arc::clone(&self.child);
+            let task_sink = Arc::clone(&sink);
+            let task_approval_service = Arc::clone(&self.bundle.approval_service);
+            let task_callback = Arc::clone(&self.bundle.callback);
+            let task_self_exit_grace = self.self_exit_grace;
+            let task_escalation = self.escalation;
+            let task_canonical_repo_root = canonical_repo_root.clone();
+            let task_prompt = spec.prompt.clone();
+            let task_pane_output = pane.as_ref().map(|p| p.output_tx.clone());
+            let task_pane_support = self.pane_support.clone();
+            let task_handshake_done = Arc::clone(&handshake_done);
+            #[cfg(test)]
+            let task_panic_in_run_phase = self.panic_in_run_phase;
 
-                let termination = {
-                    let mut guard = self.child.lock().await;
-                    let child = guard.as_mut().ok_or_else(|| {
-                        AdapterError::invalid_vendor_state(
-                            self.kind(),
-                            "start",
-                            "the spawned child process handle was missing at reap time",
+            let join_handle = tokio::spawn(async move {
+                let mut ready = Some(ready_tx);
+
+                let result: Result<(), AdapterError> = async {
+                    let outcome = reader::drive_turn(
+                        stdout,
+                        stdin,
+                        &task_sink,
+                        &task_approval_service,
+                        &task_callback,
+                        ids,
+                        task_pane_output.as_ref(),
+                        &task_prompt,
+                        &mut ready,
+                        &task_handshake_done,
+                    )
+                    .await?;
+
+                    // Test-only seam (`with_run_phase_panic`): proves the
+                    // panic supervisor below, not just the ordinary `Err`
+                    // path, still settles this run terminal.
+                    #[cfg(test)]
+                    if task_panic_in_run_phase {
+                        panic!(
+                            "deliberate test panic in the run phase, after the handshake \
+                             (a with_run_phase_panic test seam)"
+                        );
+                    }
+
+                    // The turn boundary, parity with `tui/adapter.rs`'s
+                    // own `TurnEnded` emission (`TuiEvent::TurnEnded
+                    // { outcome }` at that module's line ~1687).
+                    // `drive_turn` returning `Ok` here IS this adapter's
+                    // turn-boundary evidence -- claude's `-p` invocation
+                    // only returns once its own turn is over, there is
+                    // no separate "holding at its prompt" signal to wait
+                    // for the way a TUI transcript tail has to watch for
+                    // one. Emitted before `settle_after_turn`/
+                    // `ProcessExited` below, matching the TUI path's own
+                    // ordering. Always `TurnOutcome::Normal`: this
+                    // adapter does not yet distinguish an API-error-ended
+                    // turn from an ordinary one (a narrower follow-up,
+                    // not this fix's scope).
+                    task_sink
+                        .emit(AdapterEvent {
+                            run_id: ids.run_id,
+                            task_id: ids.task_id,
+                            worker_id: ids.worker_id,
+                            payload: AdapterEventPayload::TurnEnded {
+                                outcome: TurnOutcome::Normal,
+                            },
+                            cursor: None,
+                        })
+                        .await?;
+
+                    let termination = {
+                        let mut guard = task_child.lock().await;
+                        let child = guard.as_mut().ok_or_else(|| {
+                            AdapterError::invalid_vendor_state(
+                                "claude",
+                                "start",
+                                "the spawned child process handle was missing at reap time",
+                            )
+                        })?;
+                        settle_after_turn(child, task_self_exit_grace, task_escalation).await
+                    };
+                    *task_child.lock().await = None;
+                    let (exit_code, signal) = termination.exit_signals();
+
+                    task_sink
+                        .emit(AdapterEvent {
+                            run_id: ids.run_id,
+                            task_id: ids.task_id,
+                            worker_id: ids.worker_id,
+                            payload: AdapterEventPayload::ProcessExited { exit_code, signal },
+                            cursor: None,
+                        })
+                        .await?;
+
+                    reconcile_turn(&task_canonical_repo_root, &outcome, &task_sink, ids).await;
+
+                    Ok(())
+                }
+                .await;
+
+                // Captured before `result` is potentially moved into the
+                // oneshot send below -- `detach_pane`'s own `succeeded`
+                // needs it regardless of which arm runs.
+                let succeeded = result.is_ok();
+
+                match ready.take() {
+                    Some(tx) => {
+                        // The handshake never completed -- `start`'s
+                        // caller (still waiting on `ready_rx`) gets this
+                        // exact result. Always `Err` in practice (see
+                        // `drive_turn`'s own doc comment: `Ok` is never
+                        // returned without consuming `ready` first), and
+                        // nothing above was reaped on this path, matching
+                        // this function's pre-split behavior for the
+                        // identical failure exactly (a start-time error,
+                        // backstopped by orchestration's own
+                        // `ensure_failed_after_start_error`).
+                        let _ = tx.send(result);
+                    }
+                    None => {
+                        // The handshake already completed -- `start`
+                        // already returned `Ok`. An `Err` here is this
+                        // run's own to settle terminal; nothing else
+                        // will (see this method's own doc comment).
+                        if let Err(err) = &result {
+                            tracing::warn!(
+                                error = %err,
+                                run_id = %ids.run_id,
+                                "claude-protocol run phase failed after the handshake; settling this run terminal directly"
+                            );
+                            settle_and_emit_exit_best_effort(
+                                &task_child,
+                                &task_sink,
+                                ids,
+                                task_self_exit_grace,
+                                task_escalation,
+                            )
+                            .await;
+                        }
+                    }
+                }
+
+                if let Some(pane) = pane {
+                    detach_pane(task_pane_support.as_ref(), pane, succeeded).await;
+                }
+            });
+
+            // A panic in the task above -- rather than an ordinary
+            // `Err` -- must still not leave this run non-terminal
+            // forever if it happened after the handshake (see this
+            // method's own doc comment). Watched from a separate task so
+            // this "up" phase itself only ever waits on `ready_rx` below,
+            // never on the run-phase task's own completion.
+            let supervisor_child = Arc::clone(&self.child);
+            let supervisor_sink = Arc::clone(&sink);
+            let supervisor_self_exit_grace = self.self_exit_grace;
+            let supervisor_escalation = self.escalation;
+            tokio::spawn(async move {
+                if let Err(join_err) = join_handle.await {
+                    tracing::error!(
+                        error = %join_err,
+                        run_id = %ids.run_id,
+                        "claude-protocol run-phase task panicked"
+                    );
+                    if handshake_done.load(Ordering::SeqCst) {
+                        settle_and_emit_exit_best_effort(
+                            &supervisor_child,
+                            &supervisor_sink,
+                            ids,
+                            supervisor_self_exit_grace,
+                            supervisor_escalation,
                         )
-                    })?;
-                    settle_after_turn(child, self.self_exit_grace, self.escalation).await
-                };
-                *self.child.lock().await = None;
-                let (exit_code, signal) = termination.exit_signals();
+                        .await;
+                    }
+                    // Else: the panic happened before the handshake
+                    // completed -- `ready_tx` was dropped without
+                    // sending, `ready_rx.await` below already saw
+                    // `Err` (a closed channel) and this "up" phase
+                    // already returned its own `Err`; orchestration's
+                    // existing synchronous backstop
+                    // (`ensure_failed_after_start_error`) covers it,
+                    // same as any other start-time failure.
+                }
+            });
 
-                sink.emit(AdapterEvent {
-                    run_id: ids.run_id,
-                    task_id: ids.task_id,
-                    worker_id: ids.worker_id,
-                    payload: AdapterEventPayload::ProcessExited { exit_code, signal },
-                    cursor: None,
-                })
-                .await?;
-
-                self.reconcile_turn(&canonical_repo_root, &outcome, &sink, ids)
-                    .await;
-
-                Ok(())
+            match ready_rx.await {
+                Ok(result) => result,
+                Err(_closed) => Err(AdapterError::process(
+                    self.kind(),
+                    "start",
+                    "the run-phase task ended before it could report whether claude's initialize \
+                     handshake completed",
+                )),
             }
-            .await;
-
-            // Detached on every exit path from here, success or error --
-            // `PaneCoordinator::detach` is what releases the live-pane
-            // slot and journals `DisplayPaneDetached`; leaving it
-            // unreached on an error path would leak both.
-            if let Some(pane) = pane {
-                self.detach_pane(pane, turn.is_ok()).await;
-            }
-
-            turn
         })
     }
 
@@ -901,7 +1149,7 @@ echo '{{"type":"result","subtype":"success"}}'
         }
     }
 
-    /// End-to-end proof that `Self::attach_pane`/`Self::detach_pane`
+    /// End-to-end proof that `Self::attach_pane`/`detach_pane`
     /// actually reach a real `PaneCoordinator`: drives a real turn (the
     /// same fake-script harness as the model-argv test above) with a
     /// real pane wired in, then asserts a real `DisplayPaneAttached` and
@@ -909,6 +1157,11 @@ echo '{{"type":"result","subtype":"success"}}'
     /// non-empty pane ref -- not that the two pieces were built to
     /// agree, but that wiring them together actually reaches the
     /// journal.
+    ///
+    /// Waits for the detach (`wait_for`) rather than asserting the
+    /// moment `adapter.start(...)` returns: the pane detach now happens
+    /// inside the spawned run-phase task, which `start` no longer waits
+    /// on (it returns once the initialize handshake completes).
     #[tokio::test]
     async fn a_real_turn_attaches_and_detaches_a_real_pane() {
         // `tempdir_in("/tmp")`, not the bare `TempDir::new()` default
@@ -1034,11 +1287,13 @@ echo '{{"type":"result","subtype":"success"}}'
                 sink,
             )
             .await
-            .expect("start must succeed against the fake binary and fake pane backend");
+            .expect(
+                "start (the up phase) must succeed against the fake binary and fake pane backend",
+            );
 
-        let run_id_string = run_id.to_string();
-        let dump: Vec<String> = db
-            .run_domain_op(Box::new(move |conn| {
+        async fn fetch_dump(db: &DatabaseHandle, run_id: RunId) -> Vec<String> {
+            let run_id_string = run_id.to_string();
+            db.run_domain_op(Box::new(move |conn| {
                 let mut stmt = conn
                     .prepare("SELECT event_json FROM events WHERE run_id = ?1 ORDER BY sequence")?;
                 let rows = stmt
@@ -1054,7 +1309,18 @@ echo '{{"type":"result","subtype":"success"}}'
             .unwrap()
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
-            .collect();
+            .collect()
+        }
+
+        wait_for(Duration::from_secs(5), || async {
+            fetch_dump(&db, run_id)
+                .await
+                .iter()
+                .any(|e| e.contains("displayPaneDetached"))
+        })
+        .await;
+
+        let dump = fetch_dump(&db, run_id).await;
 
         assert!(
             dump.iter()
@@ -1095,9 +1361,16 @@ while true; do sleep 1; done
     /// End to end proof that a claude process which never exits on its
     /// own, and ignores both SIGINT and SIGTERM, still gets reaped: the
     /// turn completes normally (the protocol's own `result` line
-    /// arrived), and `Adapter::start` still returns rather than hanging
+    /// arrived), and the run-phase task still settles rather than hanging
     /// forever on `child.wait()`, with the final `ProcessExited` event
     /// reporting the SIGKILL escalation actually needed.
+    ///
+    /// `adapter.start(...)` itself now returns as soon as the handshake
+    /// completes (the up/run split -- see `Self::start`'s own doc
+    /// comment) -- long before this wedged process is ever escalated --
+    /// so this test's own bounded wait moved from `start`'s own return
+    /// to `wait_for` polling the recorded sink events for the SIGKILL
+    /// exit directly.
     #[tokio::test]
     async fn a_wedged_process_is_escalated_to_sigkill_rather_than_hung_on() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -1146,7 +1419,7 @@ while true; do sleep 1; done
         });
 
         tokio::time::timeout(
-            Duration::from_secs(10),
+            Duration::from_secs(5),
             adapter.start(
                 StartSpec {
                     run_id: RunId::new(),
@@ -1159,8 +1432,16 @@ while true; do sleep 1; done
             ),
         )
         .await
-        .expect("start must not hang past the escalation ladder's own bounded windows")
-        .expect("start must still succeed: the turn itself completed normally");
+        .expect("start (the up phase) must not hang: it returns once the handshake completes")
+        .expect("start must still succeed: the handshake completed normally");
+
+        wait_for(Duration::from_secs(10), || async {
+            events
+                .lock()
+                .iter()
+                .any(|payload| matches!(payload, AdapterEventPayload::ProcessExited { .. }))
+        })
+        .await;
 
         {
             let recorded = events.lock();
@@ -1339,6 +1620,30 @@ echo '{"type":"result","subtype":"success"}'
         .collect()
     }
 
+    /// Polls `check` (an async predicate) every 20ms until it returns
+    /// `true` or `bound` elapses -- what every test below now needs
+    /// wherever it used to rely on `adapter.start(...).await` itself
+    /// only resolving once the whole turn (not just the "up" phase, the
+    /// initialize handshake) had completed. Panics past `bound`, naming
+    /// it, rather than hanging a suite run.
+    async fn wait_for<Fut, F>(bound: Duration, mut check: F)
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        let deadline = tokio::time::Instant::now() + bound;
+        loop {
+            if check().await {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "condition did not become true within {bound:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
     /// **The reproduction this fix exists for.** Pins the PROPERTY
     /// (`terminal_state_for`'s own doc comment: a zero exit after a
     /// settled turn is `RunState::unrendered_verdict()`, i.e.
@@ -1349,6 +1654,11 @@ echo '{"type":"result","subtype":"success"}'
     /// green. This is red before this adapter emits its own turn boundary
     /// (the run reads `"failed"` after a turn that produced real content
     /// and exited 0) and green after.
+    ///
+    /// Synchronizes on the run's own final state (`wait_for`), not on
+    /// `adapter.start(...)` returning: the up/run split means `start`
+    /// itself now resolves once the initialize handshake completes, not
+    /// once the whole turn (and this run's terminal state) does.
     #[tokio::test]
     async fn a_clean_protocol_turn_settles_rather_than_fails() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -1400,7 +1710,15 @@ echo '{"type":"result","subtype":"success"}'
                 sink,
             )
             .await
-            .expect("start must succeed: the turn completed normally against the fake binary");
+            .expect("start (the up phase) must succeed: the handshake completes against the fake binary");
+
+        wait_for(Duration::from_secs(5), || async {
+            matches!(
+                run_state(&db, run_id).await.as_str(),
+                "cancelled" | "failed"
+            )
+        })
+        .await;
 
         let final_state = run_state(&db, run_id).await;
         assert_ne!(
@@ -1422,6 +1740,10 @@ echo '{"type":"result","subtype":"success"}'
     /// exit). Checked from the durable journal's own sequence numbers,
     /// not from call order in this test's own code, since that is what
     /// `RunLifecycleSink` actually acts on.
+    ///
+    /// Synchronizes on the run's own final state (`wait_for`), not on
+    /// `adapter.start(...)` returning -- see the same note on
+    /// `a_clean_protocol_turn_settles_rather_than_fails` above.
     #[tokio::test]
     async fn turn_ended_is_journaled_before_process_exited_on_the_protocol_path() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -1473,7 +1795,15 @@ echo '{"type":"result","subtype":"success"}'
                 sink,
             )
             .await
-            .expect("start must succeed against the fake binary");
+            .expect("start (the up phase) must succeed against the fake binary");
+
+        wait_for(Duration::from_secs(5), || async {
+            matches!(
+                run_state(&db, run_id).await.as_str(),
+                "cancelled" | "failed"
+            )
+        })
+        .await;
 
         let kinds = journaled_kinds(&db, run_id).await;
         let turn_ended_seq = kinds
@@ -1506,6 +1836,221 @@ echo '{"type":"result","subtype":"success"}'
         assert!(
             turn_ended_seq.unwrap() < last_process_event_seq.unwrap(),
             "the turn boundary must be journaled before the process's own exit; got kinds: {kinds:?}"
+        );
+
+        db.shutdown().await.ok();
+    }
+
+    // -------------------------------------------------- up/run split tests
+
+    /// A fake `claude` that completes its own initialize handshake
+    /// immediately, then sleeps for `SLOW_TURN_SLEEP_SECS` before the
+    /// rest of the turn -- standing in for a real turn's own duration.
+    ///
+    /// **Margin arithmetic** (same discipline as
+    /// `tui::adapter::tests`' own load-tested margin comment): two
+    /// numbers, `SLOW_TURN_SLEEP_SECS` (this fake turn's own duration)
+    /// and `bound` (the test's own timeout, defined at its call site
+    /// below), and three constraints on their gap:
+    ///
+    ///   1. `bound` must stay below `SLOW_TURN_SLEEP_SECS`, or the
+    ///      turn's own sleep would already have elapsed by the time the
+    ///      bound does, and this would stop discriminating fixed from
+    ///      broken code at all.
+    ///   2. `bound` IS the spawn budget: real time for `/bin/sh` to
+    ///      start, read one line, and write one line back, on whatever
+    ///      runner this executes on -- there is no real handshake work
+    ///      here, so nearly all of `bound` is slack for process
+    ///      spawn/scheduling latency. Too small and this flakes on
+    ///      infrastructure contention having nothing to do with the fix.
+    ///   3. `SLOW_TURN_SLEEP_SECS - bound` is the discrimination margin:
+    ///      fixed code returns in the low tens of milliseconds (spawn +
+    ///      one read + one echo), broken code cannot return before the
+    ///      sleep's own wall-clock floor -- a real `sleep N` can only
+    ///      take AT LEAST `N` seconds under load, never less, so there
+    ///      is no contention scenario where broken code finishes before
+    ///      `bound` elapses. The only real risk this margin protects
+    ///      against is fixed code's own spawn overrunning `bound` on an
+    ///      exceptionally loaded runner, not a false pass.
+    ///
+    /// `SLOW_TURN_SLEEP_SECS = 6`, `bound = 3s`: constraint 1 holds
+    /// (3 < 6), constraint 2 gives a 3s spawn budget (tens of thousands
+    /// of times the actual work), constraint 3 gives a 3s discrimination
+    /// margin between the fixed code's near-instant return and the
+    /// broken code's own 6s+ floor.
+    const SLOW_TURN_SLEEP_SECS: u64 = 6;
+
+    fn write_slow_turn_fake_claude(dir: &std::path::Path) -> PathBuf {
+        let script = format!(
+            r#"#!/bin/sh
+read -r _first_line
+echo '{{"type":"control_response","response":{{"subtype":"success","request_id":"crew-initialize","response":{{}}}}}}'
+sleep {SLOW_TURN_SLEEP_SECS}
+echo '{{"type":"system","subtype":"init","session_id":"sess-slow-turn","claude_code_version":"2.1.268","permissionMode":"auto"}}'
+echo '{{"type":"result","subtype":"success"}}'
+"#
+        );
+        let path = dir.join("slow-turn-claude.sh");
+        std::fs::write(&path, script).expect("write fake claude script");
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    /// **The reproduction this fix exists for.** Before the up/run split,
+    /// `Adapter::start` awaited [`reader::drive_turn`]'s ENTIRE return
+    /// inline, which itself does not return until the turn ends -- so
+    /// this is red against that code: `start` would not return until
+    /// the fake claude's own `SLOW_TURN_SLEEP_SECS` sleep elapsed (a
+    /// stand-in for a real turn's duration, and for the daemon's own
+    /// per-connection dispatch loop blocking on it -- see this module's
+    /// own doc comment on `Self::start`). Green after the split: `start`
+    /// returns once the initialize handshake completes, long before the
+    /// turn (and this fake process) is done.
+    #[tokio::test]
+    async fn start_returns_once_the_handshake_completes_not_once_the_turn_ends() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo_root = dir.path().join("repo");
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let bin = write_slow_turn_fake_claude(dir.path());
+        let claude_json_path = trusted_claude_json(dir.path(), &repo_root);
+
+        let state_dir = tempfile::TempDir::new().unwrap();
+        let db = StdArc::new(
+            DatabaseHandle::start(state_dir.path().join("runtime.db"))
+                .await
+                .unwrap(),
+        );
+        let project_id = crew_protocol::ProjectId::new();
+        let approval_service = StdArc::new(ApprovalService::new(
+            StdArc::clone(&db),
+            project_id,
+            StdArc::new(NoopApprovalCallback) as StdArc<dyn crate::approval::ApprovalCallback>,
+            broadcast::channel(64).0,
+        ));
+        let callback = StdArc::new(ProtocolApprovalCallback::new());
+        let adapter = ClaudeProtocolAdapter::new(
+            repo_root.clone(),
+            Vec::new(),
+            None,
+            ProtocolBundle {
+                approval_service,
+                callback,
+            },
+            None,
+        )
+        .with_test_overrides(claude_json_path, bin.to_string_lossy().to_string());
+
+        let events = StdArc::new(parking_lot::Mutex::new(Vec::new()));
+        let sink: Arc<dyn AdapterEventSink> = Arc::new(RecordingSink {
+            events: StdArc::clone(&events),
+        });
+
+        // See `SLOW_TURN_SLEEP_SECS`'s own doc comment above for the
+        // margin arithmetic behind this specific value.
+        let bound = Duration::from_secs(3);
+        let started_at = tokio::time::Instant::now();
+        tokio::time::timeout(
+            bound,
+            adapter.start(
+                StartSpec {
+                    run_id: RunId::new(),
+                    task_id: TaskId::new(),
+                    worker_id: WorkerId::new(),
+                    prompt: "hello".to_string(),
+                    resume: None,
+                },
+                sink,
+            ),
+        )
+        .await
+        .expect("start must return well before the fake turn's own sleep elapses")
+        .expect("start (the up phase) must succeed: the handshake completed");
+        let elapsed = started_at.elapsed();
+
+        assert!(
+            elapsed < bound,
+            "expected start to return once the handshake completed, long before the turn's own \
+             {SLOW_TURN_SLEEP_SECS}s sleep -- took {elapsed:?}"
+        );
+
+        db.shutdown().await.ok();
+    }
+
+    /// Condition from review: a run-phase PANIC (not just an ordinary
+    /// `Err`) after the handshake must still leave this run terminal --
+    /// nothing else will settle it, since `start` has already returned
+    /// `Ok` by the time a post-handshake panic can occur. Proven via the
+    /// `with_run_phase_panic` test seam rather than provoking a real
+    /// panic from production code paths.
+    #[tokio::test]
+    async fn a_run_phase_panic_after_the_handshake_still_settles_the_run_terminal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo_root = dir.path().join("repo");
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let bin = write_clean_completion_fake_claude(dir.path());
+        let claude_json_path = trusted_claude_json(dir.path(), &repo_root);
+
+        let state_dir = tempfile::TempDir::new().unwrap();
+        let db = StdArc::new(
+            DatabaseHandle::start(state_dir.path().join("runtime.db"))
+                .await
+                .unwrap(),
+        );
+        let project_id = crew_protocol::ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_task_worker_run(&db, project_id).await;
+
+        let (events_tx, _events_rx) = tokio::sync::broadcast::channel(64);
+        let sink = production_sink_chain(&db, project_id, events_tx, run_id);
+
+        let approval_service = StdArc::new(ApprovalService::new(
+            StdArc::clone(&db),
+            project_id,
+            StdArc::new(NoopApprovalCallback) as StdArc<dyn crate::approval::ApprovalCallback>,
+            tokio::sync::broadcast::channel(64).0,
+        ));
+        let callback = StdArc::new(ProtocolApprovalCallback::new());
+        let adapter = ClaudeProtocolAdapter::new(
+            repo_root.clone(),
+            Vec::new(),
+            None,
+            ProtocolBundle {
+                approval_service,
+                callback,
+            },
+            None,
+        )
+        .with_test_overrides(claude_json_path, bin.to_string_lossy().to_string())
+        .with_run_phase_panic();
+
+        adapter
+            .start(
+                StartSpec {
+                    run_id,
+                    task_id,
+                    worker_id,
+                    prompt: "hello".to_string(),
+                    resume: None,
+                },
+                sink,
+            )
+            .await
+            .expect("start (the up phase) must still succeed: the handshake completed before the run phase ever panics");
+
+        wait_for(Duration::from_secs(5), || async {
+            matches!(
+                run_state(&db, run_id).await.as_str(),
+                "cancelled" | "failed"
+            )
+        })
+        .await;
+
+        let final_state = run_state(&db, run_id).await;
+        assert_eq!(
+            final_state, "failed",
+            "a run-phase panic (no TurnEnded ever emitted) must settle as failed, \
+             `terminal_state_for`'s own \"no turn ever settled\" arm -- got {final_state:?}"
         );
 
         db.shutdown().await.ok();
