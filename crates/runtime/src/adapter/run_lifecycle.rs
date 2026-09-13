@@ -419,8 +419,11 @@ impl RunLifecycle {
         }
     }
 
-    /// `TurnEnded` evidence: the vendor finished its turn and is holding at
-    /// its prompt (ADR-0027).
+    /// `TurnEnded` evidence: the vendor's turn reached its end (ADR-0027).
+    /// A TUI worker holds at its prompt when this fires; a protocol
+    /// worker (`AdapterMode::Protocol`, e.g. claude's `-p` invocation)
+    /// exits instead of holding -- this edge means only "the turn is
+    /// over", not "the vendor process is still around to ask again".
     ///
     /// Deliberately **non-terminal**. A run is a conversation the leader
     /// closes, and a vendor turn boundary says only that the turn is over
