@@ -237,41 +237,28 @@ Before crew-v2, each of the four worker adapters (Claude, Codex, Copilot, OMP-RP
 independent implementations: a headless one driving each vendor's own non-interactive/JSON
 protocol directly (`claude stream-json`, `codex app-server`, `copilot --acp`, `omp --mode rpc`),
 and a TUI one driving the real interactive CLI on a PTY. That ruling deleted every headless
-implementation, its fixtures, and its conformance suite, leaving `adapter::tui::*` as the sole
-control plane. `mode: "headless"` stays deserializable (an old journal or config naming it must
-still parse) but is typed-rejected at both config-validation and adapter-dispatch time — never
-silently remapped to `tui` and never silently accepted.
+implementation, its fixtures, and its conformance suite. `mode: "headless"` stays deserializable
+(an old journal or config naming it must still parse) but is typed-rejected at both
+config-validation and adapter-dispatch time — never silently remapped to `tui` and never silently
+accepted.
 
-### Why deferred
+### Status: no longer deferred
 
-The headless adapters existed for CI-friendly, non-interactive automation and for hidden/backgrounded
-runs a PTY-based TUI can't naturally serve. But crew-v2's TUI control plane became the
-better-maintained, better-tested path (ADR-0025), and running two parallel implementations per
-vendor doubled the surface its authors had to keep correct without doubling real usage — no
-operator was reported as depending on the headless path specifically. Retiring it outright, rather
-than keeping it permanently inert, follows the same reasoning as the Org Governance Enforcement
-entry above: an unreachable-in-practice code path is a liability, not a free option.
+This entry recorded a deferred option: implementing a non-interactive control plane again, designed
+fresh against the vendors' current protocols rather than by resurrecting the deleted code. That has now
+happened for one vendor — claude is driven over its streaming-JSON protocol by a new adapter, selected
+explicitly per worker and never by default. It is experimental, under evaluation, and not yet
+recommended for use. The `headless` mode name remains typed-rejected; the new adapter does not revive it.
 
-Subsequent work removed most of the *practical* pressure that would have argued for bringing it
-back. The three complaints that made a headless plane attractive were that driving a real TUI is
-fragile about input, opaque about completion, and unverifiable about delivery. Each now has an
-answer in the TUI path itself: prompts are delivered as one bracketed paste in paced chunks with a
-bounded write, so a vendor that stops reading fails loudly instead of truncating silently; a run
-reaches a settled state from the vendor's own end-of-turn boundary rather than only from process
-exit, with `run/finish` for the leader and a disconnect-grace-window teardown for a leader that is
-actually gone, never merely quiet ([ADR-0027](adr/0027-turn-end-settles-a-run.md),
-[ADR-0036](adr/0036-leader-disconnect-grace-window.md)); and post-submit verification compares what the
-vendor actually recorded against what was sent, so a truncating composer fails the run rather than
-producing a plausible-looking short answer. A headless plane would have to beat that, not merely
-match a PTY's old weaknesses.
+The trigger this entry anticipated was a deployment with no pseudo-terminal available. That is not why
+the work was done. The reason was that the failures of the terminal control plane were consistently
+failures of reading a screen rather than of any one vendor — a different argument from the reasoning
+this entry originally recorded, and one it did not consider.
 
-### Decision trigger
-
-Implement a non-interactive control plane again only if a concrete deployment needs to drive a
-vendor CLI without a PTY (e.g. a headless CI runner with no pane backend available at all) *and*
-the TUI path is confirmed unworkable for it — not merely inconvenient. Any reintroduction should
-design fresh against the vendor CLIs' current protocols rather than resurrect the deleted code,
-since the vendor wire formats this was built against may themselves have moved on by then.
+What remains genuinely deferred is the same treatment for the other three vendors, and the question of
+which control plane is primary. Both are under evaluation by a pending ADR rather than deferred here, so
+this entry stays only as the record of a decision trigger that fired for a reason nobody wrote down in
+advance.
 
 ---
 
