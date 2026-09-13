@@ -1,7 +1,10 @@
 # Headless control plane retirement
 
-* Status: Accepted
+* Status: Accepted; superseded by [0037](0037-protocol-first-control-plane.md)
 * Date: 2026-08-27
+* Superseded by: [0037](0037-protocol-first-control-plane.md) -- the headless adapters this
+  retired are not returning, but the control plane moved back to the vendors' own protocols;
+  0037 is a fresh implementation against the current protocols, not this code restored.
 
 ## Context and Problem Statement
 
