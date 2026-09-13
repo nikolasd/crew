@@ -11,7 +11,7 @@ has to cope with, so a fixture with them stripped would test nothing.
 
 ## Why these are captures and not hand-written strings
 
-A vendor TUI positions **each word** with its own cursor-column escape, so the
+Some vendor TUIs (claude, codex) position **each word** with its own cursor-column escape, so the
 escape-stripped text of a screen contains no spaces. A predicate written by
 reading the dialog off a terminal and pasting the phrase into a test matches
 nothing at runtime, and passes review because it looks obviously correct.
@@ -68,9 +68,12 @@ them is the whole point:
 Codex's readiness predicate keyed on the first of those -- the composer's
 **empty-state placeholder** -- which by construction cannot survive a prompt
 being put in the box. Every other vendor keys on chrome that a paste leaves
-alone. The pair exists so that predicate can be re-keyed against measured
-bytes rather than a guess, and so a future change to it fails a test rather
-than a live run.
+alone. The pair exists so this can be measured against real bytes rather than
+a guess, and so re-keying the predicate would fail a test rather than a live
+run the moment it happened. The pinned expectation (`Surface::Undecided` for
+the holding screen, in `classify.rs`) stands until the readiness question is
+re-decided; nothing here promises when that will be, only that the fixture
+keeps proving the current behavior in the meantime, not a fixed one.
 
 Measure phrases through `TuiScreen`'s normalizing matcher, never by grepping
 the `.raw`: the header above is split across escape sequences, so a raw-byte
