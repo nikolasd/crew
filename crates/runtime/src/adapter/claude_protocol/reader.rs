@@ -26,7 +26,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, oneshot};
 
 use crew_protocol::{Classified, ContentClass, RunId, TaskId, WorkerId};
 
@@ -338,6 +338,28 @@ fn classify_line(value: &serde_json::Value) -> StreamLine {
 /// nobody is watching) is silently ignored: the pane is a convenience
 /// view, never load-bearing for the turn itself.
 ///
+/// `ready`, when `Some`, is consumed (`Option::take`) and fired with
+/// `Ok(())` the moment the initialize handshake completes -- immediately
+/// before the prompt is written to `stdin` -- so [`super::adapter::
+/// ClaudeProtocolAdapter::start`]'s "up" phase can return there instead
+/// of waiting for the whole turn (see that method's own doc comment on
+/// the up/run split this exists for). Also consumed defensively at
+/// [`StreamLine::TurnComplete`], firing `Ok(())` there too, in case a
+/// turn ends without ever seeing a matching `control_response` (a
+/// degenerate stream, not the real protocol's documented shape, but
+/// `start`'s caller must never be left waiting on a signal that will
+/// never come). Already `None` by the time any error is returned AFTER
+/// the handshake fired it -- those errors are the "run" phase's own to
+/// settle, not `start`'s.
+///
+/// `handshake_done` is set at the exact same two call sites as `ready`,
+/// never inferred from this function's own return value afterward: an
+/// `Err` returned AFTER the handshake (a post-handshake protocol
+/// failure) must still leave `handshake_done` `true`, since `start` has
+/// already returned by then and its own run-phase panic supervisor
+/// needs to know that settling this run terminal is now its job, not a
+/// backstop reached through `start`'s own error path.
+///
 /// # Errors
 /// Propagates a stdout read failure, a stdin write failure, or
 /// [`approval_bridge::handle_permission_request`]'s own error (a run no
@@ -355,12 +377,12 @@ fn classify_line(value: &serde_json::Value) -> StreamLine {
 /// denial explained by either set is expected and does not fail the
 /// turn -- an operator's own hard `deny` rule is legitimate, ordinary
 /// behavior, not a sentinel failure.
-// The `prompt` parameter added for the initialize handshake is the
-// eighth -- matching the existing precedent elsewhere in this codebase
+// The `ready`/`handshake_done` parameters are the ninth and tenth --
+// matching the existing precedent elsewhere in this codebase
 // (`build_tui_adapter`, `TuiAdapter::fail_start`) of allowing this
 // specific lint on a function whose every parameter is load-bearing and
-// already documented above, rather than introducing a params struct
-// for one field.
+// already documented above, rather than introducing a params struct for
+// two fields that must be set from the same two call sites.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn drive_turn<R, W>(
     stdout: R,
@@ -371,6 +393,8 @@ pub(crate) async fn drive_turn<R, W>(
     ids: RunIdentity,
     pane_output: Option<&broadcast::Sender<Vec<u8>>>,
     prompt: &str,
+    ready: &mut Option<oneshot::Sender<Result<(), crate::adapter::error::AdapterError>>>,
+    handshake_done: &Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<TurnOutcome, crate::adapter::error::AdapterError>
 where
     R: AsyncRead + Unpin,
@@ -488,6 +512,14 @@ where
                     // prompt (and anything that could raise a
                     // `can_use_tool` request) has not been sent.
                     continue;
+                }
+                // The handshake is done -- fire the readiness signal
+                // BEFORE writing the prompt, matching `Adapter::start`'s
+                // own contract ("returns once the worker is up... before
+                // the turn's own prompt is sent").
+                if let Some(tx) = ready.take() {
+                    handshake_done.store(true, std::sync::atomic::Ordering::SeqCst);
+                    let _ = tx.send(Ok(()));
                 }
                 let mut prompt_line = serde_json::json!({
                     "type": "user",
@@ -643,6 +675,25 @@ where
                             ),
                         ));
                     }
+                }
+                // Defensive, not the documented path: a turn that
+                // completes without this reader ever having seen a
+                // matching `control_response` (see this fn's own doc
+                // comment on `ready`) must still not leave `start`'s
+                // caller waiting forever. If this fires, it means
+                // `start` returned only once the turn ended -- the exact
+                // symptom this adapter's up/run split exists to fix,
+                // restored for this one run -- so it must never be a
+                // silent fallback: warn, naming what was never observed.
+                if let Some(tx) = ready.take() {
+                    tracing::warn!(
+                        run_id = %ids.run_id,
+                        "claude's initialize control_response was never observed on this turn's \
+                         stream; start() returned only once the turn ended, not once the \
+                         handshake completed -- the up/run split did not take effect for this run"
+                    );
+                    handshake_done.store(true, std::sync::atomic::Ordering::SeqCst);
+                    let _ = tx.send(Ok(()));
                 }
                 return Ok(outcome);
             }
@@ -901,6 +952,8 @@ mod tests {
             ids(),
             None,
             "hello",
+            &mut None,
+            &Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await
         .expect("must not error");
@@ -992,6 +1045,8 @@ mod tests {
             ids(),
             None,
             "should never be sent",
+            &mut None,
+            &Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await;
 
@@ -1051,6 +1106,8 @@ mod tests {
             ids(),
             None,
             "should never be sent",
+            &mut None,
+            &Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await;
 
@@ -1109,6 +1166,8 @@ mod tests {
             ids(),
             Some(&pane_tx),
             "hello",
+            &mut None,
+            &Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await
         .expect("must not error");
@@ -1224,6 +1283,8 @@ mod tests {
                     },
                     None,
                     "hello",
+                    &mut None,
+                    &Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 )
                 .await
             }
@@ -1351,6 +1412,8 @@ mod tests {
             ids(),
             None,
             "the real prompt",
+            &mut None,
+            &Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await
         .expect("must not error");
@@ -1402,6 +1465,8 @@ mod tests {
             ids(),
             None,
             "never sent",
+            &mut None,
+            &Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await;
 
@@ -1452,6 +1517,8 @@ mod tests {
             ids(),
             None,
             "hello",
+            &mut None,
+            &Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await;
 
@@ -1504,6 +1571,8 @@ mod tests {
             ids(),
             None,
             "hello",
+            &mut None,
+            &Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await;
 
@@ -1591,6 +1660,8 @@ mod tests {
             ids(),
             None,
             "hello",
+            &mut None,
+            &Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await
         .expect("a denial explained by an observed notice must not fail the turn");
@@ -1701,6 +1772,8 @@ mod tests {
                     },
                     None,
                     "hello",
+                    &mut None,
+                    &Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 )
                 .await
             }

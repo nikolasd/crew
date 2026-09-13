@@ -4121,6 +4121,195 @@ async fn start_queued_run_releases_the_lease_and_worktree_when_driver_start_fail
         "the worktree materialized before driver.start failed must be torn down: {worktree_path}"
     );
 }
+
+// ---------------------------- run-phase failure / lease parity (up/run split)
+
+/// Reproduces `ClaudeProtocolAdapter::start`'s own post-handshake failure
+/// shape at the orchestration level, without a real vendor process:
+/// `start` returns `Ok` immediately (the "up" phase, matching this
+/// driver's real counterpart once its own handshake completes), then a
+/// spawned task -- standing in for the real run-phase task -- journals
+/// only `ProcessExited` (no `TurnEnded`) through the real
+/// `RunLifecycleSink`. That is the same "no turn ever settled" shape
+/// `terminal_state_for` folds to `failed`, and it happens entirely AFTER
+/// `start_queued_run`'s own call to `driver.start(ctx).await` has already
+/// returned `Ok` -- so unlike `FailingRunDriver` above (an `Err` from
+/// `start` itself, still on `start_queued_run`'s own synchronous error
+/// path), nothing here ever reaches `abandon_and_announce`.
+struct RunPhaseFailsAfterUpRunDriver;
+
+impl RunDriver for RunPhaseFailsAfterUpRunDriver {
+    fn active_run_count(&self) -> usize {
+        0
+    }
+
+    fn start(&self, ctx: RunDriverContext) -> AdapterFuture<'static, Result<(), String>> {
+        tokio::spawn(async move {
+            let inner: Arc<dyn AdapterEventSink> = Arc::new(
+                crew_runtime::adapter::DomainAdapterEventSink::new(
+                    ctx.db.clone(),
+                    ctx.project_id,
+                    ctx.events_tx.clone(),
+                    Vec::new(),
+                    false,
+                    Arc::clone(&ctx.violation_service),
+                    false,
+                )
+                .expect("seed patterns always compile"),
+            );
+            let sink = RunLifecycleSink::wrap(
+                inner,
+                ctx.db.clone(),
+                ctx.project_id,
+                ctx.events_tx.clone(),
+                ctx.run_id,
+                Arc::new(ActivityClock::new()),
+            );
+            // A brief yield so this test can observe `run/submit`'s own
+            // response (already primed to return once the future below
+            // resolves) before this settles -- proving the ORDERING this
+            // driver exists to reproduce, not just the eventual state.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = sink
+                .emit(AdapterEvent {
+                    run_id: ctx.run_id,
+                    task_id: ctx.task_id,
+                    worker_id: ctx.worker_id,
+                    payload: AdapterEventPayload::ProcessExited {
+                        exit_code: None,
+                        signal: Some("SIGKILL".to_string()),
+                    },
+                    cursor: None,
+                })
+                .await;
+        });
+        Box::pin(async move { Ok(()) })
+    }
+
+    fn send_follow_up(
+        &self,
+        _run_id: RunId,
+        _task_id: TaskId,
+        _worker_id: WorkerId,
+        _prompt: String,
+        _kind: crew_protocol::MessageKind,
+    ) -> AdapterFuture<'static, Result<(), String>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn running_adapter(&self, _run_id: RunId) -> Option<Arc<dyn Adapter>> {
+        None
+    }
+
+    fn cancel_run(
+        &self,
+        _run_id: RunId,
+        _scope: CancelScope,
+    ) -> AdapterFuture<'static, Result<crew_runtime::service::CancelOutcome, String>> {
+        Box::pin(async move { Ok(crew_runtime::service::CancelOutcome::NoRunningAdapter) })
+    }
+}
+
+/// **PARITY RECORD, not a correctness ruling** (see `Adapter::start`'s own
+/// trait doc comment, clause 2): a run-phase failure that happens AFTER
+/// `start` has already returned `Ok` leaves this run's lease held --
+/// released only by an explicit `workspace/release` or a later
+/// `run/retry`'s own abandonment -- exactly like a `TuiAdapter` run-phase
+/// failure already does, and unlike `start_queued_run_releases_the_lease_
+/// and_worktree_when_driver_start_fails` immediately above (a `start`-time
+/// `Err`, which still abandons the lease via `start_queued_run`'s own
+/// synchronous error path). Before the protocol adapter's own up/run
+/// split, EVERY protocol adapter failure -- including one occurring
+/// mid-turn -- looked like the
+/// `FailingRunDriver` case: `start` did not return until the failure, so
+/// `orchestration.rs`'s own `abandon_and_announce` always ran. Whether
+/// automatic release on a terminal state should exist is the pending
+/// leases ADR's own question, not this test's.
+#[tokio::test]
+async fn a_run_phase_failure_after_start_returns_ok_leaves_the_lease_held_like_tui_does() {
+    let harness = Harness::start(|c| {
+        c.run_driver = Some(Arc::new(RunPhaseFailsAfterUpRunDriver));
+    })
+    .await;
+    init_real_git_repo(&harness.owned_dir);
+    let mut client = omp_client(&harness, "omp-1").await;
+
+    let task = client
+        .call(
+            2,
+            "task/upsert",
+            json!({ "ownerClientInstanceId": "omp-1", "revision": 1 }),
+        )
+        .await;
+    let task_id = task["result"]["taskId"].as_str().unwrap().to_string();
+    let worker = client
+        .call(
+            3,
+            "worker/create",
+            json!({ "fingerprint": "sha256:f", "adapter": "fake", "model": "m" }),
+        )
+        .await;
+    let worker_id = worker["result"]["workerId"].as_str().unwrap().to_string();
+
+    let submit = client
+        .call(
+            4,
+            "run/submit",
+            json!({ "taskId": task_id, "workerId": worker_id, "workspaceMode": "isolated" }),
+        )
+        .await;
+    assert!(
+        submit.get("error").is_none(),
+        "run/submit's own response is this driver's \"up\" phase -- it must succeed \
+         immediately, well before the run-phase task's own 50ms delay: {submit:?}"
+    );
+    let run_id = submit["result"]["runId"].as_str().unwrap().to_string();
+
+    assert!(
+        wait_for_state(&mut client, 5, &run_id, "failed").await,
+        "the run-phase task's own ProcessExited-with-no-TurnEnded must still settle this run \
+         failed, even though start_queued_run already returned before it ran"
+    );
+
+    let replay = client
+        .call(6, "events/replay", json!({ "afterSequence": 0 }))
+        .await;
+    let kinds = workspace_event_kinds_for_run(&replay, &run_id);
+    assert_eq!(
+        kinds,
+        vec!["leaseRequested", "leaseAcquired"],
+        "no leaseReleased: a post-start-Ok run-phase failure must not reach \
+         start_queued_run's own abandon-and-announce path, which already ran (successfully) \
+         before this failure ever happened: {kinds:?}"
+    );
+
+    let lease_db = harness.socket.parent().unwrap().join("workspace-leases.db");
+    let conn = rusqlite::Connection::open(&lease_db).unwrap();
+    let (state, path, released_at): (String, Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT state, path, released_at FROM workspace_leases WHERE run_id = ?1",
+            rusqlite::params![run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        state, "active",
+        "the lease must still read active -- exactly the state a TuiAdapter run-phase \
+         failure would leave it in, pinned here so the two adapter paths cannot silently \
+         diverge (see this test's own doc comment on why held, not released, is correct \
+         TODAY, pending the leases ADR)"
+    );
+    assert!(
+        released_at.is_none(),
+        "an unreleased lease must carry no released_at"
+    );
+    let worktree_path = path.expect("an activated lease has a real path");
+    assert!(
+        std::path::Path::new(&worktree_path).exists(),
+        "the worktree must still be on disk: nothing tore it down: {worktree_path}"
+    );
+}
+
 // ---------------------------------------------------------------- item 33: real adapter cancel
 
 /// Locates the `fake-worker` binary, building it if necessary. Each
