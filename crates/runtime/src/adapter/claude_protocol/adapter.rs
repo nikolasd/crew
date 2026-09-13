@@ -45,7 +45,7 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use tokio::sync::Mutex as AsyncMutex;
 
-use crew_protocol::{Classified, ContentClass};
+use crew_protocol::{Classified, ContentClass, TurnOutcome};
 
 use crate::adapter::AdapterFuture;
 use crate::adapter::capability::AdapterCapabilities;
@@ -553,6 +553,37 @@ impl Adapter for ClaudeProtocolAdapter {
                     pane_output,
                     &spec.prompt,
                 )
+                .await?;
+
+                // The turn boundary, parity with
+                // `tui/adapter.rs`'s own `TurnEnded` emission
+                // (`TuiEvent::TurnEnded { outcome }` at that module's line
+                // ~1687). `drive_turn` returning `Ok` here IS this
+                // adapter's turn-boundary evidence -- claude's `-p`
+                // invocation only returns once its own turn is over,
+                // there is no separate "holding at its prompt" signal to
+                // wait for the way a TUI transcript tail has to watch
+                // for one. Emitted before `settle_after_turn`/
+                // `ProcessExited` below, matching the TUI path's own
+                // ordering (the turn boundary is independent of, and
+                // precedes, the process actually going away): without
+                // this, `run_lifecycle::RunLifecycleSink` never learns
+                // this run's turn settled, and a clean exit is
+                // classified `failed` (`terminal_state_for`'s "no turn
+                // ever settled" arm) regardless of what the turn actually
+                // did -- the defect this emission closes. Always
+                // `TurnOutcome::Normal`: this adapter does not yet
+                // distinguish an API-error-ended turn from an ordinary
+                // one (a narrower follow-up, not this fix's scope).
+                sink.emit(AdapterEvent {
+                    run_id: ids.run_id,
+                    task_id: ids.task_id,
+                    worker_id: ids.worker_id,
+                    payload: AdapterEventPayload::TurnEnded {
+                        outcome: TurnOutcome::Normal,
+                    },
+                    cursor: None,
+                })
                 .await?;
 
                 let termination = {
@@ -1145,6 +1176,337 @@ while true; do sleep 1; done
                 "expected a SIGKILL-escalated exit, got: {recorded:#?}"
             );
         }
+
+        db.shutdown().await.ok();
+    }
+
+    // ------------------------------------------------ turn-boundary tests
+
+    /// A fake `claude` that completes a turn cleanly: `system/init`, one
+    /// `assistant` text line (so the turn produced real content, not an
+    /// empty one), and a `result` with no permission denials. No argv
+    /// recording -- these tests are about the run's own lifecycle state,
+    /// not the launched command line (`the_resolved_model_reaches_the_real_launched_argv`
+    /// already proves that separately).
+    fn write_clean_completion_fake_claude(dir: &std::path::Path) -> PathBuf {
+        let script = r#"#!/bin/sh
+read -r _first_line
+echo '{"type":"system","subtype":"init","session_id":"sess-lifecycle-test","claude_code_version":"2.1.268","permissionMode":"auto"}'
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}'
+echo '{"type":"result","subtype":"success"}'
+"#;
+        let path = dir.join("fake-claude-clean.sh");
+        std::fs::write(&path, script).expect("write fake claude script");
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    /// The production sink chain minus settlement, same shape
+    /// `tests/run_lifecycle.rs`'s own `production_sink_chain` builds
+    /// (duplicated in-crate rather than imported: that file is a
+    /// separate compilation unit, and the seam this test needs --
+    /// `ClaudeProtocolAdapter::new`'s `pub(crate)` constructor and
+    /// `with_test_overrides`'s `#[cfg(test)]` gate -- is only reachable
+    /// from inside this crate's own test compilation, not from an
+    /// external integration-test binary linking the built rlib).
+    fn production_sink_chain(
+        db: &StdArc<DatabaseHandle>,
+        project_id: crew_protocol::ProjectId,
+        events_tx: tokio::sync::broadcast::Sender<crew_protocol::EventEnvelope>,
+        run_id: RunId,
+    ) -> Arc<dyn AdapterEventSink> {
+        let violation = StdArc::new(crate::policy::ViolationService::new(
+            StdArc::clone(db),
+            project_id,
+            events_tx.clone(),
+            None,
+            crate::config::NestedViolationAction::default(),
+            crate::security::redaction::Redactor::new(),
+        ));
+        let domain_sink = Arc::new(
+            crate::adapter::DomainAdapterEventSink::new(
+                StdArc::clone(db),
+                project_id,
+                events_tx.clone(),
+                Vec::new(),
+                false,
+                violation,
+                false,
+            )
+            .expect("built-in patterns always compile"),
+        );
+        crate::adapter::RunLifecycleSink::wrap(
+            domain_sink,
+            StdArc::clone(db),
+            project_id,
+            events_tx,
+            run_id,
+            StdArc::new(crate::adapter::ActivityClock::new()),
+        )
+    }
+
+    /// Seeds one task/worker/run row directly, same shape the pane test
+    /// above uses -- returns the identifiers for the caller to drive.
+    async fn seed_task_worker_run(
+        db: &DatabaseHandle,
+        project_id: crew_protocol::ProjectId,
+    ) -> (TaskId, WorkerId, RunId) {
+        let task_id = TaskId::new();
+        let worker_id = WorkerId::new();
+        let run_id = RunId::new();
+        db.run_domain_op(Box::new({
+            let task_id = task_id.to_string();
+            let worker_id = worker_id.to_string();
+            let run_id = run_id.to_string();
+            let project_id = project_id.to_string();
+            move |conn| {
+                conn.execute(
+                    "INSERT INTO tasks (task_id, project_id, owner_client_instance_id, revision, created_at, updated_at) \
+                     VALUES (?1, ?2, 'test-owner', 1, ?3, ?3)",
+                    rusqlite::params![task_id, project_id, "2026-01-01T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO worker_profiles (id, fingerprint, adapter, model, permission_envelope) \
+                     VALUES (?1, 'sha256:test', 'claude', 'test-model', '{}')",
+                    rusqlite::params![worker_id.clone()],
+                )?;
+                conn.execute(
+                    "INSERT INTO workers (worker_id, project_id, profile_id, resolved_profile_json, created_at) \
+                     VALUES (?1, ?2, ?1, '{}', ?3)",
+                    rusqlite::params![worker_id, project_id, "2026-01-01T00:00:00Z"],
+                )?;
+                conn.execute(
+                    "INSERT INTO runs (run_id, task_id, worker_id, state, created_at) \
+                     VALUES (?1, ?2, ?3, 'queued', ?4)",
+                    rusqlite::params![run_id, task_id, worker_id, "2026-01-01T00:00:00Z"],
+                )?;
+                Ok(serde_json::Value::Null)
+            }
+        }))
+        .await
+        .expect("seed task/worker/run");
+        (task_id, worker_id, run_id)
+    }
+
+    async fn run_state(db: &DatabaseHandle, run_id: RunId) -> String {
+        db.run_domain_op(Box::new(move |conn| {
+            let state: String = conn.query_row(
+                "SELECT state FROM runs WHERE run_id = ?1",
+                [run_id.to_string()],
+                |r| r.get(0),
+            )?;
+            Ok(serde_json::json!(state))
+        }))
+        .await
+        .expect("read run state")
+        .as_str()
+        .expect("state is a string")
+        .to_string()
+    }
+
+    /// Every journaled event kind for `run_id`, in sequence order, as
+    /// `(sequence, RuntimeEventKind)` pairs -- used to check ordering
+    /// between two kinds, not just that each individually appears.
+    async fn journaled_kinds(db: &DatabaseHandle, run_id: RunId) -> Vec<(i64, String)> {
+        db.run_domain_op(Box::new(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT sequence, event_json FROM events WHERE run_id = ?1 ORDER BY sequence",
+            )?;
+            let rows: Vec<(i64, String)> = stmt
+                .query_map([run_id.to_string()], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<_, _>>()?;
+            Ok(serde_json::json!(rows))
+        }))
+        .await
+        .expect("read journaled events")
+        .as_array()
+        .expect("rows are an array")
+        .iter()
+        .map(|pair| {
+            let seq = pair[0].as_i64().expect("sequence is an integer");
+            let raw = pair[1].as_str().expect("event_json is a string");
+            let value: serde_json::Value =
+                serde_json::from_str(raw).expect("parse journaled event");
+            let kind = value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<unknown>")
+                .to_string();
+            (seq, kind)
+        })
+        .collect()
+    }
+
+    /// **The reproduction this fix exists for.** Pins the PROPERTY
+    /// (`terminal_state_for`'s own doc comment: a zero exit after a
+    /// settled turn is `RunState::unrendered_verdict()`, i.e.
+    /// `"cancelled"`, never `"failed"`), not the implementation detail
+    /// (that `TurnEnded` was emitted) -- a test asserting the latter
+    /// would keep passing even if the lifecycle's own matching changed
+    /// underneath it, with the real defect back and the test still
+    /// green. This is red before this adapter emits its own turn boundary
+    /// (the run reads `"failed"` after a turn that produced real content
+    /// and exited 0) and green after.
+    #[tokio::test]
+    async fn a_clean_protocol_turn_settles_rather_than_fails() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo_root = dir.path().join("repo");
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let bin = write_clean_completion_fake_claude(dir.path());
+        let claude_json_path = trusted_claude_json(dir.path(), &repo_root);
+
+        let state_dir = tempfile::TempDir::new().unwrap();
+        let db = StdArc::new(
+            DatabaseHandle::start(state_dir.path().join("runtime.db"))
+                .await
+                .unwrap(),
+        );
+        let project_id = crew_protocol::ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_task_worker_run(&db, project_id).await;
+
+        let (events_tx, _events_rx) = tokio::sync::broadcast::channel(64);
+        let sink = production_sink_chain(&db, project_id, events_tx, run_id);
+
+        let approval_service = StdArc::new(ApprovalService::new(
+            StdArc::clone(&db),
+            project_id,
+            StdArc::new(NoopApprovalCallback) as StdArc<dyn crate::approval::ApprovalCallback>,
+            tokio::sync::broadcast::channel(64).0,
+        ));
+        let callback = StdArc::new(ProtocolApprovalCallback::new());
+        let adapter = ClaudeProtocolAdapter::new(
+            repo_root.clone(),
+            Vec::new(),
+            None,
+            ProtocolBundle {
+                approval_service,
+                callback,
+            },
+            None,
+        )
+        .with_test_overrides(claude_json_path, bin.to_string_lossy().to_string());
+
+        adapter
+            .start(
+                StartSpec {
+                    run_id,
+                    task_id,
+                    worker_id,
+                    prompt: "hello".to_string(),
+                    resume: None,
+                },
+                sink,
+            )
+            .await
+            .expect("start must succeed: the turn completed normally against the fake binary");
+
+        let final_state = run_state(&db, run_id).await;
+        assert_ne!(
+            final_state, "failed",
+            "a clean protocol turn that produced real content must not be recorded failed"
+        );
+        assert_eq!(
+            final_state, "cancelled",
+            "expected RunState::unrendered_verdict() (\"cancelled\"): real work was done, \
+             but nothing (no run/finish call) rendered a verdict on it, got {final_state:?}"
+        );
+
+        db.shutdown().await.ok();
+    }
+
+    /// The turn boundary must be journaled BEFORE the process's own exit
+    /// -- the same ordering the TUI path already guarantees (a
+    /// transcript-tail boundary always precedes the eventual process
+    /// exit). Checked from the durable journal's own sequence numbers,
+    /// not from call order in this test's own code, since that is what
+    /// `RunLifecycleSink` actually acts on.
+    #[tokio::test]
+    async fn turn_ended_is_journaled_before_process_exited_on_the_protocol_path() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo_root = dir.path().join("repo");
+        std::fs::create_dir_all(&repo_root).unwrap();
+        let bin = write_clean_completion_fake_claude(dir.path());
+        let claude_json_path = trusted_claude_json(dir.path(), &repo_root);
+
+        let state_dir = tempfile::TempDir::new().unwrap();
+        let db = StdArc::new(
+            DatabaseHandle::start(state_dir.path().join("runtime.db"))
+                .await
+                .unwrap(),
+        );
+        let project_id = crew_protocol::ProjectId::new();
+        let (task_id, worker_id, run_id) = seed_task_worker_run(&db, project_id).await;
+
+        let (events_tx, _events_rx) = tokio::sync::broadcast::channel(64);
+        let sink = production_sink_chain(&db, project_id, events_tx, run_id);
+
+        let approval_service = StdArc::new(ApprovalService::new(
+            StdArc::clone(&db),
+            project_id,
+            StdArc::new(NoopApprovalCallback) as StdArc<dyn crate::approval::ApprovalCallback>,
+            tokio::sync::broadcast::channel(64).0,
+        ));
+        let callback = StdArc::new(ProtocolApprovalCallback::new());
+        let adapter = ClaudeProtocolAdapter::new(
+            repo_root.clone(),
+            Vec::new(),
+            None,
+            ProtocolBundle {
+                approval_service,
+                callback,
+            },
+            None,
+        )
+        .with_test_overrides(claude_json_path, bin.to_string_lossy().to_string());
+
+        adapter
+            .start(
+                StartSpec {
+                    run_id,
+                    task_id,
+                    worker_id,
+                    prompt: "hello".to_string(),
+                    resume: None,
+                },
+                sink,
+            )
+            .await
+            .expect("start must succeed against the fake binary");
+
+        let kinds = journaled_kinds(&db, run_id).await;
+        let turn_ended_seq = kinds
+            .iter()
+            .find(|(_, kind)| kind == "adapterTurnEvent")
+            .map(|(seq, _)| *seq);
+        let process_exited_seq = kinds
+            .iter()
+            .find(|(_, kind)| kind == "adapterProcessEvent")
+            .map(|(seq, _)| *seq);
+        // Both kinds share `adapterProcessEvent`'s own type tag for
+        // `ProcessStarted`/`ProcessExited` alike (see `event_sink.rs`'s
+        // `RuntimeEvent` mapping), so disambiguate by finding the turn
+        // boundary's sequence number and asserting it precedes the
+        // LAST `adapterProcessEvent`-tagged row (the exit, since start
+        // was already journaled earlier in the same sequence).
+        let last_process_event_seq = kinds
+            .iter()
+            .filter(|(_, kind)| kind == "adapterProcessEvent")
+            .map(|(seq, _)| *seq)
+            .max();
+        assert!(
+            turn_ended_seq.is_some(),
+            "expected a journaled turn-boundary event; got kinds: {kinds:?}"
+        );
+        assert!(
+            process_exited_seq.is_some(),
+            "expected at least one journaled adapterProcessEvent; got kinds: {kinds:?}"
+        );
+        assert!(
+            turn_ended_seq.unwrap() < last_process_event_seq.unwrap(),
+            "the turn boundary must be journaled before the process's own exit; got kinds: {kinds:?}"
+        );
 
         db.shutdown().await.ok();
     }
