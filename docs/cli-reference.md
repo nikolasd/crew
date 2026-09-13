@@ -258,6 +258,15 @@ still parses (so `config print`/`config path` never fail on an old file), but `s
 subcommand that reads config typed-rejects it at validation time, naming the retirement --
 [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md).
 
+`mode: "protocol"` is a second, independent control path alongside `"tui"`, not a replacement for
+it: for claude specifically, it drives the vendor over its own streaming-JSON protocol rather than
+a pseudo-terminal, with the terminal reduced to a self-rendered view rather than the control
+surface. It is never selected unless named explicitly — an adapter with no `mode` given still
+resolves to `"tui"` — and it is experimental, under evaluation, and not yet recommended for use.
+It depends on the target repository already having its one-time trust prompt accepted in claude
+directly (crew reads that record and never writes it); an untrusted repository is refused before
+any vendor process spawns, with a typed escalation naming the remedy.
+
 ### `crewd attach`
 
 Attaches to a run's display pane directly from the CLI, without going through the extension.

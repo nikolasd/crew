@@ -827,6 +827,22 @@ Crew persists your model choice for future sessions. The first time you run a ta
 
 There is no interactive `/crew config` editor — edit `.omp/crew.json` directly. The repository's `.omp/crew.json` takes precedence over any global `~/.omp/crew.json`.
 
+## Claude's Protocol Mode (Experimental)
+
+A claude worker can be requested with `startupOptions: { claude: { mode: "protocol" } }` — driving
+the vendor over its own streaming-JSON protocol instead of a terminal, with the terminal reduced to
+a self-rendered view rather than the control surface. Omitting `mode` selects the terminal path
+instead; protocol mode is never chosen for you. It is experimental, under evaluation, and not yet
+recommended for use.
+
+**Requires the repository to already be trusted in claude.** Before crew will launch a claude
+worker this way, the target repository must already have its one-time trust prompt accepted in
+claude directly — crew reads that record and never writes it. If it hasn't been, the run is refused
+before any vendor process spawns, with a typed escalation telling you to trust the repository once
+in claude yourself and resubmit. Per claude's own documentation, this trust is keyed on the git
+repository root, and in a worktree it uses the main checkout's root — trusting a parent folder, or
+a worktree path specifically, does not satisfy it.
+
 ## Watching Runs on the Dashboard
 
 Crew runs a live dashboard showing your active and completed runs, their status, cost, and transcript. Enable it in your config (`~/.omp/crew.json` or `.omp/crew.json` in your repo):
