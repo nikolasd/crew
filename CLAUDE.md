@@ -160,7 +160,7 @@ These are enforced in review, not just style preference:
 5. Supported platforms: macOS and glibc Linux, arm64/x64 only — everything else gets a typed rejection, never a silent fallback.
 6. OMP owns the task graph; Rust never creates or edits it. A retry always creates a new run; a harness replacement always creates a new worker and run.
 7. Every domain mutation commits its event and broadcasts it in the same call (see above).
-8. Prompt text reaches a vendor TUI only via `write_paste`'s bracketed-paste framing — never raw keystrokes. Confirmed by live measurement to be a security control, not just a prompt-integrity fix: unframed, the same bytes are parsed as keystrokes and can move a first-run trust dialog's selection before crew's Enter confirms it.
+8. Prompt text reaches a vendor **TUI** only via `write_paste`'s bracketed-paste framing — never raw keystrokes. Confirmed by live measurement to be a security control, not just a prompt-integrity fix: unframed, the same bytes are parsed as keystrokes and can move a first-run trust dialog's selection before crew's Enter confirms it. A worker driven over a vendor's own protocol (claude's `mode: "protocol"`, experimental) writes no prompt bytes to a PTY at all, so this invariant does not apply there — it has no equivalent framing requirement of its own today.
 
 ## Conventions worth knowing before editing
 
