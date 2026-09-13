@@ -5,7 +5,11 @@ Supervised live test of crew, gating the v0.7.0 cut — the exact commit under t
 run. Every phase below either verifies a specific class of regression an earlier run surfaced, or
 exercises what has changed since.
 
-**The gate is open and no P1 remains.** The display-placement work made panes work under tmux and
+**The gate is open and no P1 remains.** *(Historical claim, as of when this runbook was written —
+the gate has since closed and reopened: a later attempt failed, a further attempt failed on a
+different half of the system, and a subsequent attempt was cancelled outright when the control-plane
+direction changed. Open items are tracked outside this repository, not in this runbook. Read this
+paragraph as the state of the gate at the time, not as a live claim.)* The display-placement work made panes work under tmux and
 herdr for the first time and added `runtime/status`'s `state_root`/`socket_path` fields to `/crew
 health` (see [ADR-0029](../docs/adr/0029-placement-follows-the-backend-embedded-deleted.md)); the
 compile-time redaction guard closed the redaction class and fixed four live leaks on the way (see
@@ -71,7 +75,7 @@ cargo build                   # a clean build is expected; produces target/debug
 # variable set and it reports "no runtime running" while the daemon is still alive. Every
 # command in the session needs the SAME CREW_STATE_DIR; verify with `pgrep` before trusting
 # a stop's message.
-export CREW_STATE_DIR=/tmp/crew-e2e3-state && mkdir -p "$CREW_STATE_DIR"
+export CREW_STATE_DIR=/tmp/crew-e2e-state && mkdir -p "$CREW_STATE_DIR"
 # A BRAND-NEW PATH. Do not reuse a state dir from an earlier attempt: if it holds events
 # carrying placement "embedded" (a value the display-placement work deleted, see ADR-0029),
 # this binary refuses to replay that journal. The refusal is the documented breaking change working correctly (expect a

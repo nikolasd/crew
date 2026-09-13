@@ -47,7 +47,7 @@ Also merged, supporting but not wave-2-numbered: commit 3a77aac (three documenta
 
 - **`Embedded` display placement deleted (commit 86ba675).** A pre-0.7.0 state directory whose event journal contains a `placement: "embedded"` value will refuse to replay under this binary rather than silently misinterpreting it — this is the intended failure mode, not a bug. **Anyone testing or upgrading against an existing state directory needs a fresh one** (`CREW_STATE_DIR` pointed at a new, empty path); replaying an old journal containing the deleted value produces a legible refusal naming the remedy, not a panic. See [ADR-0029](../docs/adr/0029-placement-follows-the-backend-embedded-deleted.md).
 - **Compile-time redaction guard (commits 79b301c–e4c52f8).** Every `String`-typed field reachable from `RuntimeEvent` must now be either `Redacted` (built via `Redactor::sanitize_fragment`/`Redactor::redact_text`, or `Redacted::assert_runtime_authored` when no caller/vendor text can reach it) or explicitly listed in `NON_REDACTED_STRING_FIELDS` with a stated reason — enforced by a test, not a convention. A future change that adds a new `String` field to `RuntimeEvent` without satisfying one of those two paths fails CI, not review. See [ADR-0006](../docs/adr/0006-type-enforced-redaction-boundary.md).
-- **omp 18.1.13 is the tested host version** for this release (upgraded from 18.0.11 during wave 2; the peer range `>=17.0.7 <19` covers it). The plugin-root `--extension` directory-form requirement (F4) was diagnosed on 18.0.11 and re-confirmed present on 18.1.13.
+- **omp 18.1.13 was the tested host version at the time this checklist was written** (upgraded from 18.0.11 during wave 2; the peer range `>=17.0.7 <19` covers it). The plugin-root `--extension` directory-form requirement (F4) was diagnosed on 18.0.11 and re-confirmed present on 18.1.13. *(This is a point-in-time record — the installed version has since moved past 18.1.13; check the currently installed version rather than treating this line as current.)*
 - **Two `main` history rewrites landed today**, both attribution cleanups, both verified identical-tree:
   - `d2190c4` → **`0c10f62`** (dashboard replay-on-connect): the squash-merge commit's message carried the `Claude-Session:` trailer twice (GitHub concatenated two source commit messages); the maintainer force-pushed-with-lease a rewrite removing both lines. Verified independently: `git show -s --format=%T d2190c4` and `...0c10f62` both print `f1f880d…` (identical tree); `d2190c4`'s message contains `Claude-Session` twice, `0c10f62`'s contains it zero times; `d2190c4` is no longer an ancestor of `origin/main`, `0c10f62` is.
   - Standing check adopted from here forward, run after every merge: `git show -s --format=%B origin/main | grep -c Claude-Session` → must print `0`.
@@ -136,7 +136,11 @@ baked into the binary.
       misbehave — see "Breaking changes" above).
   - [ ] Supervised live E2E re-run completed against this checklist's commit — **attempt 3
         (2026-09-08) did not complete: stopped after P4 by maintainer decision once five P1
-        candidates had accumulated. Attempt 4 required against the post-fix-wave build.**
+        candidates had accumulated.** *(Historical from here: a later attempt ran against the
+        fixed build and itself did not complete; a further attempt was then cancelled outright
+        when the control-plane direction changed. This checkbox and the two lines above it are a
+        point-in-time record of attempt 3 specifically, not a live status; the current state of
+        the live-E2E gate is tracked outside this repository, not on this line.)*
   - [ ] Each wave-2 behavioral claim above (resumption causality, result fold boundary,
         `crew_transcript` array validation, display placement deletion, model-name resolution,
         dashboard replay-on-connect, resume-cause event kind, `PaneDowngraded` event, dashboard

@@ -61,6 +61,9 @@ Reproduce with (`CREW_DISABLE_VENDOR_CLI` must be **unset** — it suppresses ve
   --output /tmp/live-<adapter>.json
 ```
 
+*(Captured against the versions shown below; every one of the four has since moved — this is a
+record of a past headless-era run, not a current version claim for any vendor.)*
+
 | Adapter | Observed version | Scenarios passing |
 |---------|------------------|-------------------|
 | Claude  | `2.1.222`           | 14 / 14 |
@@ -107,16 +110,23 @@ each carries the vendor's or the environment's own explanation.
 
 The CLI version compared against the table below is the `agentInfo.version` field reported by
 the real ACP `initialize` handshake, **not** the output of `copilot --version` (which prints, for
-example, `GitHub Copilot CLI 1.0.78.` — note the trailing period — plus a separate
+example, `GitHub Copilot CLI 1.0.83.` — note the trailing period — plus a separate
 `copilot update` notice line). An installed CLI version is trusted only after it has been
 empirically verified with a real handshake; a version not in the table is refused, never assumed
-"nearby" compatible.
+"nearby" compatible. Copilot is the only one of the four vendors gated by an exact-match list
+rather than a range — claude, codex and omp are each gated by a version range instead (see the
+gate table further below), a design choice this adapter's own module comment explains. **As of
+this writing, the only copilot release measured on this machine (1.0.83) is outside the table
+below and is therefore refused** until a verified handshake adds it — claude, codex and omp's
+installed versions all fall inside their own range gates and are not in this position.
 
 | CLI Version | ACP Protocol Version |
 |--------------|----------------------|
 | 1.0.73       | 1                    |
 | 1.0.75       | 1                    |
 | 1.0.78       | 1                    |
+| 1.0.80       | 1                    |
+| 1.0.81       | 1                    |
 
 Supported ACP protocol version range: 1–1 (`COPILOT_MIN_ACP_PROTOCOL_VERSION` through
 `COPILOT_MAX_ACP_PROTOCOL_VERSION`). A negotiated protocol version outside this range is refused

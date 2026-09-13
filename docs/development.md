@@ -285,6 +285,9 @@ The test suite's Rust integration test files (`crates/runtime/tests/`) cover:
 - All four TUI vendor adapters (Claude, Codex, Copilot, OMP-RPC) — the headless control plane
   these once ran alongside is retired (crew-v2 gap-closure; deserializable but rejected, see
   [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md))
+- The claude protocol adapter (`claude_protocol_reconcile`) — a fifth, non-TUI adapter that drives
+  claude over its own streaming-JSON protocol; experimental, under evaluation, not yet recommended
+  for use
 - Configuration and merging
 - Conformance testing
 - Coordination and MCP integration

@@ -64,9 +64,9 @@ Small, dependency-light, and the vocabulary for everything else.
 | `src/service/query.rs` | Read-only lookup closures (`task_get_op`, `run_state_op`, etc.) run through `DatabaseHandle::run_domain_op` |
 | `src/service/run_driver.rs` | `RunDriver` trait, `RunDriverContext`, `FakeRunDriver` (`queued -> starting -> working`) |
 | `src/adapter/trait.rs` | `Adapter` trait with `start`/`resume`/`send`/`cancel`/`dispose` |
-| `src/adapter/registry.rs` | `AdapterRegistry` — implements `RunDriver` against four TUI worker adapters (the headless control plane these once ran alongside is retired; `mode: "headless"` is deserializable but typed-rejected — crew-v2 gap-closure, `docs/adr/0026-headless-retirement.md`), `AdapterAuthorization` trait, `FixtureAuthorization`/`DenyByDefaultAuthorization` |
+| `src/adapter/registry.rs` | `AdapterRegistry` — implements `RunDriver` against five worker adapters: four pseudo-terminal vendor adapters and one that drives claude over its streaming-JSON protocol (experimental, under evaluation, not yet recommended for use). The earlier headless control plane was retired and the `headless` mode name stays deserializable but typed-rejected; the protocol adapter is a fresh implementation against the vendor's current protocol, not that code returning (crew-v2 gap-closure, `docs/adr/0026-headless-retirement.md`). `AdapterAuthorization` trait, `FixtureAuthorization`/`DenyByDefaultAuthorization` |
 | `src/adapter/event_sink.rs` | `DomainAdapterEventSink` — sanitizes, journals, and broadcasts adapter events |
-| `src/adapter/run_lifecycle.rs` | `RunLifecycleSink` — applies `queued -> starting -> working` and the terminal edge from adapter evidence |
+| `src/adapter/run_lifecycle.rs` | `RunLifecycleSink` — applies `queued -> starting -> working`, and the terminal edge from adapter evidence together with whether the run's turn had settled: a clean exit with no settled turn is `failed`, not success |
 | `src/adapter/error.rs` | `AdapterError` — adapter-specific error types |
 | `src/adapter/capability.rs` | `AdapterCapabilities` — capability declarations for each adapter |
 | `src/adapter/mcp_config.rs` | MCP configuration generation for adapter processes |
@@ -81,6 +81,14 @@ Small, dependency-light, and the vocabulary for everything else.
 | `src/adapter/tui/omp.rs` | `OmpTuiVendor` — drives the real interactive `omp` CLI |
 | `src/adapter/tui/discovery.rs` | Vendor-pane discovery/attach helpers |
 | `src/adapter/tui/tailer.rs` | Session-transcript tailing shared across vendors |
+| `src/adapter/claude_protocol/adapter.rs` | `ClaudeProtocolAdapter` — drives `claude` over streaming JSON on pipes; spawn, turn, settle, teardown |
+| `src/adapter/claude_protocol/launch.rs` | The argv, with each permission-relevant flag passed explicitly |
+| `src/adapter/claude_protocol/posture.rs` | Asserts at session start that the vendor reports the posture crew passed |
+| `src/adapter/claude_protocol/reader.rs` | Stream classification into adapter events; the denial reconciliation at end of turn |
+| `src/adapter/claude_protocol/approval_bridge.rs` | Bridges a vendor permission request into `ApprovalService` — the first adapter that calls into it |
+| `src/adapter/claude_protocol/reconcile.rs` | Compares the run's journal against the vendor's own transcript, read as a file; detects gaps, does not repair them |
+| `src/adapter/claude_protocol/trust.rs` | Reads the vendor's workspace-trust record before spawn; fails closed, never writes it |
+| `src/adapter/claude_protocol/pane.rs` | The crew-rendered pane (a view, and not independent evidence) |
 | `src/adapter/tui/{claude,codex,copilot,omp}_conformance.rs` | Per-vendor fixture/live conformance scenario probes |
 | `src/coordination/broker.rs` | `CoordinationBroker` — record-before-delivery messaging, `sweep_unacknowledged_as_unknown` |
 | `src/coordination/scope_token.rs` | `ScopeTokenStore` (mint/verify), `PidAncestryChecker` |
@@ -117,17 +125,21 @@ subsystem (`paths`, `database`, `redaction`, `redaction_boundary`, `ipc`, `lifec
 `terminal_adapter`, `monitor_cli`, `audit`, `config`, `config_cli`, `config_artifacts`,
 `crew_config`, `conformance`, `attach`, `dashboard`, `escalations`, `lease_cli`, `lease_db`,
 `recovery`, `run_result`, `run_lifecycle`, `vendor_cli_availability`, `kill_switch_authorization`,
-and the several race-condition-named files, e.g. `approval_decide_race`,
-`task_revision_race`). The four worker adapters are TUI-only now (crew-v2 gap-closure;
-`docs/adr/0026-headless-retirement.md`) — their own real-process coverage lives in `tui_adapter.rs`
-(the shared `TuiAdapter<V>` machinery against a scripted mock vendor), `tui_claude_registry.rs`
-(a real, TUI-mode Claude run through the registry), `tui_tailer.rs`, and `claude_tui_fixture.rs`
-(the committed `claude-tui` fixture); `run_lifecycle.rs` and `orchestration_rpc.rs` additionally
-drive a real spawned OS process through `tests/support/spawn_evidence_adapter.rs` — a small,
-protocol-agnostic, test-only `Adapter` (not a shipped adapter kind) built to keep that specific
-"a real process, not a test-fake" property provable once the headless control plane's adapters
-(which those two files used to borrow for exactly this) were deleted. The lifecycle tests run the
-real compiled binary (`env!("CARGO_BIN_EXE_crewd")`) as real processes.
+`claude_protocol_reconcile`, and the several race-condition-named files, e.g.
+`approval_decide_race`, `task_revision_race`). Four of the five worker adapters are TUI-only
+(crew-v2 gap-closure; `docs/adr/0026-headless-retirement.md`) — their own real-process coverage
+lives in `tui_adapter.rs` (the shared `TuiAdapter<V>` machinery against a scripted mock vendor),
+`tui_claude_registry.rs` (a real, TUI-mode Claude run through the registry), `tui_tailer.rs`, and
+`claude_tui_fixture.rs` (the committed `claude-tui` fixture); `run_lifecycle.rs` and
+`orchestration_rpc.rs` additionally drive a real spawned OS process through
+`tests/support/spawn_evidence_adapter.rs` — a small, protocol-agnostic, test-only `Adapter` (not a
+shipped adapter kind) built to keep that specific "a real process, not a test-fake" property
+provable once the headless control plane's adapters (which those two files used to borrow for
+exactly this) were deleted. The fifth adapter, the claude protocol path (experimental, under
+evaluation, not yet recommended for use), has its own suite in `claude_protocol_reconcile.rs`,
+which links this crate as an ordinary dependency rather than compiling with `cfg(test)` — proving
+a property of the shipping binary itself, not only of its own test build. The lifecycle tests run
+the real compiled binary (`env!("CARGO_BIN_EXE_crewd")`) as real processes.
 
 ### `crates/xtask` — build tooling
 

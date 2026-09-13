@@ -104,7 +104,7 @@ will complain about the type mismatch.
 
 ### Modules
 
-`crates/protocol/src/lib.rs` is the crate root. It declares 15 child modules (`approval`, `artifact`, `coordination`, `display`, `event`, `ids`, `message`, `method`, `rpc`, `run`, `schema`, `task`, `version`, `worker`, `workspace`) and re-exports their public items so users write `crew_protocol::Timestamp` instead of `crew_protocol::event::Timestamp`.
+`crates/protocol/src/lib.rs` is the crate root. It declares 18 child modules (`approval`, `artifact`, `coordination`, `display`, `event`, `ids`, `message`, `method`, `plan`, `retention`, `rpc`, `run`, `schema`, `task`, `version`, `violation`, `worker`, `workspace`) and re-exports their public items so users write `crew_protocol::Timestamp` instead of `crew_protocol::event::Timestamp`.
 
 This is the same pattern as a TypeScript barrel `index.ts`, except visibility is enforced: without `pub`, an item is private to its module — a fact Day 5 turns into a security mechanism.
 
@@ -310,8 +310,11 @@ The `#[error(...)]` string is the human-readable message. `#[from]` variants (se
 let `?` auto-convert a lower layer's error into this layer's — that's how a `DbError` deep inside
 `serve` surfaces as a `ServeError` at the CLI.
 
-**Do now:** read `cli.rs` end to end (it's ~330 lines across six subcommands), then trace one
-`?` in `lifecycle::serve` down to the error enum variant it produces.
+**Do now:** read `cli.rs` end to end — check its current size yourself (`wc -l
+crates/runtime/src/cli.rs`) rather than trust a number here, since it has already grown well past
+what an earlier version of this paragraph claimed, the same reason the `Command` list two
+paragraphs up refuses to give a fixed count — then trace one `?` in `lifecycle::serve` down to the
+error enum variant it produces.
 
 ---
 
@@ -714,9 +717,13 @@ everyone that boundary.
   only the public API — 50+ test files covering `paths`, `database`, `redaction_boundary`,
   `ipc`, `lifecycle`, `domain_repository`, `orchestration_rpc`, `coordination`, `approval`, the
   TUI vendor adapters (Claude/Codex/Copilot/OMP-RPC, e.g. `tui_adapter.rs`,
-  `tui_claude_registry.rs`), every display (terminal, tmux, herdr), audit, conformance,
-  supervisor, workspace (apply, lease, materialize), config, and monitor. The lifecycle suite
-  runs the actual compiled binary via `env!("CARGO_BIN_EXE_crewd")` as real child processes.
+  `tui_claude_registry.rs`), the claude protocol adapter (`claude_protocol_reconcile.rs` — driven
+  as an ordinary dependency of this crate rather than compiled with `cfg(test)`, so it proves
+  something about the shipping binary rather than only about its own test build; experimental,
+  under evaluation, not yet recommended for use), every display (terminal, tmux, herdr), audit,
+  conformance, supervisor, workspace (apply, lease, materialize), config, and monitor. The
+  lifecycle suite runs the actual compiled binary via `env!("CARGO_BIN_EXE_crewd")` as real child
+  processes.
 - Protocol integration tests live in `crates/protocol/tests/`: `wire_contract.rs`,
   `workspace_contract.rs`, `domain_contract.rs`, `coordination_contract.rs`, `fixtures.rs`.
 - `#[test]` marks a test; `#[tokio::test]` gives it an async runtime; `assert!`, `assert_eq!`

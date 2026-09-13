@@ -184,16 +184,18 @@ installing anything.
 **Adapter conformance failures:**
 - `crewd adapters --json` reports each adapter's effective capabilities from a fixture run — start
   there before assuming a live-vendor issue.
-- `CREW_DISABLE_VENDOR_CLI=1 cargo test --test conformance` runs the same checks offline; drop the
-  env var (unset, not `=0`) to exercise the real vendor CLI via `crewd conformance --live` (see
+- `CREW_DISABLE_VENDOR_CLI=1 cargo test --test conformance` runs the same checks offline; a live run
+  needs the variable set to `0` explicitly, never merely unset — `.cargo/config.toml`'s own `[env]`
+  block sets it to `1` for every process cargo launches, so under `cargo test` the variable is never
+  absent, and unsetting it in your shell only lets that block re-supply `1`:
+  `CREW_DISABLE_VENDOR_CLI=0 CREW_LIVE_CWD=<trusted-dir> cargo test --test conformance` (see
   [`cli-reference.md`](cli-reference.md#crewd-conformance)) — there is no per-adapter live-gate
   variable, one switch gates all four.
 - Confirm the vendor CLI itself is installed and authenticated — a conformance failure here is
   usually the vendor CLI, not Crew.
 
-For open implementation gaps (as opposed to operational issues): the open-items backlog lives in
-the maintainer's local, gitignored `REVIEW.md` (not present in a fresh clone), verified against
-the current codebase. Engineering lessons from closed findings — every fix, with the test that proved it — live
+Open implementation gaps (as opposed to operational issues) are tracked outside this repository.
+Engineering lessons from closed findings — every fix, with the test that proved it — live
 in [`engineering-lessons.md`](engineering-lessons.md).
 
 ## Dashboard
