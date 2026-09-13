@@ -782,11 +782,18 @@ sequenceDiagram
    | `ProcessStarted` | `queued -> starting` |
    | `TurnEnded` | up to `waitingUser` — non-terminal ([ADR-0027](adr/0027-turn-end-settles-a-run.md)) |
    | any other payload except `ProcessExited`/`TurnEnded` | up to `working` |
-   | `ProcessExited { exit_code: Some(0), signal: None }` | `-> succeeded` |
-   | `ProcessExited` with a non-zero code or a signal | `-> failed` |
-   | `ProcessExited` with no code and no signal | `-> lost` |
+   | `ProcessExited` with a signal | `-> failed` — a code is not trustworthy once a signal is |
+   | `ProcessExited { exit_code: Some(0) }` **after a settled turn** | the unrendered verdict — the run did real work and nothing rendered a verdict on it. Never a guessed `succeeded` |
+   | `ProcessExited { exit_code: Some(0) }` **with no settled turn** | `-> failed` — the run exited cleanly having done no work |
+   | `ProcessExited` with a non-zero code | `-> failed` |
+   | `ProcessExited` with no code and no signal | `-> lost` — the only case `lost` covers |
 
-   A TUI vendor never exits, so `ProcessExited` alone would leave such a run non-terminal forever.
+   A terminal vendor never exits, so a process exit alone would leave such a run non-terminal
+   forever, and the vendor's own end-of-turn boundary is what settles it. A worker driven over a
+   protocol has the opposite shape: it finishes its turn and exits, so its exit and its turn
+   boundary coincide. The run lifecycle described here was built around the first shape, and the
+   terminal adapters are what it was measured against. Whether a worker whose normal life is a
+   single turn belongs in this lifecycle or in one of its own is under evaluation by a pending ADR.
    `TurnEnded` is the vendor's own end-of-turn boundary, journaled as durable evidence and driving a
    **non-terminal** edge: the boundary says the *turn* ended, never that the *task* succeeded, so
    only the leader closes a run (`run/finish`) — or, if the leader's own connection is gone for the
