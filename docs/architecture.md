@@ -101,7 +101,7 @@ graph TB
         subgraph "Rust/crewd"
             IS[IPC Server<br/>JSON-RPC 2.0 over NDJSON]
             DA[Database Actor<br/>SQLite journal]
-            AR[Adapter Registry<br/>4 worker adapters]
+            AR[Adapter Registry<br/>5 worker adapters]
             CB[Coordination Broker<br/>Scope tokens, rate limiting]
             AS[Approval Service]
             SV[Supervisor<br/>Process management]
@@ -110,8 +110,9 @@ graph TB
         end
     end
 
-    subgraph "Worker Process Containers (TUI)"
+    subgraph "Worker Process Containers"
         CA[Claude Adapter<br/>claude CLI, real PTY]
+        CAP[Claude Protocol Adapter<br/>claude CLI, streaming JSON over pipes<br/>experimental]
         COD[Codex Adapter<br/>codex CLI, real PTY]
         CO[Copilot Adapter<br/>copilot CLI, real PTY]
         OR[OMP-RPC Adapter<br/>omp CLI, real PTY]
@@ -128,11 +129,13 @@ graph TB
     AS -->|approval/*| IS
 
     AR --> CA
+    AR --> CAP
     AR --> COD
     AR --> CO
     AR --> OR
 
     CA & COD & CO & OR -->|supervised process| SV
+    CAP -->|supervised process| SV
     SV -->|workspace ops| WO
     SV -->|display| DB
 ```
@@ -143,7 +146,7 @@ graph TB
 |---|---|---|
 | OMP Extension | TypeScript/Node.js (Bun) | JSON-RPC 2.0 over NDJSON |
 | Crew Runtime | Rust (tokio, rusqlite) | JSON-RPC 2.0 over NDJSON |
-| Worker Processes | Claude/Codex/Copilot/OMP CLI | NDJSON over stdio |
+| Worker Processes | Claude/Codex/Copilot/OMP CLI | A pseudo-terminal, or streaming JSON over stdio where the vendor offers a protocol |
 
 **Communication protocol:** JSON-RPC 2.0 over bounded NDJSON on per-repository Unix domain sockets.
 
@@ -326,15 +329,35 @@ graph TB
 
 #### Adapter Layer
 - **Adapter Trait** ([`crates/runtime/src/adapter/trait.rs`](crates/runtime/src/adapter/trait.rs)): `Adapter` trait with `start`/`resume`/`send`/`cancel`/`dispose`
-- **Adapter Registry** ([`crates/runtime/src/adapter/registry.rs`](crates/runtime/src/adapter/registry.rs)): Implements `RunDriver` against four TUI worker adapters. The headless control plane these
-  once ran alongside (a direct, non-interactive protocol per vendor) is retired — `mode: "headless"`
-  stays deserializable for old configs/journals but is typed-rejected at validation and dispatch
-  time (crew-v2 gap-closure; see [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md)).
+- **Adapter Registry** ([`crates/runtime/src/adapter/registry.rs`](crates/runtime/src/adapter/registry.rs)): Implements `RunDriver` against five worker adapters: four that drive a vendor's real
+  interactive CLI on a pseudo-terminal, and one that drives claude over the vendor's own streaming-JSON
+  protocol. The protocol adapter is **experimental, under evaluation, and not yet recommended for use**;
+  it is selected explicitly per worker and is never a default. The earlier headless control plane — a
+  second, parallel implementation per vendor — was retired, and the `headless` mode name stays
+  deserializable for old configs and journals while being typed-rejected at validation and dispatch
+  time; it is never silently remapped (crew-v2 gap-closure; see [`docs/adr/0026-headless-retirement.md`](adr/0026-headless-retirement.md)).
+  The protocol adapter is not that code returning: it is a new implementation written against the
+  vendor's current protocol. Which control plane should be primary is under evaluation by a pending ADR.
 - **Run Lifecycle Sink** ([`crates/runtime/src/adapter/run_lifecycle.rs`](crates/runtime/src/adapter/run_lifecycle.rs)): Applies `RunState` edges from journaled adapter evidence
 - **Claude Adapter** ([`crates/runtime/src/adapter/tui/claude.rs`](crates/runtime/src/adapter/tui/claude.rs)): drives the real interactive `claude` CLI on a PTY
 - **Codex Adapter** ([`crates/runtime/src/adapter/tui/codex.rs`](crates/runtime/src/adapter/tui/codex.rs)): drives the real interactive `codex` CLI on a PTY
 - **Copilot Adapter** ([`crates/runtime/src/adapter/tui/copilot.rs`](crates/runtime/src/adapter/tui/copilot.rs)): drives the real interactive `copilot` CLI on a PTY
 - **OMP-RPC Adapter** ([`crates/runtime/src/adapter/tui/omp.rs`](crates/runtime/src/adapter/tui/omp.rs)): drives the real interactive `omp` CLI on a PTY
+- **Claude Protocol Adapter** ([`crates/runtime/src/adapter/claude_protocol/`](crates/runtime/src/adapter/claude_protocol/)): drives the real `claude`
+  CLI over its streaming-JSON protocol rather than a pseudo-terminal. **Experimental, under evaluation,
+  not yet recommended for use.** Its parts are worth naming separately, because three have no equivalent
+  on the terminal path:
+  - **Launch and posture** (`launch.rs`, `posture.rs`): the argv, with each permission-relevant flag
+    passed explicitly, and an assertion at session start that the vendor reports the posture crew passed.
+  - **Reader** (`reader.rs`): normalizes the vendor's stream into adapter events.
+  - **Approval bridge** (`approval_bridge.rs`): routes a vendor permission request into the approval
+    service — the first adapter to call into it rather than declining the capability.
+  - **Reconcile** (`reconcile.rs`): compares what the run journaled against the vendor's own durable
+    transcript, read as a file. Detection only: it does not repair a gap and cannot change a run's outcome.
+  - **Trust** (`trust.rs`): reads the vendor's own workspace-trust record before spawning and refuses
+    rather than starting an untrusted workspace. Crew reads that file and never writes it.
+  - **Pane** (`pane.rs`): a crew-rendered view. Unlike a terminal pane it carries crew's rendering of what
+    crew believes happened, not the vendor's own bytes.
 
 #### Coordination and Approval
 - **Coordination Broker** ([`crates/runtime/src/coordination/broker.rs`](crates/runtime/src/coordination/broker.rs)): Worker-safe messaging with record-before-delivery
@@ -546,7 +569,7 @@ pub struct FixtureAuthorization {
 /// `docs/future-features.md`'s org-governance entry.
 pub struct PolicyEvaluator { ... }
 
-/// Implements `RunDriver` against the four real worker adapters.
+/// Implements `RunDriver` against the five real worker adapters.
 pub struct AdapterRegistry {
     authorization: Arc<dyn AdapterAuthorization>,
     repo_root: PathBuf,
@@ -880,14 +903,14 @@ ownership gates *mutation*. Rationale and the one exception (`workspace/get`) in
 
 Run with a test-runner timeout if you suspect a new mutation has regressed the broadcast invariant — the bug manifests as an infinite hang, not a clean failure.
 
-## Crew v2 TUI control plane
+## Control planes
 
 ```mermaid
 flowchart LR
   OMP[OMP leader / extension] -->|plan, spawn, send, timeoutAck| RPC[crewd JSON-RPC]
   RPC --> DB[(SQLite journal)]
   RPC --> REG[Adapter registry]
-  REG --> W[Vendor worker / PTY]
+  REG --> W[Vendor worker / PTY or protocol]
   W --> RED[Redaction + lifecycle sink]
   RED --> DB
   DB --> EVT[Committed EventEnvelope broadcast]
@@ -897,7 +920,7 @@ flowchart LR
   ATTACH --> PANE[tmux / herdr / terminal pane]
 ```
 
-The daemon persists intent before execution and redacts content before journal durability. OMP retains the task graph and all leader decisions: plan approval, timeout disposition, budget escalation, and merge/finish decisions. A pane is a view over a live attach socket, not a second worker-control channel.
+The daemon persists intent before execution and redacts content before journal durability. OMP retains the task graph and all leader decisions: plan approval, timeout disposition, budget escalation, and merge or finish decisions. Two control planes exist. On the terminal plane a pane is a view over a live attach socket, never a second worker-control channel, and it carries the vendor's own bytes — so a human watching it can catch crew being wrong. On the protocol plane the pane carries crew's rendering of what crew believes happened: a view in the same sense, and **not** independent evidence, because a misreading would render and journal identically. The audit path there is the vendor's own durable transcript. The protocol plane is experimental, under evaluation, and not yet recommended for use; which plane should be primary is under evaluation by a pending ADR.
 
 
 ## Redaction: Two-Level Design

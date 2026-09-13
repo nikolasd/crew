@@ -321,7 +321,7 @@ pub struct ProtocolSupport {
     pub callback: Arc<super::claude_protocol::approval_bridge::ProtocolApprovalCallback>,
 }
 
-/// Implements [`RunDriver`] against the four real worker adapters.
+/// Implements [`RunDriver`] against the five real worker adapters.
 ///
 /// Always constructed behind an `Arc` in practice (exactly like every
 /// other `RunDriver`, per `OrchestrationService`'s own
