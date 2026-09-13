@@ -191,9 +191,8 @@ installing anything.
 - Confirm the vendor CLI itself is installed and authenticated — a conformance failure here is
   usually the vendor CLI, not Crew.
 
-For open implementation gaps (as opposed to operational issues): the open-items backlog lives in
-the maintainer's local, gitignored `REVIEW.md` (not present in a fresh clone), verified against
-the current codebase. Engineering lessons from closed findings — every fix, with the test that proved it — live
+Open implementation gaps (as opposed to operational issues) are tracked outside this repository.
+Engineering lessons from closed findings — every fix, with the test that proved it — live
 in [`engineering-lessons.md`](engineering-lessons.md).
 
 ## Dashboard

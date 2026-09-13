@@ -393,7 +393,7 @@ graph TB
 
 #### Configuration and Policy
 - **Config** ([`crates/runtime/src/config/crew.rs`](crates/runtime/src/config/crew.rs)): Loads the layered crew config with strict unknown-key rejection and produces its SHA-256 `fingerprint`; [`config/mod.rs`](crates/runtime/src/config/mod.rs)'s `RuntimePolicy::from_crew_config` adapts it into the immutable policy the runtime reads. Hashed JSON bytes are explicitly key-sorted because this workspace enables `preserve_order`, and fingerprinting must not depend on input key order. (`config/merge.rs` is the retired pre-crew-v2 layering module — orphaned, not declared as a module and not compiled; see [future-features.md](future-features.md).)
-- **Policy Evaluator** ([`crates/runtime/src/policy/evaluate.rs`](crates/runtime/src/policy/evaluate.rs)): `PolicyEvaluator` implements `AdapterAuthorization` against a `RuntimePolicy` (model allowlist, concurrency ceiling) — wired into production via `lifecycle::serve()`, same as the real `ScopeTokenVerifier` `workerMcp` credential store (see the maintainer's local, gitignored `REVIEW.md` for remaining gaps)
+- **Policy Evaluator** ([`crates/runtime/src/policy/evaluate.rs`](crates/runtime/src/policy/evaluate.rs)): `PolicyEvaluator` implements `AdapterAuthorization` against a `RuntimePolicy` (model allowlist, concurrency ceiling) — wired into production via `lifecycle::serve()`, same as the real `ScopeTokenVerifier` `workerMcp` credential store
 
 ## Level 4: Code (C4-4)
 
@@ -812,9 +812,9 @@ sequenceDiagram
 ## Known Deferred Items
 
 Consciously deferred features, each with a decision trigger, live in
-[`future-features.md`](future-features.md). Open defects and watch items live in the
-maintainer's local, gitignored `REVIEW.md` (not present in a fresh clone); their resolution
-history lives in [`docs/adr/`](adr/) and [engineering-lessons.md](engineering-lessons.md).
+[`future-features.md`](future-features.md). Resolved defects and the invariants that closed them
+live in [`docs/adr/`](adr/) and [engineering-lessons.md](engineering-lessons.md). Open defects are
+tracked outside this repository.
 
 ## Appendix A: Quick Reference
 
