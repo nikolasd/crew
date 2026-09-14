@@ -67,9 +67,9 @@ rather than behind a number nobody can resolve.
 | [0022](0022-github-release-download-cache-replaces-npm-leaf-packages.md) | GitHub Release download-cache replaces npm optional leaf packages | Accepted |
 | [0023](0023-run-state-edges-from-adapter-evidence.md) | Run-state edges derive from adapter evidence; an unobservable exit is `lost` | Accepted, amended by [0027](0027-turn-end-settles-a-run.md) |
 | [0024](0024-project-scoped-reads-are-open-ownership-gates-writes.md) | Project-scoped reads are open; ownership gates writes | Accepted |
-| [0025](0025-crew-v2-tui-control-plane.md) | Crew v2 TUI control plane | Accepted; under evaluation by a pending ADR |
-| [0026](0026-headless-retirement.md) | Headless control plane retirement | Accepted; under evaluation by a pending ADR |
-| [0027](0027-turn-end-settles-a-run.md) | A run is a conversation the leader closes; a vendor's turn-end is durable evidence, not a terminal state | Accepted, Decision point 3 partially superseded by [0036](0036-leader-disconnect-grace-window.md) |
+| [0025](0025-crew-v2-tui-control-plane.md) | Crew v2 TUI control plane | Accepted, amended by [0037](0037-protocol-first-control-plane.md) |
+| [0026](0026-headless-retirement.md) | Headless control plane retirement | Accepted, superseded by [0037](0037-protocol-first-control-plane.md) |
+| [0027](0027-turn-end-settles-a-run.md) | A run is a conversation the leader closes; a vendor's turn-end is durable evidence, not a terminal state | Accepted, Decision point 3 partially superseded by [0036](0036-leader-disconnect-grace-window.md); turn-boundary meaning amended by [0037](0037-protocol-first-control-plane.md) |
 | [0028](0028-submit-prompt-is-journaled-redacted-run-intent.md) | The submit prompt is journaled, redacted, as durable run intent | Accepted |
 | [0029](0029-placement-follows-the-backend-embedded-deleted.md) | Display placement is the backend's natural form, and `Embedded` is deleted rather than deprecated | Accepted |
 | [0030](0030-paste-delivery-bounded-on-progress.md) | Paste delivery is bounded on progress, not on elapsed time | Accepted |
@@ -78,12 +78,18 @@ rather than behind a number nobody can resolve.
 | [0034](0034-dashboard-bearer-token-over-loopback.md) | A daemon-hosted web dashboard, authenticated by a per-run bearer token over loopback | Accepted |
 | [0035](0035-protocol-doc-comment-sigil-split.md) | Protocol doc comments split by sigil: `///` ships, `//` stays internal | Accepted |
 | [0036](0036-leader-disconnect-grace-window.md) | A parked run is settled on its leader's connection actually being gone, never on silence alone | Accepted |
+| [0037](0037-protocol-first-control-plane.md) | Drive workers over the vendors' own protocols; the terminal becomes a view | Accepted; supersedes [0026](0026-headless-retirement.md), amends [0025](0025-crew-v2-tui-control-plane.md) and [0027](0027-turn-end-settles-a-run.md) |
 
-Two rows above are marked as under evaluation. Neither decision has been reversed and neither ADR
-has been edited; a control plane that drives a vendor over its own protocol now exists alongside
-the terminal one — experimental, and not yet recommended for use — and the decision about which
-should be primary is being written. If it reverses either, it will say so in its own text, as the
-rule above requires.
+Row 0026 is superseded and rows 0025 and 0027 are amended by 0037, each in 0037's own text rather
+than by editing theirs; 0026 carries a superseded-by header, which is the one edit the write-once
+rule allows.
+
+**Numbering decisions inside an ADR:** spell them `Decision 1` and `decision 7` in full, never the
+short form — a bare capital D immediately followed by a digit. The marker guard matches that short
+form, because it is how a design document crew no longer has labelled its own decision points, and
+a reader arriving from elsewhere cannot tell which document such a label belongs to. The long form
+is followable, collides with nothing, and passes the guard. (This note deliberately describes the
+short form rather than writing one, for the same reason.)
 
 ## When to add one
 
