@@ -245,15 +245,47 @@ export class MilestoneTracker {
         return false;
     }
   }
+
+  /**
+   * Whether `runId`'s current turn settled (ADR-0027's `waitingUser` +
+   * `turnSettled`) before whatever terminal event is being formatted now --
+   * the same bookkeeping {@link isMilestone}'s `runFlagsEvent` arm
+   * maintains, exposed read-only so {@link formatDigest} can tell a
+   * cancellation that arrived after a real, complete turn apart from one
+   * that never got that far (a rejected/aborted start, a worker that died
+   * before ever settling). Reflects the run's CURRENT settle episode only:
+   * `run/finish` (or a follow-up resuming the run) clears it, same as
+   * `isMilestone`'s own one-shot bookkeeping.
+   *
+   * A second, separate limit, worth naming rather than leaving implicit:
+   * this answers "did THIS bridge instance observe the run's turn settle",
+   * not "did the run's turn settle" -- the two usually coincide (bookkeeping
+   * runs on every envelope regardless of replay, so an ordinary reconnect
+   * still sees it), but a connection established strictly between a run's
+   * settle and its terminal event, with the settle already behind the
+   * replay cursor, leaves this `false` for a run that did complete. Not a
+   * regression this method introduces -- that run got the same
+   * (unsettled-looking) digest before this method existed too -- but a
+   * caller reading this as "the turn never settled" rather than "this
+   * bridge never saw it settle" will draw the wrong conclusion.
+   */
+  hasSettledTurn(runId: string): boolean {
+    return this.#sawSettled.has(runId);
+  }
 }
 
 /**
  * Builds the compact prose digest for a milestone envelope. `lookup` names
- * the run's adapter / task from the monitor's rows. Returns undefined when
- * the envelope is not a milestone (callers should only call this after
- * `isMilestone`).
+ * the run's adapter / task from the monitor's rows. `tracker` is the same
+ * {@link MilestoneTracker} instance `isMilestone` was already called
+ * against for this envelope -- its {@link MilestoneTracker.hasSettledTurn}
+ * is what lets the `cancelled` case below tell a run that finished a real
+ * turn (ADR-0027's `unrendered_verdict()`: real work done, nothing rendered
+ * a verdict on it) apart from one cancelled before ever getting that far.
+ * Returns undefined when the envelope is not a milestone (callers should
+ * only call this after `isMilestone`).
  */
-export function formatDigest(e: EventEnvelope, lookup: RunLookup): string | undefined {
+export function formatDigest(e: EventEnvelope, lookup: RunLookup, tracker: MilestoneTracker): string | undefined {
   const event: RuntimeEvent = e.event;
   const runId = lookupKey(e);
   const row = runId !== undefined ? lookup[runId] : undefined;
@@ -270,6 +302,19 @@ export function formatDigest(e: EventEnvelope, lookup: RunLookup): string | unde
         return `${capitalize(who)} succeeded. ${READ_THE_REPORT}`;
       }
       if (state === "cancelled") {
+        // `cancelled` is ADR-0027's `RunState::unrendered_verdict()`: it
+        // covers both "cancelled before doing anything" and "did real
+        // work, settled a turn, but nothing ever called run/finish to
+        // render a verdict on it" -- the SAME state, two very different
+        // facts to hand the leader. `tracker.hasSettledTurn` (the same
+        // bookkeeping `isMilestone`'s own `runFlagsEvent` arm keeps) is
+        // what tells them apart; the state itself never changes (the
+        // maintainer's own 2026-09-09 ruling, shared with the
+        // leader-disconnect case -- ADR-0027 reserves `succeeded` for an
+        // explicit `run/finish`).
+        if (runId !== undefined && tracker.hasSettledTurn(runId)) {
+          return `${capitalize(who)} finished its turn and ended without a verdict; the result is complete. ${READ_THE_REPORT}`;
+        }
         return `${capitalize(who)} was cancelled. ${READ_ANY_PARTIAL_OUTPUT}`;
       }
       if (state === "lost") {
@@ -392,7 +437,7 @@ export function attachMilestoneBridge(pi: ExtensionAPI, monitor: MonitorControll
     }
     try {
       const rows = monitor.getState().rows;
-      const digest = formatDigest(e, rows);
+      const digest = formatDigest(e, rows, tracker);
       if (digest === undefined) {
         return;
       }
