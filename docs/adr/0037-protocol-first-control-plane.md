@@ -63,7 +63,7 @@ measured. **Nothing further is coming from launches.** The state below is what t
 | Row | Claim | State (last moved) |
 |---|---|---|
 | 1 | the model ask fires; the chosen model reaches the launch | **Passes** (2026-09-13) — argv read from the live process carried `--model claude-sonnet-5`, *contradicting* the operator's own `opus` default, and `profile.model` is the only source on this path |
-| 2 | the result returns to omp under crew's own label | **Send and content proven; render pending** (2026-09-13) — leader-received is not human-saw |
+| 2 | the result returns to omp under crew's own label | **Send and content proven; render never confirmed** (2026-09-13) — leader-received is not human-saw, and the run closed before anyone saw it rendered |
 | 3 | reconciliation detects a dropped event | **Clean leg failed; detection leg unrunnable live** (2026-09-13) — the drop-injection seam is absent from a release build by construction, so detection rests on a unit test and was never exercised against a real turn. The clean leg's failure was a wrong baseline, not a wrong mechanism — see decision 2 |
 | 4 | one approval round trip produces a durable ledger entry | **Passes, forced** (2026-09-13) — proves the mechanism works; row 10A shows it is not exercised in the shipped posture |
 | 5 | the three-way reconciliation's second leg; sentinel detection | **Passes** (2026-09-13); the detector question closed — see decision 8 |
