@@ -21,7 +21,7 @@ To run any task via Claude, Codex, Copilot, or OMP-RPC:
 
 ## Run lifecycle: a run settles, it doesn't just exit
 
-A TUI vendor process never exits between turns — it sits there waiting for the next instruction. So a run's answer becomes readable, and the leader's turn to act begins, the moment the vendor finishes a turn, not only when the whole run reaches a terminal state (`succeeded`/`failed`/`cancelled`/`lost`):
+A TUI worker persists between turns; a protocol worker exits when its turn ends. In both cases a settled turn is when the answer is readable — so a run's answer becomes readable, and the leader's turn to act begins, the moment the vendor finishes a turn, not only when the whole run reaches a terminal state (`succeeded`/`failed`/`cancelled`/`lost`):
 
 1. A finished turn parks the run at `waitingUser` and journals the turn-end. The `/crew` monitor now emits a milestone for this the same way it does for terminal states, worker questions, and timeouts — you do not have to poll for it.
 2. `crew_run { op: "result", runId }` is readable as soon as that happens (a settled `waitingUser`, not only a terminal run) — no need to cancel the run first to read its answer.

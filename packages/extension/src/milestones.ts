@@ -252,22 +252,12 @@ export class MilestoneTracker {
    * the same bookkeeping {@link isMilestone}'s `runFlagsEvent` arm
    * maintains, exposed read-only so {@link formatDigest} can tell a
    * cancellation that arrived after a real, complete turn apart from one
-   * that never got that far (a rejected/aborted start, a worker that died
-   * before ever settling). Reflects the run's CURRENT settle episode only:
-   * `run/finish` (or a follow-up resuming the run) clears it, same as
-   * `isMilestone`'s own one-shot bookkeeping.
-   *
-   * A second, separate limit, worth naming rather than leaving implicit:
-   * this answers "did THIS bridge instance observe the run's turn settle",
-   * not "did the run's turn settle" -- the two usually coincide (bookkeeping
-   * runs on every envelope regardless of replay, so an ordinary reconnect
-   * still sees it), but a connection established strictly between a run's
-   * settle and its terminal event, with the settle already behind the
-   * replay cursor, leaves this `false` for a run that did complete. Not a
-   * regression this method introduces -- that run got the same
-   * (unsettled-looking) digest before this method existed too -- but a
-   * caller reading this as "the turn never settled" rather than "this
-   * bridge never saw it settle" will draw the wrong conclusion.
+   * that never got that far. Reflects the run's CURRENT settle episode
+   * only: `run/finish` (or a follow-up resuming the run) clears it, same
+   * as `isMilestone`'s own one-shot bookkeeping. See the `cancelled` case
+   * in {@link formatDigest} for the two populations this distinguishes and
+   * the one bound on relying on it (a connection opened between a settle
+   * and its terminal event, with the settle behind the replay cursor).
    */
   hasSettledTurn(runId: string): boolean {
     return this.#sawSettled.has(runId);
@@ -302,16 +292,29 @@ export function formatDigest(e: EventEnvelope, lookup: RunLookup, tracker: Miles
         return `${capitalize(who)} succeeded. ${READ_THE_REPORT}`;
       }
       if (state === "cancelled") {
-        // `cancelled` is ADR-0027's `RunState::unrendered_verdict()`: it
-        // covers both "cancelled before doing anything" and "did real
-        // work, settled a turn, but nothing ever called run/finish to
-        // render a verdict on it" -- the SAME state, two very different
-        // facts to hand the leader. `tracker.hasSettledTurn` (the same
-        // bookkeeping `isMilestone`'s own `runFlagsEvent` arm keeps) is
-        // what tells them apart; the state itself never changes (the
-        // maintainer's own 2026-09-09 ruling, shared with the
-        // leader-disconnect case -- ADR-0027 reserves `succeeded` for an
-        // explicit `run/finish`).
+        // `cancelled` is ADR-0027's `RunState::unrendered_verdict()`, and
+        // this branch deliberately covers TWO populations that land in it
+        // for different reasons, with the SAME next action for both: (1) a
+        // leader that never called run/finish to render a verdict on a
+        // real, completed turn, and (2) the daemon's own recovery sweep
+        // ending a `waitingUser`/`waitingPeer`/`paused` run at restart --
+        // if that run's turn had genuinely settled before the restart, the
+        // sentence below is still true and the leader's next move is
+        // identical (read the result). The state itself never changes for
+        // either population (the maintainer's own 2026-09-09 ruling,
+        // shared with the leader-disconnect case -- ADR-0027 reserves
+        // `succeeded` for an explicit `run/finish`); only this digest text
+        // does. `tracker.hasSettledTurn` (the same bookkeeping
+        // `isMilestone`'s own `runFlagsEvent` arm keeps) is what tells the
+        // two apart from a run that never settled at all.
+        //
+        // Bound worth stating plainly: `hasSettledTurn` only knows what
+        // THIS bridge instance observed. A connection established between
+        // a run's settle and its terminal event, with the settle already
+        // behind the replay cursor, leaves it `false` for a run that did
+        // complete -- not a regression (that run got the same
+        // unsettled-looking wording before this branch existed), but the
+        // fallback below, not a claim that the turn never settled.
         if (runId !== undefined && tracker.hasSettledTurn(runId)) {
           return `${capitalize(who)} finished its turn and ended without a verdict; the result is complete. ${READ_THE_REPORT}`;
         }
