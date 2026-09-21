@@ -179,6 +179,7 @@ test("paneDowngraded digest names the requested/actual backends and the reason",
       event: { type: "paneDowngraded", payload: { runId: "run-1", requestedBackend: "tmux", requestedPlacement: "splitDown", actualBackend: "hidden", attempted: ["tmux"], reason: "tmux exploded" } },
     }),
     ROWS,
+    tracker(),
   );
   expect(digest).toBeDefined();
   expect(digest).toContain("tmux");
@@ -205,7 +206,7 @@ test("failed digest names the reason but never claims a failure count on its own
   const rows: RunLookup = {
     "run-1": { ...ROWS["run-1"], latestActivity: "process exited 1" } as MonitorRow,
   };
-  const digest = formatDigest(run("run-1", "failed"), rows);
+  const digest = formatDigest(run("run-1", "failed"), rows, tracker());
   expect(digest).toBeDefined();
   expect(digest).toContain("FAILED");
   expect(digest).toContain("process exited 1");
@@ -233,6 +234,7 @@ test("escalation digest for a genuine repeat failure carries the runtime's own q
       },
     }),
     ROWS,
+    tracker(),
   );
   expect(digest).toBeDefined();
   expect(digest).toContain("repeated_failure");
@@ -246,7 +248,7 @@ test("succeeded digest tells the leader how to read the report", () => {
   // settled-turn digest below has always carried this instruction and had a
   // test pinning it; the terminal digests carried neither, which is how the
   // omission survived.
-  const digest = formatDigest(run("run-1", "succeeded"), ROWS);
+  const digest = formatDigest(run("run-1", "succeeded"), ROWS, tracker());
   expect(digest).toBeDefined();
   expect(digest).toContain("succeeded");
   expect(digest).toContain('crew_run { op: "result"');
@@ -256,14 +258,43 @@ test("non-succeeded terminal digests offer partial output without promising it",
   // `run/result` accepts every terminal state and returns whatever visible
   // text the journal accumulated, which for a run that died is usually
   // partial and is sometimes null. The wording must offer it without
-  // claiming it exists.
+  // claiming it exists. `cancelled` here is the run's ONLY settle episode
+  // never happening at all -- see the dedicated `cancelled` tests below for
+  // the branch where it did.
   for (const state of ["failed", "cancelled", "lost"]) {
     const rows: RunLookup = { "run-1": { ...ROWS["run-1"], latestActivity: "process exited 1" } as MonitorRow };
-    const digest = formatDigest(run("run-1", state), rows);
+    const digest = formatDigest(run("run-1", state), rows, tracker());
     expect(digest, `${state} must produce a digest`).toBeDefined();
     expect(digest, `${state} must point at run/result`).toContain('crew_run { op: "result"');
     expect(digest, `${state} must not promise output exists`).toContain("there may be none");
   }
+});
+
+test("cancelled after a settled turn says the result is complete, not 'may be none'", () => {
+  // ADR-0027's `unrendered_verdict()`: this run did real work and settled a
+  // turn, but nothing ever called run/finish to render a verdict -- the
+  // SAME `cancelled` state a never-started run gets, but a very different
+  // fact for the leader. The state itself does not change (the
+  // maintainer's own ruling); only the digest text does.
+  const t = tracker();
+  expect(t.isMilestone(flags("run-1", true))).toBe(true); // the turn settles first
+  const digest = formatDigest(run("run-1", "cancelled"), ROWS, t);
+  expect(digest).toBeDefined();
+  expect(digest).toContain("finished its turn and ended without a verdict");
+  expect(digest).toContain("the result is complete");
+  expect(digest).toContain('crew_run { op: "result"');
+  expect(digest).not.toContain("there may be none");
+  expect(digest).not.toContain("was cancelled");
+});
+
+test("cancelled with no settled turn keeps the existing partial-output wording", () => {
+  const t = tracker();
+  // No settle episode recorded for this run at all.
+  const digest = formatDigest(run("run-1", "cancelled"), ROWS, t);
+  expect(digest).toBeDefined();
+  expect(digest).toContain("was cancelled");
+  expect(digest).toContain("there may be none");
+  expect(digest).not.toContain("finished its turn and ended without a verdict");
 });
 
 test("a settled turn (runFlagsEvent turnSettled:true) is a milestone, once per settle episode", () => {
@@ -287,7 +318,7 @@ test("a runFlagsEvent with turnSettled false is never a milestone on its own", (
 });
 
 test("settled-turn digest points the leader at crew_run result and finish", () => {
-  const digest = formatDigest(flags("run-1", true), ROWS);
+  const digest = formatDigest(flags("run-1", true), ROWS, tracker());
   expect(digest).toBeDefined();
   expect(digest).toContain("settled a turn");
   expect(digest).toContain('crew_run { op: "result"');
@@ -301,6 +332,7 @@ test("question digest contains the question text and triage instruction", () => 
       event: { type: "workerQuestion", payload: { runId: "run-1", taskId: "task-1", workerId: "w1", question: "should I delete the index?" } },
     }),
     ROWS,
+    tracker(),
   );
   expect(digest).toBeDefined();
   expect(digest).toContain("should I delete the index?");
@@ -314,6 +346,7 @@ test("escalation digest with no question renders exactly today's sentence", () =
       event: { type: "escalationRaised", payload: { runId: "run-1", taskId: "task-1", workerId: "w1", reason: "write_violation", question: null } },
     }),
     ROWS,
+    tracker(),
   );
   expect(digest).toBe("Escalation raised on run run-1 (claude adapter) for task task-1: write_violation.");
 });
@@ -334,6 +367,7 @@ test("escalation digest with a question appends it after the reason", () => {
       },
     }),
     ROWS,
+    tracker(),
   );
   expect(digest).toBeDefined();
   expect(digest).toContain("vendorFirstRunGate");

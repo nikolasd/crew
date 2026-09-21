@@ -245,15 +245,37 @@ export class MilestoneTracker {
         return false;
     }
   }
+
+  /**
+   * Whether `runId`'s current turn settled (ADR-0027's `waitingUser` +
+   * `turnSettled`) before whatever terminal event is being formatted now --
+   * the same bookkeeping {@link isMilestone}'s `runFlagsEvent` arm
+   * maintains, exposed read-only so {@link formatDigest} can tell a
+   * cancellation that arrived after a real, complete turn apart from one
+   * that never got that far. Reflects the run's CURRENT settle episode
+   * only: `run/finish` (or a follow-up resuming the run) clears it, same
+   * as `isMilestone`'s own one-shot bookkeeping. See the `cancelled` case
+   * in {@link formatDigest} for the two populations this distinguishes and
+   * the one bound on relying on it (a connection opened between a settle
+   * and its terminal event, with the settle behind the replay cursor).
+   */
+  hasSettledTurn(runId: string): boolean {
+    return this.#sawSettled.has(runId);
+  }
 }
 
 /**
  * Builds the compact prose digest for a milestone envelope. `lookup` names
- * the run's adapter / task from the monitor's rows. Returns undefined when
- * the envelope is not a milestone (callers should only call this after
- * `isMilestone`).
+ * the run's adapter / task from the monitor's rows. `tracker` is the same
+ * {@link MilestoneTracker} instance `isMilestone` was already called
+ * against for this envelope -- its {@link MilestoneTracker.hasSettledTurn}
+ * is what lets the `cancelled` case below tell a run that finished a real
+ * turn (ADR-0027's `unrendered_verdict()`: real work done, nothing rendered
+ * a verdict on it) apart from one cancelled before ever getting that far.
+ * Returns undefined when the envelope is not a milestone (callers should
+ * only call this after `isMilestone`).
  */
-export function formatDigest(e: EventEnvelope, lookup: RunLookup): string | undefined {
+export function formatDigest(e: EventEnvelope, lookup: RunLookup, tracker: MilestoneTracker): string | undefined {
   const event: RuntimeEvent = e.event;
   const runId = lookupKey(e);
   const row = runId !== undefined ? lookup[runId] : undefined;
@@ -270,6 +292,32 @@ export function formatDigest(e: EventEnvelope, lookup: RunLookup): string | unde
         return `${capitalize(who)} succeeded. ${READ_THE_REPORT}`;
       }
       if (state === "cancelled") {
+        // `cancelled` is ADR-0027's `RunState::unrendered_verdict()`, and
+        // this branch deliberately covers TWO populations that land in it
+        // for different reasons, with the SAME next action for both: (1) a
+        // leader that never called run/finish to render a verdict on a
+        // real, completed turn, and (2) the daemon's own recovery sweep
+        // ending a `waitingUser`/`waitingPeer`/`paused` run at restart --
+        // if that run's turn had genuinely settled before the restart, the
+        // sentence below is still true and the leader's next move is
+        // identical (read the result). The state itself never changes for
+        // either population (the maintainer's own 2026-09-09 ruling,
+        // shared with the leader-disconnect case -- ADR-0027 reserves
+        // `succeeded` for an explicit `run/finish`); only this digest text
+        // does. `tracker.hasSettledTurn` (the same bookkeeping
+        // `isMilestone`'s own `runFlagsEvent` arm keeps) is what tells the
+        // two apart from a run that never settled at all.
+        //
+        // Bound worth stating plainly: `hasSettledTurn` only knows what
+        // THIS bridge instance observed. A connection established between
+        // a run's settle and its terminal event, with the settle already
+        // behind the replay cursor, leaves it `false` for a run that did
+        // complete -- not a regression (that run got the same
+        // unsettled-looking wording before this branch existed), but the
+        // fallback below, not a claim that the turn never settled.
+        if (runId !== undefined && tracker.hasSettledTurn(runId)) {
+          return `${capitalize(who)} finished its turn and ended without a verdict; the result is complete. ${READ_THE_REPORT}`;
+        }
         return `${capitalize(who)} was cancelled. ${READ_ANY_PARTIAL_OUTPUT}`;
       }
       if (state === "lost") {
@@ -392,7 +440,7 @@ export function attachMilestoneBridge(pi: ExtensionAPI, monitor: MonitorControll
     }
     try {
       const rows = monitor.getState().rows;
-      const digest = formatDigest(e, rows);
+      const digest = formatDigest(e, rows, tracker);
       if (digest === undefined) {
         return;
       }
