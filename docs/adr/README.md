@@ -79,7 +79,7 @@ rather than behind a number nobody can resolve.
 | [0035](0035-protocol-doc-comment-sigil-split.md) | Protocol doc comments split by sigil: `///` ships, `//` stays internal | Accepted |
 | [0036](0036-leader-disconnect-grace-window.md) | A parked run is settled on its leader's connection actually being gone, never on silence alone | Accepted |
 | [0037](0037-protocol-first-control-plane.md) | Drive workers over the vendors' own protocols; the terminal becomes a view | Accepted; supersedes [0026](0026-headless-retirement.md), amends [0025](0025-crew-v2-tui-control-plane.md) and [0027](0027-turn-end-settles-a-run.md) |
-| [0038](0038-one-turn-worker-lifecycle.md) | A one-turn worker's clean exit, after its turn has settled, is terminal — the run is `unrendered_verdict`; the leader's `run/finish` is the only verdict-renderer | Accepted; amends [0037](0037-protocol-first-control-plane.md) (decision 8's held question) and [0027](0027-turn-end-settles-a-run.md) |
+| [0038](0038-one-turn-worker-lifecycle.md) | A one-turn worker's clean exit, after its turn has settled, is terminal — the run is `unrendered_verdict`; the leader's `run/finish` is the only verdict-renderer | Accepted; amends [0037](0037-protocol-first-control-plane.md) (decision 8's held question), [0027](0027-turn-end-settles-a-run.md) and [0036](0036-leader-disconnect-grace-window.md) |
 
 Row 0026 is superseded and rows 0025 and 0027 are amended by 0037, each in 0037's own text rather
 than by editing theirs; 0026 carries a superseded-by header, which is the one edit the write-once
