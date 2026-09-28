@@ -20,7 +20,6 @@ rusqlite_migration = "2"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1.0.129", features = ["preserve_order"] }
-serde_yaml_ng = "0.10"
 sha2 = "0.10"
 tempfile = "3"
 thiserror = "2"
