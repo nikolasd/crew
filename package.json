@@ -13,8 +13,9 @@
     "format:write": "biome format --write .",
     "typecheck": "tsc --noEmit",
     "test": "CREW_DISABLE_VENDOR_CLI=1 bun test && CREW_DISABLE_VENDOR_CLI=1 cargo test --workspace",
-    "check": "bun run check:markers && bun run generate --check && bun run format:check && bun run typecheck && (CHECK_OUT=$(mktemp -d) && bun run --cwd packages/extension build --outdir \"$CHECK_OUT/dist\" && rm -rf \"$CHECK_OUT\") && CREW_DISABLE_VENDOR_CLI=1 bun test && CREW_DISABLE_VENDOR_CLI=1 cargo test --workspace",
-    "check:markers": "bun scripts/check-markers.ts"
+    "check": "bun run check:markers && bun run check:adr-status && bun run generate --check && bun run format:check && bun run typecheck && (CHECK_OUT=$(mktemp -d) && bun run --cwd packages/extension build --outdir \"$CHECK_OUT/dist\" && rm -rf \"$CHECK_OUT\") && CREW_DISABLE_VENDOR_CLI=1 bun test && CREW_DISABLE_VENDOR_CLI=1 cargo test --workspace",
+    "check:markers": "bun scripts/check-markers.ts",
+    "check:adr-status": "bun scripts/check-adr-status.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7",

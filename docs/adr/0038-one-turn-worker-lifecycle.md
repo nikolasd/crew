@@ -1,6 +1,6 @@
 # A one-turn worker's exit is the run's terminal event; the lifecycle must model exit, not hold
 
-* Status: Proposed
+* Status: Accepted
 * Date: 2026-09-22
 * Supersedes: *(none — this does not reverse a decision; it resolves one that was held)*
 * Amends: [0037](0037-protocol-first-control-plane.md) (decision 8, the deferred question), [0027](0027-turn-end-settles-a-run.md) (the meaning of the turn-boundary event), [0036](0036-leader-disconnect-grace-window.md) (lease release on worker exit)

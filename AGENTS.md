@@ -171,6 +171,18 @@ than restating them, so the two surfaces cannot drift into enforcing different t
 already on the target branch is excluded — the reference GitHub appends to a squash-merge subject is
 generated at merge time, is not a citation anyone wrote, and is out of scope.
 
+### The ADR index and the records must agree on their state
+
+`scripts/check-adr-status.ts` runs immediately after the marker check in `bun run check`. It reads
+the index table in `docs/adr/README.md`, reads each row's record's own `Status:` line, and fails
+where the two lead with different lifecycle statuses. The index is what a reader scans to learn
+which decisions are live; a record that still says `Proposed` beside a row that says `Accepted` is
+invisible in the one direction that matters. Only the leading word is compared — the trailing
+`amended by` / `superseded by` clauses are prose and differ legitimately between the two surfaces.
+It runs from the index outward, so the deliberately unused `0033` is never visited and is not a
+missing record. `scripts/check-adr-status.test.ts` holds its controls, including one that the
+reserved-number gap and the amended rows do not fail.
+
 ---
 
 ## Important Files
