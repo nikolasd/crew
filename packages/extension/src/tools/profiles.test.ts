@@ -15,9 +15,10 @@ import { injectTuiMode, registerProfileTool } from "./profiles";
  * model set, and take about a second each.
  *
  * The anthropic and openai-codex lists are the COMPLETE provider lists from
- * that catalogue (2026-09-07), not a selection: the interesting cases turn
- * on real collisions, and a subset can make an ambiguous name look unique.
- * See the header of models.test.ts, where a subset did exactly that.
+ * that catalogue (2026-09-07), plus the id the vendor has since added to
+ * the `opus` family, not a selection: the interesting cases turn on real
+ * collisions, and a subset can make an ambiguous name look unique. See the
+ * header of models.test.ts, where a subset did exactly that.
  */
 const CATALOGUE: Record<string, readonly string[]> = {
   anthropic: [
@@ -39,6 +40,7 @@ const CATALOGUE: Record<string, readonly string[]> = {
     "claude-opus-4-7",
     "claude-opus-4-8",
     "claude-opus-5",
+    "claude-opus-5-5",
     "claude-sonnet-4-0",
     "claude-sonnet-4-20250514",
     "claude-sonnet-4-5",
@@ -160,7 +162,7 @@ test("crew_profile treats an explicit model matching the configured one as a no-
 
   expect(result.isError).not.toBe(true);
   const register = calls.find((c) => c.method === "profile/register");
-  expect((register!.params as { model: string }).model).toBe("claude-opus-5");
+  expect((register!.params as { model: string }).model).toBe("claude-opus-5-5");
 });
 
 // The original symptom: a hallucinating leader invents a model name.
@@ -362,10 +364,10 @@ test("a stored shorthand and an explicit canonical id are one model, not a confl
   const { client, calls } = fakeClient();
   const { tool } = setupProfileTool(client);
 
-  const result = await tool({ adapter: "claude", model: "claude-opus-5" }, fakeExtCtx(repository));
+  const result = await tool({ adapter: "claude", model: "claude-opus-5-5" }, fakeExtCtx(repository));
 
   expect(result.isError).not.toBe(true);
-  expect((calls.find((c) => c.method === "profile/register")!.params as { model: string }).model).toBe("claude-opus-5");
+  expect((calls.find((c) => c.method === "profile/register")!.params as { model: string }).model).toBe("claude-opus-5-5");
 });
 
 // Ambiguity is a `decideModel` concern, reachable now only through the
@@ -463,7 +465,7 @@ test("a leader-supplied model never bypasses the dialog -- the pick wins even wh
 
   expect(result.isError).not.toBe(true);
   // The suggestion was still preselected -- the dialog just wasn't bound to it.
-  expect(ui.calls[0]?.options[ui.calls[0]!.initialIndex!]).toBe("claude-opus-5");
+  expect(ui.calls[0]?.options[ui.calls[0]!.initialIndex!]).toBe("claude-opus-5-5");
   expect((calls.find((c) => c.method === "profile/register")!.params as { model: string }).model).toBe("claude-sonnet-5");
   expect(JSON.parse(readFileSync(join(repository, ".omp", "crew.json"), "utf8")).adapters.claude.model).toBe("claude-sonnet-5");
 });

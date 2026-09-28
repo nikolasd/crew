@@ -64,7 +64,7 @@ const PROVIDER_FOR_ADAPTER: Partial<Record<Adapter, string>> = {
  * `latest_per_family` out of the installed binary:
  *
  *   defaults:{}, best:"fable",
- *   latest_per_family:{ fable:"claude-fable-5-1", opus:"claude-opus-5",
+ *   latest_per_family:{ fable:"claude-fable-5-1", opus:"claude-opus-5-5",
  *                       sonnet:"claude-sonnet-5", haiku:"claude-haiku-4-5" },
  *   alias_migration:{}
  *
@@ -86,7 +86,7 @@ const PROVIDER_FOR_ADAPTER: Partial<Record<Adapter, string>> = {
 export const VENDOR_ALIASES: Partial<Record<Adapter, Readonly<Record<string, string>>>> = {
   claude: {
     fable: "claude-fable-5-1",
-    opus: "claude-opus-5",
+    opus: "claude-opus-5-5",
     sonnet: "claude-sonnet-5",
     haiku: "claude-haiku-4-5",
   },

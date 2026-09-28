@@ -1,12 +1,13 @@
 // Tests for model-name resolution.
 //
 // The two fixtures below are the COMPLETE provider lists from
-// `omp models ls --json` (2026-09-07: anthropic 24, openai-codex 6), not a
-// selection from them. That matters more than it looks: a first draft of
-// this file used a hand-picked subset, and in the subset `opus` matched one
-// id and so resolved by unique substring match -- making the alias table
-// look optional. Against the real 24 it matches 10, `sonnet` 8, `fable` 2
-// and `haiku` 3, so every one of claude's four aliases is load-bearing. A
+// `omp models ls --json` (2026-09-07: anthropic 24, openai-codex 6), plus
+// the one id the vendor has since added to the `opus` family. They are not
+// a selection. That matters more than it looks: a first draft of this file
+// used a hand-picked subset, and in the subset `opus` matched one id and so
+// resolved by unique substring match -- making the alias table look
+// optional. Against the real 25 it matches 11, `sonnet` 8, `fable` 2 and
+// `haiku` 3, so every one of claude's four aliases is load-bearing. A
 // subset fixture can make an ambiguous input look unique, which is the one
 // thing these tests exist to catch.
 
@@ -15,7 +16,14 @@ import { readFileSync } from "node:fs";
 import { expect, test } from "bun:test";
 import { type Catalogue, VENDOR_ALIASES, currentModels, decideModel, isCataloguedAdapter, readCatalogue, resolutionNote, resolveModelName } from "./models";
 
-/** Every `anthropic` id omp catalogues. */
+/**
+ * Every `anthropic` id omp catalogues as of 2026-09-07, plus
+ * `claude-opus-5-5`. That one is not in the dated snapshot: the vendor's
+ * current binary points the `opus` alias at it, and a fixture missing an
+ * alias table's own target would send a correctly-resolved model down the
+ * unverified path instead of the exact one -- which silently stops it
+ * being persisted to `.omp/crew.json`.
+ */
 const ANTHROPIC: Catalogue = {
   available: true,
   ids: [
@@ -37,6 +45,7 @@ const ANTHROPIC: Catalogue = {
     "claude-opus-4-7",
     "claude-opus-4-8",
     "claude-opus-5",
+    "claude-opus-5-5",
     "claude-sonnet-4-0",
     "claude-sonnet-4-20250514",
     "claude-sonnet-4-5",
@@ -71,13 +80,13 @@ test("a vendor alias wins over an ambiguous substring match", () => {
   // Each of claude's four aliases matches several catalogue ids as a
   // substring, so a substring-first resolver would refuse all four as
   // ambiguous. The vendor's own answer has to win.
-  const ambiguity = { fable: 2, haiku: 3, sonnet: 8, opus: 10 };
+  const ambiguity = { fable: 2, haiku: 3, sonnet: 8, opus: 11 };
   for (const [alias, count] of Object.entries(ambiguity)) {
     expect(ANTHROPIC.available && ANTHROPIC.ids.filter((id) => id.includes(alias)).length).toBe(count);
   }
 
   expect(resolveModelName("claude", "haiku", ANTHROPIC)).toEqual({ kind: "alias", model: "claude-haiku-4-5", from: "haiku" });
-  expect(resolveModelName("claude", "opus", ANTHROPIC)).toEqual({ kind: "alias", model: "claude-opus-5", from: "opus" });
+  expect(resolveModelName("claude", "opus", ANTHROPIC)).toEqual({ kind: "alias", model: "claude-opus-5-5", from: "opus" });
   expect(resolveModelName("claude", "sonnet", ANTHROPIC)).toEqual({ kind: "alias", model: "claude-sonnet-5", from: "sonnet" });
   expect(resolveModelName("claude", "fable", ANTHROPIC)).toEqual({ kind: "alias", model: "claude-fable-5-1", from: "fable" });
 });
@@ -132,7 +141,7 @@ test("a vendor alias still resolves when the catalogue is unavailable", () => {
   // The alias table is local, so a broken catalogue must not cost the user
   // shorthands that never needed it.
   const r = resolveModelName("claude", "opus", { available: false, why: "omp not on PATH" });
-  expect(r).toEqual({ kind: "alias", model: "claude-opus-5", from: "opus" });
+  expect(r).toEqual({ kind: "alias", model: "claude-opus-5-5", from: "opus" });
 });
 
 // The three catalogue-unavailable shapes. The third is the one worth having
@@ -194,7 +203,7 @@ test("ompRpc has no single provider, so it is unavailable by construction rather
 // `crew_profile` already refuses an explicit model that disagrees with the
 // one recorded in `.omp/crew.json`. Resolution has to happen BEFORE that
 // comparison, and on BOTH sides of it: a stored `opus` and an explicit
-// `claude-opus-5` name one model, and reading them as a conflict would
+// `claude-opus-5-5` name one model, and reading them as a conflict would
 // refuse a correct call. The comparison is between canonical ids, never
 // between spellings.
 
@@ -208,15 +217,15 @@ test("an alias resolves to the canonical id the vendor gets, not the spelling th
 test("a stored shorthand and an explicit canonical id are the same model, not a conflict", () => {
   // The direction the spec did not mention. `.omp/crew.json` written before
   // Existing files hold shorthands, so this is the common case.
-  const d = decideModel("claude", "claude-opus-5", "opus", ANTHROPIC);
+  const d = decideModel("claude", "claude-opus-5-5", "opus", ANTHROPIC);
   expect(d.kind).toBe("use");
-  if (d.kind === "use") expect(d.model).toBe("claude-opus-5");
+  if (d.kind === "use") expect(d.model).toBe("claude-opus-5-5");
 });
 
 test("a stored canonical id and an explicit shorthand are the same model, not a conflict", () => {
-  const d = decideModel("claude", "opus", "claude-opus-5", ANTHROPIC);
+  const d = decideModel("claude", "opus", "claude-opus-5-5", ANTHROPIC);
   expect(d.kind).toBe("use");
-  if (d.kind === "use") expect(d.model).toBe("claude-opus-5");
+  if (d.kind === "use") expect(d.model).toBe("claude-opus-5-5");
 });
 
 test("a genuine disagreement is still a conflict, reporting the RAW stored text", () => {
@@ -288,7 +297,7 @@ test("a model resolved from the local alias table is verified even when the cata
   // The alias table is crew's own, checked in and reviewed, so a broken
   // catalogue does not make its targets unknown.
   const d = decideModel("claude", "opus", undefined, { available: false, why: "omp not on PATH" });
-  expect(d).toEqual({ kind: "use", model: "claude-opus-5", verified: true, note: expect.stringContaining("alias") });
+  expect(d).toEqual({ kind: "use", model: "claude-opus-5-5", verified: true, note: expect.stringContaining("alias") });
 });
 
 test("a name that could not be checked because the catalogue was unavailable is not verified", () => {
@@ -310,7 +319,7 @@ test("currentModels falls back to the vendor's own family table when the catalog
   const result = currentModels("claude", { available: false, why: "omp's catalogue lists no models for provider `anthropic`" });
   expect(result.available).toBe(true);
   expect(result.available && result.source).toBe("vendorFamilyTable");
-  expect(result.available && [...result.models].sort()).toEqual(["claude-fable-5-1", "claude-haiku-4-5", "claude-opus-5", "claude-sonnet-5"]);
+  expect(result.available && [...result.models].sort()).toEqual(["claude-fable-5-1", "claude-haiku-4-5", "claude-opus-5-5", "claude-sonnet-5"]);
 });
 
 test("currentModels reports unavailable when neither the catalogue nor a family table has anything -- ompRpc", () => {
