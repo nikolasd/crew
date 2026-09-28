@@ -45,10 +45,14 @@ OMP Extension (TypeScript)  ──JSON-RPC 2.0 over NDJSON──>  crewd daemon 
 | `packages/protocol-ts/` | Generated TS bindings + JSON Schema + Ajv validators |
 | `packages/crew-*/` | Per-target release build staging (created on demand by `crew-xtask package`; gitignored, not committed) |
 | `fixtures/` | Cross-language golden fixtures (protocol frames, state roots, configs) |
-| `tests/` | Conformance test runner |
+| `tests/conformance/` | Golden-frame adapter conformance runner |
 | `release/` | Release build inputs and evidence: `targets.json` (platform build matrix, read by xtask and CI) plus per-version release checklists and live adapter conformance results |
-| `docs/` | Engineering documentation (start with `development.md` (Crew Development Guide), `architecture.md` (Crew Architecture); `cli-reference.md` and `user-guide.md` (Crew User Guide) cover the two user-facing surfaces) |
+| `docs/` | Engineering documentation (start with `development.md` (Crew Development Guide), `architecture.md` (Crew Architecture) — C4 system-context/container/component views, the event-lifecycle sequence diagram, and a role/permission table; `cli-reference.md` and `user-guide.md` (Crew User Guide) cover the two user-facing surfaces). `adr/` holds the numbered design decisions: 37 of them, highest `0038`, numbering non-contiguous (`0033` does not exist) |
 | `scripts/` | Setup and build scripts |
+
+Design rationale for any structural choice is an ADR in `docs/adr/` — check there before assuming a
+choice is accidental, and check `docs/future-features.md` before concluding that a gap is
+unintentional.
 
 ---
 
@@ -94,6 +98,14 @@ crewd stop --repo /path/to/repo
 crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/audit.jsonl
 ```
 
+### The committed bundle can go stale without a visible diff
+
+The reasoning, the release-checklist steps, and the `refresh-bundle` workaround are written out in
+`CONTRIBUTING.md` (release checklist) and `README.md` (bundle-refresh blockquote); they are not
+repeated here on purpose. The one fact worth carrying: a change under `crates/protocol/`
+regenerates the bindings the bundle embeds, so the committed artifact goes stale in a file your
+diff never mentions, and `bun run check` does not compare the committed artifact.
+
 ---
 
 ## Code Conventions & Common Patterns
@@ -105,9 +117,9 @@ crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/aud
 - **Workspace dependencies** in root `Cargo.toml` — all crates reference via `.workspace = true`
 - **Error handling:** `thiserror` for custom error types, `anyhow` for application errors
 - **Async:** `tokio` runtime (multi-thread), `futures-util` for combinators
-- **Database:** `rusqlite` with `rusqlite_migration` for versioned migrations; single-thread actor owns the SQLite connection
+- **Database:** `rusqlite` with `rusqlite_migration` for versioned migrations; a single-thread actor owns the one `rusqlite::Connection` (`crates/runtime/src/db/actor.rs`) — do not reach for a connection pool
 - **Logging:** `tracing` + `tracing-subscriber` (with `env-filter` and `json` features)
-- **Serialization:** `serde` with `derive`; `serde_json` for JSON, `serde_yaml_ng` for YAML config
+- **Serialization:** `serde` with `derive`; `serde_json` for JSON, which is the only configuration format — the YAML config surface is gone, and `serde_yaml_ng` is no longer a dependency
 - **Self-referential crate pattern:** `extern crate self as crew_runtime;` in `lib.rs` so adapter submodules can use the crate's external path, allowing the same source to compile both inside the library and in standalone test binaries via `#[path = "..."]`
 
 ### TypeScript
@@ -122,9 +134,10 @@ crewd audit export --repo "$PWD" --state-dir "$HOME/.omp/crew" --output /tmp/aud
 ### Shared Patterns
 
 - **Protocol types flow Rust → TypeScript:** `crates/protocol/` defines types with `serde` + `schemars` + `ts-rs` derives; `xtask generate` produces JSON Schema and `.ts` bindings
-- **Configuration layers** (lowest → highest): org config → repo config → user config → per-run params. YAML with strict unknown-key rejection.
-- **Event broadcast invariant:** Every domain mutation commits its event AND broadcasts the same `EventEnvelope` to live `events/subscribe` listeners in the same call. A mutation that appends without broadcasting silently breaks the embedded monitor.
+- **Configuration layers** (lowest precedence → highest): built-in defaults, then each explicit `--config` path in the order given, then `per_run`. `load_layers` in `crates/runtime/src/config/crew.rs:551-559` declares exactly that order. The implicit pair used when no flag is passed is `$HOME/.omp/crew.json` then `<repo>/.omp/crew.json` (`config_layer_paths`, `crates/runtime/src/cli.rs:761-768`), so the lower-precedence file is the user one. Layered **JSON**, strict unknown-key rejection at any depth; a path that does not exist is an absent layer, not an error. The three-layer org/repo/user scheme is gone — the org layer was retired outright (`crates/runtime/src/config/mod.rs:14-24`), and `CrewConfig` (`config/crew.rs:322`) is the only config type. `resolve_policy()` (`config/mod.rs:135`) then adapts the merged `CrewConfig` to the immutable, SHA-256-fingerprinted `RuntimePolicy` (`config/mod.rs:82`).
+- **Event broadcast invariant:** Every domain mutation commits its event AND broadcasts the same `EventEnvelope` to live `events/subscribe` listeners in the same call. A mutation that appends without broadcasting silently breaks the embedded monitor. Two regression tests guard it — `events_replay_round_trips_committed_mutation_events` and `events_subscribe_delivers_live_notifications_for_orchestration_mutations`, both in `crates/runtime/tests/orchestration_rpc.rs`. If you suspect a new mutation path regressed it, run with a test-runner timeout: the failure mode is a hang, not a clean assertion failure.
 - **Redaction boundary:** Raw vendor content → `Redactor.sanitize()` → `PersistableEvent` (private fields, no public constructor). Secrets never reach the journal.
+- **State-root resolution is duplicated across the language boundary:** `resolveStateRoot` in `packages/extension/src/state.ts` must stay semantically identical to Rust's `StateRoot::resolve` in `crates/runtime/src/paths.rs`. The two resolve the same on-disk state root independently, in two languages, with no shared code to keep them honest.
 
 ### Naming
 
@@ -198,7 +211,7 @@ generated at merge time, is not a citation anyone wrote, and is out of scope.
 - **Package manager:** Bun workspaces. `bun install` for deps, `bun run <script>` for commands.
 - **Exact install mode:** `bunfig.toml` sets `exact = true` — lockfile is strict.
 - **Rust toolchain:** tracks `stable` via `rust-toolchain.toml` — always the latest stable release, no fixed version. Use `rustup` so this is picked up automatically per-directory. CI picks up a new stable point release the day it ships; a local checkout only picks it up on `rustup update` — coordinate toolchain updates rather than running them ad hoc mid-effort on a machine shared with other automated work, since the update changes what "clean gate" means for everyone building there. Print `rustc --version` alongside test/lint results in any gate report, so a toolchain gap between two runs is visible instead of inferred from a run that was green in one place and red in another. Run one full-workspace `cargo clippy --all-targets --all-features -- -D warnings` after any toolchain update — a point release can start flagging a lint shape it previously missed.
-- **Formatter:** Biome for TS/JS (`bun run format`), `cargo fmt` for Rust. Linting disabled in Biome; use `cargo clippy` for Rust.
+- **Formatter:** Biome for TS/JS (`bun run format:check` to verify, `bun run format:write` to fix), `cargo fmt` for Rust. Linting disabled in Biome; use `cargo clippy` for Rust.
 - **Distribution:** Extension + skills install via the OMP marketplace (`.claude-plugin/marketplace.json`, git clone of this repo — public, cloned over HTTPS, no authentication required). The `crewd` binary downloads on demand as a GitHub Release asset via `/crew-install`, verified by SHA-256; a `GITHUB_TOKEN`/`GH_TOKEN` or a local `gh auth login` session is optional but recommended — it raises GitHub's unauthenticated rate limit (60/hour) to 5,000/hour, and is not a permission gate.
 - **Test environment:** Set `CREW_DISABLE_VENDOR_CLI=1` to skip live vendor CLI calls made by the conformance harness and test suite (required in CI to avoid billed model calls). It does not gate a running daemon — `run/submit` against a live `crewd` spawns the real vendor CLI regardless, so any live run through the daemon is a real, possibly billed, vendor launch.
 - **Cross-platform:** macOS (arm64/x64) and glibc Linux (arm64/x64). Everything else rejected with typed error.
@@ -251,7 +264,7 @@ generated at merge time, is not a citation anyone wrote, and is out of scope.
 - **Rust tests:** Integration tests in `crates/runtime/tests/` (adapter_contract, approval, audit, conformance, etc.) and unit tests inline with `#[cfg(test)]` modules
 - **TypeScript tests:** Co-located `.test.ts` files alongside source in `packages/extension/src/`
 - **Conformance tests:** `tests/conformance/` — golden-frame protocol conformance runner (`run.ts`, `assert-report.ts`)
-- **Fixtures:** `fixtures/` — golden JSON/YAML for protocol frames, configs, state roots, repo IDs
+- **Fixtures:** `fixtures/` — golden JSON for protocol frames, configs, state roots, repo IDs (JSONL and byte-exact `.raw` terminal recordings alongside; there are no YAML fixtures)
 
 ### Running Tests
 
@@ -310,6 +323,6 @@ Triggered by pushing a `v*` tag. Builds `crewd` for all 4 platforms, assembles p
 3. **SQLite runs with WAL, foreign keys, `synchronous=FULL`, and atomic versioned migrations.** Event journal is append-only.
 4. **Intent persisted before side effects; content redacted before durability.**
 5. **Supported platforms: macOS and glibc Linux on arm64/x64.** Typed rejection for everything else.
-6. **OMP owns the task graph.** Rust never creates or edits OMP's task graph.
+6. **OMP owns the task graph.** Rust never creates or edits OMP's task graph. A retry always creates a new run; a harness replacement always creates a new worker and a new run.
 7. **Every domain mutation commits its event AND broadcasts** the same `EventEnvelope` to live subscribers in the same call.
 8. **Prompt text is always delivered to a vendor TUI as a bracketed paste, never as raw keystrokes.** `write_paste` is the only path permitted to write prompt bytes to a PTY. This was shipped as a prompt-integrity fix, but live measurement later established it is also a security control: the identical bytes written *unframed* are parsed by the vendor as keystrokes, and an escape sequence embedded in ordinary prompt text can move a first-run security dialog's selection off its safe default before crew's own Enter confirms it — turning an intended no-op into a silent trust grant. A future code path that writes prompt text to a PTY outside `write_paste` reintroduces this even if it never touches `write_paste` itself. This invariant is scoped to the TUI path specifically: a worker driven over a vendor's own protocol (claude's `mode: "protocol"`, experimental, under evaluation) writes no prompt bytes to a PTY at all, so it has no equivalent requirement here today.
