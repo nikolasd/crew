@@ -10,10 +10,22 @@
 > owner on 2026-09-29, by two separate rulings**, and each is named under "The two questions, and
 > where each now stands" below with its own status there. What remains open there is not either
 > question, but one named consequence of question 2 — the size of a backstop the owner ruled into
-> existence and did not size. Ratifying it means: resolving that open item, then changing this
-> header's `Status:` to `Accepted` and following the index in [README.md](README.md) — not editing
+> existence and did not size, and which a third ruling of the same date has since **gated on a
+> named prerequisite** rather than left merely unset. Ratifying it means: landing that prerequisite
+> and resolving that open item, then changing this header's `Status:` to `Accepted` and following
+> the index in [README.md](README.md) — not editing
 > [0036](0036-leader-disconnect-grace-window.md), which records what was decided on 2026-09-09 and
 > is not edited to read as though it always agreed.
+>
+> **Amended 2026-09-29 (uncommitted).** A third owner ruling, the same date, settled the *ordering*
+> of the backstop's sizing: *"I agree c and then e"*. **The settle loop is to be made concurrent
+> before any value is chosen, and the value is then to be short, with the documented manual escape
+> as the sanctioned way to grant a wedged agent more time.** Consequences now carry that ruling in
+> full; item 3 below is updated to state the value as **deliberately unset and gated**. **The
+> header's `Status:` is unchanged and the record remains Proposed** — nothing here is ratified, and
+> ADR ratification remains the owner's and is not conferred here. The backstop's value, the
+> in-band version-recording question, and whether Claude's protocol mode can receive a death notice
+> all remain open and are not resolved by this amendment.
 
 ## How to read the labels
 
@@ -68,6 +80,19 @@ backstop**, so that a wedged or unresponsive agent cannot hang the settle foreve
 offered a number for that backstop and declined it.** **No verbatim of that exchange is carried
 here, and none is invented** — what is recorded is its substance, in full, at question 2 below,
 where the backstop's **unset** size is carried as an open item in its own right.
+>
+> "I agree c and then e"
+>
+**A sixth ruling, the same date and last of the day, decided the *ordering* of the backstop's
+sizing, and it is quoted verbatim because the order is the ruling.** Offered five ways to reach that
+value, the owner chose **(c) then (e)**: **parallelise the settle loop first, and only then pick a
+number; and set it short, with the manual escape documented.** **What it did is not supply a
+number** — it ruled that no number is to be chosen until the loop is concurrent, which is a stronger
+statement than declining one. It is recorded in full under "The backstop's sizing, ruled on
+2026-09-29 and ordered" in Consequences below, with its effect on item 3, where the value is now
+carried as **open, deliberately unset, and gated on a named prerequisite**. **The fifth ruling's
+substance above is unchanged by it**; what changed is that the unset value now has a reason and an
+order, and (d) is on the record as considered and not chosen.
 
 **The branch the ruling itself names is settled and is not re-opened here.** ADR-0036 does not
 describe a different ruling — it says nothing about instructing a worker at all — so it is **amended,
@@ -164,6 +189,26 @@ mapping are all already in place; only a sender is missing.**
 ## Considered Options
 
 * **Instruct, wait for the agent to report itself finished, then kill — bounded by a backstop timeout whose size is not set.** Chosen — see below.
+* **How to arrive at the backstop's size, as a separate question put on 2026-09-29.** Five options
+  were offered and the owner chose **(c) then (e)**. Each is recorded so a reader can see what was on
+  the table, and the chosen pair is recorded twice — once here, in full under "The backstop's
+  sizing, ruled on 2026-09-29 and ordered" in Consequences.
+  - **(a) A short fixed number.** Settles fast, but an agent mid-save is killed while saving, and
+    the cost is **N × that number** for a multi-run driver. Not chosen.
+  - **(b) A long fixed number.** Every agent gets room, but the cost is **N × that number** in slot
+    holds and live processes. Not chosen.
+  - **(c) Parallelise the loop first, then pick a number. CHOSEN, and chosen first.** The settle
+    loop is sequential and shares nothing, so making it concurrent makes every option N times
+    cheaper. `[USER-STATED]` — *"I agree c and then e"*.
+  - **(d) Silence-based rather than absolute.** The backstop extends while the agent still emits
+    output and fires only when it goes quiet. **Offered and NOT chosen; recorded so a future reader
+    knows it was not overlooked. It remains available and nothing in this record forecloses it.**
+  - **(e) Short backstop plus the manual escape. CHOSEN, and chosen second, after (c).** Set it
+    short, and document `task/get` → `reconcile/omp` → `run/cancel` as the way to grant an agent
+    more time when someone is watching.
+  - **The order is the ruling.** (c) precedes (e), and **the value remains unset until (c) lands**,
+    because the loop is serial today and multiplies any value by the number of non-terminal runs
+    the lost leader owned. `[VERIFIED]` at `2c812cb`.
 * **Kill with no instruction, which is what ADR-0036 chose.** Rejected; see below.
 * **A second settle path, parallel to `run_cancel`.** Rejected; see below.
 * **Reuse the 60s window for the graceful stop.** Rejected; see below.
@@ -341,17 +386,113 @@ settle bound in the supervisor; neither measures the quantity this decision need
   exists by the owner's ruling and has never been set.
 * Nothing here makes the concurrency-slot bound tighter. If a leader leaves with many live runs,
   every one of them now pays the graceful stop.
+* **The settle loop is serial, so every backstop this record contemplates is paid N times over.**
+  `settle_leader_gone` (`crates/runtime/src/service/orchestration.rs:1656-1751#Orchestrator::settle_leader_gone`)
+  iterates the run ids returned by `owned_nonterminal_run_ids_op` in a plain `for` loop at line
+  1686, awaiting each run's own journal write (`:1712-1734`), its own broadcast (`:1736`) and its
+  own settle (`:1739-1741`) before moving to the next. **There is no `join_all`, no
+  `FuturesUnordered` and no per-run spawn anywhere in the function.** `[VERIFIED]` at `2c812cb` by
+  reading the whole range and searching the file. **A leader owning N non-terminal runs pays the
+  backstop N times, in sequence** — which is why the backstop's value cannot be chosen until the
+  loop is made concurrent. **The owner's ruling of 2026-09-29 orders exactly that, and it is
+  recorded under "The backstop's sizing, ruled on 2026-09-29 and ordered" below.**
+
+### The backstop's sizing, ruled on 2026-09-29 and ordered
+
+`[USER-STATED]` 2026-09-29, verbatim, answering a question about this record's unset backstop:
+
+> "I agree c and then e"
+
+**The ruling is ordered, and the order is the whole of it.** Offered five ways to size the backstop,
+the owner chose **(c) then (e)**: **make the settle loop concurrent first, and only then pick a
+number; and set that number short, with the manual escape documented as the way to grant a wedged
+agent more time while someone is watching.** **A reader must not collapse the two halves.** (c) is
+work to be done before a number means anything; (e) is the shape of the number once (c) has landed.
+
+**What (c) was, as it was put to the owner.** Parallelise the settle loop before choosing a value —
+*"The settle loop is sequential and shares nothing; make it concurrent and every option becomes N
+times cheaper."* **What (e) was.** A short backstop plus the manual escape — *"set it short, and
+document `task/get` → `reconcile/omp` → `run/cancel` as the way to grant an agent more time when
+someone is watching."*
+
+**The consequence this record carries forward, and it is a new negative one.** **The backstop's
+value remains unset, and it cannot sensibly be set until (c) lands** — because the loop is serial
+today, so any value is multiplied by the number of non-terminal runs the lost leader owned, and a
+value chosen against a serial loop is a value chosen against a loop that will not be the one in
+production. **This is a stronger statement than "the owner has not chosen a number":** it is that
+**choosing one now would be choosing it against the wrong loop.** Item 3 below is updated
+accordingly, and it stays OPEN and UNSET.
+
+**Option (d) was offered and not chosen, and is recorded so a future reader knows it was not
+overlooked.** The silence-based variant — the backstop extends while the agent still emits output
+and fires only when it goes quiet — was one of the five options put to the owner. **It is available
+and was not selected**, in favour of (c) then (e). **Nothing in this record forecloses it**, and no
+argument against it is made here; the fact that it was on the table and not taken is the fact
+worth keeping.
+
+**What (e) adds to this record, in the record's own terms.** The sanctioned way to give a wedged
+agent more time is **not** a longer default, and this record should name it as such. The two-call
+path exists today and is documented as intended rather than as a workaround:
+`reconcile_omp` (`crates/runtime/src/service/orchestration.rs:3504#OrchestrationService::reconcile_omp`),
+whose ownership rebind is revision-guarded in
+`crates/runtime/src/domain/repository.rs:2715#DomainRepository::reconcile_ownership` (the `WHERE
+task_id = ?4 AND revision = ?2` predicate is at `:2748-2750`), taking a task id and a revision that
+`task/get` supplies (`crates/runtime/src/service/query.rs:11#task_get_op`); then `run_cancel`
+(`crates/runtime/src/service/orchestration.rs:1542#OrchestrationService::run_cancel`), which is
+owner-gated by the `if let Some(principal_instance_id)` block at
+`crates/runtime/src/domain/repository.rs:895-919` inside `transition_run`. `[VERIFIED]` at
+`2c812cb`. **This is how work is reclaimed from a disconnected client**, and (e) makes it also the
+documented way to extend a single wedged agent's life. **Lengthening the default is not the
+sanctioned answer to a wedged agent, and this record should not be read as proposing one.**
+
+**And a fact that makes the ordering load-bearing rather than tidy.** **The settle path never
+releases the run's workspace lease, today and under this record alike.** `cancel_and_settle_run`
+(`crates/runtime/src/service/orchestration.rs:1570-1618#Orchestrator::cancel_and_settle_run`) performs
+three operations — the domain transition (`:1577-1585`), the broadcast (`:1586`) and
+`driver.cancel_run` (`:1589-1590`) — and its own doc comment at `:1566-1569` says lease and slot
+release is not its job and happens downstream, evidence-driven, from the adapter's own exit event.
+**The function contains no lease call of any kind.** `[VERIFIED]` at `2c812cb` by reading the whole
+range. **A concurrency slot, by contrast, is released by that adapter event** —
+`crates/runtime/src/adapter/event_sink.rs:852-853` frees on `ProcessExited` or `TurnEnded`
+(`is_exit` on 852, `frees_slot` on 853), and the kill produces it — so **a longer backstop holds a
+slot, a live vendor process and a PTY for proportionally longer, per run.** A run left non-terminal
+by a long backstop is, on every observable this record has, **indistinguishable from a healthy
+working run**: a live row state, a live lease, a held slot, a live PTY. And **when the backstop
+expires the journal is byte-identical to today's immediate kill** — `WorkerTimeout { kind:
+LeaderGone }` (`crates/protocol/src/event.rs:354#TimeoutKind::LeaderGone`, recorded at
+`crates/runtime/src/domain/repository.rs:1823-1829` from
+`crates/runtime/src/service/orchestration.rs:1716`) and then `RunCancelled`. **There is no field
+anywhere that distinguishes an agent that ignored the instruction from one that saved and exited.**
+**A backstop long enough to be generous is therefore indistinguishable, to every consumer, from a
+backstop that failed to work** — which is the cost (c) is paid to reduce and the reason (e) is
+recorded as the sanctioned alternative.
+
+**Provenance note on this subsection.** Everything marked `[VERIFIED]` in it was opened and read in
+this repository at `2c812cb`, not at the `2962c80` named in "How to read the labels" above; the
+amendment's own verification is at the current anchor and the labels above are unchanged. **Nothing
+in this subsection is implemented.** `[VERIFIED]`
+
+**A reader who has reached the end of this subsection should hold five separate facts, and only
+one of them is a decision about a number.** The *shape* of the wait is decided. The *direction* of
+the backstop is decided — short. The *order* is decided — (c) before (e), and no value at all
+until (c) lands. The *manual escape* is now the sanctioned way to grant a wedged agent more time,
+in place of a longer default. And the *settle loop is still serial*, which is the fifth fact and
+the one the whole ordering turns on. **None of the four decisions supplies the value, and this
+record still does not contain one.**
 
 ## The two questions, and where each now stands
 
-**Both are the owner's, and both are now answered — by two separate owner rulings on 2026-09-29.**
-They are kept under their original numbers so that no reference to either breaks. **Neither closure
-closes everything it sits over, and the statuses below must not be read as one.** Question 1 is
-answered in the owner's own words, quoted below. Question 2's answer is a *shape*, and it left
-behind one named item that is **not answered**: the size of the backstop. **A reader who takes the
-closure of question 1, or of question 2's shape, as the closure of the backstop's value is
-misreading this record**, and an implementation that needs that value before the owner has set it
-has a blocker, not a default.
+**Both are the owner's, and both are now answered — by two separate owner rulings on 2026-09-29,
+with a third ruling of the same date bearing on the consequence of the second.** They are kept under
+their original numbers so that no reference to either breaks. **Neither closure closes everything it
+sits over, and the statuses below must not be read as one.** Question 1 is answered in the owner's
+own words, quoted below. Question 2's answer is a *shape*, and it left behind one named item that is
+**not answered**: the size of the backstop. **The third ruling does not answer that item either — it
+orders the work that must precede answering it**, and it is recorded in full under "The backstop's
+sizing, ruled on 2026-09-29 and ordered" in Consequences, with its effect on item 3 below. **A reader
+who takes the closure of question 1, of question 2's shape, or of the third ruling as the closure of
+the backstop's value is misreading this record**, and an implementation that needs that value
+before the owner has set it has a blocker, not a default.
 
 ### 1. Which `RunState` values count as "finished" — **CLOSED, answered by the owner 2026-09-29**
 
@@ -426,7 +567,7 @@ construction resumable, and the owner has said that is not a reason to withhold 
 That edge governs what a run may become; this decision governs what an agent is told while it is
 paused. The owner's ruling is about the second, and it is the later word on the subject.
 
-### 2. The size of the graceful stop's window — **CLOSED as to the shape, 2026-09-29; OPEN as to the backstop's size, which is unset**
+### 2. The size of the graceful stop's window — **CLOSED as to the shape, 2026-09-29; the backstop's size is unset and is now gated on a named prerequisite, see item 3**
 
 **This is a separate owner ruling from the one recorded under question 1, and a reader must be able
 to tell which ruling set what.** Question 1 settled which `RunState` values count as finished.
@@ -469,7 +610,37 @@ them run together.** The *shape* is closed: state-driven, untimed, ending on the
 report. The *backstop* is a separate quantity, it exists by the owner's ruling, and **its size is
 not set** — carried as item 3 below.
 
-### 3. The backstop's size — **OPEN, AND UNSET**
+### 3. The backstop's size — **OPEN, DELIBERATELY UNSET, AND NOW GATED ON A NAMED PREREQUISITE**
+
+**The status line above changed on 2026-09-29 and the change is the substance of the ruling, not a
+housekeeping edit.** The item was OPEN because the owner had been offered a number and declined it.
+**It is now OPEN because the owner has ruled that the number cannot be chosen yet** — the settle
+loop must be made concurrent first. `[USER-STATED]` 2026-09-29, verbatim: *"I agree c and then e"*.
+**These are different states and a reader entitled to tell them apart will find different work in
+them:** the first said the owner had no number in mind, the second says the owner has decided what
+kind of number to want and has decided the codebase is not yet in the state where one can be
+picked. The full ruling is under "The backstop's sizing, ruled on 2026-09-29 and ordered" in
+Consequences above.
+
+**The prerequisite, named so it can be checked rather than assumed.** **(c) is to make the settle
+loop concurrent**, and it is a prerequisite to the value, not merely adjacent to it. The loop is
+serial today (`crates/runtime/src/service/orchestration.rs:1656-1751#Orchestrator::settle_leader_gone`,
+the plain `for` at line 1686, with no `join_all`, no `FuturesUnordered` and no per-run spawn), and
+**a backstop is paid once per non-terminal run the lost leader owned.** Choosing a value against
+that loop would be choosing it against a loop that is not the one that will run in production.
+`[VERIFIED]` at `2c812cb`.
+
+**What is decided about the value, so the "deliberately unset" is not read as "unexamined".** The
+owner has ruled that the number is to be **short** — (e), *"set it short, and document
+`task/get` → `reconcile/omp` → `run/cancel` as the way to grant an agent more time when someone is
+watching."* **So the direction is decided and the magnitude is not**: short is a property the
+value will have, and it is not itself a value. **The sanctioned response to a wedged agent is the
+documented manual escape, not a longer default**, and that is now part of this record rather than
+only a practice.
+
+**Option (d), the silence-based variant, was offered and not chosen.** It remains available and
+nothing here forecloses it. **It is recorded because a future reader must be able to see that it
+was considered.**
 
 **Stated as two separate facts, because they are two separate states and a reader must be able to
 tell them apart.**
@@ -477,18 +648,23 @@ tell them apart.**
 * **That a backstop exists — CLOSED.** `[USER-STATED]` 2026-09-29, recorded in item 2 above: a
   timeout is retained **only as a backstop**, so that a wedged or unresponsive agent cannot hang
   the settle indefinitely. This much is the owner's ruling and it is not open.
-* **How long that backstop is — OPEN, and unset.** The owner **was offered a number and declined
-  it**, in favour of the state-driven wait. **Declining a number is not a decision that the value
+* **How long that backstop is — OPEN, unset, and now gated.** The owner **was offered a number and
+  declined it**, in favour of the state-driven wait, and has since ruled that no number is to be
+  chosen until the settle loop is concurrent. **Declining a number is not a decision that the value
   is anything in particular**, and it is not permission to pick one. **This record proposes no
-  number**; an implementation that needs one before the owner has set it has a blocker, not a
-  default, and a plausible-looking value supplied by an implementer would be a number no owner
-  ever chose.
+  number**; an implementation that needs one before the prerequisite above has landed has a
+  blocker, not a default, and a plausible-looking value supplied by an implementer would be a
+  number no owner ever chose against a loop that does not yet exist.
 
-**What would settle it:** the owner's view of how long a wedged or unresponsive agent is owed before
-the kill, or a measurement of how long a graceful exit takes — which the repository does not hold
-and which would have to be taken before any number could be defended rather than guessed. The
-60-second constant is **not** an available answer; item 2 above is why it bounds a different
-quantity.
+**What would settle it, in the new order.** Two things, and the first now gates the second:
+**(1) the settle loop is made concurrent** — the work the owner's ruling puts first, and the
+prerequisite for any number meaning what it says; **then (2) the owner's view of how long a wedged
+or unresponsive agent is owed before the kill**, or a measurement of how long a graceful exit
+takes, which the repository does not hold and which would have to be taken before any number could
+be defended rather than guessed. The 60-second constant is **not** an available answer; item 2
+above is why it bounds a different quantity. **Until (1) lands, writing a number into this record
+would be a number chosen against the wrong loop**, and an implementation that needs the value
+before (1) has landed has a blocker, not a default.
 
 ## What would reverse this
 
