@@ -80,6 +80,7 @@ rather than behind a number nobody can resolve.
 | [0036](0036-leader-disconnect-grace-window.md) | A parked run is settled on its leader's connection actually being gone, never on silence alone | Accepted |
 | [0037](0037-protocol-first-control-plane.md) | Drive workers over the vendors' own protocols; the terminal becomes a view | Accepted; supersedes [0026](0026-headless-retirement.md), amends [0025](0025-crew-v2-tui-control-plane.md) and [0027](0027-turn-end-settles-a-run.md) |
 | [0038](0038-one-turn-worker-lifecycle.md) | A one-turn worker's clean exit, after its turn has settled, is terminal — the run is `unrendered_verdict`; the leader's `run/finish` is the only verdict-renderer | Accepted; amends [0037](0037-protocol-first-control-plane.md) (decision 8's held question), [0027](0027-turn-end-settles-a-run.md) and [0036](0036-leader-disconnect-grace-window.md) |
+| [0050](0050-one-rule-two-arms-the-user-and-the-driver-may-start-agents.md) | One rule, two arms; the user and the driver may start agents, an agent asks the driver, and the sender is read from the connection's bound scope | Proposed — awaiting the owner's ratification; amends nothing. Its drafted title, "the driver is the only party that may spawn or relay", was withdrawn by the owner on 2026-09-29; the record names the withdrawal in its own text |
 
 Row 0026 is superseded and rows 0025 and 0027 are amended by 0037, each in 0037's own text rather
 than by editing theirs; 0026 carries a superseded-by header, which is the one edit the write-once
