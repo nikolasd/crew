@@ -4,7 +4,46 @@
 * Date: 2026-09-30
 * Supersedes: *(none — nothing here reverses a decision)*
 * Amends: [0011](0011-omp-retains-task-graph-authority.md) (the *subject* of its authority line only; its substance is untouched — see "What this does and does not change about ADR-0011" below)
-* Numbering: `0041`. The owner's planning notes reserved this number for this subject — "The driving harness retains task-graph authority, whichever harness that is" — and **this record is that decision, so it carries the reserved number.** `docs/adr/` holds `0001`–`0032` and `0034`–`0038`; `0033` is reserved and deliberately unused (`docs/adr/README.md:13-17`); `0044` is deliberately skipped. **⚠ The reserved title asserted a subject this record deliberately leaves open** — see "The open question this record does not answer", which is the one thing the owner must read before ratifying.
+* Numbering: `0041`. The owner's planning notes reserved this number for this subject — "The driving harness retains task-graph authority, whichever harness that is" — and **this record is that decision, so it carries the reserved number.** `docs/adr/` holds `0001`–`0032` and `0034`–`0038`; `0033` is reserved and deliberately unused (`docs/adr/README.md:13-17`); `0044` is deliberately skipped. **The reserved title asserted a subject this record originally left open** — the question is now **settled by the owner's ruling of 2026-09-29**, quoted and dated in "The authority subject is settled: the driver, not the driving harness" below, and the reserved wording is corrected here rather than inherited.
+
+## The authority subject is settled: the driver, not the driving harness
+
+**The reserved title of this number asserted the wrong subject, and the owner has now ruled on
+it.** `[USER-STATED]` 2026-09-29, verbatim:
+
+> "user is the handler of driver agent. driver is the steering wheel and user is the car driver."
+
+**The subject of ADR-0011's authority line is the driver.** Not the driving harness. The distinction
+is not a wording preference and this record does not treat it as one:
+
+* **"The driving harness"** would make the authority a property of *software* — a product
+  statement, in which any harness not currently driving is out of scope by construction, and in
+  which the authority is asserted by the fact of the software rather than proved by the connection.
+* **"The driver"** makes the authority a property of a *role* — a statement about whoever holds the
+  driver's role in this session. **A harness is never the authority.** A harness is capable of
+  hosting a driver; the session in it may hold the role, and a harness that is not hosting a driver
+  holds nothing. The owner's own third term carries this: the user is the handler and the driver
+  is the steering wheel — one arrangement described two ways, not a product that owns a capability.
+
+**The consequence, stated so it cannot be read the other way.** Nothing in the protocol may
+establish the driver by naming a product. `role: "ompExtension"` is a string a peer supplies, and
+this repository has verified that supplying it is currently sufficient to receive the driver's
+spawn-capable method table — the finding, with its citations, is in
+[0050](0050-one-rule-two-arms-the-user-and-the-driver-may-start-agents.md) under "The defect the
+gate must close: `OmpExtension` is self-assertable". **The driver must prove it is the driver.**
+That proof is not built, and this record does not build it; `0050` is `Proposed` and records the
+requirement.
+
+**Exactly one driver, per team, at a time.** `[USER-STATED]` 2026-09-29: *"There is ONE driver, in
+the crew team."* The rule's whole purpose is to prevent **an agent from taking over as driver
+mid-team** — an agent is never the driver, and a sub-agent is outside Crew's domain entirely. It is
+not a statement about what happens across sessions, and this record makes **no claim about
+handover, transfer, or succession between drivers**: closing the driver **ends the team**, per
+[0039](0039-instruct-then-kill-on-timeout.md) — *"driver dies, agents stop and save"* — where every
+agent is instructed to stop, save its work and exit gracefully. A later driver begins a **new
+team** and inherits nothing from the previous one: not its agents, not its tasks, not its run
+state. `0039` remains `Proposed` and the one item it leaves open, the size of the backstop
+timeout, is not resolved here.
 
 > **⚠ THIS RECORD IS A DRAFT AND AWAITS THE OWNER'S RATIFICATION.** Nothing in it is a
 > decision yet. It records rulings the owner has already given, the reasoning those rulings
@@ -109,10 +148,14 @@ is which on its own terms.
 
 Chosen option: **three terms, each with one meaning, and the third meaning a boundary.**
 
-**Decision 1 — `driver`.** The agent the user started. It is the sole interlocutor on the user's
-side: the user speaks to the driver, and Crew never speaks to the user. There is exactly one
-`[USER-STATED]` — *"there is only one driver agent"*. A driver is not a harness and not a product; it
-is a role a session may hold. Crew does not address it as an agent and does not track it as one.
+**Decision 1 — `driver`.** The harness the user is conversing with — Claude Code, Codex, Copilot,
+opencode, or omp. It is the sole interlocutor on the user's side: the user speaks to the driver, and
+Crew never speaks to the user. **The user is the handler of the driver agent; the driver is the
+steering wheel and the user is the car driver** `[USER-STATED]` 2026-09-29, verbatim: *"user is the
+handler of driver agent. driver is the steering wheel and user is the car driver."* **A driver is
+not a harness and not a product; it is a role a session may hold, and a harness is never the
+authority.** There is exactly one per team, at a time: *"There is ONE driver, in the crew team"*
+`[USER-STATED]`. Crew does not address it as an agent and does not track it as one.
 
 **Decision 2 — `agent`.** A worker Crew spawned. Crew knows it, Crew created it, Crew observes it,
 and it is the *first point of contact*: the unit the owner's boundary is drawn around. When an agent
@@ -159,48 +202,55 @@ distinguishable to this repository. They share one client role and one authentic
 55-58) carries only an instance id and an agent directory, and `ClientRole::OmpExtension`
 (`crates/protocol/src/rpc.rs:38-42#ClientRole`) is the role whose method table includes
 `WorkerCreate` (`crates/runtime/src/ipc/mod.rs:271-359#allowed_methods`, the `OmpExtension` arm
-beginning at line 286 of that declaration, `WorkerCreate` at line 293). So *"the user or the driver"*
-reduces on the wire to *"a connection that authenticated as `OmpExtension`"*, and the `WorkerMcp`
-arm of the same table (line 344) contains no method that creates a worker. That is a fact about the
-authentication this repository has today, **not** a claim that the user and the driver are the same
-party. `[VERIFIED]` for the tables; `[AGENT-PROPOSED]` for the reduction.
+beginning at line 286 of that declaration, `WorkerCreate` at line 293) and the `WorkerMcp` arm at
+line 344, which contains no method that creates a worker. That is a fact about the authentication
+this repository has today, **and it is the reason the harness can never be the authority**: a role
+name a peer supplies is not a proof, and `0050` records the consequence with its citations.
+`[VERIFIED]` for the tables.
 
-### The open question this record does not answer
+### The authority subject: answered, quoted and dated
 
-**The subject of ADR-0011's authority line is still open, and this record does not settle it.**
-There are two candidate subjects, and they are not variants of one another:
+**The subject of ADR-0011's authority line is no longer open. It is the driver, not the driving
+harness.** The question was put to the owner and answered on 2026-09-29:
 
-* **"The driving harness."** The authority is a property of *software*. The driving harness retains
-  task-graph authority, whichever harness it is.
-* **"The driver."** The authority is a property of a *role*. Whoever holds the driver's role in this
-  session retains task-graph authority, and a harness is not thereby a driver — a harness is capable
-  of hosting a driver, and one session in it may hold the role while the next does not.
+> "user is the handler of driver agent. driver is the steering wheel and user is the car driver."
 
-These differ in a way that has consequences. Under the first, a harness that is not currently
-driving is out of scope by construction, and the line reads as a product statement. Under the
-second, the line reads as a role statement, and it becomes necessary to say what happens when a
-session stops being the driver — which is a question about session identity this repository has not
-been asked and has not answered.
+`[USER-STATED]` 2026-09-29. The two candidates this record previously held open were:
 
-**This record deliberately uses the word "driver" throughout and does not assert that the authority
-subject is the driver rather than the harness.** It settles the vocabulary and the boundary, and it
-notes that the subject is open. `[AGENT-PROPOSED]` — the owner has not been asked, and this record
-must not supply the answer by writing it down.
+* ~~**"The driving harness."** The authority is a property of *software*. The driving harness
+  retains task-graph authority, whichever harness it is.~~ — **NOT THE ANSWER.** Struck and kept,
+  because it is the candidate the reserved title of this number asserted by wording, and a reader
+  who meets the reserved title needs to see that it was not adopted and why. The owner ruled on
+  2026-09-29 that the subject is the **driver**; a harness is capable of hosting a driver and is
+  not thereby one.
+* **"The driver."** The authority is a property of a *role*. Whoever holds the driver's role in
+  this session retains task-graph authority, and a harness is not thereby a driver — a harness is
+  capable of hosting a driver, and one session in it may hold the role while the next does not.
+  — **CHOSEN**, on the owner's ruling quoted above.
 
-**⚠ The title this number was reserved under asserts the first candidate as the settled answer.**
-When the owner's planning notes reserved `0041` for this subject, the title they chose was "The
-driving harness retains task-graph authority, whichever harness that is" — and that wording **decides
-the question above by assertion**. The reservation identified the subject; the title that came with
-it went further and picked a side.
+**The consequence that had to be named with the answer: a harness is never the authority.** Nothing
+in the protocol may establish the driver by naming a product, and the current code does exactly
+that — `role: "ompExtension"` is a string the peer supplies, and supplying it is presently
+sufficient to receive the driver's spawn-capable method table. The finding is in
+[0050](0050-one-rule-two-arms-the-user-and-the-driver-may-start-agents.md) with its citations;
+**the driver must prove it is the driver**, and that proof is not built.
 
-**This record keeps the number and does not keep the assertion.** Its own title names the
-vocabulary and the boundary — the things the owner ruled — and leaves the authority subject stated
-as open, because it is open. Ratifying this record therefore means **correcting that earlier
-title**, and the correction is substantive rather than cosmetic: the record lands saying "the
-subject of ADR-0011's authority line is unsettled, and here are the two candidates and what turns on
-the choice", where the reserved wording would have landed saying the first candidate was the answer.
-**[AGENT-PROPOSED]** — the owner has not been asked which candidate is correct, and choosing one here
-is the one thing this section exists to prevent.
+**The question this section previously said was unasked — what happens when a session stops being
+the driver — is answered by ADR-0039, and the answer is not a handover.** Closing the driver **ends
+the team**: *[USER-STATED]* 2026-09-29, *"driver dies, agents stop and save"*, and in the owner's
+fuller form, *"If the driver dies unexpectedly, or even if the user just /exit driver, how crew will
+ask?! Unless what you mean, is that crew understands that driver is dead, and instructs the agent to
+stop, save their work and exit gracefully."* A crash and a deliberate `/exit` are the same event.
+A later driver is a **new team** and inherits nothing — no agents, no tasks, no run state — because
+ADR-0039's entire subject is that a team's agents do not survive its driver. **There is no driver
+switch and no handover ceremony; there is one driver per team, at a time.** `0039` is itself
+`Proposed` and the one item it leaves open, the size of the backstop timeout, is not resolved here
+and is not reopened by this record.
+
+**What remains open in this record.** The vocabulary, the boundary, and the authority subject are
+all settled by the owner's rulings and quoted above. **The record is still `Proposed`** and still
+awaits ratification; and the unbuilt proof — how a driver is proved rather than asserted — is work
+recorded in [0050](0050-one-rule-two-arms-the-user-and-the-driver-may-start-agents.md), not here.
 
 ### Positive Consequences
 
@@ -225,11 +275,15 @@ is the one thing this section exists to prevent.
   `crates/runtime/src/coordination/mcp_protocol.rs:63#tool_specs`), and `ClientRole::OmpExtension`
   itself (`crates/protocol/src/rpc.rs:38-42#ClientRole`) all say OMP. Renaming them is a separate
   change, and until it lands a reader of those files alone gets the old vocabulary.
-* **The user and the driver remain one wire identity**, so any mechanism that needs to tell them
-  apart cannot be built on the current authentication. This record makes no claim about whether
-  they must be.
-* **The record is silent about what happens to the driver's authority when the driver exits.** The
-  open question above is the reason, and it is not a gap this record may paper over.
+* **The user and the driver remain one wire identity**, and the driver is currently **asserted**
+  rather than proved — `role: "ompExtension"` is a value the peer supplies, and supplying it is
+  presently enough to receive the driver's spawn-capable method table (`0050`, with citations).
+  This is a fact about the authentication this repository has today, and it is work, not a gap this
+  record may paper over: **the driver must prove it is the driver.**
+* **What happens to the driver's authority when the driver exits is settled elsewhere and is not a
+  transfer.** Closing the driver **ends the team**: the agents are instructed to stop, save and exit
+  gracefully, per ADR-0039. A later driver is a new team inheriting nothing. This record asserts no
+  handover, and no part of a team's agents survives its driver.
 * An agent that needs a second *agent* must go through the driver every time. That is the owner's
   ruling and it costs a round trip; nothing here argues otherwise.
 

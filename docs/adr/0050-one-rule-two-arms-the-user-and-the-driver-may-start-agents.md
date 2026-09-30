@@ -23,6 +23,79 @@ the file was renamed with it, because a filename that says "the driver is the on
 the withdrawn reading. The number did not change: 0050 is the number reserved for this subject,
 not for one of the readings of it.
 
+## The owner's ruling of 2026-09-29 that fixes the three terms
+
+The record below was drafted on 2026-09-29 before the owner fixed the vocabulary the rule is
+written in. The three terms it uses are load-bearing, and the ruling that fixes them is quoted
+first, verbatim `[USER-STATED]` 2026-09-29:
+
+> "Sub-agent is the agent an existing running harness spawns internally. Agent is a new harness
+> spawned by the driver, using crew."
+
+> "A crew-spawned agent, can do whatever he needs. Spawn its own sub-agents, edit, write, ask. It
+> cannot though act like a driver! There is ONE driver, in the crew team."
+
+> "user is the handler of driver agent. driver is the steering wheel and user is the car driver."
+
+The three quotations are this record's foundation and are not paraphrased into something firmer
+anywhere below. What they fix:
+
+* **`driver` — the harness the user is conversing with.** Claude Code, Codex, Copilot, opencode, or
+  omp. It is the user's instrument. The third quotation is the reason the user and the driver are
+  not separated by this record: the user is the handler and the driver is the instrument, and a
+  steering wheel and the hand on it are two descriptions of one arrangement, not two parties to be
+  told apart on the wire.
+* **`agent` — a new harness the driver spawned, using Crew.** Crew-spawned, and therefore
+  Crew-known: Crew created it, Crew observes it, and Crew's obligation ends at having handed the
+  task to it.
+* **`sub-agent` — spawned internally by a harness.** Crew neither creates one, nor mirrors one, nor
+  observes one. **This is a domain boundary, not a permission level**, and the distinction is
+  load-bearing: a permission level is something Crew could in principle check and chose not to; a
+  boundary is a fact about what is inside Crew's domain at all. *There is no route to a sub-agent,
+  because there is nothing at the far end of one to route to.*
+
+**`WorkerMcp` is the agent's channel back to Crew, and it is not a sub-agent's.** The role named
+`ClientRole::WorkerMcp` (`crates/protocol/src/rpc.rs:38-42#ClientRole`, the variant declared at
+line 39) belongs to a **Crew-spawned agent** — the middle term above. A sub-agent has no Crew
+connection of any kind, so it holds no role here, authenticates to nothing, and has no method table
+at all. Every sentence in this record that says "a worker" means the agent, and none of them
+reaches a sub-agent.
+
+**An agent's autonomy is total within its own scope, and this record states that as a capability
+rather than as a restriction.** The second quotation is the owner's, and it is positive: a
+Crew-spawned agent may edit, may write, may ask, and may spawn its own sub-agents natively — and
+doing the last of those is expressly permitted. What it may not do is act like a driver, and the
+reason is not a narrower grant of authority but that **there is one driver and it is not the
+agent**. Nothing in this record reduces what an agent may do to its own task; what the record
+governs is the narrower question of who may cause a *new* Crew agent to exist.
+
+**"There is ONE driver, in the crew team" means one driver per team, at a time — and it is not a
+statement about what happens after a team ends.** `[USER-STATED]` 2026-09-29, the ruling
+[0039](0039-instruct-then-kill-on-timeout.md) records: *"driver dies, agents stop and save."* The
+fuller form of the same ruling is the owner's own question and its own answer `[USER-STATED]`,
+2026-09-29: *"If the driver dies unexpectedly, or even if the user just /exit driver, how crew will
+ask?! Unless what you mean, is that crew understands that driver is dead, and instructs the agent
+to stop, save their work and exit gracefully."*
+
+**Closing the driver ends the team.** It is not a slot that transfers to whoever is holding the
+wheel next. A crash and a deliberate `/exit` are the same event, Crew detects the departure on the
+connection actually being gone and never on silence, and every agent in that team is instructed to
+stop, save its work, and exit gracefully, with the kill following the instruction's own window.
+**A later driver is a new team with nothing inherited** — no agents, no tasks, no run state, and
+nothing from the previous team, because ADR-0039's entire subject is that a team's agents do not
+survive its driver. This record therefore **makes no claim, and must not be read as making one,
+about handover, transfer, or succession between drivers across sessions.** What the one-driver rule
+forbids is narrower and is what the two arms below exist to enforce: **an agent taking over as
+driver mid-team.** ADR-0039 remains `Proposed`, and the one item it leaves open — the size of the
+backstop timeout — is not resolved here and is not reopened by this record.
+
+**A note on this record's own title and filename.** The H1 and the filename say "the user and the
+driver may start agents", and the arm as restated below is now "is the sender the driver?" — the
+third quotation above is why the two collapse. The filename is deliberately **not** changed: it is
+cited by the row for this record in [README.md](README.md) and from the planning vault, and this
+record is not permitted to break either reference. The correction is recorded here rather than
+performed on the filename.
+
 **This record is not a decision.** It is written and numbered so that the reasoning and the
 rejected alternatives are on the table, and its own status says so. It awaits the owner's
 ratification; until the owner ratifies it, the single predicate below is a proposal, the code it
@@ -53,7 +126,7 @@ recorded rather than smoothed over. "Claude spawing its own subagents is allowed
 "Only Codex can spawn a new agent". `[AGENT-DECIDED]` The distinction is **a subagent spawned by a
 harness** and **an agent spawned by Crew**. A harness's own subagent mechanism is the vendor's
 business, is not a Crew agent, is not journalled by Crew, and is outside anything this record
-governs. Only an agent **Crew** spawns is in scope, and only the user or the driver may cause one.
+governs. Only an agent **Crew** spawns is in scope, and only the driver may cause one.
 This is the reading under which both sentences are true at once, and it is marked as a decision
 because the owner left the mechanism open.
 
@@ -86,6 +159,63 @@ is read from the connection, and the request has nothing to say about it. The ex
 the right instinct at the wrong altitude, and the difference is the whole security argument in
 "Decision Outcome" below.
 
+### The defect the gate must close: `OmpExtension` is self-assertable
+
+The defect above is the one the predicate was drafted against. The owner's ruling of 2026-09-29
+adds a second, and this one sits on the *subject* of the predicate rather than on the step it
+gates. Arm 1 as restated asks **"is the sender the driver?"** — and today the party being asked
+that question supplies the answer. This is `[VERIFIED]` in the code as of `2962c80`, and it is the
+defect the gate must close, because a predicate whose subject the untrusted party names is not a
+predicate.
+
+**An agent runs under the owner's uid, so it can present the driver's own role.** Admission as
+`OmpExtension` is checked by `validate_agent_directory` and nothing else: the arm at
+`crates/runtime/src/ipc/connection.rs:330-334` destructures `ClientAuth::OmpExtension` and, at
+line 334, calls `validate_agent_directory(agent_directory, shared.config.euid)` — so the *only*
+admission condition is that the directory exists, canonicalizes, and is owned by a uid. That check
+is declared at `crates/runtime/src/ipc/connection.rs:372` and its ownership test is at
+`crates/runtime/src/ipc/connection.rs:381-386` (`if metadata.uid() != euid`). **The uid compared
+against is the daemon's own effective uid, taken from `shared.config.euid` — not the peer's.**
+An agent, a worker, or any process the owner runs, is running under that same uid, so it presents
+an arbitrary `instanceId` together with an owner-owned `agentDirectory`, passes both checks, and
+receives the driver's spawn-capable method table.
+
+**The second half is that nothing binds the connection to the repository it claims.**
+`InitializeParams::repository` is declared at `crates/protocol/src/rpc.rs:84` and is never compared
+against `ServerConfig::repository`, declared at `crates/runtime/src/ipc/mod.rs:174-175`. So the
+peer also names its own repository, and the server serves whichever one the peer asked for.
+
+**The method table makes the consequence concrete.** `ClientRole::OmpExtension` is the arm at
+`crates/runtime/src/ipc/mod.rs:286` of `allowed_methods`, declared at
+`crates/runtime/src/ipc/mod.rs:271`, and it includes `WorkerCreate` at
+`crates/runtime/src/ipc/mod.rs:293`. The `ClientRole::WorkerMcp` arm at
+`crates/runtime/src/ipc/mod.rs:344` **contains no method that creates a worker** — it is the
+agent's table, and it already omits the spawn capability. The asymmetry the ruling requires is
+therefore already half-present in the code: the agent's table is correct, and the privileged table
+is the one that must stop being self-assertable.
+
+**Therefore: the driver must prove it is the driver, and an agent can only ever reach arm 2.**
+This is recorded as a requirement of this record rather than as an implementation, because this
+record is `Proposed` and the code it describes is not built. The combined nature of the fix is
+stated under "What is not built yet" and is not two pieces of work.
+
+### Why arm 2 is currently unreachable, not merely unenforced
+
+The mirror image of the defect above is closed — and vacuously. The scope token an agent would have
+to present in order to authenticate as `WorkerMcp` **is never minted in production.** `AdapterMcpConfig::reserve`
+is declared at `crates/runtime/src/adapter/mcp_config.rs:90` and `AdapterMcpConfig::activate` at
+`crates/runtime/src/adapter/mcp_config.rs:108`; `ScopeTokenStore::revoke_for_run` is declared at
+`crates/runtime/src/coordination/scope_token.rs:233`. `#[cfg(test)]` begins at
+`crates/runtime/src/adapter/mcp_config.rs:256`, and **the only invocations of `reserve` and
+`activate` anywhere in the repository are inside that test module** — at
+`crates/runtime/src/adapter/mcp_config.rs:381`, `:393`, `:415`, `:417` and `:427`. There is no
+call site outside `#[cfg(test)]`.
+
+**So arm 2 is not "enforced but leaky"; it is unreachable.** An agent has no issued credential to
+present, so it cannot open the channel the second arm governs, and the honest path — the agent
+asking the driver — does not work today. That is a different defect from the self-assertion
+above, and it has a different fix; both are named in "What is not built yet" below.
+
 ## Decision Drivers
 
 * A caller that can name its own identity can forge a chain. This is not a style preference. If the
@@ -114,7 +244,7 @@ the right instinct at the wrong altitude, and the difference is the whole securi
 ## Considered Options
 
 * **One predicate over the bound sender, applied at every mediated step.** The connection's bound
-  identity is read; a step is permitted when that identity is the user's or the driver's, or when
+  identity is read; a step is permitted when that identity is the driver's, or when
   the step's counterparty is the driver. Spawn, the driver-to-agent relay and the agent-to-driver
   relay are three call sites of this one predicate.
 * **A per-node tree with ancestry predicates.** Model parent/child edges and permit a send when the
@@ -194,19 +324,42 @@ bound scope, applied at every step Crew mediates.**
 
 ### The predicate, stated once
 
-A Crew-mediated step is permitted when **the connection's bound identity is the user's or the
-driver's**, or when **the step's counterparty is the driver**. Every edge Crew mediates is
-therefore incident to the user or the driver, and never between two agents, which is what keeps
-the topology from becoming a mesh.
+**One rule, two arms.** `(1)` **The sender is the driver** → Crew may spawn an agent on its
+authority. `(2)` **The counterparty is the driver** → an agent may *ask* the driver to spawn one.
+**No third arm, no takeover, no second driver.** `[USER-STATED]` 2026-09-29.
+
+A Crew-mediated step is permitted when **the sender is the driver**, or when **the step's
+counterparty is the driver**. Every edge Crew mediates is therefore incident to the driver, and
+never between two agents, which is what keeps the topology from becoming a mesh.
+
+**The first arm as it was previously written could not be evaluated, and is restated here.** It
+read "the connection's bound identity is the user's **or the driver's**", and a predicate with an
+"or" in it has no subject: a caller cannot be checked against a disjunction of two parties when
+the protocol has no way to tell them apart, and — as the finding recorded in "The defect this
+closes" below establishes — the one role that carries the spawn-capable method table is one any
+process running under the owner's uid can present. The arm is now a single question with a single
+subject: **is the sender the driver?** The user is not a second value of that question, and this
+record does not maintain the "user or the driver" phrasing as though it were a rule.
+
+The disjunction is withdrawn rather than silently edited away, for the reason the record's own
+earlier title withdrawal states. `[USER-STATED]` 2026-09-29, the owner:
+
+> "user is the handler of driver agent. driver is the steering wheel and user is the car driver."
 
 Both arms ask who a step belongs to, of a fact rather than of a claim: the first arm asks whether
-the bound sender is the user or the driver, the second whether the counterparty is the driver. The
-first arm is the operative one for the spawn path, which has no counterparty: only the user or the
-driver can cause an agent to exist, which is the owner's ruling "me and the driver are both allowed
-to start agents" in executable form, and which carries forward the earlier sentence "Only Codex can
-spawn a new agent" with the user named alongside the driver. The second arm exists because the
-owner's ruling requires an agent to be able to ask for another agent, and an ask is a message
-whose sender is by definition neither the user nor the driver.
+the bound sender is the driver, the second whether the counterparty is the driver. The first arm
+is the operative one for the spawn path, which has no counterparty — only the driver can cause an
+agent to exist — and it carries forward the earlier same-day ruling "me and the driver are both
+allowed to start agents" read under the later correction above, in which the user *is* the driver's
+handler rather than a second authority. The second arm exists because the owner's ruling requires
+an agent to be able to ask for another agent, and an ask is a message whose sender is by definition
+not the driver.
+
+**Why arm 2 is an ask and not a spawn.** The second arm does not let an agent cause an agent to
+exist; it lets an agent *reach* the driver, and the driver then decides under arm 1. That is what
+"There is ONE driver, in the crew team" requires: an agent is never the driver, so an agent can
+never be the thing that authorises the next agent. The two arms are the whole of the rule, and a
+third arm would be a takeover.
 
 **This is one rule and not three.** The spawn path, the driver-to-agent relay and the
 agent-to-driver relay are three call sites of the predicate defined in this section. They are not
@@ -234,10 +387,17 @@ in the request.
 
 ### The spawn path
 
-Only the user or the driver may cause Crew to spawn an agent. The check is the first arm of the
-predicate alone, because a spawn has no counterparty: there is no second arm to satisfy. Under the
-owner's ruling, a vendor's own subagent mechanism is not this path and is not gated by it; the
-gate governs an agent **Crew** spawns.
+Only the driver may cause Crew to spawn an agent. The check is the first arm of the predicate
+alone, because a spawn has no counterparty: there is no second arm to satisfy. Under the owner's
+ruling, a vendor's own subagent mechanism is not this path and is not gated by it; the gate governs
+an agent **Crew** spawns.
+
+**The gate must also stop being self-assertable.** Under the arm as restated, "the sender is the
+driver" is a question about an authenticated fact, and today the party being asked it supplies the
+answer: `role: "ompExtension"` is a value the peer states in its own `InitializeParams`. The
+finding is recorded in "The defect this closes" below with its citations, and the requirement that
+follows from it is in "What is not built yet": **the driver proves it is the driver, and an agent
+can only ever reach arm 2.**
 
 ### Relay, in both directions
 
@@ -272,6 +432,20 @@ describing a system that does not exist:
   exactly three variants: `OmpExtension`, `WorkerMcp` and `Display`. The predicate's subject does
   not exist in the protocol yet, so "is the bound sender the driver?" cannot be evaluated against
   any role as the code stands.
+* **`OmpExtension` is self-assertable, and the agent's own credential is never issued.** The two
+  findings are recorded with their citations under "The defect the gate must close" above, and they
+  are stated here as one requirement rather than two, because they are one fix:
+  **issuing the agent's credential and closing the privileged role are the same change.** Close
+  `OmpExtension` to anything that has not proved it is the driver — a proof that does not exist
+  today, because admission checks only that an owner-owned directory exists
+  (`crates/runtime/src/ipc/connection.rs:330-334`, `:372`, `:381-386`) and never compares
+  `InitializeParams::repository` (`crates/protocol/src/rpc.rs:84`) against
+  `ServerConfig::repository` (`crates/runtime/src/ipc/mod.rs:174-175`) — and, in the same change,
+  actually issue the scope token an agent presents as `WorkerMcp`, which today is minted nowhere
+  outside `#[cfg(test)]` (`crates/runtime/src/adapter/mcp_config.rs:90`, `:108`, `:256`, `:381`,
+  `:393`, `:415`, `:417`, `:427`; `crates/runtime/src/coordination/scope_token.rs:233`). **Doing
+  only the first leaves arm 2 unreachable; doing only the second leaves the privileged role
+  forgeable.** The two halves are not separable work items and are not filed as two.
 * **There is no spawn call.** No `crew_spawn_agent`, and no equivalent, exists anywhere in the
   repository. The spawn path this record governs is unbuilt.
 * **The relay and the driver are two different paths today, and only one of them binds the
